@@ -1,9 +1,29 @@
 # Safety and Sandboxing
 
-By default, Swival sandboxes all file and command operations. The agent can only
-touch files inside the base directory, can't run commands, and can't fetch
-internal network resources. This page explains each layer of protection and how
-to relax them when you trust the situation.
+Swival's sandboxing is application-level. It validates paths and whitelists
+commands in Python, but it does not use OS-level isolation (namespaces,
+seccomp, pledge, etc.). A sufficiently creative model or a bug in the sandbox
+code could bypass these checks. Don't treat them as a security boundary for
+untrusted models.
+
+For stronger isolation, use an OS-level sandbox around Swival itself:
+
+- **[AgentFS](agentfs.md)** provides a copy-on-write filesystem overlay. The
+  agent can write freely, but your real files don't change until you explicitly
+  copy them back. See [Using Swival with AgentFS](agentfs.md) for a full
+  walkthrough.
+- **sandbox-exec** (macOS) can restrict filesystem, network, and process
+  access at the kernel level. For example, to deny network access:
+  ```sh
+  sandbox-exec -p '(version 1)(allow default)(deny network*)' \
+      uvx swival "task" --yolo
+  ```
+
+Both can be combined. AgentFS handles filesystem isolation, sandbox-exec
+handles everything else.
+
+With that caveat, here's what Swival's built-in sandbox does and how to
+configure it.
 
 ## Base directory
 
@@ -66,7 +86,7 @@ can read and write any file (except the filesystem root) and run any command. No
 questions asked.
 
 Use this when you trust the model and want maximum capability. Combine it with
-something like AgentFS if you want an external safety net.
+[AgentFS](agentfs.md) if you want an external safety net.
 
 In YOLO mode, the `run_command` tool description changes to indicate any command
 is allowed, and the system prompt is updated accordingly.

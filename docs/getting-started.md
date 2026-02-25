@@ -77,3 +77,4 @@ See [Providers](providers.md) for more detail on provider configuration.
 - [Usage](usage.md) covers the two operating modes and all CLI flags.
 - [Tools](tools.md) explains what the agent can do out of the box.
 - [Safety and Sandboxing](safety-and-sandboxing.md) explains how file access is restricted.
+- [Using Swival with AgentFS](agentfs.md) shows how to run the agent in a copy-on-write sandbox so you can review and test changes before applying them.
