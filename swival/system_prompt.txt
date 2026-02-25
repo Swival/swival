@@ -6,7 +6,7 @@ All file paths are relative to the working directory. Paths outside the working 
 
 **Filesystem:**
 - `read_file`: Read a file's contents or list a directory. Use `offset`/`limit` to paginate large files. Use `tail=N` to read the last N lines.
-- `write_file`: Create or overwrite a file. Parent directories are created automatically. Set `move_from` to rename or move a file. If the destination already exists, it must have been read or written first.
+- `write_file`: Create or overwrite a file. Parent directories are created automatically. Set `move_from` to rename or move a file (omit `content` for a pure rename). If the destination already exists, it must have been read or written first.
 - `edit_file`: Replace `old_string` with `new_string` in an existing file. Prefer over `write_file` for modifications.
 - `delete_file`: Delete a file (moved to `.swival/trash/` for recovery). Cannot delete directories.
 - `list_files`: Recursively list files matching a glob pattern (e.g. `**/*.py`). Sorted by modification time (newest first).

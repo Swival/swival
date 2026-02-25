@@ -278,6 +278,28 @@ class TestWriteFileMoveFrom:
         # Destination must have been written.
         assert (tmp_path / "dst.txt").read_text(encoding="utf-8") == "content"
 
+    def test_pure_rename_no_content(self, tmp_path):
+        """move_from without content reads source and writes it to destination."""
+        (tmp_path / "old.txt").write_text("keep this", encoding="utf-8")
+        result = _write_file("new.txt", None, str(tmp_path), move_from="old.txt")
+        assert result.startswith("Moved")
+        assert (tmp_path / "new.txt").read_text(encoding="utf-8") == "keep this"
+        assert not (tmp_path / "old.txt").exists()
+
+    def test_pure_rename_preserves_content_exactly(self, tmp_path):
+        """Pure rename preserves file content byte-for-byte."""
+        original = "line 1\nline 2\n\ttabbed\n"
+        (tmp_path / "src.py").write_text(original, encoding="utf-8")
+        result = _write_file("dst.py", None, str(tmp_path), move_from="src.py")
+        assert result.startswith("Moved")
+        assert (tmp_path / "dst.py").read_text(encoding="utf-8") == original
+
+    def test_content_required_without_move_from(self, tmp_path):
+        """content=None without move_from is an error."""
+        result = _write_file("new.txt", None, str(tmp_path))
+        assert result.startswith("error:")
+        assert "content is required" in result
+
 
 # =========================================================================
 # edit_file -- positive paths

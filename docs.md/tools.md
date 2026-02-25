@@ -22,12 +22,12 @@ agent uses this when it needs to create something from scratch. For modifying
 existing files, it prefers `edit_file` (below), which is less destructive.
 
 The optional `move_from` parameter lets the agent rename or move a file in a
-single call: it writes the new content to the destination, then trashes the
-source. This is "write + trash", not an atomic rename, so the source and
-destination briefly coexist if interrupted. The source does not need to have
-been read first — renaming doesn't change content. If the destination already
-exists, it must have been read or written first, the same requirement that
-`edit_file` enforces.
+single call. When `content` is omitted, it does an atomic filesystem rename
+(works for binary files too, no content copying). When `content` is provided,
+it writes the new content to the destination and trashes the source. The source
+does not need to have been read first — renaming doesn't change content. If the
+destination already exists, it must have been read or written first, the same
+requirement that `edit_file` enforces.
 
 ## File editing
 

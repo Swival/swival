@@ -64,7 +64,7 @@ TOOLS = [
             "name": "write_file",
             "description": (
                 "Create or overwrite a file with the given content, creating parent directories as needed. "
-                "Set move_from to rename or move a file: writes the destination, then trashes the source."
+                "Set move_from to rename or move a file. For a pure rename, omit content."
             ),
             "parameters": {
                 "type": "object",
@@ -75,18 +75,21 @@ TOOLS = [
                     },
                     "content": {
                         "type": "string",
-                        "description": "The content to write to the file.",
+                        "description": (
+                            "The content to write to the file. "
+                            "Required unless move_from is set (omit for a pure atomic rename)."
+                        ),
                     },
                     "move_from": {
                         "type": "string",
                         "description": (
-                            "Optional source path to trash after writing the destination. "
-                            "Use to move or rename a file. "
-                            "If the destination already exists, it must have been read or written in this session first."
+                            "Source path to rename or move. "
+                            "Omit content for an atomic rename; provide content to write new content and trash the source. "
+                            "If the destination already exists, it must have been read or written first."
                         ),
                     },
                 },
-                "required": ["file_path", "content"],
+                "required": ["file_path"],
             },
         },
     },
@@ -858,7 +861,7 @@ def _read_file(
 
 def _write_file(
     file_path: str,
-    content: str,
+    content: str | None,
     base_dir: str,
     move_from: str | None = None,
     extra_write_roots: list[Path] = (),
@@ -869,8 +872,12 @@ def _write_file(
     """Create or overwrite a file with content.
 
     If move_from is set, the source is soft-deleted after writing the
-    destination (write + trash, not an atomic rename).
+    destination (write + trash, not an atomic rename).  When content is
+    None and move_from is set, the source content is used (pure rename).
     """
+    if content is None and move_from is None:
+        return "error: content is required when move_from is not set"
+
     # Resolve destination.
     try:
         resolved = safe_resolve(
@@ -918,6 +925,18 @@ def _write_file(
         if error:
             return error
 
+    # Pure rename: atomic filesystem move, no content copying.
+    if content is None and move_from_resolved is not None:
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            move_from_original.rename(resolved)
+        except OSError:
+            import shutil as _shutil
+            _shutil.move(str(move_from_original), str(resolved))
+        if tracker is not None:
+            tracker.record_write(str(resolved))
+        return f"Moved {move_from} -> {file_path}"
+
     # Write destination.
     resolved.parent.mkdir(parents=True, exist_ok=True)
     data = content.encode("utf-8")
@@ -928,9 +947,8 @@ def _write_file(
     if move_from_resolved is None:
         return f"Wrote {len(data)} bytes to {file_path}"
 
-    # Soft-delete source via existing trash path. Pass tracker=None so
-    # _delete_file doesn't re-run the read guard — the move doesn't require
-    # the source to have been read, and all preflight is done above.
+    # Move with new content: write destination, then trash source. Pass
+    # tracker=None so _delete_file doesn't re-run the read guard.
     delete_result = _delete_file(
         move_from,
         base_dir,
@@ -1546,7 +1564,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
     elif name == "write_file":
         return _write_file(
             file_path=args["file_path"],
-            content=args["content"],
+            content=args.get("content"),
             base_dir=base_dir,
             move_from=args.get("move_from"),
             extra_write_roots=extra_write_roots,
