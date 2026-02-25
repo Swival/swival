@@ -84,6 +84,13 @@ with. Behind the scenes, the edit engine uses a 3-pass matching strategy:</p>
 whitespace or punctuation than the original file. If multiple matches are found,
 the edit fails unless <code>replace_all</code> is set -- this prevents accidental bulk
 changes.</p>
+<h2 id="file-deletion">File deletion</h2>
+<p>Moves a file to <code>.swival/trash/</code> inside the base directory rather than deleting
+it outright. The agent gets a trash ID it can report back if you need to find the
+file later. Directories cannot be deleted with this tool.</p>
+<p>The trash is automatically cleaned up: entries older than 7 days are removed, and
+the total trash size is capped at 50 MB (oldest entries removed first when the cap
+is exceeded). The cleanup runs at the start of each delete operation.</p>
 <h2 id="directory-listing">Directory listing</h2>
 <p>Recursively lists files matching a glob pattern (like <code>**/*.py</code> or
 <code>src/**/*.ts</code>), sorted by modification time with newest first. Results are
@@ -114,8 +121,8 @@ it gets too large. Use <code>--no-history</code> to disable history logging enti
 <h2 id="web-fetching">Web fetching</h2>
 <p>Fetches URLs and returns the content as markdown (default), plain text, or raw
 HTML. The agent uses this to read documentation, check API references, or pull
-in information from the web. Output is capped at 50 KB; larger responses are
-saved to a file for paginated reading.</p>
+in information from the web. Raw responses are capped at 5 MB before conversion;
+converted output is capped at 50 KB.</p>
 <p>URL fetching has built-in SSRF protection -- it blocks requests to private,
 loopback, and link-local addresses, checking every hop in the redirect chain.
 See <a href="safety-and-sandboxing.html">Safety and Sandboxing</a> for details.</p>

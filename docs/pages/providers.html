@@ -127,7 +127,7 @@ swival --provider openrouter --model openrouter/free &quot;task&quot;
 </code></pre>
 <p>The <code>--model</code> flag is required. Use the model identifier from OpenRouter's
 catalog (e.g., <code>openrouter/free</code>, <code>anthropic/claude-3-5-sonnet</code>,
-<code>meta-llama/llama-3.1-70b-instruct</code>). Authentication comes from
+<code>openrouter/free</code>). Authentication comes from
 <code>OPENROUTER_API_KEY</code> in the environment or <code>--api-key</code> on the command line
 (which takes precedence).</p>
 <h3 id="custom-base-url_1">Custom base URL</h3>
@@ -142,7 +142,7 @@ catalog (e.g., <code>openrouter/free</code>, <code>anthropic/claude-3-5-sonnet</
 <p>OpenRouter models vary widely in context size (8K to 200K+ tokens). Swival
 defaults to whatever <code>--max-context-tokens</code> is set to; use it to match your
 model's actual limit:</p>
-<pre><code class="language-sh">swival --provider openrouter --model meta-llama/llama-3.1-70b-instruct \
+<pre><code class="language-sh">swival --provider openrouter --model openrouter/free \
     --max-context-tokens 131072 &quot;task&quot;
 </code></pre>
 <h3 id="how-the-litellm-call-works_2">How the LiteLLM call works</h3>
