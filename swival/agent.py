@@ -506,18 +506,23 @@ def run_reviewer(
     answer: str,
     verbose: bool,
     timeout: int = 120,
+    env_extra: dict[str, str] | None = None,
 ) -> tuple[int, str]:
     """Run the reviewer executable.
 
     Returns (exit_code, stdout_text).
     Never raises — all failures return (2, "") with a warning on stderr.
     """
+    env = os.environ.copy()
+    if env_extra:
+        env.update(env_extra)
     try:
         proc = subprocess.run(
             [reviewer_cmd, base_dir],
             input=answer.encode(),
             capture_output=True,
             timeout=timeout,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         if verbose:
@@ -1050,6 +1055,14 @@ def _run_main(args, report, _write_report, parser):
         review_round = 0
         turn_offset = 0
 
+        # Build env vars for reviewer subprocess
+        reviewer_env: dict[str, str] | None = None
+        if reviewer_cmd:
+            reviewer_env = {"SWIVAL_TASK": args.question}
+            model_id = getattr(args, "_resolved_model_id", None)
+            if model_id:
+                reviewer_env["SWIVAL_MODEL"] = model_id
+
         while True:
             answer, exhausted = run_agent_loop(
                 messages, tools, **loop_kwargs, report=report,
@@ -1064,8 +1077,10 @@ def _run_main(args, report, _write_report, parser):
             if args.verbose:
                 fmt.info(f"Review round {review_round}: sending answer to reviewer")
 
+            reviewer_env["SWIVAL_REVIEW_ROUND"] = str(review_round)
             exit_code, review_text = run_reviewer(
-                reviewer_cmd, base_dir, answer, args.verbose
+                reviewer_cmd, base_dir, answer, args.verbose,
+                env_extra=reviewer_env,
             )
 
             if exit_code == 0:

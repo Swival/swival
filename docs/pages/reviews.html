@@ -108,6 +108,42 @@ as a new user message -- the model sees the full conversation history plus the
 review feedback, and gets a fresh turn budget to address it.</p>
 <p>On exit code 0, stdout is ignored. On exit code 2 (or any other code), stdout
 is ignored and Swival accepts the answer without modification.</p>
+<h2 id="environment-variables">Environment variables</h2>
+<p>Swival sets environment variables on the reviewer subprocess so the script has
+context beyond just the answer text:</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Value</th>
+<th>Always set?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SWIVAL_TASK</code></td>
+<td>The original question passed to Swival</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>SWIVAL_REVIEW_ROUND</code></td>
+<td>Current round number, 1-indexed</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>SWIVAL_MODEL</code></td>
+<td>Resolved model ID (e.g. <code>qwen3-coder-30b</code>)</td>
+<td>When available</td>
+</tr>
+</tbody>
+</table>
+<p>The reviewer also inherits the parent process's full environment. If any of
+these variables already exist in the parent environment, Swival's values take
+precedence.</p>
+<p><code>SWIVAL_TASK</code> is the most useful one -- it tells an LLM-as-judge reviewer what
+the agent was supposed to do, so it can evaluate the answer in context.
+<code>SWIVAL_REVIEW_ROUND</code> lets a reviewer adjust its strictness or bail out based on
+how many rounds have passed.</p>
 <h2 id="writing-a-reviewer-script">Writing a reviewer script</h2>
 <p>A minimal reviewer that checks whether tests pass:</p>
 <pre><code class="language-bash">#!/usr/bin/env bash
@@ -135,6 +171,31 @@ if echo &quot;$answer&quot; | python3 -c &quot;import sys, json; json.load(sys.s
 else
     echo &quot;Your answer is not valid JSON. Please output only valid JSON.&quot;
     exit 1
+fi
+</code></pre>
+<p>An LLM-as-judge reviewer using a second Swival instance:</p>
+<pre><code class="language-bash">#!/usr/bin/env bash
+set -uo pipefail
+
+base_dir=&quot;$1&quot;
+answer=$(cat)
+
+judge_output=$(swival &quot;You are reviewing a coding agent's output.
+
+&lt;task&gt;$SWIVAL_TASK&lt;/task&gt;
+&lt;answer&gt;$answer&lt;/answer&gt;
+
+Respond with VERDICT: ACCEPT if the answer is correct, or
+VERDICT: RETRY followed by feedback if it needs work.&quot; \
+    --base-dir &quot;$base_dir&quot; --max-turns 3 --quiet --no-history 2&gt;/dev/null)
+
+if echo &quot;$judge_output&quot; | grep -qi &quot;VERDICT: ACCEPT&quot;; then
+    exit 0
+elif echo &quot;$judge_output&quot; | grep -qi &quot;VERDICT: RETRY&quot;; then
+    echo &quot;$judge_output&quot; | sed '1,/VERDICT: RETRY/d'
+    exit 1
+else
+    exit 2
 fi
 </code></pre>
 <p>The script must be executable (<code>chmod +x review.sh</code>). Swival validates this at

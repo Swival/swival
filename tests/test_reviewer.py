@@ -150,6 +150,69 @@ class TestRunReviewer:
         code, text = agent.run_reviewer(str(script), str(tmp_path), "answer", False)
         assert code == 42
 
+    def test_env_vars_passed_to_subprocess(self, tmp_path):
+        """All SWIVAL_* env vars are visible to the reviewer."""
+        script = tmp_path / "reviewer.sh"
+        script.write_text(
+            '#!/bin/sh\n'
+            'echo "task=$SWIVAL_TASK"\n'
+            'echo "round=$SWIVAL_REVIEW_ROUND"\n'
+            'echo "model=$SWIVAL_MODEL"\n'
+            'exit 0\n'
+        )
+        script.chmod(0o755)
+
+        env = {
+            "SWIVAL_TASK": "do the thing",
+            "SWIVAL_REVIEW_ROUND": "2",
+            "SWIVAL_MODEL": "test-model-7b",
+        }
+        code, text = agent.run_reviewer(
+            str(script), str(tmp_path), "answer", False, env_extra=env
+        )
+        assert code == 0
+        assert "task=do the thing" in text
+        assert "round=2" in text
+        assert "model=test-model-7b" in text
+
+    def test_env_vars_inherit_parent_env(self, tmp_path, monkeypatch):
+        """Reviewer inherits the parent process environment."""
+        monkeypatch.setenv("SWIVAL_TEST_SENTINEL", "hello")
+        script = tmp_path / "reviewer.sh"
+        script.write_text('#!/bin/sh\necho "$SWIVAL_TEST_SENTINEL"\nexit 0\n')
+        script.chmod(0o755)
+
+        code, text = agent.run_reviewer(
+            str(script), str(tmp_path), "answer", False,
+            env_extra={"SWIVAL_TASK": "x"},
+        )
+        assert code == 0
+        assert "hello" in text
+
+    def test_env_extra_none(self, tmp_path):
+        """env_extra=None (default) works without crashing."""
+        script = tmp_path / "reviewer.sh"
+        script.write_text("#!/bin/sh\nexit 0\n")
+        script.chmod(0o755)
+
+        code, text = agent.run_reviewer(str(script), str(tmp_path), "answer", False)
+        assert code == 0
+
+    def test_env_vars_override_parent(self, tmp_path, monkeypatch):
+        """Swival's env vars override any pre-existing parent values."""
+        monkeypatch.setenv("SWIVAL_TASK", "old")
+        script = tmp_path / "reviewer.sh"
+        script.write_text('#!/bin/sh\necho "$SWIVAL_TASK"\nexit 0\n')
+        script.chmod(0o755)
+
+        code, text = agent.run_reviewer(
+            str(script), str(tmp_path), "answer", False,
+            env_extra={"SWIVAL_TASK": "new"},
+        )
+        assert code == 0
+        assert "new" in text
+        assert "old" not in text
+
 
 # ---------------------------------------------------------------------------
 # CLI validation
@@ -397,6 +460,78 @@ class TestReviewLoop:
 
         agent.main()
         assert call_count == 2
+
+    def test_review_round_env_increments(self, tmp_path, monkeypatch):
+        """SWIVAL_REVIEW_ROUND increments with each reviewer invocation."""
+        log_file = tmp_path / "rounds.log"
+        script = tmp_path / "reviewer.sh"
+        # Append the round number to a log file, retry twice then accept.
+        script.write_text(
+            f'#!/bin/sh\n'
+            f'echo "$SWIVAL_REVIEW_ROUND" >> "{log_file}"\n'
+            f'if [ "$SWIVAL_REVIEW_ROUND" -lt 3 ]; then\n'
+            f'  echo "again"\n'
+            f'  exit 1\n'
+            f'else\n'
+            f'  exit 0\n'
+            f'fi\n'
+        )
+        script.chmod(0o755)
+
+        args = _base_args(tmp_path, reviewer=str(script))
+        monkeypatch.setattr(agent, "call_llm", _simple_llm)
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+        monkeypatch.setattr("argparse.ArgumentParser.parse_args", lambda self: args)
+        fmt.init(color=False, no_color=True)
+
+        agent.main()
+
+        rounds = log_file.read_text().strip().splitlines()
+        assert rounds == ["1", "2", "3"]
+
+    def test_task_env_matches_question(self, tmp_path, monkeypatch):
+        """SWIVAL_TASK contains the original question."""
+        task_file = tmp_path / "task.txt"
+        script = tmp_path / "reviewer.sh"
+        script.write_text(
+            f'#!/bin/sh\n'
+            f'echo "$SWIVAL_TASK" > "{task_file}"\n'
+            f'exit 0\n'
+        )
+        script.chmod(0o755)
+
+        args = _base_args(tmp_path, reviewer=str(script), question="hello world")
+        monkeypatch.setattr(agent, "call_llm", _simple_llm)
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+        monkeypatch.setattr("argparse.ArgumentParser.parse_args", lambda self: args)
+        fmt.init(color=False, no_color=True)
+
+        agent.main()
+
+        assert task_file.read_text().strip() == "hello world"
+
+    def test_model_env_set(self, tmp_path, monkeypatch):
+        """SWIVAL_MODEL is set from args._resolved_model_id."""
+        model_file = tmp_path / "model.txt"
+        script = tmp_path / "reviewer.sh"
+        script.write_text(
+            f'#!/bin/sh\n'
+            f'echo "$SWIVAL_MODEL" > "{model_file}"\n'
+            f'exit 0\n'
+        )
+        script.chmod(0o755)
+
+        args = _base_args(tmp_path, reviewer=str(script), model="my-llm-7b")
+        # _run_main() sets _resolved_model_id from args.model for lmstudio
+        # provider when a model is specified, so we match args.model here.
+        monkeypatch.setattr(agent, "call_llm", _simple_llm)
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("my-llm-7b", None))
+        monkeypatch.setattr("argparse.ArgumentParser.parse_args", lambda self: args)
+        fmt.init(color=False, no_color=True)
+
+        agent.main()
+
+        assert model_file.read_text().strip() == "my-llm-7b"
 
 
 # ---------------------------------------------------------------------------

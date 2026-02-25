@@ -39,6 +39,26 @@ review feedback, and gets a fresh turn budget to address it.
 On exit code 0, stdout is ignored. On exit code 2 (or any other code), stdout
 is ignored and Swival accepts the answer without modification.
 
+## Environment variables
+
+Swival sets environment variables on the reviewer subprocess so the script has
+context beyond just the answer text:
+
+| Variable              | Value                                      | Always set?    |
+| --------------------- | ------------------------------------------ | -------------- |
+| `SWIVAL_TASK`         | The original question passed to Swival     | Yes            |
+| `SWIVAL_REVIEW_ROUND` | Current round number, 1-indexed            | Yes            |
+| `SWIVAL_MODEL`        | Resolved model ID (e.g. `qwen3-coder-30b`) | When available |
+
+The reviewer also inherits the parent process's full environment. If any of
+these variables already exist in the parent environment, Swival's values take
+precedence.
+
+`SWIVAL_TASK` is the most useful one -- it tells an LLM-as-judge reviewer what
+the agent was supposed to do, so it can evaluate the answer in context.
+`SWIVAL_REVIEW_ROUND` lets a reviewer adjust its strictness or bail out based on
+how many rounds have passed.
+
 ## Writing a reviewer script
 
 A minimal reviewer that checks whether tests pass:
@@ -72,6 +92,34 @@ if echo "$answer" | python3 -c "import sys, json; json.load(sys.stdin)" 2>/dev/n
 else
     echo "Your answer is not valid JSON. Please output only valid JSON."
     exit 1
+fi
+```
+
+An LLM-as-judge reviewer using a second Swival instance:
+
+```bash
+#!/usr/bin/env bash
+set -uo pipefail
+
+base_dir="$1"
+answer=$(cat)
+
+judge_output=$(swival "You are reviewing a coding agent's output.
+
+<task>$SWIVAL_TASK</task>
+<answer>$answer</answer>
+
+Respond with VERDICT: ACCEPT if the answer is correct, or
+VERDICT: RETRY followed by feedback if it needs work." \
+    --base-dir "$base_dir" --max-turns 3 --quiet --no-history 2>/dev/null)
+
+if echo "$judge_output" | grep -qi "VERDICT: ACCEPT"; then
+    exit 0
+elif echo "$judge_output" | grep -qi "VERDICT: RETRY"; then
+    echo "$judge_output" | sed '1,/VERDICT: RETRY/d'
+    exit 1
+else
+    exit 2
 fi
 ```
 
