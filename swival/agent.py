@@ -377,6 +377,7 @@ def call_llm(
     max_output_tokens,
     temperature,
     top_p,
+    seed,
     tools,
     verbose,
     *,
@@ -402,21 +403,26 @@ def call_llm(
         sys.exit(1)
 
     if verbose:
+        seed_info = f", seed={seed}" if seed is not None else ""
         fmt.model_info(
-            f"Calling model {model_str} with max_tokens={max_output_tokens}, temperature={temperature}, top_p={top_p}"
+            f"Calling model {model_str} with max_tokens={max_output_tokens}, temperature={temperature}, top_p={top_p}{seed_info}"
         )
 
+    completion_kwargs = dict(
+        model=model_str,
+        messages=messages,
+        max_tokens=max_output_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        tools=tools,
+        tool_choice="auto",
+        **kwargs,
+    )
+    if seed is not None:
+        completion_kwargs["seed"] = seed
+
     try:
-        response = litellm.completion(
-            model=model_str,
-            messages=messages,
-            max_tokens=max_output_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            tools=tools,
-            tool_choice="auto",
-            **kwargs,
-        )
+        response = litellm.completion(**completion_kwargs)
     except litellm.ContextWindowExceededError:
         raise ContextOverflowError("context window exceeded (typed)")
     except litellm.BadRequestError as e:
@@ -486,6 +492,12 @@ def build_parser():
         type=float,
         default=1.0,
         help="Top-p (nucleus) sampling (default: 1.0).",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducible outputs (optional, model support varies).",
     )
 
     prompt_group = parser.add_mutually_exclusive_group()
@@ -767,6 +779,7 @@ def main():
         max_output_tokens=args.max_output_tokens,
         temperature=args.temperature,
         top_p=args.top_p,
+        seed=args.seed,
         context_length=context_length,
         base_dir=base_dir,
         thinking_state=thinking_state,
@@ -812,6 +825,7 @@ def run_agent_loop(
     max_output_tokens: int,
     temperature: float,
     top_p: float,
+    seed: int | None,
     context_length: int | None,
     base_dir: str,
     thinking_state: ThinkingState,
@@ -856,6 +870,7 @@ def run_agent_loop(
                 effective_max_output,
                 temperature,
                 top_p,
+                seed,
                 tools,
                 verbose,
                 **llm_kwargs,
@@ -1095,6 +1110,7 @@ def repl_loop(
     max_output_tokens: int,
     temperature: float,
     top_p: float,
+    seed: int | None,
     context_length: int | None,
     base_dir: str,
     thinking_state: ThinkingState,
@@ -1166,6 +1182,7 @@ def repl_loop(
                 max_output_tokens=max_output_tokens,
                 temperature=temperature,
                 top_p=top_p,
+                seed=seed,
                 context_length=context_length,
                 base_dir=base_dir,
                 thinking_state=thinking_state,

@@ -60,6 +60,7 @@ def _loop_kwargs(tmp_path, **overrides):
         max_output_tokens=1024,
         temperature=0.5,
         top_p=1.0,
+        seed=None,
         context_length=None,
         base_dir=str(tmp_path),
         thinking_state=ThinkingState(verbose=False, notes_dir=str(tmp_path)),

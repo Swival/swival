@@ -383,7 +383,7 @@ class TestContextOverflowClassifier:
                 llm_provider="openai",
             )
             with pytest.raises(ContextOverflowError):
-                call_llm("http://localhost", "model", [], 100, 0.1, 1.0, None, False)
+                call_llm("http://localhost", "model", [], 100, 0.1, 1.0, None, None, False)
 
     def test_bad_request_with_context_keywords(self):
         """call_llm raises ContextOverflowError for BadRequestError with context keywords."""
@@ -396,7 +396,7 @@ class TestContextOverflowClassifier:
                 llm_provider="openai",
             )
             with pytest.raises(ContextOverflowError):
-                call_llm("http://localhost", "model", [], 100, 0.1, 1.0, None, False)
+                call_llm("http://localhost", "model", [], 100, 0.1, 1.0, None, None, False)
 
     def test_bad_request_without_context_keywords(self):
         """call_llm exits for BadRequestError without context keywords."""
@@ -409,5 +409,5 @@ class TestContextOverflowClassifier:
                 llm_provider="openai",
             )
             with pytest.raises(SystemExit) as exc_info:
-                call_llm("http://localhost", "model", [], 100, 0.1, 1.0, None, False)
+                call_llm("http://localhost", "model", [], 100, 0.1, 1.0, None, None, False)
             assert exc_info.value.code == 1

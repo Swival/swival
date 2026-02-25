@@ -90,6 +90,7 @@ line editing.
 | `--max-context-tokens` | from model | Requested context length (may trigger model reload) |
 | `--temperature`        | `0.55`     | Sampling temperature                                |
 | `--top-p`              | `1.0`      | Top-p (nucleus) sampling                            |
+| `--seed`               | none       | Random seed for reproducible outputs                |
 
 ### Sandboxing
 

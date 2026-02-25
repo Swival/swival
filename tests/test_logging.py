@@ -37,6 +37,7 @@ def _base_args(tmp_path, **overrides):
         max_output_tokens=1024,
         temperature=0.55,
         top_p=1.0,
+        seed=None,
         quiet=False,
         max_turns=10,
         base_dir=str(tmp_path),

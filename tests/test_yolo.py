@@ -343,7 +343,7 @@ class TestAgentYolo:
         captured = {}
 
         def fake_call_llm(*args, **kwargs):
-            captured["tools"] = kwargs.get("tools") or args[6]
+            captured["tools"] = kwargs.get("tools") or args[7]
             captured["messages"] = args[2]
             return _make_message(content="Done."), "stop"
 
