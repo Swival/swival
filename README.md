@@ -73,11 +73,6 @@ Python across a handful of files, with no framework underneath. You can read the
 entire thing in an afternoon. If something doesn't work the way you want, you
 can change it.
 
-**Portable skills.** Drop a `SKILL.md` file in a directory, and the agent
-learns new capabilities on demand. The system prompt only gets a compact catalog
-at startup. Full instructions load when the agent actually needs them. Skills
-are easy to write, share, and version.
-
 **Structured thinking for any model.** The built-in think tool gives any model
 (including local ones) multi-step reasoning with revisions, branches, and
 persistent notes that survive context compaction. It's not locked to a specific
@@ -88,7 +83,7 @@ machine-readable evaluation report with per-call LLM timing, tool
 success/failure counts, context compaction events, and guardrail interventions.
 Good for comparing models systematically on real coding tasks.
 
-**Unix-native.** stdout is exclusively the final answer. All diagnostics go to
+**CLI-native.** stdout is exclusively the final answer. All diagnostics go to
 stderr. You can pipe Swival's output straight into another command or a file.
 
 ## Documentation
