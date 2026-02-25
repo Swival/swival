@@ -4,11 +4,12 @@
 
 A coding agent for open models. [Documentation](https://swival.github.io/swival/)
 
-Swival connects to [LM Studio](https://lmstudio.ai/) or
-[HuggingFace Inference API](https://huggingface.co/inference-api), sends your
-task, and runs an autonomous tool loop until it produces an answer. With LM
-Studio it auto-discovers your loaded model, so there's nothing to configure.
-A few thousand lines of Python, no framework.
+Swival connects to [LM Studio](https://lmstudio.ai/),
+[HuggingFace Inference API](https://huggingface.co/inference-api), or
+[OpenRouter](https://openrouter.ai/), sends your task, and runs an autonomous
+tool loop until it produces an answer. With LM Studio it auto-discovers your
+loaded model, so there's nothing to configure. A few thousand lines of Python,
+no framework.
 
 ## Quickstart
 
@@ -44,6 +45,15 @@ swival "Refactor the error handling in src/api.py" \
 ```
 
 You can also point it at a dedicated endpoint with `--base-url` and `--api-key`.
+
+### OpenRouter
+
+```sh
+export OPENROUTER_API_KEY=sk_or_...
+uv tool install swival
+swival "Refactor the error handling in src/api.py" \
+    --provider openrouter --model openrouter/free
+```
 
 ### Interactive sessions
 

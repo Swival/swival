@@ -89,6 +89,48 @@ class TestCallLlmRouting:
             kwargs = mock_comp.call_args
             assert kwargs[1]["api_base"] == "https://xyz.endpoints.huggingface.cloud"
 
+    def test_openrouter_routing(self):
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                None,
+                "openrouter/free",
+                [],
+                100,
+                0.5,
+                1.0,
+                None,
+                None,
+                False,
+                provider="openrouter",
+                api_key="sk_or_test_key",
+            )
+            mock_comp.assert_called_once()
+            kwargs = mock_comp.call_args
+            assert kwargs[1]["model"] == "openrouter/openrouter/free"
+            assert kwargs[1]["api_key"] == "sk_or_test_key"
+            assert "api_base" not in kwargs[1]
+
+    def test_openrouter_with_base_url(self):
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                "https://custom.openrouter.endpoint",
+                "openrouter/free",
+                [],
+                100,
+                0.5,
+                1.0,
+                None,
+                None,
+                False,
+                provider="openrouter",
+                api_key="sk_or_test_key",
+            )
+            mock_comp.assert_called_once()
+            kwargs = mock_comp.call_args
+            assert kwargs[1]["api_base"] == "https://custom.openrouter.endpoint"
+
 
 # ---------------------------------------------------------------------------
 # Model ID normalization (double-prefix guard)
@@ -146,6 +188,26 @@ class TestModelNormalization:
                 == "huggingface/zai-org/GLM-5"
             )
 
+    def test_openrouter_already_prefixed_no_double(self):
+        # If user passes "openrouter/openrouter/free" (full LiteLLM prefix
+        # already included), the result should still be "openrouter/openrouter/free".
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                None,
+                "openrouter/openrouter/free",
+                [],
+                100,
+                0.5,
+                1.0,
+                None,
+                None,
+                False,
+                provider="openrouter",
+                api_key="sk_or_test_key",
+            )
+            assert mock_comp.call_args[1]["model"] == "openrouter/openrouter/free"
+
 
 # ---------------------------------------------------------------------------
 # CLI validation
@@ -167,6 +229,24 @@ class TestCLIValidation:
             ],
         )
         monkeypatch.setenv("HF_TOKEN", "hf_test")
+        with pytest.raises(SystemExit) as exc_info:
+            agent.main()
+        assert exc_info.value.code == 2
+
+    def test_openrouter_requires_model(self, monkeypatch):
+        from swival import agent
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "agent",
+                "hello",
+                "--provider",
+                "openrouter",
+            ],
+        )
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk_or_test")
         with pytest.raises(SystemExit) as exc_info:
             agent.main()
         assert exc_info.value.code == 2
@@ -302,6 +382,96 @@ class TestAPIKeyResolution:
         monkeypatch.setattr(agent, "call_llm", fake_call_llm)
         agent.main()
         assert captured["api_key"] == "hf_env"
+
+    def test_openrouter_cli_key_takes_precedence(self, monkeypatch, tmp_path):
+        from swival import agent
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "agent",
+                "hello",
+                "--provider",
+                "openrouter",
+                "--model",
+                "openrouter/free",
+                "--api-key",
+                "sk_or_cli",
+                "--no-system-prompt",
+                "--base-dir",
+                str(tmp_path),
+            ],
+        )
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk_or_env")
+
+        captured = {}
+
+        def fake_call_llm(*args, **kwargs):
+            captured["api_key"] = kwargs.get("api_key")
+            msg = types.SimpleNamespace(
+                content="done", tool_calls=None, role="assistant"
+            )
+            msg.get = lambda key, default=None: getattr(msg, key, default)
+            return msg, "stop"
+
+        monkeypatch.setattr(agent, "call_llm", fake_call_llm)
+        agent.main()
+        assert captured["api_key"] == "sk_or_cli"
+
+    def test_openrouter_env_var_used(self, monkeypatch, tmp_path):
+        from swival import agent
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "agent",
+                "hello",
+                "--provider",
+                "openrouter",
+                "--model",
+                "openrouter/free",
+                "--no-system-prompt",
+                "--base-dir",
+                str(tmp_path),
+            ],
+        )
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk_or_env")
+
+        captured = {}
+
+        def fake_call_llm(*args, **kwargs):
+            captured["api_key"] = kwargs.get("api_key")
+            msg = types.SimpleNamespace(
+                content="done", tool_calls=None, role="assistant"
+            )
+            msg.get = lambda key, default=None: getattr(msg, key, default)
+            return msg, "stop"
+
+        monkeypatch.setattr(agent, "call_llm", fake_call_llm)
+        agent.main()
+        assert captured["api_key"] == "sk_or_env"
+
+    def test_openrouter_no_key_errors(self, monkeypatch):
+        from swival import agent
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "agent",
+                "hello",
+                "--provider",
+                "openrouter",
+                "--model",
+                "openrouter/free",
+            ],
+        )
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        with pytest.raises(SystemExit) as exc_info:
+            agent.main()
+        assert exc_info.value.code == 2
 
     def test_no_key_errors(self, monkeypatch):
         from swival import agent

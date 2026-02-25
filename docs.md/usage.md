@@ -77,12 +77,12 @@ line editing.
 
 ### Model and provider
 
-| Flag         | Default                 | Description                                |
-| ------------ | ----------------------- | ------------------------------------------ |
-| `--provider` | `lmstudio`              | LLM provider (`lmstudio` or `huggingface`) |
-| `--model`    | auto-discovered         | Override model identifier                  |
-| `--base-url` | `http://127.0.0.1:1234` | Server base URL                            |
-| `--api-key`  | from env                | API key (overrides `HF_TOKEN`)             |
+| Flag         | Default                 | Description                                              |
+| ------------ | ----------------------- | -------------------------------------------------------- |
+| `--provider` | `lmstudio`              | LLM provider: `lmstudio`, `huggingface`, or `openrouter` |
+| `--model`    | auto-discovered         | Override model identifier                                |
+| `--base-url` | `http://127.0.0.1:1234` | Server base URL                                          |
+| `--api-key`  | from env                | API key (overrides `HF_TOKEN` / `OPENROUTER_API_KEY`)    |
 
 ### Behavior tuning
 

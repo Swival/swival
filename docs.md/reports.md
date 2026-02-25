@@ -115,7 +115,7 @@ a square root, then delivered the answer:
 | `timestamp` | string | UTC ISO 8601 timestamp of when the run ended   |
 | `task`      | string | The question/task passed on the command line   |
 | `model`     | string | Model identifier (auto-discovered or from CLI) |
-| `provider`  | string | `lmstudio` or `huggingface`                    |
+| `provider`  | string | `lmstudio`, `huggingface`, or `openrouter`     |
 | `settings`  | object | Configuration snapshot (see below)             |
 | `result`    | object | Outcome and answer (see below)                 |
 | `stats`     | object | Aggregate counters (see below)                 |

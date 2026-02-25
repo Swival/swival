@@ -54,9 +54,10 @@
         </aside>
         <article class="docs-content">
             <h1 id="providers">Providers</h1>
-<p>Swival supports two providers: LM Studio (local) and HuggingFace Inference API
-(hosted). Under the hood, all LLM calls go through
-<a href="https://docs.litellm.ai/">LiteLLM</a>, which normalizes the API differences.</p>
+<p>Swival supports three providers: LM Studio (local), HuggingFace Inference API
+(hosted), and OpenRouter (multi-provider API). Under the hood, all LLM calls go
+through <a href="https://docs.litellm.ai/">LiteLLM</a>, which normalizes the API
+differences.</p>
 <h2 id="lm-studio">LM Studio</h2>
 <p>This is the default and requires no configuration beyond having LM Studio
 running with a model loaded.</p>
@@ -117,11 +118,45 @@ window is available.</p>
 <p>For HuggingFace, Swival prefixes the model with <code>huggingface/</code> (stripping any
 existing prefix first) and passes the API key directly. If <code>--base-url</code> is set,
 it's passed as <code>api_base</code> to LiteLLM.</p>
+<h2 id="openrouter">OpenRouter</h2>
+<p>For access to dozens of models from different providers (OpenAI, Anthropic,
+Meta, Google, and others) through a single API.</p>
+<h3 id="basic-usage_1">Basic usage</h3>
+<pre><code class="language-sh">export OPENROUTER_API_KEY=sk_or_your_token_here
+swival --provider openrouter --model openrouter/free &quot;task&quot;
+</code></pre>
+<p>The <code>--model</code> flag is required. Use the model identifier from OpenRouter's
+catalog (e.g., <code>openrouter/free</code>, <code>anthropic/claude-3-5-sonnet</code>,
+<code>meta-llama/llama-3.1-70b-instruct</code>). Authentication comes from
+<code>OPENROUTER_API_KEY</code> in the environment or <code>--api-key</code> on the command line
+(which takes precedence).</p>
+<h3 id="custom-base-url_1">Custom base URL</h3>
+<p>For custom OpenRouter-compatible endpoints:</p>
+<pre><code class="language-sh">swival --provider openrouter \
+    --model openrouter/free \
+    --base-url https://custom.openrouter.endpoint \
+    --api-key sk_or_key \
+    &quot;task&quot;
+</code></pre>
+<h3 id="context-size">Context size</h3>
+<p>OpenRouter models vary widely in context size (8K to 200K+ tokens). Swival
+defaults to whatever <code>--max-context-tokens</code> is set to; use it to match your
+model's actual limit:</p>
+<pre><code class="language-sh">swival --provider openrouter --model meta-llama/llama-3.1-70b-instruct \
+    --max-context-tokens 131072 &quot;task&quot;
+</code></pre>
+<h3 id="how-the-litellm-call-works_2">How the LiteLLM call works</h3>
+<p>For OpenRouter, Swival prefixes the model with <code>openrouter/</code> (stripping any
+existing prefix first) and passes the API key directly. If <code>--base-url</code> is set,
+it's passed as <code>api_base</code> to LiteLLM.</p>
 <h2 id="future-providers">Future providers</h2>
 <p>Since Swival uses LiteLLM for the actual API call, adding new providers is
 straightforward -- it's mostly a matter of building the right model string and
 passing the right credentials. The provider-specific logic in <code>call_llm()</code> is
 about 10 lines per provider.</p>
+<p>OpenRouter already provides access to dozens of models from different providers
+through a single API, so it's a good option if you need flexibility without
+configuring multiple credentials.</p>
         </article>
     </div>
     <footer class="site-footer">

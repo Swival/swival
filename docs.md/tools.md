@@ -38,6 +38,16 @@ whitespace or punctuation than the original file. If multiple matches are found,
 the edit fails unless `replace_all` is set -- this prevents accidental bulk
 changes.
 
+## File deletion
+
+Moves a file to `.swival/trash/` inside the base directory rather than deleting
+it outright. The agent gets a trash ID it can report back if you need to find the
+file later. Directories cannot be deleted with this tool.
+
+The trash is automatically cleaned up: entries older than 7 days are removed, and
+the total trash size is capped at 50 MB (oldest entries removed first when the cap
+is exceeded). The cleanup runs at the start of each delete operation.
+
 ## Directory listing
 
 Recursively lists files matching a glob pattern (like `**/*.py` or
@@ -79,8 +89,8 @@ it gets too large. Use `--no-history` to disable history logging entirely.
 
 Fetches URLs and returns the content as markdown (default), plain text, or raw
 HTML. The agent uses this to read documentation, check API references, or pull
-in information from the web. Output is capped at 50 KB; larger responses are
-saved to a file for paginated reading.
+in information from the web. Raw responses are capped at 5 MB before conversion;
+converted output is capped at 50 KB.
 
 URL fetching has built-in SSRF protection -- it blocks requests to private,
 loopback, and link-local addresses, checking every hop in the redirect chain.

@@ -460,6 +460,15 @@ def call_llm(
         kwargs = {"api_key": api_key}
         if base_url:
             kwargs["api_base"] = base_url
+    elif provider == "openrouter":
+        # Only strip the prefix if the user already included the LiteLLM
+        # "openrouter/" prefix (i.e. "openrouter/openrouter/free"). Don't strip
+        # org names like "openrouter" in "openrouter/free".
+        bare_id = model_id[len("openrouter/"):] if model_id.startswith("openrouter/openrouter/") else model_id
+        model_str = f"openrouter/{bare_id}"
+        kwargs = {"api_key": api_key}
+        if base_url:
+            kwargs["api_base"] = base_url
     else:
         raise AgentError(f"unknown provider {provider!r}")
 
@@ -558,9 +567,9 @@ def build_parser():
     )
     parser.add_argument(
         "--provider",
-        choices=["lmstudio", "huggingface"],
+        choices=["lmstudio", "huggingface", "openrouter"],
         default="lmstudio",
-        help="LLM provider (default: lmstudio).",
+        help="LLM provider: lmstudio (local), huggingface (HF API), openrouter (multi-provider API).",
     )
     parser.add_argument(
         "--api-key",
@@ -863,6 +872,18 @@ def _run_main(args, report, _write_report, parser):
         if not api_key:
             parser.error(
                 "--api-key or HF_TOKEN env var required for huggingface provider"
+            )
+
+    elif args.provider == "openrouter":
+        if not args.model:
+            parser.error("--model is required when --provider is openrouter")
+        api_base = args.base_url  # LiteLLM knows OpenRouter's default; only set if user provides --base-url
+        model_id = args.model
+        current_context = args.max_context_tokens  # None if not given
+        api_key = args.api_key or os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            parser.error(
+                "--api-key or OPENROUTER_API_KEY env var required for openrouter provider"
             )
 
     # Stash resolved model_id for error reporting

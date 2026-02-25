@@ -1,8 +1,9 @@
 # Providers
 
-Swival supports two providers: LM Studio (local) and HuggingFace Inference API
-(hosted). Under the hood, all LLM calls go through
-[LiteLLM](https://docs.litellm.ai/), which normalizes the API differences.
+Swival supports three providers: LM Studio (local), HuggingFace Inference API
+(hosted), and OpenRouter (multi-provider API). Under the hood, all LLM calls go
+through [LiteLLM](https://docs.litellm.ai/), which normalizes the API
+differences.
 
 ## LM Studio
 
@@ -98,9 +99,60 @@ For HuggingFace, Swival prefixes the model with `huggingface/` (stripping any
 existing prefix first) and passes the API key directly. If `--base-url` is set,
 it's passed as `api_base` to LiteLLM.
 
+## OpenRouter
+
+For access to dozens of models from different providers (OpenAI, Anthropic,
+Meta, Google, and others) through a single API.
+
+### Basic usage
+
+```sh
+export OPENROUTER_API_KEY=sk_or_your_token_here
+swival --provider openrouter --model openrouter/free "task"
+```
+
+The `--model` flag is required. Use the model identifier from OpenRouter's
+catalog (e.g., `openrouter/free`, `anthropic/claude-3-5-sonnet`,
+`openrouter/free`). Authentication comes from
+`OPENROUTER_API_KEY` in the environment or `--api-key` on the command line
+(which takes precedence).
+
+### Custom base URL
+
+For custom OpenRouter-compatible endpoints:
+
+```sh
+swival --provider openrouter \
+    --model openrouter/free \
+    --base-url https://custom.openrouter.endpoint \
+    --api-key sk_or_key \
+    "task"
+```
+
+### Context size
+
+OpenRouter models vary widely in context size (8K to 200K+ tokens). Swival
+defaults to whatever `--max-context-tokens` is set to; use it to match your
+model's actual limit:
+
+```sh
+swival --provider openrouter --model openrouter/free \
+    --max-context-tokens 131072 "task"
+```
+
+### How the LiteLLM call works
+
+For OpenRouter, Swival prefixes the model with `openrouter/` (stripping any
+existing prefix first) and passes the API key directly. If `--base-url` is set,
+it's passed as `api_base` to LiteLLM.
+
 ## Future providers
 
 Since Swival uses LiteLLM for the actual API call, adding new providers is
 straightforward -- it's mostly a matter of building the right model string and
 passing the right credentials. The provider-specific logic in `call_llm()` is
 about 10 lines per provider.
+
+OpenRouter already provides access to dozens of models from different providers
+through a single API, so it's a good option if you need flexibility without
+configuring multiple credentials.
