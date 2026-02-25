@@ -442,7 +442,9 @@ def call_llm(
 def build_parser():
     """Build and return the argument parser."""
     parser = argparse.ArgumentParser(
-        description="Swival: a CLI coding agent with tool-calling, sandboxed file access, and multi-provider LLM support."
+        prog="swival",
+        usage="%(prog)s [options] <question>\n       %(prog)s --repl [options] [question]",
+        description="A CLI coding agent with tool-calling, sandboxed file access, and multi-provider LLM support.",
     )
     parser.add_argument(
         "question", nargs="?", default=None, help="The question or task for the model."
