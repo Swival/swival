@@ -637,7 +637,7 @@ def build_parser():
         type=str,
         default=None,
         metavar="FILE",
-        help="Write a JSON evaluation report to FILE instead of printing the answer. Incompatible with --repl.",
+        help="Write a JSON evaluation report to FILE. Incompatible with --repl.",
     )
 
     color_group = parser.add_mutually_exclusive_group()
@@ -979,6 +979,8 @@ def _run_main(args, report, _write_report, parser):
         )
         if not no_history and answer:
             append_history(base_dir, args.question, answer)
+        if answer is not None:
+            print(answer)
         if report:
             _write_report(
                 "exhausted" if exhausted else "success",
@@ -989,9 +991,6 @@ def _run_main(args, report, _write_report, parser):
                 skills_catalog=skills_catalog,
                 instructions_loaded=instructions_loaded,
             )
-        else:
-            if answer is not None:
-                print(answer)
         if exhausted:
             fmt.warning("max turns reached, agent stopped.")
             sys.exit(2)

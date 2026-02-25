@@ -520,7 +520,7 @@ class TestReportIntegration:
         assert data["result"]["outcome"] == "error"
         assert "connection refused" in data["result"]["error_message"]
 
-    def test_no_stdout_when_report_active(self, tmp_path, capsys):
+    def test_stdout_also_printed_when_report_active(self, tmp_path, capsys):
         report_path = tmp_path / "report.json"
         fake_args = self._base_args(tmp_path, report_path)
 
@@ -539,7 +539,7 @@ class TestReportIntegration:
             agent.main()
 
         captured = capsys.readouterr()
-        assert "secret answer" not in captured.out
+        assert "secret answer" in captured.out
 
     def test_report_write_failure_does_not_crash(self, tmp_path, capsys):
         """If the report path is unwritable, emit an error instead of crashing."""
