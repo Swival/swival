@@ -70,6 +70,17 @@ higher values make it more creative (and more likely to hallucinate).
 Top-p defaults to 1.0 (no nucleus sampling). Reducing it limits the token pool
 the model samples from.
 
+### Seed
+
+```sh
+uvx swival --seed 42 "task"
+```
+
+Sets a random seed for reproducible outputs. When given, the seed is passed
+through to the model provider. Not all models support this, and even those that
+do may not guarantee identical outputs across different hardware or software
+versions. Omit it (the default) to let the model sample normally.
+
 ### Max turns
 
 ```sh
