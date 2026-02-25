@@ -140,6 +140,10 @@ def context_stats(label: str, tokens: int) -> None:
     _console.print(Text(f"  {label}: ~{tokens} tokens", style="dim"))
 
 
+def think_summary(line: str) -> None:
+    _console.print(Text(f"  {line}", style="dim"))
+
+
 def warning(msg: str) -> None:
     line = Text()
     line.append("  \u26a0 Warning: ", style="yellow")

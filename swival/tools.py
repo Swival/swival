@@ -186,10 +186,11 @@ TOOLS = [
         "function": {
             "name": "think",
             "description": (
-                "Structure your reasoning into numbered steps. "
-                "Use this before complex tasks to plan, during debugging to track hypotheses, "
-                "or when you need to revise earlier conclusions. "
-                "Supports revisions (correcting a previous thought) and branches (exploring alternatives)."
+                "Think step-by-step before acting. This is your scratchpad for reasoning — "
+                "use it to plan, debug, weigh alternatives, or track what you've learned. "
+                "Using think before complex actions leads to better outcomes. "
+                "Pass a `note` to save important findings to disk — these persist even when "
+                "older messages are dropped during context compaction."
             ),
             "parameters": {
                 "type": "object",
@@ -200,20 +201,26 @@ TOOLS = [
                     },
                     "thought_number": {
                         "type": "integer",
-                        "description": "Current step number (1-based).",
+                        "description": (
+                            "Current step number (1-based). "
+                            "Optional — auto-increments if omitted."
+                        ),
                         "minimum": 1,
                     },
                     "total_thoughts": {
                         "type": "integer",
                         "description": (
                             "Estimated total steps needed. "
-                            "Adjust freely as your understanding evolves."
+                            "Optional — defaults to 3 on first call, then carries forward."
                         ),
                         "minimum": 1,
                     },
                     "next_thought_needed": {
                         "type": "boolean",
-                        "description": "true if you need more thinking steps, false when done.",
+                        "description": (
+                            "true if you need more thinking steps, false when done. "
+                            "Optional — defaults to true."
+                        ),
                     },
                     "is_revision": {
                         "type": "boolean",
@@ -257,12 +264,7 @@ TOOLS = [
                         ),
                     },
                 },
-                "required": [
-                    "thought",
-                    "thought_number",
-                    "total_thoughts",
-                    "next_thought_needed",
-                ],
+                "required": ["thought"],
             },
         },
     },

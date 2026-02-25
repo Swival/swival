@@ -325,3 +325,184 @@ def test_multiple_tool_interventions_are_combined_into_one_user_message(
     counts = sorted(count for _tool, count, _err in guardrail_calls)
     assert tool_names == {"read_file", "run_command"}
     assert counts == [2, 2]
+
+
+# ---------------------------------------------------------------------------
+# Think nudge tests
+# ---------------------------------------------------------------------------
+
+
+def _intervention_user_messages(messages):
+    """Extract all user-role intervention messages (Tip:, IMPORTANT:, STOP:)."""
+    out = []
+    for msg in messages:
+        role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+        if role != "user":
+            continue
+        content = (
+            msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
+        )
+        if content.startswith("Tip:") or content.startswith("IMPORTANT:") or content.startswith("STOP:"):
+            out.append(content)
+    return out
+
+
+def test_think_nudge_fires_on_edit_without_think(tmp_path, monkeypatch):
+    """Nudge fires when edit_file is used without prior think call."""
+    from swival import agent
+    from swival import fmt
+
+    snapshots = []
+    call_count = 0
+
+    # Create a file to edit
+    (tmp_path / "test.txt").write_text("hello\n")
+
+    def fake_call_llm(*args, **kwargs):
+        nonlocal call_count
+        snapshots.append(list(args[2]))
+        call_count += 1
+        if call_count == 1:
+            tc = _make_tool_call(
+                "edit_file",
+                json.dumps({"file_path": "test.txt", "old_string": "hello", "new_string": "world"}),
+                call_id="call_1",
+            )
+            return _make_message(tool_calls=[tc]), "tool_calls"
+        return _make_message(content="done"), "stop"
+
+    monkeypatch.setattr(agent, "call_llm", fake_call_llm)
+    monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+    args = _base_args(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["agent", "test nudge"])
+    monkeypatch.setattr("argparse.ArgumentParser.parse_args", lambda self: args)
+
+    agent.main()
+
+    # The second LLM call should see the nudge
+    assert len(snapshots) == 2
+    tips = [m for m in _intervention_user_messages(snapshots[1]) if m.startswith("Tip:")]
+    assert len(tips) == 1
+    assert "think" in tips[0].lower()
+
+
+def test_think_nudge_suppressed_when_think_called_first(tmp_path, monkeypatch):
+    """No nudge when model calls think before edit_file."""
+    from swival import agent
+    from swival import fmt
+
+    snapshots = []
+    call_count = 0
+
+    (tmp_path / "test.txt").write_text("hello\n")
+
+    def fake_call_llm(*args, **kwargs):
+        nonlocal call_count
+        snapshots.append(list(args[2]))
+        call_count += 1
+        if call_count == 1:
+            # Model thinks first
+            tc = _make_tool_call(
+                "think",
+                json.dumps({"thought": "Planning the edit"}),
+                call_id="call_think",
+            )
+            return _make_message(tool_calls=[tc]), "tool_calls"
+        if call_count == 2:
+            tc = _make_tool_call(
+                "edit_file",
+                json.dumps({"file_path": "test.txt", "old_string": "hello", "new_string": "world"}),
+                call_id="call_edit",
+            )
+            return _make_message(tool_calls=[tc]), "tool_calls"
+        return _make_message(content="done"), "stop"
+
+    monkeypatch.setattr(agent, "call_llm", fake_call_llm)
+    monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+    args = _base_args(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["agent", "test nudge"])
+    monkeypatch.setattr("argparse.ArgumentParser.parse_args", lambda self: args)
+
+    agent.main()
+
+    # No Tip: messages should appear anywhere
+    for snap in snapshots:
+        tips = [m for m in _intervention_user_messages(snap) if m.startswith("Tip:")]
+        assert len(tips) == 0, f"Unexpected think nudge: {tips}"
+
+
+def test_think_nudge_fires_at_most_once(tmp_path, monkeypatch):
+    """Nudge fires only once even with multiple edit_file calls."""
+    from swival import agent
+    from swival import fmt
+
+    snapshots = []
+    call_count = 0
+
+    (tmp_path / "test.txt").write_text("hello\n")
+
+    def fake_call_llm(*args, **kwargs):
+        nonlocal call_count
+        snapshots.append(list(args[2]))
+        call_count += 1
+        if call_count <= 2:
+            tc = _make_tool_call(
+                "edit_file",
+                json.dumps({"file_path": "test.txt", "old_string": "hello" if call_count == 1 else "world", "new_string": "world" if call_count == 1 else "hello"}),
+                call_id=f"call_{call_count}",
+            )
+            return _make_message(tool_calls=[tc]), "tool_calls"
+        return _make_message(content="done"), "stop"
+
+    monkeypatch.setattr(agent, "call_llm", fake_call_llm)
+    monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+    args = _base_args(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["agent", "test nudge"])
+    monkeypatch.setattr("argparse.ArgumentParser.parse_args", lambda self: args)
+
+    agent.main()
+
+    # Count Tip: messages in the final snapshot (the full message history).
+    # Even though edit_file was called twice, only one tip should be present.
+    final_tips = [m for m in _intervention_user_messages(snapshots[-1]) if m.startswith("Tip:")]
+    assert len(final_tips) == 1, f"Expected exactly 1 nudge, got {len(final_tips)}: {final_tips}"
+
+
+def test_think_nudge_does_not_fire_for_read_file(tmp_path, monkeypatch):
+    """No nudge for read-only tools like read_file."""
+    from swival import agent
+    from swival import fmt
+
+    snapshots = []
+    call_count = 0
+
+    (tmp_path / "test.txt").write_text("hello\n")
+
+    def fake_call_llm(*args, **kwargs):
+        nonlocal call_count
+        snapshots.append(list(args[2]))
+        call_count += 1
+        if call_count == 1:
+            tc = _make_tool_call(
+                "read_file",
+                json.dumps({"file_path": "test.txt"}),
+                call_id="call_1",
+            )
+            return _make_message(tool_calls=[tc]), "tool_calls"
+        return _make_message(content="done"), "stop"
+
+    monkeypatch.setattr(agent, "call_llm", fake_call_llm)
+    monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+    args = _base_args(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["agent", "test nudge"])
+    monkeypatch.setattr("argparse.ArgumentParser.parse_args", lambda self: args)
+
+    agent.main()
+
+    for snap in snapshots:
+        tips = [m for m in _intervention_user_messages(snap) if m.startswith("Tip:")]
+        assert len(tips) == 0, f"Unexpected think nudge for read_file: {tips}"

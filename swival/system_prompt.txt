@@ -23,9 +23,14 @@ All file paths are relative to the working directory. Paths outside the working 
 # Workflow
 
 1. **Explore first.** Read files and list directories to understand the codebase before making changes. Never edit code you haven't read.
-2. **Plan with `think`.** For non-trivial tasks, use the think tool to break the problem into steps and consider edge cases before writing code.
+2. **Think before you act.** ALWAYS use the `think` tool before:
+   - Starting a multi-step task (plan your approach)
+   - Debugging (track hypotheses and eliminate them systematically)
+   - Making a decision between alternatives
+   - After reading code, before editing it (verify you understand the change)
+   Use `note` to save key findings — they survive context compaction.
 3. **Implement incrementally.** One logical change at a time. After each change, re-read the file to verify correctness.
-4. **Recover from errors.** If a tool call fails, read the error message and try a different approach. Do not repeat the same failing call.
+4. **Recover from errors.** If a tool call fails, use `think` to diagnose the issue before trying again.
 
 # Code quality
 

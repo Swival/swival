@@ -48,6 +48,11 @@ class ThinkingState:
         self.notes_dir = notes_dir
         self.note_count = 0
 
+        # Usage counters (unconditional, not gated on verbose)
+        self.think_calls = 0
+        self.note_attempts = 0
+        self.note_saves = 0
+
         # Session isolation: delete any stale notes file from a prior run.
         if notes_dir is not None:
             notes_path = _safe_notes_path(notes_dir)
@@ -62,9 +67,23 @@ class ThinkingState:
         if len(self.history) >= MAX_HISTORY:
             return f"error: thinking history full ({MAX_HISTORY} steps max)"
 
+        self.think_calls += 1
+
         thought = args.get("thought", "")
-        thought_number = args.get("thought_number", 1)
-        total_thoughts = args.get("total_thoughts", 1)
+
+        # Auto-default optional numbering params
+        if "thought_number" in args:
+            thought_number = args["thought_number"]
+        else:
+            thought_number = len(self.history) + 1
+
+        if "total_thoughts" in args:
+            total_thoughts = args["total_thoughts"]
+        elif self.history:
+            total_thoughts = self.history[-1].total_thoughts
+        else:
+            total_thoughts = 3
+
         next_thought_needed = args.get("next_thought_needed", True)
         is_revision = args.get("is_revision", False)
         revises_thought = args.get("revises_thought")
@@ -148,6 +167,8 @@ class ThinkingState:
 
     def _handle_note(self, note_text: str, entry: ThoughtEntry, response: dict) -> None:
         """Persist a note to disk and update the response dict."""
+        self.note_attempts += 1
+
         if self.notes_dir is None:
             response["note_saved"] = False
             response["note_error"] = "no_notes_dir"
@@ -186,8 +207,18 @@ class ThinkingState:
             response["note_error"] = "write_failed"
             return
 
+        self.note_saves += 1
         response["note_saved"] = True
         response["notes_file"] = ".swival/notes.md"
+
+    def summary_line(self) -> str | None:
+        """Return a one-line usage summary, or None if think was never called."""
+        if self.think_calls == 0:
+            return None
+        parts = [f"think: {self.think_calls} call{'s' if self.think_calls != 1 else ''}"]
+        if self.note_saves:
+            parts.append(f"{self.note_saves} note{'s' if self.note_saves != 1 else ''} saved")
+        return ", ".join(parts)
 
     def _log(self, entry: ThoughtEntry) -> None:
         """Write a formatted log line to stderr."""

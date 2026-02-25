@@ -392,6 +392,126 @@ class TestAutoAdjust:
         assert result["total_thoughts"] == 7
 
 
+class TestDefaulting:
+    """Tests for optional thought_number/total_thoughts/next_thought_needed."""
+
+    def test_thought_only(self):
+        """Calling with just 'thought' auto-increments and defaults correctly."""
+        state = ThinkingState()
+        r1 = json.loads(state.process({"thought": "First"}))
+        assert r1["thought_number"] == 1
+        assert r1["total_thoughts"] == 3  # default for first call
+        assert r1["next_thought_needed"] is True  # default
+
+        r2 = json.loads(state.process({"thought": "Second"}))
+        assert r2["thought_number"] == 2
+        assert r2["total_thoughts"] == 3  # carried forward
+
+        r3 = json.loads(state.process({"thought": "Third"}))
+        assert r3["thought_number"] == 3
+        assert r3["total_thoughts"] == 3
+
+    def test_explicit_params_still_work(self):
+        """Passing all four fields works identically to before (no regression)."""
+        state = ThinkingState()
+        r = json.loads(
+            state.process(
+                {
+                    "thought": "Step 1",
+                    "thought_number": 1,
+                    "total_thoughts": 5,
+                    "next_thought_needed": True,
+                }
+            )
+        )
+        assert r["thought_number"] == 1
+        assert r["total_thoughts"] == 5
+        assert r["next_thought_needed"] is True
+
+    def test_mixed_explicit_and_default(self):
+        """Some calls provide explicit numbers, some rely on defaults."""
+        state = ThinkingState()
+        # Explicit first call
+        r1 = json.loads(
+            state.process(
+                {
+                    "thought": "Explicit",
+                    "thought_number": 1,
+                    "total_thoughts": 5,
+                    "next_thought_needed": True,
+                }
+            )
+        )
+        assert r1["thought_number"] == 1
+        assert r1["total_thoughts"] == 5
+
+        # Default second call — should auto-increment, carry forward total
+        r2 = json.loads(state.process({"thought": "Defaulted"}))
+        assert r2["thought_number"] == 2
+        assert r2["total_thoughts"] == 5  # carried from explicit call
+
+        # Explicit third call with different total
+        r3 = json.loads(
+            state.process(
+                {
+                    "thought": "Explicit again",
+                    "thought_number": 10,
+                    "total_thoughts": 10,
+                    "next_thought_needed": False,
+                }
+            )
+        )
+        assert r3["thought_number"] == 10
+        assert r3["total_thoughts"] == 10
+        assert r3["next_thought_needed"] is False
+
+    def test_default_with_revision(self):
+        """Revision still works when thought_number is auto-incremented."""
+        state = ThinkingState()
+        state.process({"thought": "First"})  # auto: thought_number=1
+        r = json.loads(
+            state.process(
+                {
+                    "thought": "Revise first",
+                    "is_revision": True,
+                    "revises_thought": 1,
+                }
+            )
+        )
+        assert r["thought_number"] == 2
+        assert r["history_length"] == 2
+
+    def test_default_with_branch(self):
+        """Branching works when thought_number is auto-incremented."""
+        state = ThinkingState()
+        state.process({"thought": "Main"})  # auto: thought_number=1
+        r = json.loads(
+            state.process(
+                {
+                    "thought": "Alt approach",
+                    "branch_from_thought": 1,
+                    "branch_id": "alt",
+                }
+            )
+        )
+        assert r["thought_number"] == 2
+        assert "alt" in r["branches"]
+
+    def test_dispatch_thought_only(self):
+        """dispatch('think', {'thought': '...'}) returns valid JSON."""
+        state = ThinkingState()
+        result = dispatch(
+            "think",
+            {"thought": "Quick plan"},
+            tempfile.mkdtemp(),
+            thinking_state=state,
+        )
+        parsed = json.loads(result)
+        assert parsed["thought_number"] == 1
+        assert parsed["total_thoughts"] == 3
+        assert parsed["history_length"] == 1
+
+
 class TestTruncation:
     def test_long_thought_truncated(self):
         state = ThinkingState()
@@ -914,3 +1034,72 @@ class TestNotes:
         s2 = ThinkingState(verbose=True)
         assert s2.notes_dir is None
         assert s2.verbose is True
+
+
+# ---------------------------------------------------------------------------
+# Usage counters and summary tests
+# ---------------------------------------------------------------------------
+
+
+class TestUsageCounters:
+    def test_think_calls_counter(self):
+        state = ThinkingState()
+        assert state.think_calls == 0
+        state.process({"thought": "First"})
+        assert state.think_calls == 1
+        state.process({"thought": "Second"})
+        assert state.think_calls == 2
+
+    def test_note_attempts_and_saves(self):
+        tmpdir = tempfile.mkdtemp()
+        state = ThinkingState(notes_dir=tmpdir)
+        assert state.note_attempts == 0
+        assert state.note_saves == 0
+
+        state.process(_thought(1, note="Save this"))
+        assert state.note_attempts == 1
+        assert state.note_saves == 1
+
+        state.process(_thought(2))  # no note
+        assert state.note_attempts == 1
+        assert state.note_saves == 1
+
+        state.process(_thought(3, note="Another"))
+        assert state.note_attempts == 2
+        assert state.note_saves == 2
+
+    def test_note_attempt_without_save(self):
+        """note_attempts increments even when save fails (no notes_dir)."""
+        state = ThinkingState()  # no notes_dir
+        state.process(_thought(1, note="Try to save"))
+        assert state.note_attempts == 1
+        assert state.note_saves == 0
+
+    def test_summary_line_no_calls(self):
+        state = ThinkingState()
+        assert state.summary_line() is None
+
+    def test_summary_line_calls_only(self):
+        state = ThinkingState()
+        state.process({"thought": "A"})
+        state.process({"thought": "B"})
+        assert state.summary_line() == "think: 2 calls"
+
+    def test_summary_line_single_call(self):
+        state = ThinkingState()
+        state.process({"thought": "Only one"})
+        assert state.summary_line() == "think: 1 call"
+
+    def test_summary_line_with_notes(self):
+        tmpdir = tempfile.mkdtemp()
+        state = ThinkingState(notes_dir=tmpdir)
+        state.process(_thought(1, note="Key finding"))
+        state.process(_thought(2))
+        state.process(_thought(3, note="Another"))
+        assert state.summary_line() == "think: 3 calls, 2 notes saved"
+
+    def test_summary_line_single_note(self):
+        tmpdir = tempfile.mkdtemp()
+        state = ThinkingState(notes_dir=tmpdir)
+        state.process(_thought(1, note="One note"))
+        assert state.summary_line() == "think: 1 call, 1 note saved"

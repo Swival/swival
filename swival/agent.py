@@ -1026,6 +1026,8 @@ def run_agent_loop(
     """
     consecutive_errors: dict[str, tuple[str, int]] = {}
     turns = 0
+    think_used = False
+    think_nudge_fired = False
 
     while turns < max_turns:
         turns += 1
@@ -1228,6 +1230,9 @@ def run_agent_loop(
             # Model produced a final text answer
             if verbose:
                 fmt.completion(turns, "ok")
+            summary = thinking_state.summary_line()
+            if summary:
+                fmt.think_summary(summary)
             return msg.content or "", False
 
         interventions: list[str] = []
@@ -1257,6 +1262,9 @@ def run_agent_loop(
                 )
 
             tool_name = tool_meta["name"]
+            if tool_name == "think":
+                think_used = True
+
             result = tool_msg["content"]
             if result.startswith("error:"):
                 canonical_error = _canonical_error(result)
@@ -1290,6 +1298,19 @@ def run_agent_loop(
                         fmt.guardrail(tool_name, count, canonical_error)
             else:
                 consecutive_errors.pop(tool_name, None)
+        # Think nudge: if model used edit_file/write_file without thinking first
+        if not think_used and not think_nudge_fired:
+            has_mutating = any(
+                tc.function.name in ("edit_file", "write_file")
+                for tc in msg.tool_calls
+            )
+            if has_mutating:
+                think_nudge_fired = True
+                interventions.append(
+                    "Tip: Consider using the `think` tool before making edits. "
+                    "Planning your approach first leads to better outcomes."
+                )
+
         if interventions:
             messages.append({"role": "user", "content": "\n\n".join(interventions)})
         if verbose:
@@ -1310,6 +1331,9 @@ def run_agent_loop(
             if content:
                 last_text = content
                 break
+    summary = thinking_state.summary_line()
+    if summary:
+        fmt.think_summary(summary)
     return last_text, True
 
 
@@ -1349,6 +1373,9 @@ def _repl_clear(messages: list, thinking_state: ThinkingState) -> None:
     thinking_state.history.clear()
     thinking_state.branches.clear()
     thinking_state.note_count = 0
+    thinking_state.think_calls = 0
+    thinking_state.note_attempts = 0
+    thinking_state.note_saves = 0
     if thinking_state.notes_dir is not None:
         try:
             notes_path = _safe_notes_path(thinking_state.notes_dir)
