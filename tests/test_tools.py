@@ -197,108 +197,78 @@ class TestWriteFilePositive:
 
 
 class TestWriteFileMoveFrom:
-    """Tests for _write_file move_from parameter."""
+    """Tests for _write_file move_from (atomic rename) parameter."""
 
-    def test_move_from_writes_dest_and_trashes_src(self, tmp_path):
-        """move_from writes destination and soft-deletes source."""
-        src = tmp_path / "old.txt"
-        src.write_text("original", encoding="utf-8")
-        from swival.tools import _read_file
-        _read_file("old.txt", str(tmp_path))
-
-        result = _write_file("new.txt", "updated", str(tmp_path), move_from="old.txt")
+    def test_rename_moves_file(self, tmp_path):
+        """move_from atomically renames source to destination."""
+        (tmp_path / "old.txt").write_text("keep this", encoding="utf-8")
+        result = _write_file("new.txt", None, str(tmp_path), move_from="old.txt")
         assert result.startswith("Moved")
-        assert "old.txt" in result
-        assert "new.txt" in result
-        assert (tmp_path / "new.txt").read_text(encoding="utf-8") == "updated"
-        assert not src.exists()
+        assert "old.txt" in result and "new.txt" in result
+        assert (tmp_path / "new.txt").read_text(encoding="utf-8") == "keep this"
+        assert not (tmp_path / "old.txt").exists()
 
-    def test_move_from_returns_moved_message(self, tmp_path):
-        """Return message says 'Moved src -> dst'."""
-        (tmp_path / "a.txt").write_text("content", encoding="utf-8")
-        from swival.tools import _read_file
-        _read_file("a.txt", str(tmp_path))
+    def test_rename_preserves_content_exactly(self, tmp_path):
+        """Atomic rename preserves file content byte-for-byte."""
+        original = "line 1\nline 2\n\ttabbed\n"
+        (tmp_path / "src.py").write_text(original, encoding="utf-8")
+        _write_file("dst.py", None, str(tmp_path), move_from="src.py")
+        assert (tmp_path / "dst.py").read_text(encoding="utf-8") == original
 
-        result = _write_file("b.txt", "content", str(tmp_path), move_from="a.txt")
-        assert "Moved" in result
-        assert "a.txt" in result
-        assert "b.txt" in result
+    def test_rename_works_for_binary(self, tmp_path):
+        """Atomic rename works for binary files (no content read/encode)."""
+        data = bytes(range(256))
+        (tmp_path / "bin.dat").write_bytes(data)
+        result = _write_file("moved.dat", None, str(tmp_path), move_from="bin.dat")
+        assert result.startswith("Moved")
+        assert (tmp_path / "moved.dat").read_bytes() == data
 
     def test_move_from_src_not_found(self, tmp_path):
         """Error if move_from source does not exist."""
-        result = _write_file("dst.txt", "x", str(tmp_path), move_from="missing.txt")
+        result = _write_file("dst.txt", None, str(tmp_path), move_from="missing.txt")
         assert result.startswith("error:")
         assert "missing.txt" in result
 
     def test_move_from_self_move_rejected(self, tmp_path):
         """Error when source and destination resolve to the same path."""
         (tmp_path / "same.txt").write_text("x", encoding="utf-8")
-        result = _write_file("same.txt", "x", str(tmp_path), move_from="same.txt")
+        result = _write_file("same.txt", None, str(tmp_path), move_from="same.txt")
         assert result.startswith("error:")
         assert "same path" in result
 
     def test_move_from_directory_rejected(self, tmp_path):
         """Error when move_from is a directory."""
         (tmp_path / "subdir").mkdir()
-        result = _write_file("dst.txt", "x", str(tmp_path), move_from="subdir")
+        result = _write_file("dst.txt", None, str(tmp_path), move_from="subdir")
         assert result.startswith("error:")
         assert "directory" in result
 
     def test_move_from_outside_sandbox_rejected(self, tmp_path):
         """move_from path outside base_dir is rejected."""
-        result = _write_file("dst.txt", "x", str(tmp_path), move_from="../outside.txt")
+        result = _write_file("dst.txt", None, str(tmp_path), move_from="../outside.txt")
         assert result.startswith("error:")
 
     def test_move_from_dangling_symlink_allowed(self, tmp_path):
         """move_from accepts a dangling symlink, consistent with delete_file."""
         link = tmp_path / "link.txt"
-        # Point inside base_dir so safe_resolve accepts it, but target is missing.
         link.symlink_to(tmp_path / "nonexistent_target.txt")
         assert link.is_symlink() and not link.exists()
 
-        result = _write_file("dst.txt", "content", str(tmp_path), move_from="link.txt")
+        result = _write_file("dst.txt", None, str(tmp_path), move_from="link.txt")
         assert result.startswith("Moved")
         assert not link.exists()
-        assert (tmp_path / "dst.txt").read_text(encoding="utf-8") == "content"
 
-    def test_move_from_partial_success_warning(self, tmp_path):
-        """If write succeeds but trashing source fails, return a partial-success message."""
-        from unittest.mock import patch
-        from swival.tools import _read_file
+    def test_content_and_move_from_mutually_exclusive(self, tmp_path):
+        """Setting both content and move_from is an error."""
+        (tmp_path / "src.txt").write_text("x", encoding="utf-8")
+        result = _write_file("dst.txt", "x", str(tmp_path), move_from="src.txt")
+        assert result.startswith("error:")
+        assert "not both" in result
 
-        (tmp_path / "src.txt").write_text("content", encoding="utf-8")
-        _read_file("src.txt", str(tmp_path))
-
-        with patch("swival.tools._delete_file", return_value="error: permission denied"):
-            result = _write_file("dst.txt", "content", str(tmp_path), move_from="src.txt")
-
-        assert "Wrote" in result
-        assert "warning" in result
-        assert "permission denied" in result
-        # Destination must have been written.
-        assert (tmp_path / "dst.txt").read_text(encoding="utf-8") == "content"
-
-    def test_pure_rename_no_content(self, tmp_path):
-        """move_from without content reads source and writes it to destination."""
-        (tmp_path / "old.txt").write_text("keep this", encoding="utf-8")
-        result = _write_file("new.txt", None, str(tmp_path), move_from="old.txt")
-        assert result.startswith("Moved")
-        assert (tmp_path / "new.txt").read_text(encoding="utf-8") == "keep this"
-        assert not (tmp_path / "old.txt").exists()
-
-    def test_pure_rename_preserves_content_exactly(self, tmp_path):
-        """Pure rename preserves file content byte-for-byte."""
-        original = "line 1\nline 2\n\ttabbed\n"
-        (tmp_path / "src.py").write_text(original, encoding="utf-8")
-        result = _write_file("dst.py", None, str(tmp_path), move_from="src.py")
-        assert result.startswith("Moved")
-        assert (tmp_path / "dst.py").read_text(encoding="utf-8") == original
-
-    def test_content_required_without_move_from(self, tmp_path):
-        """content=None without move_from is an error."""
+    def test_neither_content_nor_move_from_is_error(self, tmp_path):
+        """Omitting both content and move_from is an error."""
         result = _write_file("new.txt", None, str(tmp_path))
         assert result.startswith("error:")
-        assert "content is required" in result
 
 
 # =========================================================================

@@ -63,28 +63,24 @@ TOOLS = [
         "function": {
             "name": "write_file",
             "description": (
-                "Create or overwrite a file with the given content, creating parent directories as needed. "
-                "Set move_from to rename or move a file. For a pure rename, omit content."
+                "Create or overwrite a file. Parent directories are created automatically. "
+                "Either provide content to write, or move_from to atomically rename a file — not both."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "Path to the file to write.",
+                        "description": "Destination path.",
                     },
                     "content": {
                         "type": "string",
-                        "description": (
-                            "The content to write to the file. "
-                            "Required unless move_from is set (omit for a pure atomic rename)."
-                        ),
+                        "description": "The content to write. Do not set with move_from.",
                     },
                     "move_from": {
                         "type": "string",
                         "description": (
-                            "Source path to rename or move. "
-                            "Omit content for an atomic rename; provide content to write new content and trash the source. "
+                            "Source path to atomically rename to file_path. Do not set with content. "
                             "If the destination already exists, it must have been read or written first."
                         ),
                     },
@@ -867,16 +863,15 @@ def _write_file(
     extra_write_roots: list[Path] = (),
     unrestricted: bool = False,
     tracker=None,
-    tool_call_id: str = "",
 ) -> str:
-    """Create or overwrite a file with content.
+    """Create or overwrite a file, or atomically rename one.
 
-    If move_from is set, the source is soft-deleted after writing the
-    destination (write + trash, not an atomic rename).  When content is
-    None and move_from is set, the source content is used (pure rename).
+    Exactly one of content or move_from must be set.
     """
+    if content is not None and move_from is not None:
+        return "error: set content or move_from, not both"
     if content is None and move_from is None:
-        return "error: content is required when move_from is not set"
+        return "error: set content or move_from"
 
     # Resolve destination.
     try:
@@ -889,8 +884,13 @@ def _write_file(
     except ValueError as exc:
         return f"error: {exc}"
 
-    # Preflight move_from checks before touching anything.
-    move_from_resolved: Path | None = None
+    # Read guard on destination (only blocks if the file already exists).
+    if tracker is not None:
+        error = tracker.check_write_allowed(str(resolved), resolved.exists())
+        if error:
+            return error
+
+    # --- Rename path ---
     if move_from is not None:
         try:
             move_from_resolved = safe_resolve(
@@ -905,8 +905,8 @@ def _write_file(
         if move_from_resolved == resolved:
             return "error: move_from and file_path resolve to the same path"
 
-        # Use the original (pre-resolved) path for existence/type checks so that
-        # dangling symlinks are handled consistently with delete_file.
+        # Use the original (pre-resolved) path for existence/type checks so
+        # that dangling symlinks are handled consistently with delete_file.
         move_from_original = (
             Path(base_dir) / move_from
             if not Path(move_from).is_absolute()
@@ -919,14 +919,6 @@ def _write_file(
         if not move_from_original.is_symlink() and move_from_original.is_dir():
             return "error: move_from is a directory (cannot move directories)"
 
-    # Read guard on destination (only blocks if the file already exists).
-    if tracker is not None:
-        error = tracker.check_write_allowed(str(resolved), resolved.exists())
-        if error:
-            return error
-
-    # Pure rename: atomic filesystem move, no content copying.
-    if content is None and move_from_resolved is not None:
         resolved.parent.mkdir(parents=True, exist_ok=True)
         try:
             move_from_original.rename(resolved)
@@ -937,32 +929,13 @@ def _write_file(
             tracker.record_write(str(resolved))
         return f"Moved {move_from} -> {file_path}"
 
-    # Write destination.
+    # --- Write path ---
     resolved.parent.mkdir(parents=True, exist_ok=True)
     data = content.encode("utf-8")
     resolved.write_bytes(data)
     if tracker is not None:
         tracker.record_write(str(resolved))
-
-    if move_from_resolved is None:
-        return f"Wrote {len(data)} bytes to {file_path}"
-
-    # Move with new content: write destination, then trash source. Pass
-    # tracker=None so _delete_file doesn't re-run the read guard.
-    delete_result = _delete_file(
-        move_from,
-        base_dir,
-        extra_write_roots=extra_write_roots,
-        unrestricted=unrestricted,
-        tracker=None,
-        tool_call_id=tool_call_id,
-    )
-    if delete_result.startswith("error:"):
-        return (
-            f"Wrote {len(data)} bytes to {file_path}; "
-            f"warning: could not trash source: {delete_result}"
-        )
-    return f"Moved {move_from} -> {file_path} ({len(data)} bytes)"
+    return f"Wrote {len(data)} bytes to {file_path}"
 
 
 def _edit_file(
@@ -1570,7 +1543,6 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             extra_write_roots=extra_write_roots,
             unrestricted=yolo,
             tracker=file_tracker,
-            tool_call_id=kwargs.get("tool_call_id", ""),
         )
     elif name == "edit_file":
         return _edit_file(
