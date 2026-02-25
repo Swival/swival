@@ -111,7 +111,8 @@ a square root, then delivered the answer:</p>
     &quot;truncated_responses&quot;: 0,
     &quot;llm_calls&quot;: 2,
     &quot;total_llm_time_s&quot;: 48.25,
-    &quot;total_tool_time_s&quot;: 0.082
+    &quot;total_tool_time_s&quot;: 0.082,
+    &quot;skills_used&quot;: []
   },
   &quot;timeline&quot;: [
     {
@@ -379,6 +380,11 @@ a square root, then delivered the answer:</p>
 <td>int</td>
 <td>LLM responses cut short by output token limit</td>
 </tr>
+<tr>
+<td><code>skills_used</code></td>
+<td>string[]</td>
+<td>Skill names that were successfully activated during the run</td>
+</tr>
 </tbody>
 </table>
 <h3 id="timeline">timeline</h3>
@@ -409,7 +415,12 @@ old tool results) or <code>"drop_middle_turns"</code> (removing entire middle tu
 </code></pre>
 <h2 id="benchmarking-workflow">Benchmarking workflow</h2>
 <p>A typical benchmarking setup runs the same set of tasks across different
-configurations and compares the reports.</p>
+configurations and compares the reports. For more deterministic results, pass
+<code>--seed</code> so the model samples consistently across runs:</p>
+<pre><code class="language-sh">swival &quot;task&quot; --seed 42 --report run1.json
+</code></pre>
+<p>Not all models guarantee identical outputs with the same seed, but it reduces
+variance significantly. See <a href="customization.html#seed">Customization</a> for details.</p>
 <h3 id="comparing-models">Comparing models</h3>
 <pre><code class="language-sh">for model in qwen3-coder-next deepseek-coder-v2; do
     swival &quot;Fix the failing tests in tests/&quot; \
@@ -445,6 +456,9 @@ jq '.stats.tool_calls_by_name' run1.json
 
 # All failed tool calls from the timeline
 jq '[.timeline[] | select(.type == &quot;tool_call&quot; and .succeeded == false)]' run1.json
+
+# Which skills were activated
+jq '.stats.skills_used' run1.json
 
 # Did context management kick in?
 jq '{compactions: .stats.compactions, turn_drops: .stats.turn_drops}' run1.json

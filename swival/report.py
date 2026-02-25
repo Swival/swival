@@ -22,6 +22,7 @@ class ReportCollector:
         self.total_llm_time = 0.0
         self.total_tool_time = 0.0
         self.max_turn_seen = 0
+        self.skills_used: list[str] = []
 
     def record_llm_call(
         self,
@@ -60,6 +61,10 @@ class ReportCollector:
         error: str | None = None,
     ):
         self.total_tool_time += duration
+        if name == "use_skill" and succeeded and arguments:
+            skill_name = arguments.get("name")
+            if skill_name and skill_name not in self.skills_used:
+                self.skills_used.append(skill_name)
         stats = self.tool_stats.setdefault(name, {"succeeded": 0, "failed": 0})
         if succeeded:
             stats["succeeded"] += 1
@@ -150,6 +155,7 @@ class ReportCollector:
                 "llm_calls": self.llm_calls,
                 "total_llm_time_s": round(self.total_llm_time, 3),
                 "total_tool_time_s": round(self.total_tool_time, 3),
+                "skills_used": list(self.skills_used),
             },
             "timeline": self.events,
         }

@@ -66,7 +66,8 @@ a square root, then delivered the answer:
     "truncated_responses": 0,
     "llm_calls": 2,
     "total_llm_time_s": 48.25,
-    "total_tool_time_s": 0.082
+    "total_tool_time_s": 0.082,
+    "skills_used": []
   },
   "timeline": [
     {
@@ -157,20 +158,21 @@ Outcomes:
 
 Aggregate counters for the entire run.
 
-| Field                     | Type   | Description                                                             |
-| ------------------------- | ------ | ----------------------------------------------------------------------- |
-| `turns`                   | int    | Number of turns completed                                               |
-| `llm_calls`               | int    | Total LLM API calls (including retries)                                 |
-| `total_llm_time_s`        | float  | Wall-clock seconds spent in LLM calls                                   |
-| `total_tool_time_s`       | float  | Wall-clock seconds spent executing tools                                |
-| `tool_calls_total`        | int    | Total tool invocations                                                  |
-| `tool_calls_succeeded`    | int    | Tool calls that returned a result                                       |
-| `tool_calls_failed`       | int    | Tool calls that returned an error                                       |
-| `tool_calls_by_name`      | object | Per-tool breakdown: `{"read_file": {"succeeded": 5, "failed": 0}, ...}` |
-| `compactions`             | int    | Context compactions (truncating old results)                            |
-| `turn_drops`              | int    | Aggressive context recovery (dropping turns)                            |
-| `guardrail_interventions` | int    | Times the guardrail injected corrective messages                        |
-| `truncated_responses`     | int    | LLM responses cut short by output token limit                           |
+| Field                     | Type     | Description                                                             |
+| ------------------------- | -------- | ----------------------------------------------------------------------- |
+| `turns`                   | int      | Number of turns completed                                               |
+| `llm_calls`               | int      | Total LLM API calls (including retries)                                 |
+| `total_llm_time_s`        | float    | Wall-clock seconds spent in LLM calls                                   |
+| `total_tool_time_s`       | float    | Wall-clock seconds spent executing tools                                |
+| `tool_calls_total`        | int      | Total tool invocations                                                  |
+| `tool_calls_succeeded`    | int      | Tool calls that returned a result                                       |
+| `tool_calls_failed`       | int      | Tool calls that returned an error                                       |
+| `tool_calls_by_name`      | object   | Per-tool breakdown: `{"read_file": {"succeeded": 5, "failed": 0}, ...}` |
+| `compactions`             | int      | Context compactions (truncating old results)                            |
+| `turn_drops`              | int      | Aggressive context recovery (dropping turns)                            |
+| `guardrail_interventions` | int      | Times the guardrail injected corrective messages                        |
+| `truncated_responses`     | int      | LLM responses cut short by output token limit                           |
+| `skills_used`             | string[] | Skill names that were successfully activated during the run             |
 
 ### timeline
 
@@ -214,7 +216,15 @@ old tool results) or `"drop_middle_turns"` (removing entire middle turns).
 ## Benchmarking workflow
 
 A typical benchmarking setup runs the same set of tasks across different
-configurations and compares the reports.
+configurations and compares the reports. For more deterministic results, pass
+`--seed` so the model samples consistently across runs:
+
+```sh
+swival "task" --seed 42 --report run1.json
+```
+
+Not all models guarantee identical outputs with the same seed, but it reduces
+variance significantly. See [Customization](customization.md#seed) for details.
 
 ### Comparing models
 
@@ -263,6 +273,9 @@ jq '.stats.tool_calls_by_name' run1.json
 
 # All failed tool calls from the timeline
 jq '[.timeline[] | select(.type == "tool_call" and .succeeded == false)]' run1.json
+
+# Which skills were activated
+jq '.stats.skills_used' run1.json
 
 # Did context management kick in?
 jq '{compactions: .stats.compactions, turn_drops: .stats.turn_drops}' run1.json
