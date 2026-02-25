@@ -63,7 +63,8 @@ TOOLS = [
         "function": {
             "name": "write_file",
             "description": (
-                "Create or overwrite a file with the given content, creating parent directories as needed."
+                "Create or overwrite a file with the given content, creating parent directories as needed. "
+                "Set move_from to rename or move a file: writes the destination, then trashes the source."
             ),
             "parameters": {
                 "type": "object",
@@ -75,6 +76,14 @@ TOOLS = [
                     "content": {
                         "type": "string",
                         "description": "The content to write to the file.",
+                    },
+                    "move_from": {
+                        "type": "string",
+                        "description": (
+                            "Optional source path to trash after writing the destination. "
+                            "Use to move or rename a file. "
+                            "If the destination already exists, it must have been read or written in this session first."
+                        ),
                     },
                 },
                 "required": ["file_path", "content"],
@@ -851,11 +860,18 @@ def _write_file(
     file_path: str,
     content: str,
     base_dir: str,
+    move_from: str | None = None,
     extra_write_roots: list[Path] = (),
     unrestricted: bool = False,
     tracker=None,
+    tool_call_id: str = "",
 ) -> str:
-    """Create or overwrite a file with content."""
+    """Create or overwrite a file with content.
+
+    If move_from is set, the source is soft-deleted after writing the
+    destination (write + trash, not an atomic rename).
+    """
+    # Resolve destination.
     try:
         resolved = safe_resolve(
             file_path,
@@ -866,17 +882,69 @@ def _write_file(
     except ValueError as exc:
         return f"error: {exc}"
 
+    # Preflight move_from checks before touching anything.
+    move_from_resolved: Path | None = None
+    if move_from is not None:
+        try:
+            move_from_resolved = safe_resolve(
+                move_from,
+                base_dir,
+                extra_write_roots=extra_write_roots,
+                unrestricted=unrestricted,
+            )
+        except ValueError as exc:
+            return f"error: {exc}"
+
+        if move_from_resolved == resolved:
+            return "error: move_from and file_path resolve to the same path"
+
+        # Use the original (pre-resolved) path for existence/type checks so that
+        # dangling symlinks are handled consistently with delete_file.
+        move_from_original = (
+            Path(base_dir) / move_from
+            if not Path(move_from).is_absolute()
+            else Path(move_from)
+        )
+
+        if not move_from_original.exists() and not move_from_original.is_symlink():
+            return f"error: move_from not found: {move_from}"
+
+        if not move_from_original.is_symlink() and move_from_original.is_dir():
+            return "error: move_from is a directory (cannot move directories)"
+
+    # Read guard on destination (only blocks if the file already exists).
     if tracker is not None:
         error = tracker.check_write_allowed(str(resolved), resolved.exists())
         if error:
             return error
 
+    # Write destination.
     resolved.parent.mkdir(parents=True, exist_ok=True)
     data = content.encode("utf-8")
     resolved.write_bytes(data)
     if tracker is not None:
         tracker.record_write(str(resolved))
-    return f"Wrote {len(data)} bytes to {file_path}"
+
+    if move_from_resolved is None:
+        return f"Wrote {len(data)} bytes to {file_path}"
+
+    # Soft-delete source via existing trash path. Pass tracker=None so
+    # _delete_file doesn't re-run the read guard — the move doesn't require
+    # the source to have been read, and all preflight is done above.
+    delete_result = _delete_file(
+        move_from,
+        base_dir,
+        extra_write_roots=extra_write_roots,
+        unrestricted=unrestricted,
+        tracker=None,
+        tool_call_id=tool_call_id,
+    )
+    if delete_result.startswith("error:"):
+        return (
+            f"Wrote {len(data)} bytes to {file_path}; "
+            f"warning: could not trash source: {delete_result}"
+        )
+    return f"Moved {move_from} -> {file_path} ({len(data)} bytes)"
 
 
 def _edit_file(
@@ -1480,9 +1548,11 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             file_path=args["file_path"],
             content=args["content"],
             base_dir=base_dir,
+            move_from=args.get("move_from"),
             extra_write_roots=extra_write_roots,
             unrestricted=yolo,
             tracker=file_tracker,
+            tool_call_id=kwargs.get("tool_call_id", ""),
         )
     elif name == "edit_file":
         return _edit_file(
