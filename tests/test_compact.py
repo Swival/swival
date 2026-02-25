@@ -15,6 +15,7 @@ from swival.agent import (
     ContextOverflowError,
     call_llm,
 )
+from swival.report import AgentError
 
 
 # ---------------------------------------------------------------------------
@@ -399,7 +400,7 @@ class TestContextOverflowClassifier:
                 call_llm("http://localhost", "model", [], 100, 0.1, 1.0, None, None, False)
 
     def test_bad_request_without_context_keywords(self):
-        """call_llm exits for BadRequestError without context keywords."""
+        """call_llm raises AgentError for BadRequestError without context keywords."""
         import litellm
 
         with patch("litellm.completion") as mock_comp:
@@ -408,6 +409,5 @@ class TestContextOverflowClassifier:
                 model="test",
                 llm_provider="openai",
             )
-            with pytest.raises(SystemExit) as exc_info:
+            with pytest.raises(AgentError):
                 call_llm("http://localhost", "model", [], 100, 0.1, 1.0, None, None, False)
-            assert exc_info.value.code == 1

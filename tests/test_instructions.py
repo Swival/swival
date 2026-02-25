@@ -15,35 +15,39 @@ from swival.agent import load_instructions, MAX_INSTRUCTIONS_CHARS
 
 class TestFileDiscovery:
     def test_no_instructions_files(self, tmp_path):
-        result = load_instructions(str(tmp_path), verbose=False)
+        result, loaded = load_instructions(str(tmp_path), verbose=False)
         assert result == ""
+        assert loaded == []
 
     def test_claude_md_only(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("Use tabs not spaces.", encoding="utf-8")
-        result = load_instructions(str(tmp_path), verbose=False)
+        result, loaded = load_instructions(str(tmp_path), verbose=False)
         assert "<project-instructions>" in result
         assert "Use tabs not spaces." in result
         assert "</project-instructions>" in result
         assert "agent-instructions" not in result
+        assert loaded == ["CLAUDE.md"]
 
     def test_agent_md_only(self, tmp_path):
         (tmp_path / "AGENT.md").write_text("Be concise.", encoding="utf-8")
-        result = load_instructions(str(tmp_path), verbose=False)
+        result, loaded = load_instructions(str(tmp_path), verbose=False)
         assert "<agent-instructions>" in result
         assert "Be concise." in result
         assert "</agent-instructions>" in result
         assert "project-instructions" not in result
+        assert loaded == ["AGENT.md"]
 
     def test_both_files(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("Project rules.", encoding="utf-8")
         (tmp_path / "AGENT.md").write_text("Agent rules.", encoding="utf-8")
-        result = load_instructions(str(tmp_path), verbose=False)
+        result, loaded = load_instructions(str(tmp_path), verbose=False)
         assert "<project-instructions>" in result
         assert "<agent-instructions>" in result
         # project-instructions comes first
         pi = result.index("<project-instructions>")
         ai = result.index("<agent-instructions>")
         assert pi < ai
+        assert loaded == ["CLAUDE.md", "AGENT.md"]
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +59,7 @@ class TestContentHandling:
     def test_truncation(self, tmp_path):
         content = "x" * 15_000
         (tmp_path / "CLAUDE.md").write_text(content, encoding="utf-8")
-        result = load_instructions(str(tmp_path), verbose=False)
+        result, loaded = load_instructions(str(tmp_path), verbose=False)
         # Should be truncated
         assert f"exceeds {MAX_INSTRUCTIONS_CHARS} character limit" in result
         # Extract content between tags
@@ -79,19 +83,20 @@ class TestContentHandling:
             return original_open(self, *args, **kwargs)
 
         monkeypatch.setattr("pathlib.Path.open", bad_open)
-        result = load_instructions(str(tmp_path), verbose=False)
+        result, loaded = load_instructions(str(tmp_path), verbose=False)
         assert result == ""
+        assert loaded == []
 
     def test_empty_file_included(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("", encoding="utf-8")
-        result = load_instructions(str(tmp_path), verbose=False)
+        result, loaded = load_instructions(str(tmp_path), verbose=False)
         assert "<project-instructions>" in result
         assert "</project-instructions>" in result
 
     def test_non_utf8_replaced(self, tmp_path):
         # Write raw bytes with invalid UTF-8
         (tmp_path / "CLAUDE.md").write_bytes(b"hello \xff\xfe world")
-        result = load_instructions(str(tmp_path), verbose=False)
+        result, loaded = load_instructions(str(tmp_path), verbose=False)
         assert "<project-instructions>" in result
         assert "hello" in result
         assert "world" in result

@@ -119,10 +119,14 @@ line editing.
 | `--skills-dir` | none    | Additional skill directory (repeatable) |
 | `--no-skills`  | off     | Disable skill discovery                 |
 
-### Output
+### Output and reporting
 
 | Flag             | Default | Description                                           |
 | ---------------- | ------- | ----------------------------------------------------- |
 | `-q` / `--quiet` | off     | Suppress all diagnostics; only print the final result |
+| `--report FILE`  | off     | Write a JSON evaluation report instead of stdout      |
 | `--color`        | auto    | Force ANSI color on stderr                            |
 | `--no-color`     | auto    | Disable ANSI color on stderr                          |
+
+See [Reports](reports.md) for the full report schema, timeline event types, and
+benchmarking workflows.

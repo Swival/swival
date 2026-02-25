@@ -14,6 +14,7 @@ from pathlib import Path
 import tiktoken
 
 from . import fmt
+from .report import AgentError, ReportCollector
 from .thinking import ThinkingState, _safe_notes_path
 from .tools import (
     TOOLS,
@@ -201,14 +202,15 @@ def clamp_output_tokens(
     return min(requested_max_output, available)
 
 
-def load_instructions(base_dir: str, verbose: bool) -> str:
+def load_instructions(base_dir: str, verbose: bool) -> tuple[str, list[str]]:
     """Load CLAUDE.md and/or AGENT.md from base_dir, if present.
 
-    Returns the combined content as XML-tagged sections, or "" if
-    no instruction files are found. Reads at most MAX_INSTRUCTIONS_CHARS+1
-    characters per file to avoid unbounded memory use.
+    Returns (combined_text, filenames_loaded) where combined_text is
+    XML-tagged sections (or "" if none found) and filenames_loaded lists
+    which files were actually loaded (e.g. ["CLAUDE.md", "AGENT.md"]).
     """
     sections = []
+    loaded: list[str] = []
     for filename, tag in [
         ("CLAUDE.md", "project-instructions"),
         ("AGENT.md", "agent-instructions"),
@@ -230,7 +232,8 @@ def load_instructions(base_dir: str, verbose: bool) -> str:
         if verbose:
             fmt.info(f"Loaded {filename} ({file_size} bytes) from {path.parent}")
         sections.append(f"<{tag}>\n{content}\n</{tag}>")
-    return "\n\n".join(sections)
+        loaded.append(filename)
+    return "\n\n".join(sections), loaded
 
 
 def handle_tool_call(
@@ -244,9 +247,10 @@ def handle_tool_call(
     extra_write_roots=None,
     yolo=False,
 ):
-    """Execute a single tool call and return the tool result message dict.
+    """Execute a single tool call and return (tool_msg, metadata).
 
-    Handles JSON parsing, logging (skipped for think), dispatch, and error catching.
+    tool_msg is the message dict for the LLM conversation.
+    metadata has stable keys: name, arguments, elapsed, succeeded.
     """
     name = tool_call.function.name
     raw_args = tool_call.function.arguments
@@ -256,11 +260,15 @@ def handle_tool_call(
     except (json.JSONDecodeError, TypeError) as e:
         if verbose:
             fmt.tool_error(name, f"invalid JSON: {e}")
-        return {
-            "role": "tool",
-            "tool_call_id": tool_call.id,
-            "content": f"error: invalid JSON in tool arguments: {e}",
-        }
+        error_content = f"error: invalid JSON in tool arguments: {e}"
+        return (
+            {
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "content": error_content,
+            },
+            {"name": name, "arguments": None, "elapsed": 0.0, "succeeded": False},
+        )
 
     if name != "think" and verbose:
         pretty = json.dumps(parsed_args, indent=2)
@@ -287,17 +295,21 @@ def handle_tool_call(
         result = f"error: {e}"
     elapsed = time.monotonic() - t0
 
+    succeeded = not result.startswith("error:")
     if name != "think" and verbose:
-        if result.startswith("error:"):
+        if not succeeded:
             fmt.tool_error(name, result)
         else:
             fmt.tool_result(name, elapsed, result[:500])
 
-    return {
-        "role": "tool",
-        "tool_call_id": tool_call.id,
-        "content": result,
-    }
+    return (
+        {
+            "role": "tool",
+            "tool_call_id": tool_call.id,
+            "content": result,
+        },
+        {"name": name, "arguments": parsed_args, "elapsed": elapsed, "succeeded": succeeded},
+    )
 
 
 def discover_model(base_url, verbose):
@@ -311,11 +323,9 @@ def discover_model(base_url, verbose):
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
     except urllib.error.URLError as e:
-        fmt.error(f"could not connect to LM Studio at {base_url}: {e}")
-        sys.exit(1)
+        raise AgentError(f"could not connect to LM Studio at {base_url}: {e}")
     except json.JSONDecodeError as e:
-        fmt.error(f"invalid JSON from {url}: {e}")
-        sys.exit(1)
+        raise AgentError(f"invalid JSON from {url}: {e}")
 
     # Find first entry with type=="llm" and non-empty loaded_instances
     # LM Studio uses "data" (OpenAI-compat) or "models" (native API) as the top-level key
@@ -363,8 +373,7 @@ def configure_context(base_url, model_key, requested_context, current_context, v
         with urllib.request.urlopen(req, timeout=120) as resp:
             resp.read()
     except urllib.error.URLError as e:
-        fmt.error(f"failed to reload model with new context size: {e}")
-        sys.exit(1)
+        raise AgentError(f"failed to reload model with new context size: {e}")
 
     if verbose:
         fmt.model_info("Model reloaded successfully.")
@@ -399,8 +408,7 @@ def call_llm(
         if base_url:
             kwargs["api_base"] = base_url
     else:
-        fmt.error(f"unknown provider {provider!r}")
-        sys.exit(1)
+        raise AgentError(f"unknown provider {provider!r}")
 
     if verbose:
         seed_info = f", seed={seed}" if seed is not None else ""
@@ -429,11 +437,9 @@ def call_llm(
         msg_text = str(e)
         if _CONTEXT_OVERFLOW_RE.search(msg_text):
             raise ContextOverflowError(f"context window exceeded (inferred): {e}")
-        fmt.error(f"LLM call failed: {e}")
-        sys.exit(1)
+        raise AgentError(f"LLM call failed: {e}")
     except Exception as e:
-        fmt.error(f"LLM call failed: {e}")
-        sys.exit(1)
+        raise AgentError(f"LLM call failed: {e}")
 
     choice = response.choices[0]
     return choice.message, choice.finish_reason
@@ -573,6 +579,13 @@ def build_parser():
         action="store_true",
         help="Disable filesystem sandbox and command whitelist (unrestricted mode).",
     )
+    parser.add_argument(
+        "--report",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Write a JSON evaluation report to FILE instead of printing the answer. Incompatible with --repl.",
+    )
 
     color_group = parser.add_mutually_exclusive_group()
     color_group.add_argument(
@@ -596,6 +609,8 @@ def main():
 
     if not args.repl and args.question is None:
         parser.error("question is required (or use --repl)")
+    if args.report and args.repl:
+        parser.error("--report is incompatible with --repl")
 
     fmt.init(color=args.color, no_color=args.no_color)
 
@@ -608,6 +623,71 @@ def main():
             "--max-output-tokens must be <= --max-context-tokens when both are specified."
         )
 
+    report = ReportCollector() if args.report else None
+
+    # Helper to build the settings dict for the report
+    def _report_settings(
+        model_id="unknown", skills_catalog=None, instructions_loaded=None
+    ):
+        return {
+            "temperature": args.temperature,
+            "top_p": args.top_p,
+            "seed": args.seed,
+            "max_turns": args.max_turns,
+            "max_output_tokens": args.max_output_tokens,
+            "context_length": getattr(args, "_resolved_context_length", args.max_context_tokens),
+            "yolo": args.yolo,
+            "allowed_commands": sorted(
+                c.strip()
+                for c in (args.allowed_commands or "").split(",")
+                if c.strip()
+            ),
+            "skills_discovered": sorted(skills_catalog or {}),
+            "instructions_loaded": instructions_loaded or [],
+        }
+
+    def _write_report(
+        outcome, answer=None, exit_code=0, turns=None, error_message=None,
+        model_id="unknown", skills_catalog=None, instructions_loaded=None,
+    ):
+        if not report:
+            return
+        effective_turns = turns if turns is not None else report.max_turn_seen
+        report.finalize(
+            task=args.question or "",
+            model=model_id,
+            provider=args.provider,
+            settings=_report_settings(model_id, skills_catalog, instructions_loaded),
+            outcome=outcome,
+            answer=answer,
+            exit_code=exit_code,
+            turns=effective_turns,
+            error_message=error_message,
+        )
+        try:
+            report.write(args.report)
+        except OSError as e:
+            fmt.error(f"Failed to write report to {args.report}: {e}")
+            return
+        if args.verbose:
+            fmt.info(f"Report written to {args.report}")
+
+    try:
+        _run_main(args, report, _write_report, parser)
+    except AgentError as e:
+        fmt.error(str(e))
+        _write_report(
+            "error",
+            exit_code=1,
+            error_message=str(e),
+            model_id=getattr(args, "_resolved_model_id", args.model or "unknown"),
+            skills_catalog=getattr(args, "_resolved_skills", None),
+            instructions_loaded=getattr(args, "_resolved_instructions", None),
+        )
+        sys.exit(1)
+
+
+def _run_main(args, report, _write_report, parser):
     # Provider-specific model discovery and context configuration
     if args.provider == "lmstudio":
         api_base = args.base_url or "http://127.0.0.1:1234"
@@ -619,11 +699,10 @@ def main():
         else:
             model_id, current_context = discover_model(api_base, args.verbose)
             if not model_id:
-                fmt.error(
+                raise AgentError(
                     "no loaded LLM found in LM Studio. "
                     "Load a model in LM Studio or use --model to specify one."
                 )
-                sys.exit(1)
         if args.max_context_tokens is not None:
             configure_context(
                 api_base,
@@ -651,6 +730,9 @@ def main():
                 "--api-key or HF_TOKEN env var required for huggingface provider"
             )
 
+    # Stash resolved model_id for error reporting
+    args._resolved_model_id = model_id
+
     llm_kwargs = {
         "provider": args.provider,
         "api_key": api_key,
@@ -661,11 +743,9 @@ def main():
     for d in args.allow_dir:
         p = Path(d).expanduser().resolve()
         if not p.is_dir():
-            fmt.error(f"--allow-dir path is not a directory: {d}")
-            sys.exit(1)
+            raise AgentError(f"--allow-dir path is not a directory: {d}")
         if p == Path(p.anchor):
-            fmt.error(f"--allow-dir cannot be the filesystem root: {d}")
-            sys.exit(1)
+            raise AgentError(f"--allow-dir cannot be the filesystem root: {d}")
         allowed_dirs.append(p)
 
     # Resolve allowed commands
@@ -686,16 +766,14 @@ def main():
         for name in sorted(allowed_names):
             cmd_path = shutil.which(name)
             if cmd_path is None:
-                fmt.error(f"allowed command {name!r} not found on PATH")
-                sys.exit(1)
+                raise AgentError(f"allowed command {name!r} not found on PATH")
             abs_path = Path(cmd_path).resolve()
             if abs_path.is_relative_to(base_resolved):
-                fmt.error(
+                raise AgentError(
                     f"allowed command {name!r} resolves to {abs_path}, "
                     f"which is inside base directory {base_resolved}. "
                     f"Commands inside the workspace can be modified by the model."
                 )
-                sys.exit(1)
             resolved_commands[name] = str(abs_path)
 
     # Discover skills
@@ -705,6 +783,7 @@ def main():
     skill_read_roots: list[Path] = []
     if not args.no_skills:
         skills_catalog = discover_skills(base_dir, args.skills_dir, args.verbose)
+    args._resolved_skills = skills_catalog
 
     # Build tools list (conditionally include run_command and use_skill)
     tools = list(TOOLS)
@@ -737,6 +816,7 @@ def main():
         tools.append(tool)
 
     # Build messages
+    instructions_loaded: list[str] = []
     messages = []
     if not args.no_system_prompt:
         if args.system_prompt:
@@ -745,7 +825,9 @@ def main():
             system_content = DEFAULT_SYSTEM_PROMPT_FILE.read_text(encoding="utf-8")
             # Append project/agent instructions (only with default prompt)
             if not args.no_instructions:
-                instructions = load_instructions(base_dir, args.verbose)
+                instructions, instructions_loaded = load_instructions(
+                    base_dir, args.verbose
+                )
                 if instructions:
                     system_content += "\n\n" + instructions
         # Include current date and time
@@ -776,8 +858,10 @@ def main():
                 f"Allowed commands: {cmd_list}."
             )
         messages.append({"role": "system", "content": system_content})
+    args._resolved_instructions = instructions_loaded
     # Determine context length for output clamping
     context_length = args.max_context_tokens or current_context
+    args._resolved_context_length = context_length
 
     # Clean up stale cmd_output files from previous sessions
     removed = cleanup_old_cmd_outputs(base_dir)
@@ -813,9 +897,22 @@ def main():
     if not args.repl:
         # Single-shot path
         messages.append({"role": "user", "content": args.question})
-        answer, exhausted = run_agent_loop(messages, tools, **loop_kwargs)
-        if answer is not None:
-            print(answer)
+        answer, exhausted = run_agent_loop(
+            messages, tools, **loop_kwargs, report=report
+        )
+        if report:
+            _write_report(
+                "exhausted" if exhausted else "success",
+                answer=answer,
+                exit_code=2 if exhausted else 0,
+                turns=report.max_turn_seen,
+                model_id=model_id,
+                skills_catalog=skills_catalog,
+                instructions_loaded=instructions_loaded,
+            )
+        else:
+            if answer is not None:
+                print(answer)
         if exhausted:
             fmt.warning("max turns reached, agent stopped.")
             sys.exit(2)
@@ -854,6 +951,7 @@ def run_agent_loop(
     yolo: bool,
     verbose: bool,
     llm_kwargs: dict,
+    report: ReportCollector | None = None,
 ) -> tuple[str | None, bool]:
     """Run the tool-calling loop until a final answer or max turns.
 
@@ -879,70 +977,118 @@ def run_agent_loop(
                 f"Output tokens clamped: {max_output_tokens} -> {effective_max_output} (context_length={context_length}, prompt=~{token_est})"
             )
 
+        _llm_args = (
+            api_base, model_id, messages, effective_max_output,
+            temperature, top_p, seed, tools, verbose,
+        )
+
         t0 = time.monotonic()
         try:
-            msg, finish_reason = call_llm(
-                api_base,
-                model_id,
-                messages,
-                effective_max_output,
-                temperature,
-                top_p,
-                seed,
-                tools,
-                verbose,
-                **llm_kwargs,
-            )
+            msg, finish_reason = call_llm(*_llm_args, **llm_kwargs)
         except ContextOverflowError:
+            elapsed = time.monotonic() - t0
+            if report:
+                report.record_llm_call(turns, elapsed, token_est, "context_overflow")
+
             fmt.warning("context window exceeded, compacting history...")
+            tokens_before = estimate_tokens(messages, tools)
             messages[:] = compact_messages(messages)
             effective_max_output = clamp_output_tokens(
                 messages, tools, context_length, max_output_tokens
             )
+            tokens_after = estimate_tokens(messages, tools)
+            if report:
+                report.record_compaction(turns, "compact_messages", tokens_before, tokens_after)
             if verbose:
-                fmt.context_stats(
-                    "Context after compaction", estimate_tokens(messages, tools)
-                )
+                fmt.context_stats("Context after compaction", tokens_after)
+
+            _llm_args = (
+                api_base, model_id, messages, effective_max_output,
+                temperature, top_p, seed, tools, verbose,
+            )
+            t0 = time.monotonic()
             try:
-                msg, finish_reason = call_llm(
-                    api_base,
-                    model_id,
-                    messages,
-                    effective_max_output,
-                    temperature,
-                    top_p,
-                    tools,
-                    verbose,
-                    **llm_kwargs,
-                )
+                msg, finish_reason = call_llm(*_llm_args, **llm_kwargs)
             except ContextOverflowError:
+                elapsed = time.monotonic() - t0
+                if report:
+                    report.record_llm_call(
+                        turns, elapsed, tokens_after, "context_overflow",
+                        is_retry=True, retry_reason="compact_messages",
+                    )
+
                 fmt.warning("still too large, dropping older turns...")
+                tokens_before = estimate_tokens(messages, tools)
                 messages[:] = drop_middle_turns(messages)
                 effective_max_output = clamp_output_tokens(
                     messages, tools, context_length, max_output_tokens
                 )
+                tokens_after = estimate_tokens(messages, tools)
+                if report:
+                    report.record_compaction(turns, "drop_middle_turns", tokens_before, tokens_after)
                 if verbose:
-                    fmt.context_stats(
-                        "Context after drop", estimate_tokens(messages, tools)
-                    )
+                    fmt.context_stats("Context after drop", tokens_after)
+
+                _llm_args = (
+                    api_base, model_id, messages, effective_max_output,
+                    temperature, top_p, seed, tools, verbose,
+                )
+                t0 = time.monotonic()
                 try:
-                    msg, finish_reason = call_llm(
-                        api_base,
-                        model_id,
-                        messages,
-                        effective_max_output,
-                        temperature,
-                        top_p,
-                        tools,
-                        verbose,
-                        **llm_kwargs,
-                    )
+                    msg, finish_reason = call_llm(*_llm_args, **llm_kwargs)
                 except ContextOverflowError:
-                    fmt.error("context window exceeded even after compaction.")
-                    sys.exit(1)
-        elapsed = time.monotonic() - t0
-        if verbose:
-            fmt.llm_timing(elapsed, finish_reason)
+                    elapsed = time.monotonic() - t0
+                    if report:
+                        report.record_llm_call(
+                            turns, elapsed, tokens_after, "context_overflow",
+                            is_retry=True, retry_reason="drop_middle_turns",
+                        )
+                    raise AgentError("context window exceeded even after compaction")
+                except AgentError:
+                    elapsed = time.monotonic() - t0
+                    if report:
+                        report.record_llm_call(
+                            turns, elapsed, tokens_after, "error",
+                            is_retry=True, retry_reason="drop_middle_turns",
+                        )
+                    raise
+                else:
+                    elapsed = time.monotonic() - t0
+                    if verbose:
+                        fmt.llm_timing(elapsed, finish_reason)
+                    if report:
+                        report.record_llm_call(
+                            turns, elapsed, tokens_after, finish_reason,
+                            is_retry=True, retry_reason="drop_middle_turns",
+                        )
+            except AgentError:
+                elapsed = time.monotonic() - t0
+                if report:
+                    report.record_llm_call(
+                        turns, elapsed, tokens_after, "error",
+                        is_retry=True, retry_reason="compact_messages",
+                    )
+                raise
+            else:
+                elapsed = time.monotonic() - t0
+                if verbose:
+                    fmt.llm_timing(elapsed, finish_reason)
+                if report:
+                    report.record_llm_call(
+                        turns, elapsed, tokens_after, finish_reason,
+                        is_retry=True, retry_reason="compact_messages",
+                    )
+        except AgentError:
+            elapsed = time.monotonic() - t0
+            if report:
+                report.record_llm_call(turns, elapsed, token_est, "error")
+            raise
+        else:
+            elapsed = time.monotonic() - t0
+            if verbose:
+                fmt.llm_timing(elapsed, finish_reason)
+            if report:
+                report.record_llm_call(turns, elapsed, token_est, finish_reason)
         messages.append(msg)
 
         # Log intermediate assistant text (reasoning before tool calls, or truncated responses)
@@ -953,6 +1099,8 @@ def run_agent_loop(
             if finish_reason == "length":
                 # Output was truncated before the model could finish;
                 # nudge it to continue using tools instead of quitting.
+                if report:
+                    report.record_truncated_response(turns)
                 if verbose:
                     fmt.info(
                         "Response truncated (finish_reason=length), prompting continuation."
@@ -971,7 +1119,7 @@ def run_agent_loop(
 
         interventions: list[str] = []
         for tool_call in msg.tool_calls:
-            tool_msg = handle_tool_call(
+            tool_msg, tool_meta = handle_tool_call(
                 tool_call,
                 base_dir,
                 thinking_state,
@@ -984,7 +1132,18 @@ def run_agent_loop(
             )
             messages.append(tool_msg)
 
-            tool_name = tool_call.function.name
+            if report:
+                report.record_tool_call(
+                    turns,
+                    tool_meta["name"],
+                    tool_meta["arguments"],
+                    tool_meta["succeeded"],
+                    tool_meta["elapsed"],
+                    len(tool_msg["content"]),
+                    error=tool_msg["content"] if not tool_meta["succeeded"] else None,
+                )
+
+            tool_name = tool_meta["name"]
             result = tool_msg["content"]
             if result.startswith("error:"):
                 canonical_error = _canonical_error(result)
@@ -997,6 +1156,7 @@ def run_agent_loop(
 
                 if count >= 2:
                     if count >= 3:
+                        level = "stop"
                         interventions.append(
                             f"STOP: You have failed to use `{tool_name}` correctly {count} times in a row "
                             "with the same error. Do NOT call "
@@ -1004,12 +1164,15 @@ def run_agent_loop(
                             "Either fix the arguments or use a completely different approach to accomplish your task."
                         )
                     else:
+                        level = "nudge"
                         interventions.append(
                             f"IMPORTANT: You have called `{tool_name}` {count} times with the same error. "
                             f"The error is: {canonical_error}\n"
                             "Please carefully re-read the error message and fix your tool call. "
                             "If you cannot use this tool correctly, use a different approach."
                         )
+                    if report:
+                        report.record_guardrail(turns, tool_name, level)
                     if verbose:
                         fmt.guardrail(tool_name, count, canonical_error)
             else:

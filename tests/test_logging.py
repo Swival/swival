@@ -56,6 +56,7 @@ def _base_args(tmp_path, **overrides):
         color=False,
         no_color=False,
         yolo=False,
+        report=None,
     )
     defaults.update(overrides)
     return types.SimpleNamespace(**defaults)

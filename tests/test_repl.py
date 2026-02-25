@@ -161,11 +161,14 @@ class TestRunAgentLoop:
             patch("swival.agent.call_llm", side_effect=fake_call_llm),
             patch(
                 "swival.agent.handle_tool_call",
-                return_value={
-                    "role": "tool",
-                    "tool_call_id": "tc1",
-                    "content": "file contents",
-                },
+                return_value=(
+                    {
+                        "role": "tool",
+                        "tool_call_id": "tc1",
+                        "content": "file contents",
+                    },
+                    {"name": "read_file", "arguments": {}, "elapsed": 0.0, "succeeded": True},
+                ),
             ),
         ):
             answer, exhausted = run_agent_loop(
@@ -188,7 +191,10 @@ class TestRunAgentLoop:
             ),
             patch(
                 "swival.agent.handle_tool_call",
-                return_value={"role": "tool", "tool_call_id": "tc1", "content": "ok"},
+                return_value=(
+                    {"role": "tool", "tool_call_id": "tc1", "content": "ok"},
+                    {"name": "read_file", "arguments": {}, "elapsed": 0.0, "succeeded": True},
+                ),
             ),
         ):
             answer, exhausted = run_agent_loop(

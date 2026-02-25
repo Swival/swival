@@ -66,3 +66,6 @@ uv tool uninstall swival
 - [Customization](docs/customization.md) -- project instructions, system prompt
   overrides, tuning parameters
 - [Providers](docs/providers.md) -- LM Studio and HuggingFace configuration
+- [Reports](docs/reports.md) -- JSON reports for benchmarking and evaluation
+- [Using Swival with AgentFS](docs/agentfs.md) -- copy-on-write filesystem
+  sandboxing for safe agent runs

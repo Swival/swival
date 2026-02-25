@@ -652,7 +652,7 @@ class TestAgentLogSkip:
                 }
             ),
         )
-        result_msg = agent.handle_tool_call(
+        result_msg, _meta = agent.handle_tool_call(
             tool_call, base_dir, thinking_state, verbose=True
         )
         assert result_msg["role"] == "tool"
@@ -668,7 +668,7 @@ class TestAgentLogSkip:
             f.write("hello\n")
 
         tool_call = _FakeToolCall("read_file", json.dumps({"file_path": "test.txt"}))
-        result_msg = agent.handle_tool_call(
+        result_msg, _meta = agent.handle_tool_call(
             tool_call, base_dir, thinking_state, verbose=True
         )
         assert result_msg["role"] == "tool"
