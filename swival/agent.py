@@ -798,7 +798,7 @@ def _run_main(args, report, _write_report, parser):
         bare_model = args.model.removeprefix("huggingface/")
         if "/" not in bare_model:
             parser.error(
-                "HuggingFace model must be in org/model format (e.g. meta-llama/Llama-3.3-70B-Instruct)"
+                "HuggingFace model must be in org/model format (e.g. Qwen/Qwen3.5-397B-A17B)"
             )
         api_base = args.base_url  # None unless user set it (dedicated endpoint)
         model_id = args.model

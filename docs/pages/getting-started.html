@@ -102,14 +102,14 @@ into other tools.</p>
 <h2 id="running-with-huggingface">Running with HuggingFace</h2>
 <p>If you'd rather use a hosted model instead of running one locally:</p>
 <pre><code class="language-sh">export HF_TOKEN=hf_your_token_here
-swival &quot;Hello world&quot; --provider huggingface --model meta-llama/Llama-3.3-70B-Instruct
+swival &quot;Hello world&quot; --provider huggingface --model Qwen/Qwen3.5-397B-A17B
 </code></pre>
 <p>You need a HuggingFace token with Inference API access. The model must be
 specified in <code>org/model</code> format. For dedicated endpoints, add <code>--base-url</code> and
 <code>--api-key</code>:</p>
 <pre><code class="language-sh">swival &quot;Hello world&quot; \
     --provider huggingface \
-    --model meta-llama/Llama-3.3-70B-Instruct \
+    --model Qwen/Qwen3.5-397B-A17B \
     --base-url https://xyz.endpoints.huggingface.cloud \
     --api-key hf_your_key
 </code></pre>

@@ -52,7 +52,7 @@ class TestCallLlmRouting:
             mock_comp.return_value = self._mock_response()
             call_llm(
                 None,
-                "meta-llama/Llama-3.3-70B-Instruct",
+                "Qwen/Qwen3.5-397B-A17B",
                 [],
                 100,
                 0.5,
@@ -65,7 +65,7 @@ class TestCallLlmRouting:
             )
             mock_comp.assert_called_once()
             kwargs = mock_comp.call_args
-            assert kwargs[1]["model"] == "huggingface/meta-llama/Llama-3.3-70B-Instruct"
+            assert kwargs[1]["model"] == "huggingface/Qwen/Qwen3.5-397B-A17B"
             assert kwargs[1]["api_key"] == "hf_test"
             assert "api_base" not in kwargs[1]
 
@@ -74,7 +74,7 @@ class TestCallLlmRouting:
             mock_comp.return_value = self._mock_response()
             call_llm(
                 "https://xyz.endpoints.huggingface.cloud",
-                "meta-llama/Llama-3.3-70B-Instruct",
+                "Qwen/Qwen3.5-397B-A17B",
                 [],
                 100,
                 0.5,
@@ -109,7 +109,7 @@ class TestModelNormalization:
             mock_comp.return_value = self._mock_response()
             call_llm(
                 None,
-                "meta-llama/Llama-3.3-70B-Instruct",
+                "Qwen/Qwen3.5-397B-A17B",
                 [],
                 100,
                 0.5,
@@ -122,7 +122,7 @@ class TestModelNormalization:
             )
             assert (
                 mock_comp.call_args[1]["model"]
-                == "huggingface/meta-llama/Llama-3.3-70B-Instruct"
+                == "huggingface/Qwen/Qwen3.5-397B-A17B"
             )
 
     def test_already_prefixed_no_double(self):
@@ -130,7 +130,7 @@ class TestModelNormalization:
             mock_comp.return_value = self._mock_response()
             call_llm(
                 None,
-                "huggingface/meta-llama/Llama-3.3-70B-Instruct",
+                "huggingface/Qwen/Qwen3.5-397B-A17B",
                 [],
                 100,
                 0.5,
@@ -143,7 +143,7 @@ class TestModelNormalization:
             )
             assert (
                 mock_comp.call_args[1]["model"]
-                == "huggingface/meta-llama/Llama-3.3-70B-Instruct"
+                == "huggingface/Qwen/Qwen3.5-397B-A17B"
             )
 
 

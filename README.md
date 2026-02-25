@@ -40,7 +40,7 @@ That's it. Swival finds the model, connects, and goes to work.
 export HF_TOKEN=hf_...
 uv tool install swival
 swival "Refactor the error handling in src/api.py" \
-    --provider huggingface --model meta-llama/Llama-3.3-70B-Instruct
+    --provider huggingface --model Qwen/Qwen3.5-397B-A17B
 ```
 
 You can also point it at a dedicated endpoint with `--base-url` and `--api-key`.

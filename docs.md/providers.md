@@ -63,7 +63,7 @@ For hosted inference without running a local model.
 
 ```sh
 export HF_TOKEN=hf_your_token_here
-swival --provider huggingface --model meta-llama/Llama-3.3-70B-Instruct "task"
+swival --provider huggingface --model Qwen/Qwen3.5-397B-A17B "task"
 ```
 
 The `--model` flag is required and must be in `org/model` format. Authentication
@@ -76,7 +76,7 @@ For HuggingFace dedicated inference endpoints (private deployments):
 
 ```sh
 swival --provider huggingface \
-    --model meta-llama/Llama-3.3-70B-Instruct \
+    --model Qwen/Qwen3.5-397B-A17B \
     --base-url https://xyz.endpoints.huggingface.cloud \
     --api-key hf_your_key \
     "task"

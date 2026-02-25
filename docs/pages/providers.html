@@ -91,7 +91,7 @@ API format.</p>
 <p>For hosted inference without running a local model.</p>
 <h3 id="basic-usage">Basic usage</h3>
 <pre><code class="language-sh">export HF_TOKEN=hf_your_token_here
-swival --provider huggingface --model meta-llama/Llama-3.3-70B-Instruct &quot;task&quot;
+swival --provider huggingface --model Qwen/Qwen3.5-397B-A17B &quot;task&quot;
 </code></pre>
 <p>The <code>--model</code> flag is required and must be in <code>org/model</code> format. Authentication
 comes from <code>HF_TOKEN</code> in the environment or <code>--api-key</code> on the command line
@@ -99,7 +99,7 @@ comes from <code>HF_TOKEN</code> in the environment or <code>--api-key</code> on
 <h3 id="dedicated-endpoints">Dedicated endpoints</h3>
 <p>For HuggingFace dedicated inference endpoints (private deployments):</p>
 <pre><code class="language-sh">swival --provider huggingface \
-    --model meta-llama/Llama-3.3-70B-Instruct \
+    --model Qwen/Qwen3.5-397B-A17B \
     --base-url https://xyz.endpoints.huggingface.cloud \
     --api-key hf_your_key \
     &quot;task&quot;

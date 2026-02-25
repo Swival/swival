@@ -75,7 +75,7 @@ If you'd rather use a hosted model instead of running one locally:
 
 ```sh
 export HF_TOKEN=hf_your_token_here
-swival "Hello world" --provider huggingface --model meta-llama/Llama-3.3-70B-Instruct
+swival "Hello world" --provider huggingface --model Qwen/Qwen3.5-397B-A17B
 ```
 
 You need a HuggingFace token with Inference API access. The model must be
@@ -85,7 +85,7 @@ specified in `org/model` format. For dedicated endpoints, add `--base-url` and
 ```sh
 swival "Hello world" \
     --provider huggingface \
-    --model meta-llama/Llama-3.3-70B-Instruct \
+    --model Qwen/Qwen3.5-397B-A17B \
     --base-url https://xyz.endpoints.huggingface.cloud \
     --api-key hf_your_key
 ```
