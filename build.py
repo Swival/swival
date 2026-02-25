@@ -17,7 +17,7 @@ from PIL import Image
 # ---------------------------------------------------------------------------
 
 BASE_URL = "https://swival.github.io/swival"
-REPO_URL = "https://github.com/swival/swival-agent"
+REPO_URL = "https://github.com/swival/swival"
 
 ROOT = Path(__file__).parent
 DOCS_SRC = ROOT / "docs.md"

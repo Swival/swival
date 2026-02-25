@@ -31,8 +31,8 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://swival.github.io/swival/"
-Repository = "https://github.com/swival/swival-agent"
-Issues = "https://github.com/swival/swival-agent/issues"
+Repository = "https://github.com/swival/swival"
+Issues = "https://github.com/swival/swival/issues"
 
 [project.scripts]
 swival = "swival.agent:main"
