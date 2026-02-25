@@ -270,6 +270,29 @@ TOOLS = [
     },
 ]
 
+DELETE_FILE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "delete_file",
+        "description": (
+            "Delete a file by moving it to the trash. "
+            "Cannot delete directories."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Path to the file to delete.",
+                },
+            },
+            "required": ["file_path"],
+        },
+    },
+}
+
+TOOLS.append(DELETE_FILE_TOOL)
+
 FETCH_URL_TOOL = {
     "type": "function",
     "function": {
@@ -904,6 +927,173 @@ def _edit_file(
     return f"Edited {file_path}"
 
 
+# ---------------------------------------------------------------------------
+# delete_file (soft-delete to .swival/trash/)
+# ---------------------------------------------------------------------------
+
+TRASH_MAX_AGE = 7 * 24 * 3600  # seconds
+TRASH_MAX_BYTES = 50 * 1024 * 1024
+
+
+def _dir_size(p: Path) -> int:
+    """Total size of all files under directory *p* (no symlink following)."""
+    total = 0
+    try:
+        for f in p.rglob("*"):
+            try:
+                total += f.lstat().st_size
+            except (OSError, FileNotFoundError):
+                pass
+    except (OSError, FileNotFoundError):
+        pass
+    return total
+
+
+def _cleanup_trash(base_dir: str, exclude: str | None = None) -> None:
+    """Enforce retention limits on .swival/trash/.
+
+    Args:
+        base_dir: Project base directory.
+        exclude: Trash ID to protect from eviction (just added). Its size
+                 still counts against the budget.
+    """
+    import shutil as _shutil
+    import time as _time
+
+    trash_root = Path(base_dir) / SWIVAL_DIR / "trash"
+    if not trash_root.is_dir():
+        return
+
+    now = _time.time()
+    entries: list[tuple[float, int, Path]] = []  # (mtime, size, path)
+
+    for entry in trash_root.iterdir():
+        if not entry.is_dir() or entry.name == "index.jsonl":
+            continue
+        try:
+            st = entry.stat()
+        except FileNotFoundError:
+            continue
+        entries.append((st.st_mtime, _dir_size(entry), entry))
+
+    # Pass 1: remove entries older than TRASH_MAX_AGE.
+    remaining = []
+    for mtime, size, path in entries:
+        if now - mtime > TRASH_MAX_AGE and path.name != exclude:
+            try:
+                _shutil.rmtree(path)
+            except FileNotFoundError:
+                pass
+        else:
+            remaining.append((mtime, size, path))
+
+    # Pass 2: enforce size cap, oldest first.
+    remaining.sort(key=lambda t: t[0])  # oldest first
+    total = sum(s for _, s, _ in remaining)
+    for mtime, size, path in remaining:
+        if total <= TRASH_MAX_BYTES:
+            break
+        if path.name == exclude:
+            continue
+        try:
+            _shutil.rmtree(path)
+        except FileNotFoundError:
+            pass
+        total -= size
+
+
+def _delete_file(
+    file_path: str,
+    base_dir: str,
+    extra_write_roots: list[Path] = (),
+    unrestricted: bool = False,
+    tracker=None,
+    tool_call_id: str = "",
+) -> str:
+    """Soft-delete a file by moving it to .swival/trash/."""
+    from . import fmt as _fmt
+
+    # 1. Sandbox check.
+    try:
+        resolved = safe_resolve(
+            file_path,
+            base_dir,
+            extra_write_roots=extra_write_roots,
+            unrestricted=unrestricted,
+        )
+    except ValueError as exc:
+        return f"error: {exc}"
+
+    # 2. Build pre-resolution path for existence/type checks.
+    original = Path(base_dir) / file_path if not Path(file_path).is_absolute() else Path(file_path)
+
+    # 3. Existence check (is_symlink catches dangling symlinks).
+    if not original.exists() and not original.is_symlink():
+        return f"error: file not found: {file_path}"
+
+    # 4. Type check: symlinks (even to dirs) are OK, actual dirs are not.
+    if not original.is_symlink() and original.is_dir():
+        return "error: is a directory (delete individual files instead)"
+
+    # 5. Read guard.
+    if tracker is not None and not original.is_symlink():
+        error = tracker.check_write_allowed(str(resolved), exists=True)
+        if error:
+            return error
+
+    # Capture before move (original is gone after rename).
+    original_was_symlink = original.is_symlink()
+
+    # 6. Pre-move cleanup.
+    _cleanup_trash(base_dir)
+
+    # 7. Generate trash ID.
+    trash_id = uuid.uuid4().hex
+
+    # 8. Move to trash.
+    trash_root = Path(base_dir) / SWIVAL_DIR / "trash"
+    trash_dir = trash_root / trash_id
+    trash_dir.mkdir(parents=True, exist_ok=True)
+    dest = trash_dir / original.name
+
+    try:
+        original.rename(dest)
+    except OSError:
+        # Cross-filesystem fallback.
+        import shutil as _shutil
+        _shutil.move(str(original), str(dest))
+
+    # Record in tracker so recreating the same path is allowed.
+    # For symlinks, record the link path (not the resolved target) to avoid
+    # leaking write authorization to the target file.
+    if tracker is not None and not original_was_symlink:
+        tracker.record_write(str(resolved))
+
+    # 9. Post-move cleanup (enforce cap including new entry).
+    _cleanup_trash(base_dir, exclude=trash_id)
+
+    # 10. Append to index.jsonl.
+    from datetime import datetime, timezone
+    index_path = trash_root / "index.jsonl"
+    entry = json.dumps({
+        "trash_id": trash_id,
+        "original_path": file_path,
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "tool_call_id": tool_call_id,
+    })
+    try:
+        fd = os.open(str(index_path), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            os.write(fd, (entry + "\n").encode("utf-8"))
+        finally:
+            os.close(fd)
+    except OSError:
+        _fmt.warning(f"failed to append to trash index: {index_path}")
+
+    # 11. Success.
+    return f"Trashed {file_path} -> .swival/trash/{trash_id}"
+
+
 MAX_INLINE_OUTPUT = 10 * 1024  # 10KB — max output returned inline
 MAX_FILE_OUTPUT = 1 * 1024 * 1024  # 1MB — max output saved to file
 SWIVAL_DIR = ".swival"
@@ -1304,6 +1494,15 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             extra_write_roots=extra_write_roots,
             unrestricted=yolo,
             tracker=file_tracker,
+        )
+    elif name == "delete_file":
+        return _delete_file(
+            args["file_path"],
+            base_dir,
+            extra_write_roots=extra_write_roots,
+            unrestricted=yolo,
+            tracker=file_tracker,
+            tool_call_id=kwargs.get("tool_call_id", ""),
         )
     elif name == "list_files":
         return _list_files(

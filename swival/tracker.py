@@ -29,7 +29,7 @@ class FileAccessTracker:
             return None
         return (
             "error: cannot write to an existing file that hasn't been read first. "
-            "Use read_file to inspect the current contents before overwriting or editing."
+            "Use read_file to inspect the current contents before modifying."
         )
 
     def reset(self) -> None:

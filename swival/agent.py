@@ -337,6 +337,7 @@ def handle_tool_call(
             else [],
             yolo=yolo,
             file_tracker=file_tracker,
+            tool_call_id=tool_call.id,
         )
     except Exception as e:
         result = f"error: {e}"
@@ -1452,7 +1453,7 @@ def run_agent_loop(
         # Think nudge: if model used edit_file/write_file without thinking first
         if not think_used and not think_nudge_fired:
             has_mutating = any(
-                tc.function.name in ("edit_file", "write_file") for tc in msg.tool_calls
+                tc.function.name in ("edit_file", "write_file", "delete_file") for tc in msg.tool_calls
             )
             if has_mutating:
                 think_nudge_fired = True
