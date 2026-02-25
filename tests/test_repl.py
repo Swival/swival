@@ -72,6 +72,7 @@ def _loop_kwargs(tmp_path, **overrides):
         yolo=False,
         verbose=False,
         llm_kwargs={"provider": "lmstudio", "api_key": None},
+        file_tracker=None,
     )
     defaults.update(overrides)
     return defaults

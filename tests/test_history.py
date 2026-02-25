@@ -271,6 +271,7 @@ class TestIntegration:
             no_color=True,
             verbose=True,
             version=False,
+            no_read_guard=False,
         )
         defaults.update(overrides)
         return types.SimpleNamespace(**defaults)

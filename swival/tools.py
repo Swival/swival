@@ -723,6 +723,7 @@ def _read_file(
     extra_read_roots: list[Path] = (),
     extra_write_roots: list[Path] = (),
     unrestricted: bool = False,
+    tracker=None,
 ) -> str:
     """Read a file or list a directory."""
     try:
@@ -810,6 +811,9 @@ def _read_file(
     total_lines = len(lines)
     remaining = total_lines - (start + lines_emitted)
 
+    if tracker is not None and (lines_emitted > 0 or total_lines == 0):
+        tracker.record_read(str(resolved))
+
     result = "\n".join(output_parts)
     if remaining > 0:
         next_offset = start + lines_emitted + 1  # 1-based
@@ -823,6 +827,7 @@ def _write_file(
     base_dir: str,
     extra_write_roots: list[Path] = (),
     unrestricted: bool = False,
+    tracker=None,
 ) -> str:
     """Create or overwrite a file with content."""
     try:
@@ -835,9 +840,16 @@ def _write_file(
     except ValueError as exc:
         return f"error: {exc}"
 
+    if tracker is not None:
+        error = tracker.check_write_allowed(str(resolved), resolved.exists())
+        if error:
+            return error
+
     resolved.parent.mkdir(parents=True, exist_ok=True)
     data = content.encode("utf-8")
     resolved.write_bytes(data)
+    if tracker is not None:
+        tracker.record_write(str(resolved))
     return f"Wrote {len(data)} bytes to {file_path}"
 
 
@@ -849,6 +861,7 @@ def _edit_file(
     replace_all: bool = False,
     extra_write_roots: list[Path] = (),
     unrestricted: bool = False,
+    tracker=None,
 ) -> str:
     """Replace old_string with new_string in an existing file."""
     from .edit import replace
@@ -865,6 +878,11 @@ def _edit_file(
 
     if not resolved.exists():
         return f"error: file does not exist: {file_path}"
+
+    if tracker is not None:
+        error = tracker.check_write_allowed(str(resolved), exists=True)
+        if error:
+            return error
 
     if not old_string:
         return "error: old_string must not be empty"
@@ -1245,6 +1263,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
     """
     yolo = kwargs.get("yolo", False)
     extra_write_roots = kwargs.get("extra_write_roots", ())
+    file_tracker = kwargs.get("file_tracker")
 
     if name == "think":
         thinking_state = kwargs.get("thinking_state")
@@ -1261,6 +1280,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             extra_read_roots=kwargs.get("skill_read_roots", ()),
             extra_write_roots=extra_write_roots,
             unrestricted=yolo,
+            tracker=file_tracker,
         )
     elif name == "write_file":
         return _write_file(
@@ -1269,6 +1289,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             base_dir=base_dir,
             extra_write_roots=extra_write_roots,
             unrestricted=yolo,
+            tracker=file_tracker,
         )
     elif name == "edit_file":
         return _edit_file(
@@ -1279,6 +1300,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             replace_all=args.get("replace_all", False),
             extra_write_roots=extra_write_roots,
             unrestricted=yolo,
+            tracker=file_tracker,
         )
     elif name == "list_files":
         return _list_files(

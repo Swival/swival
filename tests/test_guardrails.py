@@ -51,6 +51,7 @@ def _base_args(tmp_path, **overrides):
         yolo=False,
         report=None,
         version=False,
+        no_read_guard=False,
     )
     defaults.update(overrides)
     return types.SimpleNamespace(**defaults)

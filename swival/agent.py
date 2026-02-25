@@ -18,6 +18,7 @@ import tiktoken
 from . import fmt
 from .report import AgentError, ReportCollector
 from .thinking import ThinkingState, _safe_notes_path
+from .tracker import FileAccessTracker
 from .tools import (
     TOOLS,
     RUN_COMMAND_TOOL,
@@ -289,6 +290,7 @@ def handle_tool_call(
     skill_read_roots=None,
     extra_write_roots=None,
     yolo=False,
+    file_tracker=None,
 ):
     """Execute a single tool call and return (tool_msg, metadata).
 
@@ -333,6 +335,7 @@ def handle_tool_call(
             if extra_write_roots is not None
             else [],
             yolo=yolo,
+            file_tracker=file_tracker,
         )
     except Exception as e:
         result = f"error: {e}"
@@ -657,6 +660,11 @@ def build_parser():
         action="store_true",
         help="Don't write responses to .swival/HISTORY.md",
     )
+    parser.add_argument(
+        "--no-read-guard",
+        action="store_true",
+        help="Disable read-before-write guard (allow writing files without reading them first).",
+    )
 
     return parser
 
@@ -948,6 +956,7 @@ def _run_main(args, report, _write_report, parser):
     atexit.register(cleanup_old_cmd_outputs, base_dir)
 
     thinking_state = ThinkingState(verbose=args.verbose, notes_dir=base_dir)
+    file_tracker = None if getattr(args, "no_read_guard", False) else FileAccessTracker()
 
     loop_kwargs = dict(
         api_base=api_base,
@@ -967,6 +976,7 @@ def _run_main(args, report, _write_report, parser):
         yolo=yolo,
         verbose=args.verbose,
         llm_kwargs=llm_kwargs,
+        file_tracker=file_tracker,
     )
 
     no_history = getattr(args, "no_history", False)
@@ -1031,6 +1041,7 @@ def run_agent_loop(
     yolo: bool,
     verbose: bool,
     llm_kwargs: dict,
+    file_tracker: FileAccessTracker | None = None,
     report: ReportCollector | None = None,
 ) -> tuple[str | None, bool]:
     """Run the tool-calling loop until a final answer or max turns.
@@ -1263,6 +1274,7 @@ def run_agent_loop(
                 skill_read_roots=skill_read_roots,
                 extra_write_roots=extra_write_roots,
                 yolo=yolo,
+                file_tracker=file_tracker,
             )
             messages.append(tool_msg)
 
@@ -1371,7 +1383,11 @@ def _repl_help() -> None:
     )
 
 
-def _repl_clear(messages: list, thinking_state: ThinkingState) -> None:
+def _repl_clear(
+    messages: list,
+    thinking_state: ThinkingState,
+    file_tracker: FileAccessTracker | None = None,
+) -> None:
     """Clear conversation history, keeping only the leading system messages."""
     leading = []
     for msg in messages:
@@ -1397,6 +1413,9 @@ def _repl_clear(messages: list, thinking_state: ThinkingState) -> None:
             notes_path.unlink(missing_ok=True)
         except ValueError:
             pass  # symlink escape — don't touch it
+
+    if file_tracker is not None:
+        file_tracker.reset()
 
     fmt.info(f"context cleared ({dropped} messages removed)")
 
@@ -1479,6 +1498,7 @@ def repl_loop(
     yolo: bool,
     verbose: bool,
     llm_kwargs: dict,
+    file_tracker: FileAccessTracker | None = None,
     no_history: bool = False,
 ) -> None:
     """Interactive read-eval-print loop."""
@@ -1523,7 +1543,7 @@ def repl_loop(
             _repl_help()
             continue
         elif cmd == "/clear":
-            _repl_clear(messages, thinking_state)
+            _repl_clear(messages, thinking_state, file_tracker=file_tracker)
             continue
         elif cmd == "/add-dir":
             _repl_add_dir(cmd_arg, extra_write_roots)
@@ -1557,6 +1577,7 @@ def repl_loop(
                     yolo=yolo,
                     verbose=verbose,
                     llm_kwargs=llm_kwargs,
+                    file_tracker=file_tracker,
                 )
             except KeyboardInterrupt:
                 fmt.warning("interrupted, continuation aborted.")
@@ -1591,6 +1612,7 @@ def repl_loop(
                 yolo=yolo,
                 verbose=verbose,
                 llm_kwargs=llm_kwargs,
+                file_tracker=file_tracker,
             )
         except KeyboardInterrupt:
             fmt.warning("interrupted, question aborted.")
