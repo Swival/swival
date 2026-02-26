@@ -14,7 +14,7 @@ from PIL import Image
 # Config
 # ---------------------------------------------------------------------------
 
-BASE_URL = "https://swival.github.io/swival"
+BASE_URL = "https://swival.dev"
 REPO_URL = "https://github.com/swival/swival"
 
 ROOT = Path(__file__).parent
