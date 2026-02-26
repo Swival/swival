@@ -24,8 +24,8 @@ provider = "openrouter"
 model = "qwen/qwen3-235b-a22b"
 max_turns = 250
 allowed_commands = ["ls", "git", "python3"]
-allowed_dirs = ["/opt/zig/lib/std"]
-allowed_dirs_ro = ["/reference/docs", "~/datasets"]
+allowed_dirs = ["/tmp"]
+allowed_dirs_ro = ["/opt/zig/lib/std"]
 quiet = false
 ```
 
