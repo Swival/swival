@@ -1055,9 +1055,11 @@ def _cleanup_trash(base_dir: str, exclude: str | None = None) -> None:
     entries: list[tuple[float, int, Path]] = []  # (mtime, size, path)
 
     for entry in trash_root.iterdir():
-        if not entry.is_dir() or entry.name == "index.jsonl":
+        if entry.name == "index.jsonl":
             continue
         try:
+            if not entry.is_dir():
+                continue
             st = entry.stat()
         except FileNotFoundError:
             continue
