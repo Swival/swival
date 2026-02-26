@@ -11,6 +11,7 @@ from swival.agent import (
     repl_loop,
     ContextOverflowError,
     INIT_PROMPT,
+    INIT_ENRICH_PROMPT,
     _repl_help,
     _repl_clear,
     _repl_add_dir,
@@ -900,7 +901,7 @@ class TestInitCommand:
         return mock_session
 
     def test_init_sends_prompt(self, tmp_path):
-        """/init appends INIT_PROMPT as a user message and calls the agent loop."""
+        """/init runs two passes: INIT_PROMPT then INIT_ENRICH_PROMPT."""
         messages = [_sys("system")]
 
         call_messages = []
@@ -918,11 +919,12 @@ class TestInitCommand:
         ):
             repl_loop(messages, [], **_loop_kwargs(tmp_path))
 
-        assert mock_loop.call_count == 1
+        assert mock_loop.call_count == 2
         assert call_messages[0][1]["content"] == INIT_PROMPT
+        assert call_messages[1][2]["content"] == INIT_ENRICH_PROMPT
 
     def test_init_ignores_args_with_warning(self, tmp_path, capsys):
-        """/init foo warns about the argument but still runs."""
+        """/init foo warns about the argument but still runs both passes."""
         messages = [_sys("system")]
 
         inputs = ["/init foo", "/exit"]
@@ -936,7 +938,7 @@ class TestInitCommand:
         ):
             repl_loop(messages, [], **_loop_kwargs(tmp_path))
 
-        assert mock_loop.call_count == 1
+        assert mock_loop.call_count == 2
         captured = capsys.readouterr()
         assert "/init takes no arguments" in captured.err
 

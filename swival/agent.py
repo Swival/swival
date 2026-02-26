@@ -40,7 +40,15 @@ INIT_PROMPT = (
     "Create or update the markdown file called ZOK.md describing the conventions "
     "(style, doc, tools) used by this project. Only list unusual choices that you "
     "didn't know about, are hard to guess and are unlikely to change in the future. "
-    "Be concise and not redundant."
+    "Be concise and not redundant. Use the think tool (with notes) to organize your "
+    "findings before writing."
+)
+
+INIT_ENRICH_PROMPT = (
+    "Now read back the ZOK.md you just wrote and the project source files again. "
+    "Enrich ZOK.md with anything you missed in the first pass — patterns, edge cases, "
+    "implicit conventions, or non-obvious architectural decisions. Remove anything "
+    "that turned out to be wrong or redundant. Keep it concise."
 )
 
 _CONTEXT_OVERFLOW_RE = re.compile(
@@ -953,10 +961,10 @@ def resolve_commands(
     for name in sorted(allowed_names):
         cmd_path = shutil.which(name)
         if cmd_path is None:
-            raise AgentError(f"allowed command {name!r} not found on PATH")
+            raise ConfigError(f"allowed command {name!r} not found on PATH")
         abs_path = Path(cmd_path).resolve()
         if abs_path.is_relative_to(base_resolved):
-            raise AgentError(
+            raise ConfigError(
                 f"allowed command {name!r} resolves to {abs_path}, "
                 f"which is inside base directory {base_resolved}. "
                 f"Commands inside the workspace can be modified by the model."
@@ -1251,7 +1259,8 @@ def _run_main(args, report, _write_report, parser):
                 review_rounds=review_round,
             )
         if exhausted:
-            fmt.warning("max turns reached, agent stopped.")
+            if args.verbose:
+                fmt.warning("max turns reached, agent stopped.")
             sys.exit(2)
         return
 
@@ -1263,7 +1272,7 @@ def _run_main(args, report, _write_report, parser):
             append_history(base_dir, args.question, answer, diagnostics=args.verbose)
         if answer is not None:
             print(answer)
-        if exhausted:
+        if exhausted and args.verbose:
             fmt.warning("max turns reached for initial question.")
 
     repl_loop(messages, tools, **loop_kwargs, no_history=no_history)
@@ -1820,7 +1829,47 @@ def repl_loop(
         elif cmd == "/init":
             if cmd_arg:
                 fmt.warning(f"/init takes no arguments, ignoring {cmd_arg!r}")
-            line = INIT_PROMPT
+            # Two-pass init: first create ZOK.md, then enrich it
+            for _pass, prompt in enumerate(
+                (INIT_PROMPT, INIT_ENRICH_PROMPT), 1
+            ):
+                messages.append({"role": "user", "content": prompt})
+                try:
+                    answer, exhausted = run_agent_loop(
+                        messages,
+                        tools,
+                        api_base=api_base,
+                        model_id=model_id,
+                        max_turns=turn_state["max_turns"],
+                        max_output_tokens=max_output_tokens,
+                        temperature=temperature,
+                        top_p=top_p,
+                        seed=seed,
+                        context_length=context_length,
+                        base_dir=base_dir,
+                        thinking_state=thinking_state,
+                        resolved_commands=resolved_commands,
+                        skills_catalog=skills_catalog,
+                        skill_read_roots=skill_read_roots,
+                        extra_write_roots=extra_write_roots,
+                        yolo=yolo,
+                        verbose=verbose,
+                        llm_kwargs=llm_kwargs,
+                        file_tracker=file_tracker,
+                    )
+                except KeyboardInterrupt:
+                    fmt.warning("interrupted, /init aborted.")
+                    break
+                if not no_history and answer:
+                    append_history(
+                        base_dir, f"/init pass {_pass}", answer,
+                        diagnostics=verbose,
+                    )
+                if answer is not None:
+                    print(answer)
+                if exhausted and verbose:
+                    fmt.warning("max turns reached during /init.")
+            continue
         elif cmd == "/continue":
             fmt.info("continuing agent loop...")
             try:
@@ -1853,7 +1902,7 @@ def repl_loop(
                 append_history(base_dir, "(continued)", answer, diagnostics=verbose)
             if answer is not None:
                 print(answer)
-            if exhausted:
+            if exhausted and verbose:
                 fmt.warning("max turns reached for this question.")
             continue
 
@@ -1889,7 +1938,7 @@ def repl_loop(
             append_history(base_dir, line, answer, diagnostics=verbose)
         if answer is not None:
             print(answer)
-        if exhausted:
+        if exhausted and verbose:
             fmt.warning("max turns reached for this question.")
 
 
