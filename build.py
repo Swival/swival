@@ -2,10 +2,8 @@
 """Build script: converts docs.md/*.md to docs/pages/*.html, generates docs hub,
 copies logo, generates favicon. Exits non-zero on broken links."""
 
-import io
 import re
 import shutil
-import struct
 import sys
 from pathlib import Path
 
@@ -27,20 +25,46 @@ WWW_IMG = WWW / "img"
 MEDIA = ROOT / ".media"
 
 NAV = [
-    ("Basics", [
-        ("getting-started", "Getting Started", "Installation, first run, what happens under the hood"),
-        ("usage", "Usage", "One-shot mode, REPL mode, CLI flags, piping, exit codes"),
-        ("tools", "Tools", "File ops, search, editing, web fetching, thinking, command execution"),
-    ]),
-    ("Configuration & Deployment", [
-        ("safety-and-sandboxing", "Safety & Sandboxing", "Path resolution, symlink protection, command whitelisting"),
-        ("skills", "Skills", "Creating and using SKILL.md-based agent skills"),
-        ("customization", "Customization", "Project instructions, system prompt overrides, tuning parameters"),
-        ("providers", "Providers", "LM Studio and HuggingFace configuration"),
-        ("reports", "Reports", "JSON reports for benchmarking and evaluation"),
-        ("reviews", "Reviews", "External reviewer scripts for automated QA gates"),
-        ("agentfs", "AgentFS", "Copy-on-write filesystem sandboxing"),
-    ]),
+    (
+        "Basics",
+        [
+            (
+                "getting-started",
+                "Getting Started",
+                "Installation, first run, what happens under the hood",
+            ),
+            (
+                "usage",
+                "Usage",
+                "One-shot mode, REPL mode, CLI flags, piping, exit codes",
+            ),
+            (
+                "tools",
+                "Tools",
+                "File ops, search, editing, web fetching, thinking, command execution",
+            ),
+        ],
+    ),
+    (
+        "Configuration & Deployment",
+        [
+            (
+                "safety-and-sandboxing",
+                "Safety & Sandboxing",
+                "Path resolution, symlink protection, command whitelisting",
+            ),
+            ("skills", "Skills", "Creating and using SKILL.md-based agent skills"),
+            (
+                "customization",
+                "Customization",
+                "Project instructions, system prompt overrides, tuning parameters",
+            ),
+            ("providers", "Providers", "LM Studio and HuggingFace configuration"),
+            ("reports", "Reports", "JSON reports for benchmarking and evaluation"),
+            ("reviews", "Reviews", "External reviewer scripts for automated QA gates"),
+            ("agentfs", "AgentFS", "Copy-on-write filesystem sandboxing"),
+        ],
+    ),
 ]
 
 MD_EXTENSIONS = ["fenced_code", "tables", "toc"]
@@ -53,7 +77,7 @@ MD_EXTENSIONS = ["fenced_code", "tables", "toc"]
 def sidebar_html(active_slug: str) -> str:
     parts = []
     for group_name, pages in NAV:
-        parts.append(f'<div class="sidebar-section">')
+        parts.append('<div class="sidebar-section">')
         parts.append(f"<h4>{group_name}</h4>")
         parts.append("<ul>")
         for slug, title, _desc in pages:
@@ -117,7 +141,7 @@ def docs_hub_html() -> str:
     nav = sidebar_html("")
     body_parts = ["<h1>Documentation</h1>"]
     for group_name, pages in NAV:
-        body_parts.append(f'<div class="docs-hub-group">')
+        body_parts.append('<div class="docs-hub-group">')
         body_parts.append(f"<h2>{group_name}</h2>")
         body_parts.append('<ul class="docs-hub-list">')
         for slug, title, desc in pages:
@@ -249,7 +273,9 @@ def check_links(pages: dict[str, str]) -> list[str]:
 
             # Check fragment
             if fragment and fragment not in extract_ids(target_html):
-                errors.append(f"{filename}: broken fragment #{fragment} in {target or 'index.html'}")
+                errors.append(
+                    f"{filename}: broken fragment #{fragment} in {target or 'index.html'}"
+                )
 
     return errors
 
@@ -303,7 +329,10 @@ def build() -> bool:
         for slug, title, _desc in pages:
             md_path = DOCS_SRC / f"{slug}.md"
             if not md_path.exists():
-                print(f"ERROR: {md_path} not found (referenced in NAV config)", file=sys.stderr)
+                print(
+                    f"ERROR: {md_path} not found (referenced in NAV config)",
+                    file=sys.stderr,
+                )
                 return False
 
             md_converter.reset()
@@ -328,7 +357,7 @@ def build() -> bool:
     logo_dst = WWW_IMG / "logo.png"
     if logo_src.exists():
         shutil.copy2(logo_src, logo_dst)
-        print(f"  logo.png -> docs/img/logo.png")
+        print("  logo.png -> docs/img/logo.png")
     else:
         print(f"WARNING: {logo_src} not found, skipping logo copy", file=sys.stderr)
 
@@ -336,7 +365,7 @@ def build() -> bool:
     if logo_src.exists():
         favicon_path = WWW / "favicon.ico"
         generate_favicon(logo_src, favicon_path)
-        print(f"  favicon.ico generated")
+        print("  favicon.ico generated")
 
     # Check links
     print("\nChecking links...")

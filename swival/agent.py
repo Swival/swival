@@ -464,7 +464,11 @@ def call_llm(
         # Only strip the prefix if the user already included the LiteLLM
         # "openrouter/" prefix (i.e. "openrouter/openrouter/free"). Don't strip
         # org names like "openrouter" in "openrouter/free".
-        bare_id = model_id[len("openrouter/"):] if model_id.startswith("openrouter/openrouter/") else model_id
+        bare_id = (
+            model_id[len("openrouter/") :]
+            if model_id.startswith("openrouter/openrouter/")
+            else model_id
+        )
         model_str = f"openrouter/{bare_id}"
         kwargs = {"api_key": api_key}
         if base_url:
@@ -883,7 +887,9 @@ def _run_main(args, report, _write_report, parser):
     elif args.provider == "openrouter":
         if not args.model:
             parser.error("--model is required when --provider is openrouter")
-        api_base = args.base_url  # LiteLLM knows OpenRouter's default; only set if user provides --base-url
+        api_base = (
+            args.base_url
+        )  # LiteLLM knows OpenRouter's default; only set if user provides --base-url
         model_id = args.model
         current_context = args.max_context_tokens  # None if not given
         api_key = args.api_key or os.environ.get("OPENROUTER_API_KEY")
@@ -1093,7 +1099,10 @@ def _run_main(args, report, _write_report, parser):
 
         while True:
             answer, exhausted = run_agent_loop(
-                messages, tools, **loop_kwargs, report=report,
+                messages,
+                tools,
+                **loop_kwargs,
+                report=report,
                 turn_offset=turn_offset,
             )
 
@@ -1107,7 +1116,10 @@ def _run_main(args, report, _write_report, parser):
 
             reviewer_env["SWIVAL_REVIEW_ROUND"] = str(review_round)
             exit_code, review_text = run_reviewer(
-                reviewer_cmd, base_dir, answer, args.verbose,
+                reviewer_cmd,
+                base_dir,
+                answer,
+                args.verbose,
                 env_extra=reviewer_env,
             )
 
@@ -1239,7 +1251,9 @@ def run_agent_loop(
         except ContextOverflowError:
             elapsed = time.monotonic() - t0
             if report:
-                report.record_llm_call(turns + turn_offset, elapsed, token_est, "context_overflow")
+                report.record_llm_call(
+                    turns + turn_offset, elapsed, token_est, "context_overflow"
+                )
 
             fmt.warning("context window exceeded, compacting history...")
             tokens_before = estimate_tokens(messages, tools)
@@ -1290,7 +1304,10 @@ def run_agent_loop(
                 tokens_after = estimate_tokens(messages, tools)
                 if report:
                     report.record_compaction(
-                        turns + turn_offset, "drop_middle_turns", tokens_before, tokens_after
+                        turns + turn_offset,
+                        "drop_middle_turns",
+                        tokens_before,
+                        tokens_after,
                     )
                 if verbose:
                     fmt.context_stats("Context after drop", tokens_after)
@@ -1381,7 +1398,9 @@ def run_agent_loop(
             if verbose:
                 fmt.llm_timing(elapsed, finish_reason)
             if report:
-                report.record_llm_call(turns + turn_offset, elapsed, token_est, finish_reason)
+                report.record_llm_call(
+                    turns + turn_offset, elapsed, token_est, finish_reason
+                )
         messages.append(msg)
 
         # Log intermediate assistant text (reasoning before tool calls, or truncated responses)
@@ -1480,7 +1499,8 @@ def run_agent_loop(
         # Think nudge: if model used edit_file/write_file without thinking first
         if not think_used and not think_nudge_fired:
             has_mutating = any(
-                tc.function.name in ("edit_file", "write_file", "delete_file") for tc in msg.tool_calls
+                tc.function.name in ("edit_file", "write_file", "delete_file")
+                for tc in msg.tool_calls
             )
             if has_mutating:
                 think_nudge_fired = True

@@ -345,7 +345,11 @@ def _intervention_user_messages(messages):
         content = (
             msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
         )
-        if content.startswith("Tip:") or content.startswith("IMPORTANT:") or content.startswith("STOP:"):
+        if (
+            content.startswith("Tip:")
+            or content.startswith("IMPORTANT:")
+            or content.startswith("STOP:")
+        ):
             out.append(content)
     return out
 
@@ -353,7 +357,6 @@ def _intervention_user_messages(messages):
 def test_think_nudge_fires_on_edit_without_think(tmp_path, monkeypatch):
     """Nudge fires when edit_file is used without prior think call."""
     from swival import agent
-    from swival import fmt
 
     snapshots = []
     call_count = 0
@@ -368,7 +371,13 @@ def test_think_nudge_fires_on_edit_without_think(tmp_path, monkeypatch):
         if call_count == 1:
             tc = _make_tool_call(
                 "edit_file",
-                json.dumps({"file_path": "test.txt", "old_string": "hello", "new_string": "world"}),
+                json.dumps(
+                    {
+                        "file_path": "test.txt",
+                        "old_string": "hello",
+                        "new_string": "world",
+                    }
+                ),
                 call_id="call_1",
             )
             return _make_message(tool_calls=[tc]), "tool_calls"
@@ -385,7 +394,9 @@ def test_think_nudge_fires_on_edit_without_think(tmp_path, monkeypatch):
 
     # The second LLM call should see the nudge
     assert len(snapshots) == 2
-    tips = [m for m in _intervention_user_messages(snapshots[1]) if m.startswith("Tip:")]
+    tips = [
+        m for m in _intervention_user_messages(snapshots[1]) if m.startswith("Tip:")
+    ]
     assert len(tips) == 1
     assert "think" in tips[0].lower()
 
@@ -393,7 +404,6 @@ def test_think_nudge_fires_on_edit_without_think(tmp_path, monkeypatch):
 def test_think_nudge_suppressed_when_think_called_first(tmp_path, monkeypatch):
     """No nudge when model calls think before edit_file."""
     from swival import agent
-    from swival import fmt
 
     snapshots = []
     call_count = 0
@@ -415,7 +425,13 @@ def test_think_nudge_suppressed_when_think_called_first(tmp_path, monkeypatch):
         if call_count == 2:
             tc = _make_tool_call(
                 "edit_file",
-                json.dumps({"file_path": "test.txt", "old_string": "hello", "new_string": "world"}),
+                json.dumps(
+                    {
+                        "file_path": "test.txt",
+                        "old_string": "hello",
+                        "new_string": "world",
+                    }
+                ),
                 call_id="call_edit",
             )
             return _make_message(tool_calls=[tc]), "tool_calls"
@@ -439,7 +455,6 @@ def test_think_nudge_suppressed_when_think_called_first(tmp_path, monkeypatch):
 def test_think_nudge_fires_at_most_once(tmp_path, monkeypatch):
     """Nudge fires only once even with multiple edit_file calls."""
     from swival import agent
-    from swival import fmt
 
     snapshots = []
     call_count = 0
@@ -453,7 +468,13 @@ def test_think_nudge_fires_at_most_once(tmp_path, monkeypatch):
         if call_count <= 2:
             tc = _make_tool_call(
                 "edit_file",
-                json.dumps({"file_path": "test.txt", "old_string": "hello" if call_count == 1 else "world", "new_string": "world" if call_count == 1 else "hello"}),
+                json.dumps(
+                    {
+                        "file_path": "test.txt",
+                        "old_string": "hello" if call_count == 1 else "world",
+                        "new_string": "world" if call_count == 1 else "hello",
+                    }
+                ),
                 call_id=f"call_{call_count}",
             )
             return _make_message(tool_calls=[tc]), "tool_calls"
@@ -470,14 +491,17 @@ def test_think_nudge_fires_at_most_once(tmp_path, monkeypatch):
 
     # Count Tip: messages in the final snapshot (the full message history).
     # Even though edit_file was called twice, only one tip should be present.
-    final_tips = [m for m in _intervention_user_messages(snapshots[-1]) if m.startswith("Tip:")]
-    assert len(final_tips) == 1, f"Expected exactly 1 nudge, got {len(final_tips)}: {final_tips}"
+    final_tips = [
+        m for m in _intervention_user_messages(snapshots[-1]) if m.startswith("Tip:")
+    ]
+    assert len(final_tips) == 1, (
+        f"Expected exactly 1 nudge, got {len(final_tips)}: {final_tips}"
+    )
 
 
 def test_think_nudge_does_not_fire_for_read_file(tmp_path, monkeypatch):
     """No nudge for read-only tools like read_file."""
     from swival import agent
-    from swival import fmt
 
     snapshots = []
     call_count = 0

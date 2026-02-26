@@ -8,7 +8,6 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
 from swival.tools import (
     _delete_file,
@@ -37,11 +36,12 @@ def _read_index(base: Path) -> list[dict]:
     if not idx.exists():
         return []
     lines = idx.read_text().strip().splitlines()
-    return [json.loads(l) for l in lines]
+    return [json.loads(line) for line in lines]
 
 
-def _make_old_trash_entry(base: Path, trash_id: str, filename: str,
-                          content: bytes, age_seconds: float) -> Path:
+def _make_old_trash_entry(
+    base: Path, trash_id: str, filename: str, content: bytes, age_seconds: float
+) -> Path:
     """Create a trash entry with a specific age."""
     d = _trash_root(base) / trash_id
     d.mkdir(parents=True)
@@ -60,7 +60,7 @@ def _make_old_trash_entry(base: Path, trash_id: str, filename: str,
 class TestDeleteFile:
     def test_delete_moves_to_trash(self, tmp_path):
         (tmp_path / "foo.txt").write_text("hello")
-        result = _delete_file("foo.txt", str(tmp_path))
+        _delete_file("foo.txt", str(tmp_path))
         assert not (tmp_path / "foo.txt").exists()
         # File should be in trash.
         trash = _trash_root(tmp_path)
@@ -323,12 +323,8 @@ class TestDeleteDispatch:
 
 class TestCleanupTrash:
     def test_cleanup_removes_old_entries(self, tmp_path):
-        _make_old_trash_entry(
-            tmp_path, "old1", "a.txt", b"aaa", TRASH_MAX_AGE + 100
-        )
-        _make_old_trash_entry(
-            tmp_path, "fresh", "b.txt", b"bbb", 10
-        )
+        _make_old_trash_entry(tmp_path, "old1", "a.txt", b"aaa", TRASH_MAX_AGE + 100)
+        _make_old_trash_entry(tmp_path, "fresh", "b.txt", b"bbb", 10)
         _cleanup_trash(str(tmp_path))
         trash = _trash_root(tmp_path)
         assert not (trash / "old1").exists()
@@ -376,9 +372,7 @@ class TestCleanupTrash:
 
     def test_cleanup_race_entry_already_gone(self, tmp_path):
         """Cleanup handles a concurrently removed entry without raising."""
-        _make_old_trash_entry(
-            tmp_path, "vanish", "a.txt", b"data", TRASH_MAX_AGE + 100
-        )
+        _make_old_trash_entry(tmp_path, "vanish", "a.txt", b"data", TRASH_MAX_AGE + 100)
         trash = _trash_root(tmp_path)
         # Remove it before cleanup runs (simulate race).
         shutil.rmtree(trash / "vanish")
@@ -475,15 +469,34 @@ class TestThinkNudge:
         monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
 
         defaults = dict(
-            base_url="http://fake", model="test-model",
-            max_output_tokens=1024, temperature=0.55, top_p=1.0, seed=None,
-            quiet=False, max_turns=10, base_dir=str(tmp_path),
-            no_system_prompt=True, no_instructions=True, no_skills=True,
-            skills_dir=[], system_prompt=None, question="test nudge",
-            repl=False, max_context_tokens=None, allowed_commands=None,
-            allow_dir=[], provider="lmstudio", api_key=None,
-            color=False, no_color=False, yolo=False, report=None,
-            reviewer=None, version=False, no_read_guard=True,
+            base_url="http://fake",
+            model="test-model",
+            max_output_tokens=1024,
+            temperature=0.55,
+            top_p=1.0,
+            seed=None,
+            quiet=False,
+            max_turns=10,
+            base_dir=str(tmp_path),
+            no_system_prompt=True,
+            no_instructions=True,
+            no_skills=True,
+            skills_dir=[],
+            system_prompt=None,
+            question="test nudge",
+            repl=False,
+            max_context_tokens=None,
+            allowed_commands=None,
+            allow_dir=[],
+            provider="lmstudio",
+            api_key=None,
+            color=False,
+            no_color=False,
+            yolo=False,
+            report=None,
+            reviewer=None,
+            version=False,
+            no_read_guard=True,
         )
         args = types.SimpleNamespace(**defaults)
         monkeypatch.setattr(sys, "argv", ["agent", "test nudge"])
@@ -495,10 +508,16 @@ class TestThinkNudge:
         assert len(snapshots) == 2
         tips = []
         for msg in snapshots[1]:
-            role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+            role = (
+                msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+            )
             if role != "user":
                 continue
-            content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
+            content = (
+                msg.get("content")
+                if isinstance(msg, dict)
+                else getattr(msg, "content", "")
+            )
             if content and content.startswith("Tip:"):
                 tips.append(content)
         assert len(tips) == 1

@@ -1,14 +1,13 @@
 """Tests for the --reviewer feature."""
 
 import subprocess
-import sys
 import types
 
 import pytest
 from unittest.mock import patch, MagicMock
 
 from swival import agent, fmt
-from swival.report import AgentError, ReportCollector
+from swival.report import AgentError
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +128,9 @@ class TestRunReviewer:
         assert text == ""
 
     def test_file_not_found_returns_2(self):
-        code, text = agent.run_reviewer("/nonexistent/reviewer", "/tmp", "answer", False)
+        code, text = agent.run_reviewer(
+            "/nonexistent/reviewer", "/tmp", "answer", False
+        )
         assert code == 2
         assert text == ""
 
@@ -154,11 +155,11 @@ class TestRunReviewer:
         """All SWIVAL_* env vars are visible to the reviewer."""
         script = tmp_path / "reviewer.sh"
         script.write_text(
-            '#!/bin/sh\n'
+            "#!/bin/sh\n"
             'echo "task=$SWIVAL_TASK"\n'
             'echo "round=$SWIVAL_REVIEW_ROUND"\n'
             'echo "model=$SWIVAL_MODEL"\n'
-            'exit 0\n'
+            "exit 0\n"
         )
         script.chmod(0o755)
 
@@ -183,7 +184,10 @@ class TestRunReviewer:
         script.chmod(0o755)
 
         code, text = agent.run_reviewer(
-            str(script), str(tmp_path), "answer", False,
+            str(script),
+            str(tmp_path),
+            "answer",
+            False,
             env_extra={"SWIVAL_TASK": "x"},
         )
         assert code == 0
@@ -206,7 +210,10 @@ class TestRunReviewer:
         script.chmod(0o755)
 
         code, text = agent.run_reviewer(
-            str(script), str(tmp_path), "answer", False,
+            str(script),
+            str(tmp_path),
+            "answer",
+            False,
             env_extra={"SWIVAL_TASK": "new"},
         )
         assert code == 0
@@ -285,14 +292,14 @@ class TestReviewLoop:
         state_file = tmp_path / ".review_state"
         script = tmp_path / "reviewer.sh"
         script.write_text(
-            f'#!/bin/sh\n'
+            f"#!/bin/sh\n"
             f'if [ ! -f "{state_file}" ]; then\n'
             f'  touch "{state_file}"\n'
             f'  echo "please fix the typo"\n'
-            f'  exit 1\n'
-            f'else\n'
-            f'  exit 0\n'
-            f'fi\n'
+            f"  exit 1\n"
+            f"else\n"
+            f"  exit 0\n"
+            f"fi\n"
         )
         script.chmod(0o755)
 
@@ -435,13 +442,13 @@ class TestReviewLoop:
         state_file = tmp_path / ".empty_state"
         script = tmp_path / "reviewer.sh"
         script.write_text(
-            f'#!/bin/sh\n'
+            f"#!/bin/sh\n"
             f'if [ ! -f "{state_file}" ]; then\n'
             f'  touch "{state_file}"\n'
-            f'  exit 1\n'
-            f'else\n'
-            f'  exit 0\n'
-            f'fi\n'
+            f"  exit 1\n"
+            f"else\n"
+            f"  exit 0\n"
+            f"fi\n"
         )
         script.chmod(0o755)
 
@@ -467,14 +474,14 @@ class TestReviewLoop:
         script = tmp_path / "reviewer.sh"
         # Append the round number to a log file, retry twice then accept.
         script.write_text(
-            f'#!/bin/sh\n'
+            f"#!/bin/sh\n"
             f'echo "$SWIVAL_REVIEW_ROUND" >> "{log_file}"\n'
             f'if [ "$SWIVAL_REVIEW_ROUND" -lt 3 ]; then\n'
             f'  echo "again"\n'
-            f'  exit 1\n'
-            f'else\n'
-            f'  exit 0\n'
-            f'fi\n'
+            f"  exit 1\n"
+            f"else\n"
+            f"  exit 0\n"
+            f"fi\n"
         )
         script.chmod(0o755)
 
@@ -493,11 +500,7 @@ class TestReviewLoop:
         """SWIVAL_TASK contains the original question."""
         task_file = tmp_path / "task.txt"
         script = tmp_path / "reviewer.sh"
-        script.write_text(
-            f'#!/bin/sh\n'
-            f'echo "$SWIVAL_TASK" > "{task_file}"\n'
-            f'exit 0\n'
-        )
+        script.write_text(f'#!/bin/sh\necho "$SWIVAL_TASK" > "{task_file}"\nexit 0\n')
         script.chmod(0o755)
 
         args = _base_args(tmp_path, reviewer=str(script), question="hello world")
@@ -514,11 +517,7 @@ class TestReviewLoop:
         """SWIVAL_MODEL is set from args._resolved_model_id."""
         model_file = tmp_path / "model.txt"
         script = tmp_path / "reviewer.sh"
-        script.write_text(
-            f'#!/bin/sh\n'
-            f'echo "$SWIVAL_MODEL" > "{model_file}"\n'
-            f'exit 0\n'
-        )
+        script.write_text(f'#!/bin/sh\necho "$SWIVAL_MODEL" > "{model_file}"\nexit 0\n')
         script.chmod(0o755)
 
         args = _base_args(tmp_path, reviewer=str(script), model="my-llm-7b")
@@ -637,14 +636,14 @@ class TestReportMode:
         script = tmp_path / "reviewer.sh"
         # Exit 1 once, then exit 0
         script.write_text(
-            f'#!/bin/sh\n'
+            f"#!/bin/sh\n"
             f'if [ ! -f "{tmp_path}/.report_state" ]; then\n'
             f'  touch "{tmp_path}/.report_state"\n'
             f'  echo "fix it"\n'
-            f'  exit 1\n'
-            f'else\n'
-            f'  exit 0\n'
-            f'fi\n'
+            f"  exit 1\n"
+            f"else\n"
+            f"  exit 0\n"
+            f"fi\n"
         )
         script.chmod(0o755)
 
@@ -698,10 +697,7 @@ class TestReportMode:
         state_file = tmp_path / ".error_state"
         script = tmp_path / "reviewer.sh"
         script.write_text(
-            f'#!/bin/sh\n'
-            f'touch "{state_file}"\n'
-            f'echo "try harder"\n'
-            f'exit 1\n'
+            f'#!/bin/sh\ntouch "{state_file}"\necho "try harder"\nexit 1\n'
         )
         script.chmod(0o755)
 

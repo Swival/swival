@@ -283,8 +283,7 @@ DELETE_FILE_TOOL = {
     "function": {
         "name": "delete_file",
         "description": (
-            "Delete a file by moving it to the trash. "
-            "Cannot delete directories."
+            "Delete a file by moving it to the trash. Cannot delete directories."
         ),
         "parameters": {
             "type": "object",
@@ -924,6 +923,7 @@ def _write_file(
             move_from_original.rename(resolved)
         except OSError:
             import shutil as _shutil
+
             _shutil.move(str(move_from_original), str(resolved))
         if tracker is not None:
             tracker.record_write(str(resolved))
@@ -1084,7 +1084,11 @@ def _delete_file(
         return f"error: {exc}"
 
     # 2. Build pre-resolution path for existence/type checks.
-    original = Path(base_dir) / file_path if not Path(file_path).is_absolute() else Path(file_path)
+    original = (
+        Path(base_dir) / file_path
+        if not Path(file_path).is_absolute()
+        else Path(file_path)
+    )
 
     # 3. Existence check (is_symlink catches dangling symlinks).
     if not original.exists() and not original.is_symlink():
@@ -1120,6 +1124,7 @@ def _delete_file(
     except OSError:
         # Cross-filesystem fallback.
         import shutil as _shutil
+
         _shutil.move(str(original), str(dest))
 
     # Record in tracker so recreating the same path is allowed.
@@ -1133,13 +1138,16 @@ def _delete_file(
 
     # 10. Append to index.jsonl.
     from datetime import datetime, timezone
+
     index_path = trash_root / "index.jsonl"
-    entry = json.dumps({
-        "trash_id": trash_id,
-        "original_path": file_path,
-        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "tool_call_id": tool_call_id,
-    })
+    entry = json.dumps(
+        {
+            "trash_id": trash_id,
+            "original_path": file_path,
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "tool_call_id": tool_call_id,
+        }
+    )
     try:
         fd = os.open(str(index_path), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
         try:

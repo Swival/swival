@@ -252,9 +252,7 @@ class TestAbsolutePatternUnrestricted:
 
     def test_list_files_absolute_pattern(self, setup_dirs):
         base, outside = setup_dirs
-        result = _list_files(
-            f"{outside}/*.txt", ".", str(base), unrestricted=True
-        )
+        result = _list_files(f"{outside}/*.txt", ".", str(base), unrestricted=True)
         assert "out.txt" in result
         assert not result.startswith("error:")
 
@@ -269,16 +267,16 @@ class TestAbsolutePatternUnrestricted:
         sub = outside / "deep"
         sub.mkdir()
         (sub / "nested.py").write_text("x = 1")
-        result = _list_files(
-            f"{outside}/**/*.py", ".", str(base), unrestricted=True
-        )
+        result = _list_files(f"{outside}/**/*.py", ".", str(base), unrestricted=True)
         assert "nested.py" in result
 
     def test_grep_absolute_include_unrestricted(self, setup_dirs):
         base, outside = setup_dirs
         # grep's include parameter should accept absolute-looking patterns in yolo
         result = _grep(
-            "outside", str(outside), str(base),
+            "outside",
+            str(outside),
+            str(base),
             include="/some/abs/*.txt",  # would normally be rejected
             unrestricted=True,
         )
@@ -289,7 +287,9 @@ class TestAbsolutePatternUnrestricted:
     def test_grep_absolute_include_blocked_without_yolo(self, setup_dirs):
         base, outside = setup_dirs
         result = _grep(
-            "outside", str(base), str(base),
+            "outside",
+            str(base),
+            str(base),
             include="/abs/*.txt",
         )
         assert result.startswith("error:")
@@ -307,7 +307,9 @@ class TestAbsolutePatternAllowDir:
     def test_list_files_absolute_pattern_via_allow_dir(self, setup_dirs):
         base, outside = setup_dirs
         result = _list_files(
-            f"{outside}/*.txt", ".", str(base),
+            f"{outside}/*.txt",
+            ".",
+            str(base),
             extra_write_roots=[outside],
         )
         assert "out.txt" in result
@@ -317,7 +319,9 @@ class TestAbsolutePatternAllowDir:
         """Absolute pattern pointing outside all roots should be rejected."""
         base, outside = setup_dirs
         result = _list_files(
-            f"{outside}/*.txt", ".", str(base),
+            f"{outside}/*.txt",
+            ".",
+            str(base),
             extra_write_roots=[],  # no extra roots
         )
         assert result.startswith("error:")
@@ -325,7 +329,9 @@ class TestAbsolutePatternAllowDir:
     def test_list_files_absolute_pattern_via_read_roots(self, setup_dirs):
         base, outside = setup_dirs
         result = _list_files(
-            f"{outside}/*.txt", ".", str(base),
+            f"{outside}/*.txt",
+            ".",
+            str(base),
             extra_read_roots=[outside],
         )
         assert "out.txt" in result
@@ -334,7 +340,9 @@ class TestAbsolutePatternAllowDir:
     def test_grep_path_via_allow_dir(self, setup_dirs):
         base, outside = setup_dirs
         result = _grep(
-            "outside", str(outside), str(base),
+            "outside",
+            str(outside),
+            str(base),
             extra_write_roots=[outside],
         )
         assert "outside base" in result
@@ -343,7 +351,9 @@ class TestAbsolutePatternAllowDir:
     def test_grep_path_via_read_roots(self, setup_dirs):
         base, outside = setup_dirs
         result = _grep(
-            "outside", str(outside), str(base),
+            "outside",
+            str(outside),
+            str(base),
             extra_read_roots=[outside],
         )
         assert "outside base" in result

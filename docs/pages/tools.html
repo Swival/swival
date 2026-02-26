@@ -69,6 +69,13 @@ markers.</p>
 <p>Creates or overwrites a file. Parent directories are created automatically. The
 agent uses this when it needs to create something from scratch. For modifying
 existing files, it prefers <code>edit_file</code> (below), which is less destructive.</p>
+<p>The optional <code>move_from</code> parameter lets the agent rename or move a file in a
+single call. When <code>content</code> is omitted, it does an atomic filesystem rename
+(works for binary files too, no content copying). When <code>content</code> is provided,
+it writes the new content to the destination and trashes the source. The source
+does not need to have been read first — renaming doesn't change content. If the
+destination already exists, it must have been read or written first, the same
+requirement that <code>edit_file</code> enforces.</p>
 <h2 id="file-editing">File editing</h2>
 <p>This is the agent's primary tool for modifying code. It works by string
 replacement: the agent specifies the exact text to find and what to replace it

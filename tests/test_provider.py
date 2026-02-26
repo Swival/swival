@@ -162,10 +162,7 @@ class TestModelNormalization:
                 provider="huggingface",
                 api_key="hf_test",
             )
-            assert (
-                mock_comp.call_args[1]["model"]
-                == "huggingface/zai-org/GLM-5"
-            )
+            assert mock_comp.call_args[1]["model"] == "huggingface/zai-org/GLM-5"
 
     def test_already_prefixed_no_double(self):
         with patch("litellm.completion") as mock_comp:
@@ -183,10 +180,7 @@ class TestModelNormalization:
                 provider="huggingface",
                 api_key="hf_test",
             )
-            assert (
-                mock_comp.call_args[1]["model"]
-                == "huggingface/zai-org/GLM-5"
-            )
+            assert mock_comp.call_args[1]["model"] == "huggingface/zai-org/GLM-5"
 
     def test_openrouter_already_prefixed_no_double(self):
         # If user passes "openrouter/openrouter/free" (full LiteLLM prefix

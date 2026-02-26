@@ -111,7 +111,10 @@ Full documentation is available at [swival.github.io/swival](https://swival.gith
 - [Skills](docs.md/skills.md) -- creating and using SKILL.md-based agent skills
 - [Customization](docs.md/customization.md) -- project instructions, system prompt
   overrides, tuning parameters
-- [Providers](docs.md/providers.md) -- LM Studio and HuggingFace configuration
+- [Providers](docs.md/providers.md) -- LM Studio, HuggingFace, and OpenRouter
+  configuration
 - [Reports](docs.md/reports.md) -- JSON reports for benchmarking and evaluation
+- [Reviews](docs.md/reviews.md) -- external reviewer scripts for automated QA
+  and LLM-as-judge evaluation
 - [Using Swival with AgentFS](docs.md/agentfs.md) -- copy-on-write filesystem
   sandboxing for safe agent runs
