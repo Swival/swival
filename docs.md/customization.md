@@ -28,9 +28,15 @@ allowed_dirs = ["/tmp"]
 allowed_dirs_ro = ["/opt/zig/lib/std"]
 proactive_summaries = true
 quiet = false
+
+# Reviewer settings
+reviewer = "swival --reviewer-mode"
+review_prompt = "Focus on correctness and test coverage"
+objective = "objective.md"
+verify = "verification/working.md"
 ```
 
-Relative paths in `allowed_dirs`, `allowed_dirs_ro`, `skills_dir`, and `reviewer` resolve against the config file's parent directory, not the working directory. Tilde paths like `~/projects` expand to the home directory.
+Relative paths in `allowed_dirs`, `allowed_dirs_ro`, `skills_dir`, `objective`, and `verify` resolve against the config file's parent directory, not the working directory. Tilde paths like `~/projects` expand to the home directory. The `reviewer` value is shell-split; only path-like first tokens (`./`, `../`, `~`) are resolved against the config directory, while bare command names like `swival` are left for PATH lookup at runtime.
 
 If a project config contains `api_key` inside a git repository, Swival prints a warning because the key could be committed accidentally. Prefer environment variables for credentials.
 

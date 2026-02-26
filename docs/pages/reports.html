@@ -121,6 +121,7 @@
 <p>For <code>tool_call</code>, fields include <code>name</code>, <code>arguments</code>, <code>succeeded</code>, <code>duration_s</code>, and <code>result_length</code>. If arguments were invalid JSON, <code>arguments</code> is <code>null</code>. Failed tool calls include <code>error</code>.</p>
 <p>For <code>compaction</code>, fields include <code>strategy</code>, <code>tokens_before</code>, and <code>tokens_after</code>. Strategy is one of <code>compact_messages</code>, <code>drop_middle_turns</code>, or <code>aggressive_drop</code>.</p>
 <p>For <code>guardrail</code>, fields include <code>tool</code> and <code>level</code>, where <code>level</code> is <code>nudge</code> for repeated failures and <code>stop</code> for stronger intervention.</p>
+<p>For <code>review</code>, fields include <code>round</code>, <code>exit_code</code>, and <code>feedback</code> (reviewer standard output). When the reviewer produces standard error output, <code>stderr</code> is also included.</p>
 <p>For <code>truncated_response</code>, the event marks that an LLM response ended because of output token limits.</p>
 <h2 id="benchmarking-workflow">Benchmarking Workflow</h2>
 <p>A standard pattern is to run the same task set against multiple models or settings and then compare their report files. Passing <code>--seed</code> can reduce run-to-run variance for providers that support seeded sampling.</p>

@@ -129,7 +129,15 @@ The REPL is built on `prompt-toolkit`, so it supports input history, history sea
 
 `--report FILE` writes a JSON run report to `FILE`. This flag is incompatible with `--repl`.
 
-`--reviewer EXECUTABLE` runs an external reviewer after each answer. This flag is also incompatible with `--repl`.
+`--reviewer COMMAND` runs an external reviewer after each answer. The command string is shell-split, so you can pass arguments inline (e.g. `--reviewer "swival --reviewer-mode"`). This flag is incompatible with `--repl`.
+
+`--reviewer-mode` runs Swival as a reviewer process that speaks the reviewer protocol. It reads `base_dir` from the positional argument, the answer from standard input, evaluates with the LLM, and exits 0 (accept), 1 (retry), or 2 (error). Incompatible with `--repl` and `--reviewer`.
+
+`--review-prompt TEXT` appends custom instructions to the built-in review prompt when running in reviewer mode.
+
+`--objective FILE` reads the task description from a file instead of the `SWIVAL_TASK` environment variable when running in reviewer mode.
+
+`--verify FILE` reads verification criteria from a file and includes them in the review prompt when running in reviewer mode.
 
 `--no-history` disables writes to `.swival/HISTORY.md`.
 

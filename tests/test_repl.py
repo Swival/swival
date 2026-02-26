@@ -115,6 +115,10 @@ class TestArgumentParsing:
                 base_dir=".",
                 init_config=False,
                 project=False,
+                reviewer_mode=False,
+                review_prompt=None,
+                objective=None,
+                verify=None,
             )
             mock_parser.parse_args.return_value = mock_args
             mock_parser.error.side_effect = SystemExit(2)

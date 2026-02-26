@@ -119,7 +119,11 @@
 <h3 id="output-and-reporting-flags">Output And Reporting Flags</h3>
 <p><code>--quiet</code> and <code>-q</code> suppress diagnostics and keep terminal output focused on final answers.</p>
 <p><code>--report FILE</code> writes a JSON run report to <code>FILE</code>. This flag is incompatible with <code>--repl</code>.</p>
-<p><code>--reviewer EXECUTABLE</code> runs an external reviewer after each answer. This flag is also incompatible with <code>--repl</code>.</p>
+<p><code>--reviewer COMMAND</code> runs an external reviewer after each answer. The command string is shell-split, so you can pass arguments inline (e.g. <code>--reviewer "swival --reviewer-mode"</code>). This flag is incompatible with <code>--repl</code>.</p>
+<p><code>--reviewer-mode</code> runs Swival as a reviewer process that speaks the reviewer protocol. It reads <code>base_dir</code> from the positional argument, the answer from standard input, evaluates with the LLM, and exits 0 (accept), 1 (retry), or 2 (error). Incompatible with <code>--repl</code> and <code>--reviewer</code>.</p>
+<p><code>--review-prompt TEXT</code> appends custom instructions to the built-in review prompt when running in reviewer mode.</p>
+<p><code>--objective FILE</code> reads the task description from a file instead of the <code>SWIVAL_TASK</code> environment variable when running in reviewer mode.</p>
+<p><code>--verify FILE</code> reads verification criteria from a file and includes them in the review prompt when running in reviewer mode.</p>
 <p><code>--no-history</code> disables writes to <code>.swival/HISTORY.md</code>.</p>
 <p><code>--color</code> forces ANSI color on standard error, and <code>--no-color</code> disables ANSI color even on TTY output.</p>
 <h3 id="configuration-flags">Configuration Flags</h3>

@@ -59,14 +59,73 @@
 </code></pre>
 <p>This pattern works well for automated gates such as tests, linting, format checks, schema checks, or LLM-as-a-judge scoring. <code>--reviewer</code> is incompatible with <code>--repl</code>.</p>
 <h2 id="reviewer-protocol">Reviewer Protocol</h2>
-<p>Swival invokes the reviewer as <code>reviewer_executable &lt;base_dir&gt;</code>. The first positional argument is the absolute base directory. The full assistant answer is written to reviewer standard input.</p>
-<p>If the reviewer exits with code <code>0</code>, Swival accepts the answer immediately and ends normally. If the reviewer exits with code <code>1</code>, Swival treats reviewer standard output as feedback, appends that feedback as a new user message, resets turn budget for a new pass, and continues the loop. If the reviewer exits with code <code>2</code>, Swival treats that as reviewer failure, warns on standard error when diagnostics are enabled, and accepts the current answer unchanged. Any other nonzero exit code is handled the same way as <code>2</code>. Reviewer standard output is captured for all exit codes and recorded in the report timeline when <code>--report</code> is active.</p>
+<p>Swival invokes the reviewer by shell-splitting the command string and appending <code>&lt;base_dir&gt;</code> as the final argument. The full assistant answer is written to reviewer standard input.</p>
+<p>If the reviewer exits with code <code>0</code>, Swival accepts the answer immediately and ends normally. If the reviewer exits with code <code>1</code>, Swival treats reviewer standard output as feedback, appends that feedback as a new user message, resets turn budget for a new pass, and continues the loop. If the reviewer exits with code <code>2</code>, Swival treats that as reviewer failure, warns on standard error when diagnostics are enabled, and accepts the current answer unchanged. Any other nonzero exit code is handled the same way as <code>2</code>. Reviewer standard output and standard error are both captured. Standard error is forwarded to the outer process when verbose, and recorded in the report timeline when <code>--report</code> is active.</p>
 <p>Reviewer execution has a 60-minute timeout. Timeout or spawn failures are treated as reviewer errors and do not discard the agent's answer.</p>
 <h2 id="reviewer-environment-variables">Reviewer Environment Variables</h2>
 <p>Swival sets context variables on the reviewer subprocess for each round. <code>SWIVAL_TASK</code> contains the original user task and is always set. <code>SWIVAL_REVIEW_ROUND</code> contains the current review round number and is always set. <code>SWIVAL_MODEL</code> contains the resolved model identifier when available.</p>
 <p>The reviewer inherits the parent environment too, but Swival's injected values override any same-named parent values.</p>
-<h2 id="writing-a-reviewer-script">Writing A Reviewer Script</h2>
-<p>A minimal reviewer that accepts only when tests pass can look like this:</p>
+<h2 id="using-swival-as-the-reviewer">Using Swival As The Reviewer</h2>
+<p>The <code>--reviewer-mode</code> flag turns Swival into a reviewer process that speaks the reviewer protocol natively. No wrapper script needed:</p>
+<pre><code class="language-sh">swival &quot;Refactor error handling in src/api.py&quot; \
+    --reviewer &quot;swival --reviewer-mode&quot;
+</code></pre>
+<p>When <code>--reviewer-mode</code> is active, Swival reads the base directory from the first positional argument (as passed by the outer instance), reads the agent's answer from standard input, reads the task from <code>SWIVAL_TASK</code> (or a <code>--objective</code> file), calls the LLM to evaluate the answer, parses the verdict, and exits with the appropriate code.</p>
+<h3 id="reviewer-mode-options">Reviewer Mode Options</h3>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--review-prompt TEXT</code></td>
+<td>Custom instructions appended to the built-in review prompt</td>
+</tr>
+<tr>
+<td><code>--objective FILE</code></td>
+<td>Read the task description from a file instead of <code>SWIVAL_TASK</code> env var</td>
+</tr>
+<tr>
+<td><code>--verify FILE</code></td>
+<td>Read verification/acceptance criteria from a file and include them in the review prompt</td>
+</tr>
+</tbody>
+</table>
+<p>All existing model and provider options (<code>--model</code>, <code>--provider</code>, <code>--base-url</code>, <code>--api-key</code>, <code>--temperature</code>) work normally in reviewer mode since they control the LLM call.</p>
+<h3 id="different-model-for-review">Different Model For Review</h3>
+<pre><code class="language-sh">swival &quot;Fix the failing tests&quot; \
+    --model local/qwen-coder \
+    --reviewer &quot;swival --reviewer-mode --model openai/gpt-4o&quot;
+</code></pre>
+<h3 id="verification-file">Verification File</h3>
+<pre><code class="language-sh">swival &quot;Write a Python HTTP server on port 5000&quot; \
+    --reviewer &quot;swival --reviewer-mode --verify verification/working.md&quot;
+</code></pre>
+<p>The <code>--verify</code> file contains acceptance criteria that the reviewer checks the answer against.</p>
+<h3 id="custom-review-focus">Custom Review Focus</h3>
+<pre><code class="language-sh">swival &quot;Add pagination to the API&quot; \
+    --reviewer &quot;swival --reviewer-mode --review-prompt 'Verify that all endpoints return proper Link headers and that page_size defaults to 20'&quot;
+</code></pre>
+<h3 id="ci-with-report">CI With Report</h3>
+<pre><code class="language-sh">swival &quot;Fix the security vulnerability in auth.py&quot; \
+    --allowed-commands python3,pytest \
+    --reviewer &quot;swival --reviewer-mode --verify ci/security-criteria.md&quot; \
+    --report results.json \
+    --quiet
+</code></pre>
+<h3 id="project-config">Project Config</h3>
+<p>These options can live in <code>swival.toml</code> so you don't repeat them on every invocation:</p>
+<pre><code class="language-toml">reviewer = &quot;swival --reviewer-mode&quot;
+verify = &quot;verification/working.md&quot;
+review_prompt = &quot;Focus on correctness and test coverage&quot;
+</code></pre>
+<p>The <code>reviewer</code> value is shell-split; the first token is resolved via PATH when it's a bare command name, or against the config directory when it starts with <code>./</code>, <code>../</code>, or <code>~</code>. Remaining tokens are preserved as-is. The <code>verify</code> and <code>objective</code> paths resolve relative to the config directory, consistent with <code>allowed_dirs</code> and <code>skills_dir</code>.</p>
+<p>Note that <code>reviewer_mode</code> is deliberately not supported in config files. A config file with <code>reviewer_mode = true</code> would silently force every <code>swival</code> invocation into reviewer mode, breaking normal usage.</p>
+<h2 id="writing-a-custom-reviewer-script">Writing A Custom Reviewer Script</h2>
+<p>A minimal reviewer that accepts only when tests pass:</p>
 <pre><code class="language-bash">#!/usr/bin/env bash
 set -euo pipefail
 
@@ -80,7 +139,7 @@ else
     exit 1
 fi
 </code></pre>
-<p>A reviewer that requires valid JSON output can look like this:</p>
+<p>A reviewer that requires valid JSON output:</p>
 <pre><code class="language-bash">#!/usr/bin/env bash
 set -euo pipefail
 
@@ -94,8 +153,8 @@ else
 fi
 </code></pre>
 <p>The reviewer file must exist and be executable. Swival validates this before the run starts.</p>
-<h2 id="using-swival-as-the-reviewer">Using Swival As The Reviewer</h2>
-<p>You can run a second Swival instance as an LLM judge. The outer Swival does the work and the inner Swival evaluates quality against the original task and current answer.</p>
+<h3 id="fully-custom-llm-reviewer">Fully Custom LLM Reviewer</h3>
+<p>If you need complete control over the reviewer's prompt or LLM interaction, you can write a wrapper script instead of using <code>--reviewer-mode</code>:</p>
 <pre><code class="language-bash">#!/usr/bin/env bash
 # judge.sh -- use a second Swival instance to review the agent's answer
 set -uo pipefail
@@ -137,9 +196,6 @@ else
     exit 2
 fi
 </code></pre>
-<p>This wrapper keeps reviewer behavior predictable even when the judge fails to return parseable output. In that case, returning exit code <code>2</code> tells the outer run to accept the current answer rather than failing hard. All three error paths output a diagnostic reason so it gets captured in the report's <code>feedback</code> field for debugging.</p>
-<p>If both instances point at the same provider, they will use the same backend by default. You can direct the inner judge to a different provider or model by adding <code>--provider</code>, <code>--model</code>, and optionally <code>--base-url</code> inside the wrapper.</p>
-<p>Using <code>set -uo pipefail</code> instead of <code>set -euo pipefail</code> avoids aborting the wrapper early when the inner run exits with code <code>2</code> but still returns parseable output.</p>
 <h2 id="retry-and-round-limits">Retry And Round Limits</h2>
 <p>Every time the reviewer returns exit code <code>1</code>, Swival appends reviewer feedback as a user message and re-enters the loop with a fresh turn budget. The full conversation stays intact, so the model can build on prior work instead of restarting from scratch.</p>
 <p>To prevent infinite cycles, Swival enforces a hard limit of five review rounds. If round five still returns code <code>1</code>, Swival accepts the latest answer and emits a warning when diagnostics are enabled.</p>
@@ -148,19 +204,10 @@ fi
 <p>After startup, reviewer failures are non-fatal. Timeout failures, process spawn failures, and crash-style exits all degrade to reviewer error handling, which means the current answer is accepted and returned.</p>
 <h2 id="interaction-with-quiet-and-report">Interaction With <code>--quiet</code> And <code>--report</code></h2>
 <p>With <code>--quiet</code>, reviewer diagnostics are suppressed along with other diagnostic logging. Rejected intermediate answers are not printed to standard output; only the final accepted answer is printed.</p>
-<p>With <code>--report</code>, each reviewer invocation is recorded as a <code>review</code> event in the timeline with the round number, exit code, and full reviewer output. <code>stats.review_rounds</code> records the total number of reviewer invocations. Turn numbers remain cumulative across rounds, so the timeline reads as one continuous run.</p>
+<p>With <code>--report</code>, each reviewer invocation is recorded as a <code>review</code> event in the timeline with the round number, exit code, full reviewer output, and reviewer standard error (when non-empty). <code>stats.review_rounds</code> records the total number of reviewer invocations. Turn numbers remain cumulative across rounds, so the timeline reads as one continuous run.</p>
 <pre><code class="language-sh">jq '.stats.review_rounds' report.json
 jq '.timeline[] | select(.type == &quot;review&quot;)' report.json
 </code></pre>
-<h2 id="example-ci-flow">Example CI Flow</h2>
-<p>A simple CI-style invocation can combine command access, reviewer retries, and report capture in one run.</p>
-<pre><code class="language-sh">swival &quot;Fix the failing tests in tests/unit/&quot; \
-    --allowed-commands python3,pytest \
-    --reviewer ./ci-review.sh \
-    --report results.json \
-    --quiet
-</code></pre>
-<p>In that setup, <code>ci-review.sh</code> should return <code>0</code> when checks pass and return <code>1</code> with actionable feedback when checks fail. Swival will retry with that feedback up to five rounds.</p>
         </article>
     </div>
     <footer class="site-footer">

@@ -276,6 +276,10 @@ class TestIntegration:
             reviewer=None,
             init_config=False,
             project=False,
+            reviewer_mode=False,
+            review_prompt=None,
+            objective=None,
+            verify=None,
         )
         defaults.update(overrides)
         return types.SimpleNamespace(**defaults)

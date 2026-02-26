@@ -72,8 +72,14 @@ allowed_dirs = [&quot;/tmp&quot;]
 allowed_dirs_ro = [&quot;/opt/zig/lib/std&quot;]
 proactive_summaries = true
 quiet = false
+
+# Reviewer settings
+reviewer = &quot;swival --reviewer-mode&quot;
+review_prompt = &quot;Focus on correctness and test coverage&quot;
+objective = &quot;objective.md&quot;
+verify = &quot;verification/working.md&quot;
 </code></pre>
-<p>Relative paths in <code>allowed_dirs</code>, <code>allowed_dirs_ro</code>, <code>skills_dir</code>, and <code>reviewer</code> resolve against the config file's parent directory, not the working directory. Tilde paths like <code>~/projects</code> expand to the home directory.</p>
+<p>Relative paths in <code>allowed_dirs</code>, <code>allowed_dirs_ro</code>, <code>skills_dir</code>, <code>objective</code>, and <code>verify</code> resolve against the config file's parent directory, not the working directory. Tilde paths like <code>~/projects</code> expand to the home directory. The <code>reviewer</code> value is shell-split; only path-like first tokens (<code>./</code>, <code>../</code>, <code>~</code>) are resolved against the config directory, while bare command names like <code>swival</code> are left for PATH lookup at runtime.</p>
 <p>If a project config contains <code>api_key</code> inside a git repository, Swival prints a warning because the key could be committed accidentally. Prefer environment variables for credentials.</p>
 <p>The <code>--system-prompt</code> and <code>no_system_prompt</code> settings are mutually exclusive in config files, just as they are on the command line.</p>
 <p>The library API (<code>Session</code> class) does not auto-load config files. If you want config file support in library code, call <code>load_config()</code> and <code>config_to_session_kwargs()</code> explicitly.</p>

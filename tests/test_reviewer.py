@@ -58,6 +58,10 @@ def _base_args(tmp_path, **overrides):
         no_history=True,
         init_config=False,
         project=False,
+        reviewer_mode=False,
+        review_prompt=None,
+        objective=None,
+        verify=None,
     )
     defaults.update(overrides)
     return types.SimpleNamespace(**defaults)
@@ -79,7 +83,9 @@ class TestRunReviewer:
         script.write_text("#!/bin/sh\necho 'looks good'\nexit 0\n")
         script.chmod(0o755)
 
-        code, text = agent.run_reviewer(str(script), str(tmp_path), "answer", False)
+        code, text, _stderr = agent.run_reviewer(
+            str(script), str(tmp_path), "answer", False
+        )
         assert code == 0
         assert "looks good" in text
 
@@ -88,7 +94,9 @@ class TestRunReviewer:
         script.write_text("#!/bin/sh\necho 'fix the typo'\nexit 1\n")
         script.chmod(0o755)
 
-        code, text = agent.run_reviewer(str(script), str(tmp_path), "answer", False)
+        code, text, _stderr = agent.run_reviewer(
+            str(script), str(tmp_path), "answer", False
+        )
         assert code == 1
         assert "fix the typo" in text
 
@@ -97,7 +105,9 @@ class TestRunReviewer:
         script.write_text("#!/bin/sh\nexit 2\n")
         script.chmod(0o755)
 
-        code, text = agent.run_reviewer(str(script), str(tmp_path), "answer", False)
+        code, text, _stderr = agent.run_reviewer(
+            str(script), str(tmp_path), "answer", False
+        )
         assert code == 2
 
     def test_receives_answer_on_stdin(self, tmp_path):
@@ -106,7 +116,9 @@ class TestRunReviewer:
         script.write_text("#!/bin/sh\ncat\nexit 0\n")
         script.chmod(0o755)
 
-        code, text = agent.run_reviewer(str(script), str(tmp_path), "my answer", False)
+        code, text, _stderr = agent.run_reviewer(
+            str(script), str(tmp_path), "my answer", False
+        )
         assert code == 0
         assert "my answer" in text
 
@@ -115,7 +127,9 @@ class TestRunReviewer:
         script.write_text('#!/bin/sh\necho "$1"\nexit 0\n')
         script.chmod(0o755)
 
-        code, text = agent.run_reviewer(str(script), str(tmp_path), "answer", False)
+        code, text, _stderr = agent.run_reviewer(
+            str(script), str(tmp_path), "answer", False
+        )
         assert code == 0
         assert str(tmp_path) in text
 
@@ -124,14 +138,14 @@ class TestRunReviewer:
         script.write_text("#!/bin/sh\nsleep 999\n")
         script.chmod(0o755)
 
-        code, text = agent.run_reviewer(
+        code, text, _stderr = agent.run_reviewer(
             str(script), str(tmp_path), "answer", False, timeout=1
         )
         assert code == 2
         assert text == ""
 
     def test_file_not_found_returns_2(self):
-        code, text = agent.run_reviewer(
+        code, text, _stderr = agent.run_reviewer(
             "/nonexistent/reviewer", "/tmp", "answer", False
         )
         assert code == 2
@@ -142,7 +156,9 @@ class TestRunReviewer:
         script.write_text("#!/bin/sh\nexit 0\n")
         script.chmod(0o644)  # not executable
 
-        code, text = agent.run_reviewer(str(script), str(tmp_path), "answer", False)
+        code, text, _stderr = agent.run_reviewer(
+            str(script), str(tmp_path), "answer", False
+        )
         assert code == 2
         assert text == ""
 
@@ -151,7 +167,9 @@ class TestRunReviewer:
         script.write_text("#!/bin/sh\nexit 42\n")
         script.chmod(0o755)
 
-        code, text = agent.run_reviewer(str(script), str(tmp_path), "answer", False)
+        code, text, _stderr = agent.run_reviewer(
+            str(script), str(tmp_path), "answer", False
+        )
         assert code == 42
 
     def test_env_vars_passed_to_subprocess(self, tmp_path):
@@ -171,7 +189,7 @@ class TestRunReviewer:
             "SWIVAL_REVIEW_ROUND": "2",
             "SWIVAL_MODEL": "test-model-7b",
         }
-        code, text = agent.run_reviewer(
+        code, text, _stderr = agent.run_reviewer(
             str(script), str(tmp_path), "answer", False, env_extra=env
         )
         assert code == 0
@@ -186,7 +204,7 @@ class TestRunReviewer:
         script.write_text('#!/bin/sh\necho "$SWIVAL_TEST_SENTINEL"\nexit 0\n')
         script.chmod(0o755)
 
-        code, text = agent.run_reviewer(
+        code, text, _stderr = agent.run_reviewer(
             str(script),
             str(tmp_path),
             "answer",
@@ -202,7 +220,9 @@ class TestRunReviewer:
         script.write_text("#!/bin/sh\nexit 0\n")
         script.chmod(0o755)
 
-        code, text = agent.run_reviewer(str(script), str(tmp_path), "answer", False)
+        code, text, _stderr = agent.run_reviewer(
+            str(script), str(tmp_path), "answer", False
+        )
         assert code == 0
 
     def test_env_vars_override_parent(self, tmp_path, monkeypatch):
@@ -212,7 +232,7 @@ class TestRunReviewer:
         script.write_text('#!/bin/sh\necho "$SWIVAL_TASK"\nexit 0\n')
         script.chmod(0o755)
 
-        code, text = agent.run_reviewer(
+        code, text, _stderr = agent.run_reviewer(
             str(script),
             str(tmp_path),
             "answer",
@@ -247,6 +267,10 @@ class TestCLIValidation:
                 base_dir=".",
                 init_config=False,
                 project=False,
+                reviewer_mode=False,
+                review_prompt=None,
+                objective=None,
+                verify=None,
             )
             mock_parser.parse_args.return_value = mock_args
             mock_parser.error.side_effect = SystemExit(2)

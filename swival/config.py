@@ -6,6 +6,8 @@ Reads TOML config from ~/.config/swival/config.toml (global) and
 
 import argparse
 import os
+import re
+import shlex
 import sys
 import tomllib
 from pathlib import Path
@@ -44,6 +46,9 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "color": bool,
     "quiet": bool,
     "reviewer": str,
+    "review_prompt": str,
+    "objective": str,
+    "verify": str,
     "proactive_summaries": bool,
 }
 
@@ -87,6 +92,9 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "no_color": False,
     "quiet": False,
     "reviewer": None,
+    "review_prompt": None,
+    "objective": None,
+    "verify": None,
     "proactive_summaries": False,
 }
 
@@ -150,7 +158,28 @@ def _validate_config(config: dict, source: str) -> None:
         )
 
 
-def _resolve_paths(config: dict, config_dir: Path) -> None:
+_PATH_LIKE = re.compile(r"^(?:[/~]|\.\.?/)")
+
+
+def _resolve_reviewer_command(config: dict, config_dir: Path, source: str) -> None:
+    """Shell-split the reviewer value, resolve only path-like first tokens."""
+    try:
+        parts = shlex.split(config["reviewer"])
+    except ValueError as e:
+        raise ConfigError(f"{source}: malformed reviewer command: {e}")
+    if not parts:
+        raise ConfigError(f"{source}: reviewer command is empty")
+    exe = parts[0]
+    if _PATH_LIKE.match(exe):
+        expanded = Path(exe).expanduser()
+        if expanded.is_absolute():
+            parts[0] = str(expanded)
+        else:
+            parts[0] = str(config_dir / exe)
+    config["reviewer"] = shlex.join(parts)
+
+
+def _resolve_paths(config: dict, config_dir: Path, source: str = "") -> None:
     """Resolve relative paths in config against the config file's parent directory.
 
     Applies expanduser() before checking is_absolute(), so that ~/... paths
@@ -168,10 +197,15 @@ def _resolve_paths(config: dict, config_dir: Path) -> None:
             config[key] = resolved
 
     if "reviewer" in config:
-        r = Path(config["reviewer"]).expanduser()
-        if not r.is_absolute():
-            r = config_dir / config["reviewer"]
-        config["reviewer"] = str(r)
+        _resolve_reviewer_command(config, config_dir, source)
+
+    for key in ("objective", "verify"):
+        if key in config:
+            p = Path(config[key]).expanduser()
+            if p.is_absolute():
+                config[key] = str(p)
+            else:
+                config[key] = str(config_dir / config[key])
 
 
 def _check_api_key_in_git(config: dict, config_path: Path) -> None:
@@ -226,14 +260,14 @@ def load_config(base_dir: Path) -> dict:
     global_path = config_dir / "config.toml"
     global_config = _load_single(global_path, str(global_path))
     if global_config:
-        _resolve_paths(global_config, global_path.parent)
+        _resolve_paths(global_config, global_path.parent, str(global_path))
 
     # Project config
     project_path = Path(base_dir).resolve() / "swival.toml"
     project_config = _load_single(project_path, str(project_path))
     if project_config:
         _check_api_key_in_git(project_config, project_path)
-        _resolve_paths(project_config, project_path.parent)
+        _resolve_paths(project_config, project_path.parent, str(project_path))
 
     # Merge: project overrides global (shallow)
     merged = {**global_config, **project_config}
@@ -299,7 +333,7 @@ def config_to_session_kwargs(config: dict) -> dict:
     (color, reviewer).
     """
     kwargs = {}
-    _DROP_KEYS = {"color", "reviewer"}
+    _DROP_KEYS = {"color", "reviewer", "review_prompt", "objective", "verify"}
     _INVERT_KEYS = {
         "no_read_guard": "read_guard",
         "no_history": "history",
@@ -363,6 +397,9 @@ def generate_config(project: bool = False) -> str:
         "",
         "# --- External ---",
         '# reviewer = "./review.sh"',
+        '# review_prompt = "Focus on correctness"',
+        '# objective = "objective.md"',
+        '# verify = "verification/working.md"',
         "",
     ]
     return "\n".join(lines)

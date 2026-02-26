@@ -501,6 +501,10 @@ class TestThinkNudge:
             no_history=True,
             init_config=False,
             project=False,
+            reviewer_mode=False,
+            review_prompt=None,
+            objective=None,
+            verify=None,
         )
         args = types.SimpleNamespace(**defaults)
         monkeypatch.setattr(sys, "argv", ["agent", "test nudge"])

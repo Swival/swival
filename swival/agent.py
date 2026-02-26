@@ -1212,18 +1212,21 @@ def run_reviewer(
     verbose: bool,
     timeout: int = 3600,
     env_extra: dict[str, str] | None = None,
-) -> tuple[int, str]:
+) -> tuple[int, str, str]:
     """Run the reviewer executable.
 
-    Returns (exit_code, stdout_text).
-    Never raises — all failures return (2, "") with a warning on stderr.
+    Returns (exit_code, stdout_text, stderr_text).
+    Never raises — all failures return (2, "", "") with a warning on stderr.
     """
+    import shlex
+
+    argv = shlex.split(reviewer_cmd) + [base_dir]
     env = os.environ.copy()
     if env_extra:
         env.update(env_extra)
     try:
         proc = subprocess.run(
-            [reviewer_cmd, base_dir],
+            argv,
             input=answer.encode(),
             capture_output=True,
             timeout=timeout,
@@ -1232,12 +1235,16 @@ def run_reviewer(
     except subprocess.TimeoutExpired:
         if verbose:
             fmt.warning(f"reviewer timed out after {timeout}s, accepting answer as-is")
-        return 2, ""
+        return 2, "", ""
     except OSError as e:
         if verbose:
             fmt.warning(f"reviewer failed to run: {e}")
-        return 2, ""
-    return proc.returncode, proc.stdout.decode("utf-8", errors="replace")
+        return 2, "", ""
+    stdout = proc.stdout.decode("utf-8", errors="replace")
+    stderr = proc.stderr.decode("utf-8", errors="replace")
+    if stderr and verbose:
+        fmt.warning(f"reviewer stderr: {stderr.rstrip()}")
+    return proc.returncode, stdout, stderr
 
 
 def build_parser():
@@ -1400,10 +1407,37 @@ def build_parser():
     )
     parser.add_argument(
         "--reviewer",
-        metavar="EXECUTABLE",
+        metavar="COMMAND",
         default=_UNSET,
-        help="Path to reviewer executable. Called after each answer with base_dir as argument "
+        help="Reviewer command (shell-split). Called after each answer with base_dir as argument "
         "and answer on stdin. Exit 0=accept, 1=retry with stdout as feedback, 2=reviewer error.",
+    )
+    parser.add_argument(
+        "--reviewer-mode",
+        action="store_true",
+        default=False,
+        help="Run as a reviewer: read base_dir from positional arg, answer from stdin, "
+        "call LLM to judge, exit 0/1/2.",
+    )
+    parser.add_argument(
+        "--review-prompt",
+        type=str,
+        default=_UNSET,
+        help="Custom instructions appended to the built-in review prompt (reviewer mode).",
+    )
+    parser.add_argument(
+        "--objective",
+        type=str,
+        default=_UNSET,
+        metavar="FILE",
+        help="Read the task description from FILE instead of SWIVAL_TASK env var (reviewer mode).",
+    )
+    parser.add_argument(
+        "--verify",
+        type=str,
+        default=_UNSET,
+        metavar="FILE",
+        help="Read verification/acceptance criteria from FILE (reviewer mode).",
     )
 
     color_group = parser.add_mutually_exclusive_group()
@@ -1498,6 +1532,35 @@ def main():
     # Load config files, apply to args, resolve sentinels to defaults
     from .config import load_config, apply_config_to_args
     from .config import ConfigError as _ConfigError
+
+    # --- Reviewer mode: reinterpret positional arg as base_dir ---
+    if args.reviewer_mode:
+        if args.repl:
+            parser.error("--reviewer-mode is incompatible with --repl")
+        if args.question is None:
+            parser.error("--reviewer-mode requires a positional argument (base_dir)")
+
+        # Snapshot whether --reviewer was explicitly on CLI (before config merge)
+        reviewer_from_cli = args.reviewer is not _UNSET
+
+        base_dir = Path(args.question).resolve()
+        try:
+            file_config = load_config(base_dir)
+        except _ConfigError as e:
+            parser.error(str(e))
+        apply_config_to_args(args, file_config)
+
+        # Config inheritance hazard: clear the reviewer key
+        if reviewer_from_cli:
+            parser.error("--reviewer-mode and --reviewer cannot be used together")
+        args.reviewer = None
+
+        args.verbose = not args.quiet
+        fmt.init(color=args.color, no_color=args.no_color)
+
+        from .reviewer import run_as_reviewer
+
+        sys.exit(run_as_reviewer(args, str(base_dir)))
 
     base_dir = Path(args.base_dir).resolve()
     try:
@@ -1943,16 +2006,25 @@ def _run_main(args, report, _write_report, parser):
     # Validate reviewer executable at startup
     reviewer_cmd = None
     if args.reviewer:
-        resolved = shutil.which(args.reviewer)
+        import shlex
+
+        try:
+            parts = shlex.split(args.reviewer)
+        except ValueError as e:
+            raise AgentError(f"malformed reviewer command: {e}")
+        if not parts:
+            raise AgentError("reviewer command is empty")
+        exe = parts[0]
+        resolved = shutil.which(exe)
         if resolved:
-            reviewer_cmd = resolved
+            reviewer_cmd = args.reviewer
         else:
-            p = Path(args.reviewer).resolve()
+            p = Path(exe).resolve()
             if p.is_file() and os.access(p, os.X_OK):
-                reviewer_cmd = str(p)
+                reviewer_cmd = args.reviewer
             else:
                 raise AgentError(
-                    f"reviewer executable not found or not executable: {args.reviewer}"
+                    f"reviewer executable not found or not executable: {exe}"
                 )
 
     if not args.repl:
@@ -1987,7 +2059,7 @@ def _run_main(args, report, _write_report, parser):
                 fmt.info(f"Review round {review_round}: sending answer to reviewer")
 
             reviewer_env["SWIVAL_REVIEW_ROUND"] = str(review_round)
-            exit_code, review_text = run_reviewer(
+            exit_code, review_text, review_stderr = run_reviewer(
                 reviewer_cmd,
                 base_dir,
                 answer,
@@ -1996,7 +2068,9 @@ def _run_main(args, report, _write_report, parser):
             )
 
             if report:
-                report.record_review(review_round, exit_code, review_text)
+                report.record_review(
+                    review_round, exit_code, review_text, stderr=review_stderr
+                )
 
             if exit_code == 0:
                 if args.verbose:

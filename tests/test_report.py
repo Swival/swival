@@ -505,6 +505,10 @@ class TestReportIntegration:
             no_history=True,
             init_config=False,
             project=False,
+            reviewer_mode=False,
+            review_prompt=None,
+            objective=None,
+            verify=None,
         )
 
     def test_report_written_on_success(self, tmp_path):

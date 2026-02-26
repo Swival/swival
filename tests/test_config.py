@@ -56,6 +56,9 @@ def _make_args(**overrides):
         "no_color": _UNSET,
         "quiet": _UNSET,
         "reviewer": _UNSET,
+        "review_prompt": _UNSET,
+        "objective": _UNSET,
+        "verify": _UNSET,
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -655,6 +658,7 @@ class TestCLIIntegration:
             base_dir=str(tmp_path),
             init_config=False,
             project=False,
+            reviewer_mode=False,
         )
         mock_parser.parse_args.return_value = mock_args
         mock_parser.error.side_effect = SystemExit(2)

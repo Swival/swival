@@ -94,6 +94,8 @@ For `compaction`, fields include `strategy`, `tokens_before`, and `tokens_after`
 
 For `guardrail`, fields include `tool` and `level`, where `level` is `nudge` for repeated failures and `stop` for stronger intervention.
 
+For `review`, fields include `round`, `exit_code`, and `feedback` (reviewer standard output). When the reviewer produces standard error output, `stderr` is also included.
+
 For `truncated_response`, the event marks that an LLM response ended because of output token limits.
 
 ## Benchmarking Workflow
