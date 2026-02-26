@@ -39,6 +39,11 @@ def llm_timing(elapsed: float, finish_reason: str) -> None:
     _console.print(text)
 
 
+def llm_spinner(label: str = "Waiting for LLM"):
+    """Return a Rich Status context manager that spins on stderr."""
+    return _console.status(f"  {label}", spinner="dots")
+
+
 def completion(turns: int, exit_code: str) -> None:
     if exit_code == "ok":
         _console.print(
