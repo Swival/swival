@@ -278,6 +278,20 @@ class TestWriteFileMoveFrom:
         result = _write_file("new.txt", None, str(tmp_path))
         assert result.startswith("error:")
 
+    def test_empty_move_from_treated_as_absent(self, tmp_path):
+        """Empty move_from string is treated as not provided."""
+        result = _write_file("new.txt", "hello", str(tmp_path), move_from="")
+        assert not result.startswith("error:")
+        assert (tmp_path / "new.txt").read_text(encoding="utf-8") == "hello"
+
+    def test_empty_content_with_move_from(self, tmp_path):
+        """Empty content string with move_from does the rename."""
+        (tmp_path / "src.txt").write_text("data", encoding="utf-8")
+        result = _write_file("dst.txt", "", str(tmp_path), move_from="src.txt")
+        assert not result.startswith("error:")
+        assert (tmp_path / "dst.txt").read_text(encoding="utf-8") == "data"
+        assert not (tmp_path / "src.txt").exists()
+
 
 # =========================================================================
 # edit_file -- positive paths

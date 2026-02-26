@@ -896,6 +896,12 @@ def _write_file(
 
     Exactly one of content or move_from must be set.
     """
+    # Treat empty strings as "not provided".
+    if content is not None and not content and move_from:
+        content = None
+    if move_from is not None and not move_from:
+        move_from = None
+
     if content is not None and move_from is not None:
         return "error: set content or move_from, not both"
     if content is None and move_from is None:
