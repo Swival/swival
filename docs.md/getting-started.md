@@ -16,7 +16,9 @@ Install the CLI with `uv tool install swival`. This places the `swival` command 
 uv tool install swival
 ```
 
-When you want to move to the newest release, run `uv tool upgrade swival`.
+## Upgrading
+
+To upgrade an existing installation to the newest release, run `uv tool upgrade swival`.
 
 ```sh
 uv tool upgrade swival
