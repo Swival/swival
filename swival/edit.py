@@ -34,35 +34,13 @@ def _normalize_unicode(s: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _find_line_trimmed(content: str, old_string: str) -> tuple[int, int] | None:
+def _find_fuzzy(
+    content: str, old_string: str, normalize=None
+) -> tuple[int, int] | None:
     """Find old_string in content using per-line .strip() comparison.
 
-    Returns (start_index, end_index) into content, or None.
-    """
-    content_lines = content.split("\n")
-    old_lines = old_string.split("\n")
-    old_len = len(old_lines)
-
-    if old_len == 0:
-        return None
-
-    stripped_old = [line.strip() for line in old_lines]
-
-    for i in range(len(content_lines) - old_len + 1):
-        if all(content_lines[i + j].strip() == stripped_old[j] for j in range(old_len)):
-            # Compute character offsets from line indices
-            start = sum(len(content_lines[k]) + 1 for k in range(i))
-            end = start + sum(len(content_lines[i + k]) + 1 for k in range(old_len))
-            # Adjust: if old_string doesn't end with \n, remove trailing \n from span
-            if not old_string.endswith("\n") and end > 0 and end <= len(content) + 1:
-                end -= 1
-            return (start, end)
-
-    return None
-
-
-def _find_unicode_normalized(content: str, old_string: str) -> tuple[int, int] | None:
-    """Find old_string in content using per-line strip + Unicode normalization.
+    When *normalize* is provided, each stripped line is also passed through
+    it before comparison (e.g. ``_normalize_unicode``).
 
     Returns (start_index, end_index) into content, or None.
     """
@@ -73,12 +51,12 @@ def _find_unicode_normalized(content: str, old_string: str) -> tuple[int, int] |
     if old_len == 0:
         return None
 
-    norm_old = [_normalize_unicode(line.strip()) for line in old_lines]
+    prep = normalize or (lambda s: s)
+    prepped_old = [prep(line.strip()) for line in old_lines]
 
     for i in range(len(content_lines) - old_len + 1):
         if all(
-            _normalize_unicode(content_lines[i + j].strip()) == norm_old[j]
-            for j in range(old_len)
+            prep(content_lines[i + j].strip()) == prepped_old[j] for j in range(old_len)
         ):
             start = sum(len(content_lines[k]) + 1 for k in range(i))
             end = start + sum(len(content_lines[i + k]) + 1 for k in range(old_len))
@@ -89,33 +67,21 @@ def _find_unicode_normalized(content: str, old_string: str) -> tuple[int, int] |
     return None
 
 
-def _count_fuzzy_matches(
-    content: str,
-    old_string: str,
-    finder: type[object] | None = None,
-    find_func=None,
-) -> int:
-    """Count how many times old_string matches in content using a fuzzy finder."""
+def _count_fuzzy_matches(content: str, old_string: str, normalize=None) -> int:
+    """Count how many times old_string fuzzy-matches in content."""
     content_lines = content.split("\n")
     old_lines = old_string.split("\n")
     old_len = len(old_lines)
     count = 0
 
-    if find_func == "trimmed":
-        stripped_old = [line.strip() for line in old_lines]
-        for i in range(len(content_lines) - old_len + 1):
-            if all(
-                content_lines[i + j].strip() == stripped_old[j] for j in range(old_len)
-            ):
-                count += 1
-    elif find_func == "unicode":
-        norm_old = [_normalize_unicode(line.strip()) for line in old_lines]
-        for i in range(len(content_lines) - old_len + 1):
-            if all(
-                _normalize_unicode(content_lines[i + j].strip()) == norm_old[j]
-                for j in range(old_len)
-            ):
-                count += 1
+    prep = normalize or (lambda s: s)
+    prepped_old = [prep(line.strip()) for line in old_lines]
+
+    for i in range(len(content_lines) - old_len + 1):
+        if all(
+            prep(content_lines[i + j].strip()) == prepped_old[j] for j in range(old_len)
+        ):
+            count += 1
 
     return count
 
@@ -167,37 +133,23 @@ def replace(
     if exact_count > 1 and not replace_all:
         raise ValueError("multiple matches")
 
-    # --- Pass 2: line-trimmed ---
-    match = _find_line_trimmed(content, old_string)
-    if match is not None:
-        if not replace_all:
-            count = _count_fuzzy_matches(content, old_string, find_func="trimmed")
-            if count > 1:
-                raise ValueError("multiple matches")
-        result = content[: match[0]] + new_string + content[match[1] :]
-        if replace_all:
-            # Keep replacing until no more matches
-            while True:
-                next_match = _find_line_trimmed(result, old_string)
-                if next_match is None:
-                    break
-                result = result[: next_match[0]] + new_string + result[next_match[1] :]
-        return result
-
-    # --- Pass 3: Unicode-normalized ---
-    match = _find_unicode_normalized(content, old_string)
-    if match is not None:
-        if not replace_all:
-            count = _count_fuzzy_matches(content, old_string, find_func="unicode")
-            if count > 1:
-                raise ValueError("multiple matches")
-        result = content[: match[0]] + new_string + content[match[1] :]
-        if replace_all:
-            while True:
-                next_match = _find_unicode_normalized(result, old_string)
-                if next_match is None:
-                    break
-                result = result[: next_match[0]] + new_string + result[next_match[1] :]
-        return result
+    # --- Fuzzy passes: line-trimmed, then Unicode-normalized ---
+    for normalize in (None, _normalize_unicode):
+        match = _find_fuzzy(content, old_string, normalize=normalize)
+        if match is not None:
+            if not replace_all:
+                count = _count_fuzzy_matches(content, old_string, normalize=normalize)
+                if count > 1:
+                    raise ValueError("multiple matches")
+            result = content[: match[0]] + new_string + content[match[1] :]
+            if replace_all:
+                while True:
+                    next_match = _find_fuzzy(result, old_string, normalize=normalize)
+                    if next_match is None:
+                        break
+                    result = (
+                        result[: next_match[0]] + new_string + result[next_match[1] :]
+                    )
+            return result
 
     raise ValueError("not found")

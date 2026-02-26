@@ -4,6 +4,7 @@ import fnmatch
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -1020,9 +1021,7 @@ def _write_file(
         try:
             move_from_original.rename(resolved)
         except OSError:
-            import shutil as _shutil
-
-            _shutil.move(str(move_from_original), str(resolved))
+            shutil.move(str(move_from_original), str(resolved))
         if tracker is not None:
             tracker.record_write(str(resolved))
         return f"Moved {move_from} -> {file_path}"
@@ -1114,7 +1113,6 @@ def _cleanup_trash(base_dir: str, exclude: str | None = None) -> None:
         exclude: Trash ID to protect from eviction (just added). Its size
                  still counts against the budget.
     """
-    import shutil as _shutil
     import time as _time
 
     trash_root = Path(base_dir) / SWIVAL_DIR / "trash"
@@ -1140,7 +1138,7 @@ def _cleanup_trash(base_dir: str, exclude: str | None = None) -> None:
     for mtime, size, path in entries:
         if now - mtime > TRASH_MAX_AGE and path.name != exclude:
             try:
-                _shutil.rmtree(path)
+                shutil.rmtree(path)
             except FileNotFoundError:
                 pass
         else:
@@ -1155,7 +1153,7 @@ def _cleanup_trash(base_dir: str, exclude: str | None = None) -> None:
         if path.name == exclude:
             continue
         try:
-            _shutil.rmtree(path)
+            shutil.rmtree(path)
         except FileNotFoundError:
             pass
         total -= size
@@ -1223,9 +1221,7 @@ def _delete_file(
         original.rename(dest)
     except OSError:
         # Cross-filesystem fallback.
-        import shutil as _shutil
-
-        _shutil.move(str(original), str(dest))
+        shutil.move(str(original), str(dest))
 
     # Record in tracker so recreating the same path is allowed.
     # For symlinks, record the link path (not the resolved target) to avoid
@@ -1504,8 +1500,6 @@ def _run_command(
     When unrestricted is False, only whitelisted commands are allowed.
     When unrestricted is True, any command can be run.
     """
-    import shutil as _shutil
-
     was_repaired = False
 
     def _finalize(result: str, repaired: bool) -> str:
@@ -1571,7 +1565,7 @@ def _run_command(
             resolved_path = str(candidate.resolve())
         else:
             # Bare name — look up on PATH
-            found = _shutil.which(cmd_name)
+            found = shutil.which(cmd_name)
             if found is None:
                 return _finalize(
                     f"error: command not found on PATH: {cmd_name!r}", was_repaired

@@ -27,6 +27,7 @@ class ReportCollector:
         self.total_tool_time = 0.0
         self.max_turn_seen = 0
         self.skills_used: list[str] = []
+        self._last_report: dict | None = None
 
     def record_llm_call(
         self,

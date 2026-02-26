@@ -88,6 +88,50 @@ class ContextOverflowError(Exception):
     pass
 
 
+# ---------------------------------------------------------------------------
+# Message accessor helpers — abstract over dict vs object messages
+# ---------------------------------------------------------------------------
+
+
+def _msg_role(msg) -> str | None:
+    return msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+
+
+def _msg_content(msg) -> str:
+    if isinstance(msg, dict):
+        return msg.get("content", "") or ""
+    return getattr(msg, "content", "") or ""
+
+
+def _msg_tool_calls(msg):
+    return (
+        msg.get("tool_calls", None)
+        if isinstance(msg, dict)
+        else getattr(msg, "tool_calls", None)
+    )
+
+
+def _msg_tool_call_id(msg) -> str | None:
+    return (
+        msg.get("tool_call_id")
+        if isinstance(msg, dict)
+        else getattr(msg, "tool_call_id", None)
+    )
+
+
+def _msg_name(msg) -> str:
+    if isinstance(msg, dict):
+        return msg.get("name", "") or ""
+    return getattr(msg, "name", "") or ""
+
+
+def _set_msg_content(msg, value: str) -> None:
+    if isinstance(msg, dict):
+        msg["content"] = value
+    else:
+        msg.content = value
+
+
 def _sanitize_assistant_messages(messages: list) -> bool:
     """Fix assistant messages that have neither content nor tool_calls.
 
@@ -99,22 +143,13 @@ def _sanitize_assistant_messages(messages: list) -> bool:
     """
     fixed = False
     for msg in messages:
-        if isinstance(msg, dict):
-            if msg.get("role") != "assistant":
-                continue
-            has_content = bool(msg.get("content"))
-            has_tools = bool(msg.get("tool_calls"))
-            if not has_content and not has_tools:
-                msg["content"] = ""
-                fixed = True
-        else:
-            if getattr(msg, "role", None) != "assistant":
-                continue
-            has_content = bool(getattr(msg, "content", None))
-            has_tools = bool(getattr(msg, "tool_calls", None))
-            if not has_content and not has_tools:
-                msg.content = ""
-                fixed = True
+        if _msg_role(msg) != "assistant":
+            continue
+        has_content = bool(_msg_content(msg))
+        has_tools = bool(_msg_tool_calls(msg))
+        if not has_content and not has_tools:
+            _set_msg_content(msg, "")
+            fixed = True
     return fixed
 
 
@@ -171,12 +206,8 @@ def estimate_tokens(messages: list, tools: list | None = None) -> int:
     """Count tokens across all messages using tiktoken."""
     total = 0
     for m in messages:
-        if isinstance(m, dict):
-            content = m.get("content", "") or ""
-            tool_calls = m.get("tool_calls", None)
-        else:
-            content = getattr(m, "content", "") or ""
-            tool_calls = getattr(m, "tool_calls", None)
+        content = _msg_content(m)
+        tool_calls = _msg_tool_calls(m)
         if tool_calls:
             for tc in tool_calls:
                 if hasattr(tc, "function"):
@@ -203,12 +234,8 @@ def group_into_turns(messages: list) -> list[list]:
     i = 0
     while i < len(messages):
         msg = messages[i]
-        role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
-        tool_calls = (
-            msg.get("tool_calls", None)
-            if isinstance(msg, dict)
-            else getattr(msg, "tool_calls", None)
-        )
+        role = _msg_role(msg)
+        tool_calls = _msg_tool_calls(msg)
 
         if role == "assistant" and tool_calls:
             # Collect this assistant msg + all following tool results
@@ -217,16 +244,8 @@ def group_into_turns(messages: list) -> list[list]:
             j = i + 1
             while j < len(messages):
                 next_msg = messages[j]
-                next_role = (
-                    next_msg.get("role")
-                    if isinstance(next_msg, dict)
-                    else getattr(next_msg, "role", None)
-                )
-                tc_id = (
-                    next_msg.get("tool_call_id")
-                    if isinstance(next_msg, dict)
-                    else getattr(next_msg, "tool_call_id", None)
-                )
+                next_role = _msg_role(next_msg)
+                tc_id = _msg_tool_call_id(next_msg)
                 if next_role == "tool" and tc_id in tc_ids:
                     turn.append(next_msg)
                     j += 1
@@ -296,11 +315,7 @@ def _tool_call_index(turn: list) -> dict[str, tuple[str, dict | None]]:
     """
     index: dict[str, tuple[str, dict | None]] = {}
     first = turn[0]
-    tool_calls = (
-        first.get("tool_calls", None)
-        if isinstance(first, dict)
-        else getattr(first, "tool_calls", None)
-    )
+    tool_calls = _msg_tool_calls(first)
     if not tool_calls:
         return index
     for tc in tool_calls:
@@ -332,38 +347,20 @@ def compact_messages(messages: list) -> list:
     for turn in turns[:cutoff]:
         tc_index = _tool_call_index(turn)
         for msg in turn:
-            role = (
-                msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
-            )
-            if role == "tool":
-                content = (
-                    msg.get("content", "")
-                    if isinstance(msg, dict)
-                    else getattr(msg, "content", "")
-                )
+            if _msg_role(msg) == "tool":
+                content = _msg_content(msg)
                 if content and len(content) > 1000:
-                    tc_id = (
-                        msg.get("tool_call_id")
-                        if isinstance(msg, dict)
-                        else getattr(msg, "tool_call_id", None)
-                    )
+                    tc_id = _msg_tool_call_id(msg)
                     tool_name, tool_args = tc_index.get(tc_id, ("?", None))
                     replacement = compact_tool_result(tool_name, tool_args, content)
-                    if isinstance(msg, dict):
-                        msg["content"] = replacement
-                    else:
-                        msg.content = replacement
+                    _set_msg_content(msg, replacement)
     # Flatten turns back to message list
     return [msg for turn in turns for msg in turn]
 
 
 def is_pinned(turn: list) -> bool:
     """User turns are always preserved — they must never be silently dropped."""
-    return any(
-        (msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None))
-        == "user"
-        for msg in turn
-    )
+    return any(_msg_role(msg) == "user" for msg in turn)
 
 
 def score_turn(turn: list) -> int:
@@ -373,20 +370,12 @@ def score_turn(turn: list) -> int:
     """
     score = 0
     for msg in turn:
-        content = str(
-            msg.get("content", "")
-            if isinstance(msg, dict)
-            else getattr(msg, "content", "") or ""
-        )
+        content = _msg_content(msg)
         # Errors are important — the agent learned something
         if "error" in content.lower() or "failed" in content.lower():
             score += 3
         # File writes/edits are important — the agent took action
-        tool_calls = (
-            msg.get("tool_calls", None)
-            if isinstance(msg, dict)
-            else getattr(msg, "tool_calls", None)
-        )
+        tool_calls = _msg_tool_calls(msg)
         if tool_calls:
             for tc in tool_calls:
                 fn = tc.function if hasattr(tc, "function") else tc.get("function", {})
@@ -394,12 +383,7 @@ def score_turn(turn: list) -> int:
                 if fn_name in ("write_file", "edit_file"):
                     score += 5
         # Thinking turns are important — the agent reasoned
-        name = (
-            msg.get("name", "")
-            if isinstance(msg, dict)
-            else getattr(msg, "name", "") or ""
-        )
-        if "think" in name:
+        if "think" in _msg_name(msg):
             score += 2
     return score
 
@@ -442,8 +426,7 @@ def drop_middle_turns(
     # Find leading block: scan forward while role is system or user
     leading_count = 0
     for turn in turns:
-        msg = turn[0]
-        role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+        role = _msg_role(turn[0])
         if role in ("system", "user"):
             leading_count += 1
         else:
@@ -543,9 +526,7 @@ def aggressive_drop_turns(
     # Find leading system messages only (not user)
     leading_count = 0
     for turn in turns:
-        msg = turn[0]
-        role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
-        if role == "system":
+        if _msg_role(turn[0]) == "system":
             leading_count += 1
         else:
             break
@@ -615,16 +596,8 @@ def summarize_turns(
     flat = []
     for turn in turns_to_drop:
         for msg in turn:
-            role = (
-                msg.get("role", "?")
-                if isinstance(msg, dict)
-                else getattr(msg, "role", "?")
-            )
-            content = (
-                msg.get("content", "")
-                if isinstance(msg, dict)
-                else getattr(msg, "content", "") or ""
-            )
+            role = _msg_role(msg) or "?"
+            content = _msg_content(msg)
             if content:
                 flat.append(f"[{role}] {content[:2000]}")
 
@@ -1636,7 +1609,7 @@ def main():
         effective_turns = turns if turns is not None else report.max_turn_seen
         todo_stats = None
         if todo_state is not None and todo_state._total_actions > 0:
-            remaining = sum(1 for i in todo_state.items if not i.done)
+            remaining = todo_state.remaining_count
             todo_stats = {
                 "added": todo_state.add_count,
                 "completed": todo_state.done_count,
@@ -2478,7 +2451,7 @@ def run_agent_loop(
 
         # Todo reminder: nudge when items remain and todo hasn't been used recently.
         if todo_state is not None:
-            remaining = sum(1 for i in todo_state.items if not i.done)
+            remaining = todo_state.remaining_count
             if remaining > 0 and (turns - todo_last_used) >= TODO_REMINDER_INTERVAL:
                 todo_last_used = turns  # reset so we don't nag every turn
                 items_preview = "; ".join(
@@ -2514,11 +2487,8 @@ def run_agent_loop(
         fmt.completion(turns, "max_turns")
     last_text = None
     for m in reversed(messages):
-        role = m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
-        if role == "assistant":
-            content = (
-                m.get("content") if isinstance(m, dict) else getattr(m, "content", None)
-            )
+        if _msg_role(m) == "assistant":
+            content = _msg_content(m)
             if content:
                 last_text = content
                 break
@@ -2563,8 +2533,7 @@ def _repl_clear(
     """Clear conversation history, keeping only the leading system messages."""
     leading = []
     for msg in messages:
-        role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
-        if role == "system":
+        if _msg_role(msg) == "system":
             leading.append(msg)
         else:
             break

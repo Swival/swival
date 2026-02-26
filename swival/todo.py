@@ -46,6 +46,10 @@ class TodoState:
                 # .swival is a symlink escaping base_dir — disable persistence.
                 self.notes_dir = None
 
+    @property
+    def remaining_count(self) -> int:
+        return sum(1 for i in self.items if not i.done)
+
     def process(self, args: dict) -> str:
         """Handle a todo action. Returns JSON with the current list or an error string."""
         action = args.get("action", "")
@@ -84,7 +88,7 @@ class TodoState:
         task_key = self._task_key(task)
         if any(self._task_key(i.text) == task_key for i in self.items):
             if self.verbose:
-                remaining = sum(1 for i in self.items if not i.done)
+                remaining = self.remaining_count
                 fmt.todo_update(
                     "add", f"Already listed: {task[:80]} ({remaining} remaining)"
                 )
@@ -97,7 +101,7 @@ class TodoState:
         self.items.append(TodoItem(text=task))
         self.add_count += 1
         self._save()
-        remaining = sum(1 for i in self.items if not i.done)
+        remaining = self.remaining_count
         if self.verbose:
             fmt.todo_update("add", f"{task[:80]} ({remaining} remaining)")
         return self._response("add")
@@ -111,7 +115,7 @@ class TodoState:
             match.done = True
             self.done_count += 1
             self._save()
-        remaining = sum(1 for i in self.items if not i.done)
+        remaining = self.remaining_count
         if self.verbose:
             fmt.todo_update("done", f"{match.text[:80]} ({remaining} remaining)")
         return self._response("done")
@@ -122,7 +126,7 @@ class TodoState:
             return match  # error string
         self.items.remove(match)
         self._save()
-        remaining = sum(1 for i in self.items if not i.done)
+        remaining = self.remaining_count
         if self.verbose:
             fmt.todo_update(
                 "remove", f"Removed: {match.text[:80]} ({remaining} remaining)"
@@ -165,7 +169,7 @@ class TodoState:
 
     def _response(self, action: str, note: str | None = None) -> str:
         items = [{"task": i.text, "done": i.done} for i in self.items]
-        remaining = sum(1 for i in self.items if not i.done)
+        remaining = self.remaining_count
         resp: dict = {
             "action": action,
             "total": len(self.items),
@@ -212,5 +216,5 @@ class TodoState:
         """One-line usage summary, or None if todo was never called."""
         if self._total_actions == 0:
             return None
-        remaining = sum(1 for i in self.items if not i.done)
+        remaining = self.remaining_count
         return f"todo: {self.add_count} added, {self.done_count} done, {remaining} remaining"

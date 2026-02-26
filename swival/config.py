@@ -110,6 +110,15 @@ def global_config_dir() -> Path:
     return Path.home() / ".config" / "swival"
 
 
+def _type_name(expected: type | tuple[type, ...]) -> str:
+    """Format an expected type spec as a human-readable string."""
+    if expected is list:
+        return "list"
+    if isinstance(expected, tuple):
+        return " or ".join(t.__name__ for t in expected)
+    return expected.__name__
+
+
 def _validate_config(config: dict, source: str) -> None:
     """Validate types and mutual exclusions in a parsed config dict.
 
@@ -125,22 +134,12 @@ def _validate_config(config: dict, source: str) -> None:
         # bool is a subclass of int in Python, so isinstance(True, int) is True.
         # Reject bools for non-bool fields explicitly.
         if isinstance(value, bool) and expected is not bool:
-            if expected is list:
-                type_name = "list"
-            elif isinstance(expected, tuple):
-                type_name = " or ".join(t.__name__ for t in expected)
-            else:
-                type_name = expected.__name__
-            raise ConfigError(f"{source}: {key!r} expected {type_name}, got bool")
-        if not isinstance(value, expected):
-            if expected is list:
-                type_name = "list"
-            elif isinstance(expected, tuple):
-                type_name = " or ".join(t.__name__ for t in expected)
-            else:
-                type_name = expected.__name__
             raise ConfigError(
-                f"{source}: {key!r} expected {type_name}, got {type(value).__name__}"
+                f"{source}: {key!r} expected {_type_name(expected)}, got bool"
+            )
+        if not isinstance(value, expected):
+            raise ConfigError(
+                f"{source}: {key!r} expected {_type_name(expected)}, got {type(value).__name__}"
             )
 
         # Validate list element types

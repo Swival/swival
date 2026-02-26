@@ -3,6 +3,7 @@
 import html
 import html.parser
 import ipaddress
+import re
 import socket
 import urllib.parse
 import urllib.request
@@ -103,8 +104,6 @@ class _TextExtractor(html.parser.HTMLParser):
             self._parts.append(html.unescape(f"&#{name};"))
 
     def get_text(self) -> str:
-        import re
-
         text = "".join(self._parts)
         # Collapse runs of whitespace within lines
         text = re.sub(r"[^\S\n]+", " ", text)
