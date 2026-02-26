@@ -2051,7 +2051,7 @@ def _run_main(args, report, _write_report, parser):
         if answer is not None:
             print(answer)
         if exhausted and args.verbose:
-            fmt.warning("max turns reached for initial question.")
+            fmt.warning("max turns reached for initial question. Use /continue to resume.")
 
     repl_loop(messages, tools, **loop_kwargs, no_history=no_history)
 
@@ -2763,7 +2763,7 @@ def repl_loop(
             if answer is not None:
                 print(answer)
             if exhausted and verbose:
-                fmt.warning("max turns reached for this question.")
+                fmt.warning("max turns reached for this question. Use /continue to resume.")
             continue
 
         messages.append({"role": "user", "content": line})
@@ -2801,7 +2801,7 @@ def repl_loop(
         if answer is not None:
             print(answer)
         if exhausted and verbose:
-            fmt.warning("max turns reached for this question.")
+            fmt.warning("max turns reached for this question. Use /continue to resume.")
 
 
 if __name__ == "__main__":
