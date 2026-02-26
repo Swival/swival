@@ -184,6 +184,11 @@ TOOLS = [
                             'Glob pattern to filter filenames, e.g. "*.py".'
                         ),
                     },
+                    "case_insensitive": {
+                        "type": "boolean",
+                        "description": ("If true, search case-insensitively."),
+                        "default": False,
+                    },
                 },
                 "required": ["pattern"],
             },
@@ -637,6 +642,7 @@ def _grep(
     path: str,
     base_dir: str,
     include: str | None = None,
+    case_insensitive: bool = False,
     extra_read_roots: list[Path] = (),
     extra_write_roots: list[Path] = (),
     unrestricted: bool = False,
@@ -650,7 +656,8 @@ def _grep(
 
     # Compile regex
     try:
-        regex = re.compile(pattern)
+        flags = re.IGNORECASE if case_insensitive else 0
+        regex = re.compile(pattern, flags)
     except re.error as exc:
         return f"error: invalid regex {pattern!r}: {exc}"
 
@@ -681,8 +688,16 @@ def _grep(
         dirs[:] = [d for d in dirs if d != ".git"]
         for filename in files:
             # Filter by include pattern
-            if include and not fnmatch.fnmatch(filename, include):
-                continue
+            if include:
+                rel = (Path(dirpath) / filename).relative_to(root)
+                # PurePath.match handles ** globs (Python 3.12+), but
+                # '**/*.ext' won't match root-level files (no dir
+                # component).  Fall back to fnmatch on the bare
+                # filename so '**/*.zig' still matches 'a.zig'.
+                if not rel.match(include) and not fnmatch.fnmatch(
+                    filename, include.split("/")[-1] if "/" in include else include
+                ):
+                    continue
 
             filepath = Path(dirpath) / filename
 
@@ -1659,6 +1674,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             path=args.get("path", "."),
             base_dir=base_dir,
             include=args.get("include"),
+            case_insensitive=args.get("case_insensitive", False),
             extra_read_roots=kwargs.get("skill_read_roots", ()),
             extra_write_roots=extra_write_roots,
             unrestricted=yolo,

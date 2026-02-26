@@ -328,3 +328,41 @@ class TestGrep:
         result = _grep("import", ".", str(sandbox), include="..\\*.py")
         assert "error" in result
         assert ".." in result
+
+    def test_include_double_star_glob(self, sandbox):
+        """include='**/*.zig' should match .zig files at every depth."""
+        (sandbox / "a.zig").write_text("MATCH\n")
+        d1 = sandbox / "dir1"
+        d1.mkdir()
+        (d1 / "b.zig").write_text("MATCH\n")
+        d2 = d1 / "dir2"
+        d2.mkdir()
+        (d2 / "c.zig").write_text("MATCH\n")
+        # A non-.zig file should be excluded
+        (d2 / "skip.txt").write_text("MATCH\n")
+
+        result = _grep("MATCH", ".", str(sandbox), include="**/*.zig")
+        assert "a.zig" in result
+        assert "b.zig" in result
+        assert "c.zig" in result
+        assert "skip.txt" not in result
+
+    def test_include_nested_double_star_glob(self, sandbox):
+        """include='**/**/*.py' should also work."""
+        result = _grep("import", ".", str(sandbox), include="**/**/*.py")
+        assert "Found" in result
+        assert "main.py" in result
+
+    def test_case_insensitive(self, sandbox):
+        """case_insensitive=True should match regardless of case."""
+        (sandbox / "ci.txt").write_text("Hello World\nhello world\nHELLO WORLD\n")
+        result = _grep(
+            "hello", ".", str(sandbox), include="ci.txt", case_insensitive=True
+        )
+        assert "Found 3 matches" in result
+
+    def test_case_sensitive_default(self, sandbox):
+        """Default search should be case-sensitive."""
+        (sandbox / "cs.txt").write_text("Hello World\nhello world\nHELLO WORLD\n")
+        result = _grep("hello", ".", str(sandbox), include="cs.txt")
+        assert "Found 1 match" in result

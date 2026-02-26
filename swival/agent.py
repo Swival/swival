@@ -544,6 +544,7 @@ def discover_model(base_url, verbose):
             vision = False
             try:
                 import litellm
+
                 vision = litellm.supports_vision(model=f"openai/{model_key}")
             except Exception:
                 pass
@@ -847,7 +848,7 @@ def build_parser():
         "--no-instructions",
         action="store_true",
         default=_UNSET,
-        help="Don't load CLAUDE.md or AGENTS.md from the base directory.",
+        help="Don't load CLAUDE.md or AGENTS.md from the base directory or user config directory.",
     )
     parser.add_argument(
         "--skills-dir",
