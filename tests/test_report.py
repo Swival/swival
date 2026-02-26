@@ -494,6 +494,7 @@ class TestReportIntegration:
             skills_dir=[],
             no_skills=True,
             add_dir=[],
+            add_dir_ro=[],
             yolo=False,
             color=False,
             no_color=True,

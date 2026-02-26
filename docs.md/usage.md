@@ -55,6 +55,8 @@ The REPL is built on `prompt-toolkit`, so it supports input history, history sea
 
 `/add-dir <path>` grants read and write access to an additional directory for the current session.
 
+`/add-dir-ro <path>` grants read-only access to an additional directory. The agent can read, list, and grep files there but cannot write, edit, or delete them.
+
 `/extend` doubles the current turn budget. `/extend <N>` sets the turn budget to an exact value.
 
 `/continue` restarts the agent loop for the existing conversation without adding a new user message.
@@ -96,6 +98,8 @@ The REPL is built on `prompt-toolkit`, so it supports input history, history sea
 `--allowed-commands` enables command execution through a comma-separated whitelist.
 
 `--add-dir` grants read and write access to additional directories and can be repeated.
+
+`--add-dir-ro` grants read-only access to additional directories and can be repeated. The agent can read, list, and grep files in these directories but cannot write, edit, or delete them.
 
 `--yolo` disables both filesystem sandbox checks and command whitelisting, except that filesystem root access is still blocked.
 

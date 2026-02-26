@@ -64,10 +64,16 @@
 <p>All filesystem operations are anchored to <code>--base-dir</code>, which defaults to the current directory. Path checks resolve both the base directory and target path through symlinks, then verify that the resolved target remains inside an allowed root. If a path escapes through traversal or symlink indirection, the operation fails.</p>
 <p>Even in YOLO mode, Swival blocks the filesystem root itself. You cannot grant the agent unrestricted access to <code>/</code> by accident.</p>
 <h2 id="additional-allowed-directories">Additional Allowed Directories</h2>
-<p>When the agent needs access outside <code>--base-dir</code>, pass one or more <code>--add-dir</code> flags.</p>
+<p>When the agent needs full access outside <code>--base-dir</code>, pass one or more <code>--add-dir</code> flags.</p>
 <pre><code class="language-sh">swival --add-dir ~/shared-data --add-dir /opt/configs &quot;Update the config&quot;
 </code></pre>
-<p>Each allowed directory must already exist, must be a directory, and cannot be the filesystem root. In REPL mode, you can grant the same access dynamically with <code>/add-dir &lt;path&gt;</code>.</p>
+<p>When the agent only needs to read files without modifying them, use <code>--add-dir-ro</code> instead.</p>
+<pre><code class="language-sh">swival --add-dir-ro ~/reference-docs --add-dir-ro /opt/datasets &quot;Analyze the data&quot;
+</code></pre>
+<p>Both flags can be combined. The agent gets read-write access to <code>--add-dir</code> paths and read-only access to <code>--add-dir-ro</code> paths.</p>
+<pre><code class="language-sh">swival --add-dir ./output --add-dir-ro ~/corpus &quot;Summarize the corpus into output/&quot;
+</code></pre>
+<p>Each allowed directory must already exist, must be a directory, and cannot be the filesystem root. In REPL mode, you can grant the same access dynamically with <code>/add-dir &lt;path&gt;</code> or <code>/add-dir-ro &lt;path&gt;</code>.</p>
 <h2 id="command-execution-policy">Command Execution Policy</h2>
 <p>Command execution is off by default. The agent only receives <code>run_command</code> when you explicitly enable it.</p>
 <p>In whitelist mode, you pass a comma-separated set of command basenames.</p>

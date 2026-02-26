@@ -43,6 +43,7 @@ def _base_args(tmp_path, **overrides):
         max_context_tokens=None,
         allowed_commands=None,
         add_dir=[],
+        add_dir_ro=[],
         provider="lmstudio",
         api_key=None,
         color=False,

@@ -25,10 +25,11 @@ model = "qwen/qwen3-235b-a22b"
 max_turns = 250
 allowed_commands = ["ls", "git", "python3"]
 allowed_dirs = ["/opt/zig/lib/std"]
+allowed_dirs_ro = ["/reference/docs", "~/datasets"]
 quiet = false
 ```
 
-Relative paths in `allowed_dirs`, `skills_dir`, and `reviewer` resolve against the config file's parent directory, not the working directory. Tilde paths like `~/projects` expand to the home directory.
+Relative paths in `allowed_dirs`, `allowed_dirs_ro`, `skills_dir`, and `reviewer` resolve against the config file's parent directory, not the working directory. Tilde paths like `~/projects` expand to the home directory.
 
 If a project config contains `api_key` inside a git repository, Swival prints a warning because the key could be committed accidentally. Prefer environment variables for credentials.
 

@@ -46,6 +46,7 @@ def _make_args(**overrides):
         "allowed_commands": _UNSET,
         "yolo": _UNSET,
         "add_dir": None,  # append actions use None sentinel
+        "add_dir_ro": None,  # append actions use None sentinel
         "no_read_guard": _UNSET,
         "no_instructions": _UNSET,
         "no_skills": _UNSET,
@@ -268,6 +269,28 @@ class TestPathResolution:
         home = os.path.expanduser("~")
         assert result["reviewer"] == f"{home}/bin/review.sh"
 
+    def test_allowed_dirs_ro_relative_resolves(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(tmp_path / "swival.toml", 'allowed_dirs_ro = ["../sibling-ro"]\n')
+        result = load_config(tmp_path)
+        expected = str(tmp_path / "../sibling-ro")
+        assert result["allowed_dirs_ro"] == [expected]
+
+    def test_allowed_dirs_ro_absolute_unchanged(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(
+            tmp_path / "swival.toml", 'allowed_dirs_ro = ["/absolute/readonly"]\n'
+        )
+        result = load_config(tmp_path)
+        assert result["allowed_dirs_ro"] == ["/absolute/readonly"]
+
+    def test_allowed_dirs_ro_home_expansion(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(tmp_path / "swival.toml", 'allowed_dirs_ro = ["~/datasets"]\n')
+        result = load_config(tmp_path)
+        home = os.path.expanduser("~")
+        assert result["allowed_dirs_ro"] == [f"{home}/datasets"]
+
     def test_path_resolution_after_type_validation(self, tmp_path, monkeypatch):
         """Type validation runs before path resolution — bad types don't crash Path()."""
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
@@ -353,11 +376,22 @@ class TestApplyConfigToArgs:
         apply_config_to_args(args, {"skills_dir": ["/from-config"]})
         assert args.skills_dir == ["/from-cli"]
 
+    def test_allowed_dirs_ro_maps_to_add_dir_ro(self):
+        args = _make_args()
+        apply_config_to_args(args, {"allowed_dirs_ro": ["/ro1", "/ro2"]})
+        assert args.add_dir_ro == ["/ro1", "/ro2"]
+
+    def test_allowed_dirs_ro_cli_overrides(self):
+        args = _make_args(add_dir_ro=["/cli-ro"])
+        apply_config_to_args(args, {"allowed_dirs_ro": ["/config-ro"]})
+        assert args.add_dir_ro == ["/cli-ro"]
+
     def test_none_sentinel_defaults_to_empty_list(self):
-        """append-action dests (add_dir, skills_dir) default to [] when unset."""
+        """append-action dests (add_dir, add_dir_ro, skills_dir) default to [] when unset."""
         args = _make_args()
         apply_config_to_args(args, {})
         assert args.add_dir == []
+        assert args.add_dir_ro == []
         assert args.skills_dir == []
 
 

@@ -50,6 +50,7 @@ class Session:
         no_skills: bool = False,
         skills_dir: list[str] | None = None,
         allowed_dirs: list[str] | None = None,
+        allowed_dirs_ro: list[str] | None = None,
         read_guard: bool = True,
         history: bool = True,
     ):
@@ -73,6 +74,7 @@ class Session:
         self.no_skills = no_skills
         self.skills_dir = skills_dir or []
         self.allowed_dirs = allowed_dirs or []
+        self.allowed_dirs_ro = allowed_dirs_ro or []
         self.read_guard = read_guard
         self.history = history
 
@@ -89,6 +91,7 @@ class Session:
         self._system_content: str | None = None
         self._instructions_loaded: list[str] = []
         self._allowed_dir_paths: list[Path] = []
+        self._allowed_dir_ro_paths: list[Path] = []
 
         # Per-conversation state (for ask() mode)
         self._conv_state: dict | None = None
@@ -132,6 +135,16 @@ class Session:
             if p == Path(p.anchor):
                 raise ConfigError(f"allowed_dirs cannot be the filesystem root: {d}")
             self._allowed_dir_paths.append(p)
+
+        # Resolve --add-dir-ro paths
+        self._allowed_dir_ro_paths = []
+        for d in self.allowed_dirs_ro:
+            p = Path(d).expanduser().resolve()
+            if not p.is_dir():
+                raise ConfigError(f"allowed_dirs_ro path is not a directory: {d}")
+            if p == Path(p.anchor):
+                raise ConfigError(f"allowed_dirs_ro cannot be the filesystem root: {d}")
+            self._allowed_dir_ro_paths.append(p)
 
         # Resolve commands
         self._resolved_commands = resolve_commands(
@@ -185,7 +198,7 @@ class Session:
             "thinking_state": ThinkingState(verbose=self.verbose),
             "todo_state": TodoState(notes_dir=self.base_dir, verbose=self.verbose),
             "file_tracker": FileAccessTracker() if self.read_guard else None,
-            "skill_read_roots": [],
+            "skill_read_roots": list(self._allowed_dir_ro_paths),
             "messages": self._make_initial_messages(),
         }
 

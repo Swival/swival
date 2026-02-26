@@ -35,6 +35,7 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "allowed_commands": list,
     "yolo": bool,
     "allowed_dirs": list,
+    "allowed_dirs_ro": list,
     "no_read_guard": bool,
     "no_instructions": bool,
     "no_skills": bool,
@@ -45,11 +46,17 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "reviewer": str,
 }
 
-_LIST_OF_STR_KEYS = {"allowed_commands", "allowed_dirs", "skills_dir"}
+_LIST_OF_STR_KEYS = {
+    "allowed_commands",
+    "allowed_dirs",
+    "allowed_dirs_ro",
+    "skills_dir",
+}
 
 # Config key -> argparse dest (only where they differ)
 _CONFIG_TO_ARGPARSE: dict[str, str] = {
     "allowed_dirs": "add_dir",
+    "allowed_dirs_ro": "add_dir_ro",
 }
 
 # Argparse dest -> hardcoded default
@@ -69,6 +76,7 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "allowed_commands": None,
     "yolo": False,
     "add_dir": [],
+    "add_dir_ro": [],
     "no_read_guard": False,
     "no_instructions": False,
     "no_skills": False,
@@ -146,7 +154,7 @@ def _resolve_paths(config: dict, config_dir: Path) -> None:
     Applies expanduser() before checking is_absolute(), so that ~/... paths
     expand to the user's home directory instead of becoming <config_dir>/~/...
     """
-    for key in ("allowed_dirs", "skills_dir"):
+    for key in ("allowed_dirs", "allowed_dirs_ro", "skills_dir"):
         if key in config:
             resolved = []
             for p in config[key]:
@@ -243,7 +251,7 @@ def apply_config_to_args(args: argparse.Namespace, config: dict) -> None:
     replaces them with hardcoded defaults from _ARGPARSE_DEFAULTS.
     """
     # Dests that use None as sentinel (argparse append actions can't use _UNSET)
-    _NONE_SENTINEL_DESTS = {"add_dir", "skills_dir"}
+    _NONE_SENTINEL_DESTS = {"add_dir", "add_dir_ro", "skills_dir"}
 
     def _is_unset(dest: str) -> bool:
         val = getattr(args, dest, _UNSET)
@@ -331,6 +339,7 @@ def generate_config(project: bool = False) -> str:
         '# allowed_commands = ["ls", "git", "python3"]',
         "# yolo = false",
         '# allowed_dirs = ["../shared-lib", "/data/assets"]',
+        '# allowed_dirs_ro = ["/reference/docs", "~/datasets"]',
         "# no_read_guard = false",
         "",
         "# --- Features ---",

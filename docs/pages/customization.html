@@ -69,9 +69,10 @@ model = &quot;qwen/qwen3-235b-a22b&quot;
 max_turns = 250
 allowed_commands = [&quot;ls&quot;, &quot;git&quot;, &quot;python3&quot;]
 allowed_dirs = [&quot;/opt/zig/lib/std&quot;]
+allowed_dirs_ro = [&quot;/reference/docs&quot;, &quot;~/datasets&quot;]
 quiet = false
 </code></pre>
-<p>Relative paths in <code>allowed_dirs</code>, <code>skills_dir</code>, and <code>reviewer</code> resolve against the config file's parent directory, not the working directory. Tilde paths like <code>~/projects</code> expand to the home directory.</p>
+<p>Relative paths in <code>allowed_dirs</code>, <code>allowed_dirs_ro</code>, <code>skills_dir</code>, and <code>reviewer</code> resolve against the config file's parent directory, not the working directory. Tilde paths like <code>~/projects</code> expand to the home directory.</p>
 <p>If a project config contains <code>api_key</code> inside a git repository, Swival prints a warning because the key could be committed accidentally. Prefer environment variables for credentials.</p>
 <p>The <code>--system-prompt</code> and <code>no_system_prompt</code> settings are mutually exclusive in config files, just as they are on the command line.</p>
 <p>The library API (<code>Session</code> class) does not auto-load config files. If you want config file support in library code, call <code>load_config()</code> and <code>config_to_session_kwargs()</code> explicitly.</p>

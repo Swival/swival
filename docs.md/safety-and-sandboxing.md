@@ -19,13 +19,25 @@ Even in YOLO mode, Swival blocks the filesystem root itself. You cannot grant th
 
 ## Additional Allowed Directories
 
-When the agent needs access outside `--base-dir`, pass one or more `--add-dir` flags.
+When the agent needs full access outside `--base-dir`, pass one or more `--add-dir` flags.
 
 ```sh
 swival --add-dir ~/shared-data --add-dir /opt/configs "Update the config"
 ```
 
-Each allowed directory must already exist, must be a directory, and cannot be the filesystem root. In REPL mode, you can grant the same access dynamically with `/add-dir <path>`.
+When the agent only needs to read files without modifying them, use `--add-dir-ro` instead.
+
+```sh
+swival --add-dir-ro ~/reference-docs --add-dir-ro /opt/datasets "Analyze the data"
+```
+
+Both flags can be combined. The agent gets read-write access to `--add-dir` paths and read-only access to `--add-dir-ro` paths.
+
+```sh
+swival --add-dir ./output --add-dir-ro ~/corpus "Summarize the corpus into output/"
+```
+
+Each allowed directory must already exist, must be a directory, and cannot be the filesystem root. In REPL mode, you can grant the same access dynamically with `/add-dir <path>` or `/add-dir-ro <path>`.
 
 ## Command Execution Policy
 

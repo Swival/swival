@@ -16,6 +16,7 @@ from swival.agent import (
     _repl_help,
     _repl_clear,
     _repl_add_dir,
+    _repl_add_dir_ro,
     _repl_compact,
     _repl_extend,
 )
@@ -557,6 +558,108 @@ class TestAddDirCommand:
             skill_read_roots=[],
         )
         assert "hello from extra" in result
+
+
+# ---------------------------------------------------------------------------
+# /add-dir-ro command
+# ---------------------------------------------------------------------------
+
+
+class TestAddDirRoCommand:
+    def test_add_dir_ro_valid(self, tmp_path):
+        """/add-dir-ro with a valid directory appends to skill_read_roots."""
+        roots = []
+        _repl_add_dir_ro(str(tmp_path), roots)
+        assert tmp_path.resolve() in roots
+
+    def test_add_dir_ro_does_not_modify_write_roots(self, tmp_path):
+        """/add-dir-ro must not touch extra_write_roots."""
+        read_roots = []
+        write_roots = []
+        _repl_add_dir_ro(str(tmp_path), read_roots)
+        assert tmp_path.resolve() in read_roots
+        assert write_roots == []
+
+    def test_add_dir_ro_missing_arg(self, capsys):
+        """/add-dir-ro with no argument prints a warning."""
+        roots = []
+        _repl_add_dir_ro("", roots)
+        assert roots == []
+        captured = capsys.readouterr()
+        assert "requires a path" in captured.err
+
+    def test_add_dir_ro_nonexistent(self, capsys):
+        """/add-dir-ro with nonexistent path prints a warning."""
+        roots = []
+        _repl_add_dir_ro("/nonexistent_path_abc123", roots)
+        assert roots == []
+        captured = capsys.readouterr()
+        assert "not a directory" in captured.err
+
+    def test_add_dir_ro_duplicate(self, tmp_path, capsys):
+        """Adding same dir twice doesn't duplicate it."""
+        roots = [tmp_path.resolve()]
+        _repl_add_dir_ro(str(tmp_path), roots)
+        assert len(roots) == 1
+        captured = capsys.readouterr()
+        assert "already in read-only whitelist" in captured.err
+
+    def test_add_dir_ro_root_rejected(self, capsys):
+        """/add-dir-ro / is rejected."""
+        roots = []
+        _repl_add_dir_ro("/", roots)
+        assert roots == []
+        captured = capsys.readouterr()
+        assert "filesystem root" in captured.err
+
+    def test_add_dir_ro_enables_read_access(self, tmp_path):
+        """After /add-dir-ro, read_file can access files but write_file cannot."""
+        ro_dir = tmp_path / "readonly"
+        ro_dir.mkdir()
+        test_file = ro_dir / "test.txt"
+        test_file.write_text("hello from readonly")
+
+        base_dir = tmp_path / "base"
+        base_dir.mkdir()
+
+        skill_read_roots = []
+
+        # Before /add-dir-ro, reading should fail
+        result = dispatch(
+            "read_file",
+            {"file_path": str(test_file)},
+            base_dir=str(base_dir),
+            extra_write_roots=[],
+            skill_read_roots=skill_read_roots,
+        )
+        assert result.startswith("error:")
+
+        # After /add-dir-ro, reading should succeed
+        _repl_add_dir_ro(str(ro_dir), skill_read_roots)
+        result = dispatch(
+            "read_file",
+            {"file_path": str(test_file)},
+            base_dir=str(base_dir),
+            extra_write_roots=[],
+            skill_read_roots=skill_read_roots,
+        )
+        assert "hello from readonly" in result
+
+        # Writing should still fail (not in extra_write_roots)
+        result = dispatch(
+            "write_file",
+            {"file_path": str(ro_dir / "new.txt"), "content": "bad"},
+            base_dir=str(base_dir),
+            extra_write_roots=[],
+            skill_read_roots=skill_read_roots,
+        )
+        assert result.startswith("error:")
+
+    def test_help_includes_add_dir_ro(self, capsys):
+        """'/help' includes /add-dir-ro in the command list."""
+        _repl_help()
+        captured = capsys.readouterr()
+        assert "/add-dir-ro" in captured.err
 
 
 # ---------------------------------------------------------------------------

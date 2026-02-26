@@ -82,6 +82,7 @@
 <p><code>/clear</code> drops conversation history back to the initial system state and also resets internal thinking and file-tracking state.</p>
 <p><code>/compact</code> compacts older tool output in memory. <code>/compact --drop</code> is more aggressive and also drops middle turns.</p>
 <p><code>/add-dir &lt;path&gt;</code> grants read and write access to an additional directory for the current session.</p>
+<p><code>/add-dir-ro &lt;path&gt;</code> grants read-only access to an additional directory. The agent can read, list, and grep files there but cannot write, edit, or delete them.</p>
 <p><code>/extend</code> doubles the current turn budget. <code>/extend &lt;N&gt;</code> sets the turn budget to an exact value.</p>
 <p><code>/continue</code> restarts the agent loop for the existing conversation without adding a new user message.</p>
 <p><code>/init</code> runs a three-pass workflow that scans your project and generates an <code>AGENTS.md</code> file.</p>
@@ -103,6 +104,7 @@
 <p><code>--base-dir</code> defines the base directory for file tools and defaults to the current directory.</p>
 <p><code>--allowed-commands</code> enables command execution through a comma-separated whitelist.</p>
 <p><code>--add-dir</code> grants read and write access to additional directories and can be repeated.</p>
+<p><code>--add-dir-ro</code> grants read-only access to additional directories and can be repeated. The agent can read, list, and grep files in these directories but cannot write, edit, or delete them.</p>
 <p><code>--yolo</code> disables both filesystem sandbox checks and command whitelisting, except that filesystem root access is still blocked.</p>
 <p><code>--no-read-guard</code> disables the read-before-write guard that normally prevents editing existing files before reading them.</p>
 <h3 id="system-prompt-and-instruction-flags">System Prompt And Instruction Flags</h3>

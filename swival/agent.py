@@ -784,6 +784,13 @@ def build_parser():
         help="Grant read/write access to an extra directory (repeatable).",
     )
     parser.add_argument(
+        "--add-dir-ro",
+        type=str,
+        action="append",
+        default=None,
+        help="Grant read-only access to an extra directory (repeatable).",
+    )
+    parser.add_argument(
         "--yolo",
         action="store_true",
         default=_UNSET,
@@ -1242,6 +1249,16 @@ def _run_main(args, report, _write_report, parser):
             raise AgentError(f"--add-dir cannot be the filesystem root: {d}")
         allowed_dirs.append(p)
 
+    # Resolve --add-dir-ro paths
+    allowed_dirs_ro: list[Path] = []
+    for d in args.add_dir_ro:
+        p = Path(d).expanduser().resolve()
+        if not p.is_dir():
+            raise AgentError(f"--add-dir-ro path is not a directory: {d}")
+        if p == Path(p.anchor):
+            raise AgentError(f"--add-dir-ro cannot be the filesystem root: {d}")
+        allowed_dirs_ro.append(p)
+
     base_dir = args.base_dir
     yolo = args.yolo
 
@@ -1251,7 +1268,7 @@ def _run_main(args, report, _write_report, parser):
     from .skills import discover_skills
 
     skills_catalog: dict = {}
-    skill_read_roots: list[Path] = []
+    skill_read_roots: list[Path] = list(allowed_dirs_ro)
     if not args.no_skills:
         skills_catalog = discover_skills(base_dir, args.skills_dir, args.verbose)
     args._resolved_skills = skills_catalog
@@ -1864,6 +1881,7 @@ def _repl_help() -> None:
         "  /clear             Reset conversation to initial state\n"
         "  /compact [--drop]  Compress context (--drop removes middle turns)\n"
         "  /add-dir <path>    Grant read+write access to a directory\n"
+        "  /add-dir-ro <path> Grant read-only access to a directory\n"
         "  /extend [N]        Double max turns, or set to N\n"
         "  /continue          Reset turn counter and continue the agent loop\n"
         "  /init              Generate AGENTS.md for the current project\n"
@@ -1923,6 +1941,28 @@ def _repl_add_dir(path_str: str, extra_write_roots: list) -> None:
 
     extra_write_roots.append(p)
     fmt.info(f"added to whitelist: {p}")
+
+
+def _repl_add_dir_ro(path_str: str, skill_read_roots: list) -> None:
+    """Add a directory to the read-only whitelist."""
+    path_str = path_str.strip()
+    if not path_str:
+        fmt.warning("/add-dir-ro requires a path argument")
+        return
+
+    p = Path(path_str).expanduser().resolve()
+    if not p.is_dir():
+        fmt.warning(f"not a directory: {path_str}")
+        return
+    if p == Path(p.anchor):
+        fmt.warning("cannot add filesystem root")
+        return
+    if p in skill_read_roots:
+        fmt.info(f"already in read-only whitelist: {p}")
+        return
+
+    skill_read_roots.append(p)
+    fmt.info(f"added to read-only whitelist: {p}")
 
 
 def _repl_compact(
@@ -2036,6 +2076,9 @@ def repl_loop(
             continue
         elif cmd == "/add-dir":
             _repl_add_dir(cmd_arg, extra_write_roots)
+            continue
+        elif cmd == "/add-dir-ro":
+            _repl_add_dir_ro(cmd_arg, skill_read_roots)
             continue
         elif cmd == "/compact":
             _repl_compact(messages, tools, context_length, cmd_arg)

@@ -175,6 +175,68 @@ class TestSessionAsk:
         assert len(r_after.messages) < len(r_before.messages)
 
 
+class TestSessionAllowedDirsRo:
+    def test_ro_paths_in_skill_read_roots(self, tmp_path, monkeypatch):
+        """allowed_dirs_ro paths appear in skill_read_roots for each run."""
+        ro_dir = tmp_path / "readonly"
+        ro_dir.mkdir()
+
+        captured_roots = []
+
+        original_run_agent_loop = agent.run_agent_loop
+
+        def spy_loop(messages, tools, **kwargs):
+            captured_roots.append(list(kwargs.get("skill_read_roots", [])))
+            return original_run_agent_loop(messages, tools, **kwargs)
+
+        monkeypatch.setattr(agent, "call_llm", _simple_llm)
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+        monkeypatch.setattr(agent, "run_agent_loop", spy_loop)
+
+        s = Session(
+            base_dir=str(tmp_path),
+            allowed_dirs_ro=[str(ro_dir)],
+            history=False,
+        )
+        s.run("q1")
+
+        assert len(captured_roots) == 1
+        assert ro_dir.resolve() in captured_roots[0]
+
+    def test_ro_paths_isolation_across_runs(self, tmp_path, monkeypatch):
+        """Each run() gets its own copy of skill_read_roots (no cross-run leaks)."""
+        ro_dir = tmp_path / "readonly"
+        ro_dir.mkdir()
+
+        captured_roots = []
+
+        original_run_agent_loop = agent.run_agent_loop
+
+        def spy_loop(messages, tools, **kwargs):
+            roots = kwargs.get("skill_read_roots", [])
+            captured_roots.append(roots)
+            return original_run_agent_loop(messages, tools, **kwargs)
+
+        monkeypatch.setattr(agent, "call_llm", _simple_llm)
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+        monkeypatch.setattr(agent, "run_agent_loop", spy_loop)
+
+        s = Session(
+            base_dir=str(tmp_path),
+            allowed_dirs_ro=[str(ro_dir)],
+            history=False,
+        )
+        s.run("q1")
+        s.run("q2")
+
+        assert len(captured_roots) == 2
+        # Both should contain the RO dir
+        assert ro_dir.resolve() in captured_roots[0]
+        assert ro_dir.resolve() in captured_roots[1]
+        # But they should be different list objects (isolation)
+        assert captured_roots[0] is not captured_roots[1]
+
+
 class TestConvenienceRun:
     def test_run_returns_string(self, tmp_path, monkeypatch):
         monkeypatch.setattr(agent, "call_llm", _simple_llm)
