@@ -61,7 +61,7 @@
 <h2 id="reviewer-protocol">Reviewer Protocol</h2>
 <p>Swival invokes the reviewer as <code>reviewer_executable &lt;base_dir&gt;</code>. The first positional argument is the absolute base directory. The full assistant answer is written to reviewer standard input.</p>
 <p>If the reviewer exits with code <code>0</code>, Swival accepts the answer immediately and ends normally. If the reviewer exits with code <code>1</code>, Swival treats reviewer standard output as feedback, appends that feedback as a new user message, resets turn budget for a new pass, and continues the loop. If the reviewer exits with code <code>2</code>, Swival treats that as reviewer failure, warns on standard error when diagnostics are enabled, and accepts the current answer unchanged. Any other nonzero exit code is handled the same way as <code>2</code>. Reviewer standard output is captured for all exit codes and recorded in the report timeline when <code>--report</code> is active.</p>
-<p>Reviewer execution has a 120-second timeout. Timeout or spawn failures are treated as reviewer errors and do not discard the agent's answer.</p>
+<p>Reviewer execution has a 60-minute timeout. Timeout or spawn failures are treated as reviewer errors and do not discard the agent's answer.</p>
 <h2 id="reviewer-environment-variables">Reviewer Environment Variables</h2>
 <p>Swival sets context variables on the reviewer subprocess for each round. <code>SWIVAL_TASK</code> contains the original user task and is always set. <code>SWIVAL_REVIEW_ROUND</code> contains the current review round number and is always set. <code>SWIVAL_MODEL</code> contains the resolved model identifier when available.</p>
 <p>The reviewer inherits the parent environment too, but Swival's injected values override any same-named parent values.</p>
@@ -103,6 +103,9 @@ set -uo pipefail
 base_dir=&quot;$1&quot;
 answer=$(cat)
 
+judge_stderr=$(mktemp)
+trap 'rm -f &quot;$judge_stderr&quot;' EXIT
+
 judge_output=$(swival &quot;You are reviewing a coding agent's output.
 
 &lt;task&gt;$SWIVAL_TASK&lt;/task&gt;
@@ -113,10 +116,12 @@ Evaluate whether the answer correctly and completely addresses the task.
 Respond with exactly one of:
   VERDICT: ACCEPT
   VERDICT: RETRY followed by your feedback on the next line.&quot; \
-    --base-dir &quot;$base_dir&quot; --max-turns 3 --quiet --no-history 2&gt;/dev/null)
+    --base-dir &quot;$base_dir&quot; --quiet --no-history 2&gt;&quot;$judge_stderr&quot;)
 judge_exit=$?
 
-if [ $judge_exit -eq 1 ] || [ -z &quot;$judge_output&quot; ]; then
+if [ $judge_exit -ne 0 ] || [ -z &quot;$judge_output&quot; ]; then
+    echo &quot;reviewer error: inner swival exited $judge_exit with no output&quot;
+    [ -s &quot;$judge_stderr&quot; ] &amp;&amp; echo &quot;stderr: $(cat &quot;$judge_stderr&quot;)&quot;
     exit 2
 fi
 
@@ -127,12 +132,14 @@ elif echo &quot;$judge_output&quot; | grep -qi &quot;VERDICT: RETRY&quot;; then
     echo &quot;$judge_output&quot;
     exit 1
 else
+    echo &quot;reviewer error: no VERDICT found in judge output&quot;
+    echo &quot;$judge_output&quot;
     exit 2
 fi
 </code></pre>
-<p>This wrapper keeps reviewer behavior predictable even when the judge fails to return parseable output. In that case, returning exit code <code>2</code> tells the outer run to accept the current answer rather than failing hard.</p>
+<p>This wrapper keeps reviewer behavior predictable even when the judge fails to return parseable output. In that case, returning exit code <code>2</code> tells the outer run to accept the current answer rather than failing hard. All three error paths output a diagnostic reason so it gets captured in the report's <code>feedback</code> field for debugging.</p>
 <p>If both instances point at the same provider, they will use the same backend by default. You can direct the inner judge to a different provider or model by adding <code>--provider</code>, <code>--model</code>, and optionally <code>--base-url</code> inside the wrapper.</p>
-<p>Using <code>--max-turns 3</code> for the inner judge is practical because some models spend a turn on tool-based reasoning before producing a verdict. Using <code>set -uo pipefail</code> instead of <code>set -euo pipefail</code> avoids aborting the wrapper early when the inner run exits with code <code>2</code> but still returns parseable output.</p>
+<p>Using <code>set -uo pipefail</code> instead of <code>set -euo pipefail</code> avoids aborting the wrapper early when the inner run exits with code <code>2</code> but still returns parseable output.</p>
 <h2 id="retry-and-round-limits">Retry And Round Limits</h2>
 <p>Every time the reviewer returns exit code <code>1</code>, Swival appends reviewer feedback as a user message and re-enters the loop with a fresh turn budget. The full conversation stays intact, so the model can build on prior work instead of restarting from scratch.</p>
 <p>To prevent infinite cycles, Swival enforces a hard limit of five review rounds. If round five still returns code <code>1</code>, Swival accepts the latest answer and emits a warning when diagnostics are enabled.</p>

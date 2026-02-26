@@ -1210,7 +1210,7 @@ def run_reviewer(
     base_dir: str,
     answer: str,
     verbose: bool,
-    timeout: int = 120,
+    timeout: int = 3600,
     env_extra: dict[str, str] | None = None,
 ) -> tuple[int, str]:
     """Run the reviewer executable.

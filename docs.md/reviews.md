@@ -14,7 +14,7 @@ Swival invokes the reviewer as `reviewer_executable <base_dir>`. The first posit
 
 If the reviewer exits with code `0`, Swival accepts the answer immediately and ends normally. If the reviewer exits with code `1`, Swival treats reviewer standard output as feedback, appends that feedback as a new user message, resets turn budget for a new pass, and continues the loop. If the reviewer exits with code `2`, Swival treats that as reviewer failure, warns on standard error when diagnostics are enabled, and accepts the current answer unchanged. Any other nonzero exit code is handled the same way as `2`. Reviewer standard output is captured for all exit codes and recorded in the report timeline when `--report` is active.
 
-Reviewer execution has a 120-second timeout. Timeout or spawn failures are treated as reviewer errors and do not discard the agent's answer.
+Reviewer execution has a 60-minute timeout. Timeout or spawn failures are treated as reviewer errors and do not discard the agent's answer.
 
 ## Reviewer Environment Variables
 
@@ -71,6 +71,9 @@ set -uo pipefail
 base_dir="$1"
 answer=$(cat)
 
+judge_stderr=$(mktemp)
+trap 'rm -f "$judge_stderr"' EXIT
+
 judge_output=$(swival "You are reviewing a coding agent's output.
 
 <task>$SWIVAL_TASK</task>
@@ -81,10 +84,12 @@ Evaluate whether the answer correctly and completely addresses the task.
 Respond with exactly one of:
   VERDICT: ACCEPT
   VERDICT: RETRY followed by your feedback on the next line." \
-    --base-dir "$base_dir" --max-turns 3 --quiet --no-history 2>/dev/null)
+    --base-dir "$base_dir" --quiet --no-history 2>"$judge_stderr")
 judge_exit=$?
 
-if [ $judge_exit -eq 1 ] || [ -z "$judge_output" ]; then
+if [ $judge_exit -ne 0 ] || [ -z "$judge_output" ]; then
+    echo "reviewer error: inner swival exited $judge_exit with no output"
+    [ -s "$judge_stderr" ] && echo "stderr: $(cat "$judge_stderr")"
     exit 2
 fi
 
@@ -95,15 +100,17 @@ elif echo "$judge_output" | grep -qi "VERDICT: RETRY"; then
     echo "$judge_output"
     exit 1
 else
+    echo "reviewer error: no VERDICT found in judge output"
+    echo "$judge_output"
     exit 2
 fi
 ```
 
-This wrapper keeps reviewer behavior predictable even when the judge fails to return parseable output. In that case, returning exit code `2` tells the outer run to accept the current answer rather than failing hard.
+This wrapper keeps reviewer behavior predictable even when the judge fails to return parseable output. In that case, returning exit code `2` tells the outer run to accept the current answer rather than failing hard. All three error paths output a diagnostic reason so it gets captured in the report's `feedback` field for debugging.
 
 If both instances point at the same provider, they will use the same backend by default. You can direct the inner judge to a different provider or model by adding `--provider`, `--model`, and optionally `--base-url` inside the wrapper.
 
-Using `--max-turns 3` for the inner judge is practical because some models spend a turn on tool-based reasoning before producing a verdict. Using `set -uo pipefail` instead of `set -euo pipefail` avoids aborting the wrapper early when the inner run exits with code `2` but still returns parseable output.
+Using `set -uo pipefail` instead of `set -euo pipefail` avoids aborting the wrapper early when the inner run exits with code `2` but still returns parseable output.
 
 ## Retry And Round Limits
 
