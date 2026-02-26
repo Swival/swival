@@ -76,17 +76,27 @@ quiet = false
 <p>If a project config contains <code>api_key</code> inside a git repository, Swival prints a warning because the key could be committed accidentally. Prefer environment variables for credentials.</p>
 <p>The <code>--system-prompt</code> and <code>no_system_prompt</code> settings are mutually exclusive in config files, just as they are on the command line.</p>
 <p>The library API (<code>Session</code> class) does not auto-load config files. If you want config file support in library code, call <code>load_config()</code> and <code>config_to_session_kwargs()</code> explicitly.</p>
-<h2 id="project-instruction-files">Project Instruction Files</h2>
-<p>Swival can load two project-local instruction files from the base directory during startup. <code>CLAUDE.md</code> is injected as <code>&lt;project-instructions&gt;...&lt;/project-instructions&gt;</code>, and <code>AGENTS.md</code> is injected as <code>&lt;agent-instructions&gt;...&lt;/agent-instructions&gt;</code>. If both files exist, Swival loads both in that order.</p>
-<p>Each file is capped at 10,000 characters. These instructions are appended to the built-in system prompt, which makes them a practical place to encode house rules such as test commands, coding conventions, and dependency policies.</p>
+<h2 id="instruction-files">Instruction Files</h2>
+<p>Swival loads instruction files during startup and appends them to the system prompt. <code>CLAUDE.md</code> provides project rules (<code>&lt;project-instructions&gt;</code>), while <code>AGENTS.md</code> provides agent conventions (<code>&lt;agent-instructions&gt;</code>).</p>
+<h3 id="claudemd">CLAUDE.md</h3>
+<p>Loaded from the project base directory only. Capped at 10,000 characters.</p>
+<h3 id="agentsmd">AGENTS.md</h3>
+<p>Loaded from two locations, in this order:</p>
+<ol>
+<li><strong>User-level</strong>: <code>~/.config/swival/AGENTS.md</code> (or <code>$XDG_CONFIG_HOME/swival/AGENTS.md</code>)</li>
+<li><strong>Project-level</strong>: <code>&lt;base-dir&gt;/AGENTS.md</code></li>
+</ol>
+<p>Both are optional. When both exist, user-level content is prepended to project-level content inside a single <code>&lt;agent-instructions&gt;</code> block. The two levels share a combined 10,000 character budget. User-level content is read first and gets priority — a large user-level file will truncate or entirely displace the project-level file. Size your user-level file accordingly if you rely on project-level instructions.</p>
+<p>The user-level file is a good place for personal conventions that apply across all projects (preferred language style, test habits, tool preferences). The project-level file is for project-specific rules.</p>
 <pre><code class="language-markdown">This is a Go project using Chi for routing. Tests use testify.
 Always run `go test ./...` after making changes.
 Don't add dependencies without asking.
 </code></pre>
-<p>Use <code>--no-instructions</code> when you do not want Swival to read either file.</p>
+<h3 id="disabling-instructions">Disabling instructions</h3>
+<p>Use <code>--no-instructions</code> to skip all instruction files (both CLAUDE.md and AGENTS.md at all levels).</p>
 <pre><code class="language-sh">swival --no-instructions &quot;task&quot;
 </code></pre>
-<p>If you set <code>--system-prompt</code>, project instruction files are also skipped because you are providing the full prompt text directly.</p>
+<p>If you set <code>--system-prompt</code>, instruction files are also skipped because you are providing the full prompt text directly.</p>
 <h2 id="system-prompt-control">System Prompt Control</h2>
 <p>The built-in prompt is stored in <code>swival/system_prompt.txt</code> and defines default behavior, tool policy, and coding expectations.</p>
 <p>You can replace it completely with <code>--system-prompt</code>.</p>
