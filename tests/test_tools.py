@@ -149,11 +149,19 @@ class TestReadFileTail:
             assert "5: line5" in result
             assert "4: line4" not in result
 
-    def test_tail_non_integer_returns_error(self, tmp_path):
-        """tail='5' via dispatch returns an error string."""
+    def test_tail_numeric_string_coerced(self, tmp_path):
+        """tail='5' (numeric string) is coerced to int and works."""
         self._make_file(tmp_path, 5)
         result = dispatch(
             "read_file", {"file_path": "data.txt", "tail": "5"}, str(tmp_path)
+        )
+        assert "5: line5" in result
+
+    def test_tail_non_numeric_string_returns_error(self, tmp_path):
+        """tail='abc' via dispatch returns an error string."""
+        self._make_file(tmp_path, 5)
+        result = dispatch(
+            "read_file", {"file_path": "data.txt", "tail": "abc"}, str(tmp_path)
         )
         assert result.startswith("error:")
         assert "integer" in result

@@ -1559,12 +1559,26 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             return "error: think tool is not available"
         return thinking_state.process(args)
     elif name == "read_file":
+        try:
+            offset = int(args.get("offset", 1))
+        except (ValueError, TypeError):
+            return "error: offset must be an integer"
+        try:
+            limit = int(args.get("limit", 2000))
+        except (ValueError, TypeError):
+            return "error: limit must be an integer"
+        tail = args.get("tail")
+        if tail is not None:
+            try:
+                tail = int(tail)
+            except (ValueError, TypeError):
+                return "error: tail must be an integer"
         return _read_file(
             file_path=args["file_path"],
             base_dir=base_dir,
-            offset=args.get("offset", 1),
-            limit=args.get("limit", 2000),
-            tail=args.get("tail"),
+            offset=offset,
+            limit=limit,
+            tail=tail,
             extra_read_roots=kwargs.get("skill_read_roots", ()),
             extra_write_roots=extra_write_roots,
             unrestricted=yolo,
