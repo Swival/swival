@@ -40,18 +40,24 @@ MAX_HISTORY_SIZE = 500 * 1024  # 500KB
 TODO_REMINDER_INTERVAL = 3  # remind after N turns of no todo usage
 
 INIT_PROMPT = (
-    "Describe the conventions (style, doc, tools) used by this project. Only list "
-    "unusual choices that you didn't know about, are hard to guess and are unlikely "
-    "to change in the future. Be concise and not redundant. Start by listing files "
-    "and use the todo tool to schedule which ones to review. Then read them one by "
-    "one, using the think tool to reason about each file's conventions."
+    "Find the unexpected conventions in this project — patterns that would "
+    "trip up an AI agent because they're unusual, non-obvious, or contrary "
+    "to typical practices. Look for things that appear CONSISTENTLY across "
+    "multiple files, not quirks of individual files. Examples: 'all error "
+    "returns are strings starting with error:', 'exit code 2 means X not Y', "
+    "'this core data structure is mutated in place'. Read files across the "
+    "codebase to spot patterns that repeat. Use think to reason about what "
+    "is truly conventional (consistent) vs accidental (one-off)."
 )
 
 INIT_ENRICH_PROMPT = (
-    "Now read back what you wrote and the project source files again. Focus on "
-    "unexpected patterns you didn't know about — surprising conventions, non-obvious "
-    "rules, or implicit assumptions that would trip up a new contributor. Remove "
-    "anything that turned out to be wrong or redundant. Keep it concise."
+    "Review your findings. For each convention you identified, verify it "
+    "appears consistently across multiple files. Remove anything that's only "
+    "true in one place or is just a local implementation detail. Keep only "
+    "project-wide patterns that are (1) consistently applied everywhere they "
+    "apply, (2) unexpected/non-obvious to an AI agent, and (3) unlikely to "
+    "be a one-off choice. Add any conventions you missed. Be specific: name "
+    "the exact convention, not vague descriptions."
 )
 
 INIT_WRITE_PROMPT = "Create or update a file named AGENT.md with that report."
