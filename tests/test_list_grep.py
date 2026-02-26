@@ -187,6 +187,18 @@ class TestListFiles:
         result = _list_files("*.py", "nonexistent", str(sandbox))
         assert "error" in result
 
+    def test_single_file(self, sandbox):
+        """When path is a file, return it directly (ignore pattern)."""
+        result = _list_files("*.txt", "src/main.py", str(sandbox))
+        assert "src/main.py" in result
+        assert "error" not in result
+
+    def test_single_file_with_pattern(self, sandbox):
+        """Pattern is irrelevant when path is a single file."""
+        result = _list_files("*.NOPE", "README.txt", str(sandbox))
+        assert "README.txt" in result
+        assert "error" not in result
+
     def test_dispatch_list_files(self, sandbox):
         result = dispatch("list_files", {"pattern": "**/*.py"}, str(sandbox))
         assert "src/main.py" in result
@@ -360,6 +372,36 @@ class TestGrep:
             "hello", ".", str(sandbox), include="ci.txt", case_insensitive=True
         )
         assert "Found 3 matches" in result
+
+    def test_single_file(self, sandbox):
+        """When path is a file, grep it directly (no include needed)."""
+        result = _grep("import", "src/main.py", str(sandbox))
+        assert "Found" in result
+        assert "main.py" in result
+        assert "import os" in result
+
+    def test_single_file_with_include(self, sandbox):
+        """include is ignored when path is a specific file."""
+        result = _grep("import", "src/main.py", str(sandbox), include="*.py")
+        assert "Found" in result
+        assert "import os" in result
+
+    def test_single_file_with_mismatched_include(self, sandbox):
+        """include is irrelevant for a single file, even when it doesn't match."""
+        result = _grep("import", "src/main.py", str(sandbox), include="*.txt")
+        assert "Found" in result
+        assert "import os" in result
+
+    def test_single_file_binary_skipped(self, sandbox):
+        """Binary file returns 'No matches found.' — silent skip, no error."""
+        result = _grep("PNG", "image.bin", str(sandbox))
+        assert result == "No matches found."
+        assert "error" not in result.lower()
+
+    def test_single_file_no_match(self, sandbox):
+        """Single file with no matching lines."""
+        result = _grep("zzz_no_such_thing", "src/main.py", str(sandbox))
+        assert result == "No matches found."
 
     def test_case_sensitive_default(self, sandbox):
         """Default search should be case-sensitive."""

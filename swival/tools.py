@@ -144,8 +144,8 @@ TOOLS = [
                     "path": {
                         "type": "string",
                         "description": (
-                            "Directory to search in, relative to base directory. "
-                            'Defaults to "." (base directory).'
+                            "File or directory to search in, relative to base "
+                            'directory. Defaults to "." (base directory).'
                         ),
                         "default": ".",
                     },
@@ -173,8 +173,8 @@ TOOLS = [
                     "path": {
                         "type": "string",
                         "description": (
-                            "Directory to search in, relative to base directory. "
-                            'Defaults to "." (base directory).'
+                            "File or directory to search in, relative to base "
+                            'directory. Defaults to "." (base directory).'
                         ),
                         "default": ".",
                     },
@@ -577,10 +577,27 @@ def _list_files(
 
     if not root.exists():
         return f"error: path does not exist: {path}"
-    if not root.is_dir():
-        return f"error: path is not a directory: {path}"
 
     base = Path(base_dir).resolve()
+
+    if root.is_file():
+        # Single file — just return it, ignore pattern.
+        if not _is_within_base(
+            root,
+            base,
+            unrestricted=unrestricted,
+            extra_read_roots=extra_read_roots,
+            extra_write_roots=extra_write_roots,
+        ):
+            return f"error: {path} is outside allowed roots"
+        try:
+            rel = str(root.relative_to(base))
+        except ValueError:
+            rel = str(root)
+        return rel
+
+    if not root.is_dir():
+        return f"error: path is not a directory: {path}"
 
     # Walk the tree, pruning .git directories
     matched: list[Path] = []
@@ -674,62 +691,91 @@ def _grep(
 
     if not root.exists():
         return f"error: path does not exist: {path}"
-    if not root.is_dir():
-        return f"error: path is not a directory: {path}"
 
     base = Path(base_dir).resolve()
 
-    # Walk the tree, pruning .git directories
     # Collect ALL matches as (file_path, line_no, line_text, mtime),
     # then sort and cap — so the cap always picks the newest files.
     matches: list[tuple[Path, int, str, float]] = []
 
-    for dirpath, dirs, files in os.walk(root):
-        dirs[:] = [d for d in dirs if d != ".git"]
-        for filename in files:
-            # Filter by include pattern
-            if include:
-                rel = (Path(dirpath) / filename).relative_to(root)
-                # PurePath.match handles ** globs (Python 3.12+), but
-                # '**/*.ext' won't match root-level files (no dir
-                # component).  Fall back to fnmatch on the bare
-                # filename so '**/*.zig' still matches 'a.zig'.
-                if not rel.match(include) and not fnmatch.fnmatch(
-                    filename, include.split("/")[-1] if "/" in include else include
+    if root.is_file():
+        # Single file — ignore include, grep it directly.
+        if not _is_within_base(
+            root,
+            base,
+            unrestricted=unrestricted,
+            extra_read_roots=extra_read_roots,
+            extra_write_roots=extra_write_roots,
+        ):
+            return f"error: {path} is outside allowed roots"
+        # Skip binary (silent, consistent with directory mode)
+        try:
+            with open(root, "rb") as f:
+                chunk = f.read(BINARY_CHECK_BYTES)
+        except (PermissionError, OSError):
+            chunk = b""
+        if b"\x00" not in chunk:
+            try:
+                text = root.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, PermissionError, OSError):
+                text = ""
+            mtime = root.stat().st_mtime
+            for line_no, line in enumerate(text.splitlines(), start=1):
+                if regex.search(line):
+                    matches.append((root, line_no, line, mtime))
+
+    elif not root.is_dir():
+        return f"error: path is not a directory: {path}"
+
+    else:
+        # Walk the tree, pruning .git directories
+        for dirpath, dirs, files in os.walk(root):
+            dirs[:] = [d for d in dirs if d != ".git"]
+            for filename in files:
+                # Filter by include pattern
+                if include:
+                    rel = (Path(dirpath) / filename).relative_to(root)
+                    # PurePath.match handles ** globs (Python 3.12+), but
+                    # '**/*.ext' won't match root-level files (no dir
+                    # component).  Fall back to fnmatch on the bare
+                    # filename so '**/*.zig' still matches 'a.zig'.
+                    if not rel.match(include) and not fnmatch.fnmatch(
+                        filename,
+                        include.split("/")[-1] if "/" in include else include,
+                    ):
+                        continue
+
+                filepath = Path(dirpath) / filename
+
+                # Per-file containment check
+                if not _is_within_base(
+                    filepath,
+                    base,
+                    unrestricted=unrestricted,
+                    extra_read_roots=extra_read_roots,
+                    extra_write_roots=extra_write_roots,
                 ):
                     continue
 
-            filepath = Path(dirpath) / filename
+                # Skip binary files
+                try:
+                    with open(filepath, "rb") as f:
+                        chunk = f.read(BINARY_CHECK_BYTES)
+                except (PermissionError, OSError):
+                    continue
+                if b"\x00" in chunk:
+                    continue
 
-            # Per-file containment check
-            if not _is_within_base(
-                filepath,
-                base,
-                unrestricted=unrestricted,
-                extra_read_roots=extra_read_roots,
-                extra_write_roots=extra_write_roots,
-            ):
-                continue
+                # Read and search
+                try:
+                    text = filepath.read_text(encoding="utf-8")
+                except (UnicodeDecodeError, PermissionError, OSError):
+                    continue
 
-            # Skip binary files
-            try:
-                with open(filepath, "rb") as f:
-                    chunk = f.read(BINARY_CHECK_BYTES)
-            except (PermissionError, OSError):
-                continue
-            if b"\x00" in chunk:
-                continue
-
-            # Read and search
-            try:
-                text = filepath.read_text(encoding="utf-8")
-            except (UnicodeDecodeError, PermissionError, OSError):
-                continue
-
-            mtime = filepath.stat().st_mtime
-            for line_no, line in enumerate(text.splitlines(), start=1):
-                if regex.search(line):
-                    matches.append((filepath, line_no, line, mtime))
+                mtime = filepath.stat().st_mtime
+                for line_no, line in enumerate(text.splitlines(), start=1):
+                    if regex.search(line):
+                        matches.append((filepath, line_no, line, mtime))
 
     if not matches:
         return "No matches found."
