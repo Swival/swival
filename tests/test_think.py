@@ -33,7 +33,32 @@ class TestLinearFlow:
 
 
 class TestRevision:
-    def test_valid_revision(self):
+    def test_valid_revision_with_mode(self):
+        state = ThinkingState()
+        state.process(
+            {
+                "thought": "First thought",
+                "thought_number": 1,
+                "total_thoughts": 3,
+                "next_thought_needed": True,
+            }
+        )
+        result = json.loads(
+            state.process(
+                {
+                    "thought": "Correcting step 1",
+                    "thought_number": 2,
+                    "total_thoughts": 3,
+                    "next_thought_needed": True,
+                    "mode": "revision",
+                    "revises_thought": 1,
+                }
+            )
+        )
+        assert result["history_length"] == 2
+
+    def test_valid_revision_with_legacy_is_revision(self):
+        """is_revision=True still works (backward compat in sanitizer)."""
         state = ThinkingState()
         state.process(
             {
@@ -57,7 +82,28 @@ class TestRevision:
         )
         assert result["history_length"] == 2
 
-    def test_is_revision_without_revises_thought(self):
+    def test_revision_mode_without_revises_thought(self):
+        state = ThinkingState()
+        state.process(
+            {
+                "thought": "First",
+                "thought_number": 1,
+                "total_thoughts": 2,
+                "next_thought_needed": True,
+            }
+        )
+        result = state.process(
+            {
+                "thought": "Bad revision",
+                "thought_number": 2,
+                "total_thoughts": 2,
+                "next_thought_needed": True,
+                "mode": "revision",
+            }
+        )
+        assert "revision mode requires revises_thought" in result
+
+    def test_legacy_is_revision_without_revises_thought(self):
         state = ThinkingState()
         state.process(
             {
@@ -76,9 +122,10 @@ class TestRevision:
                 "is_revision": True,
             }
         )
-        assert result == "error: is_revision requires revises_thought"
+        assert "revision mode requires revises_thought" in result
 
-    def test_revises_thought_without_is_revision(self):
+    def test_revises_thought_without_mode_coerced(self):
+        """revises_thought without is_revision/mode → coerced to revision."""
         state = ThinkingState()
         state.process(
             {
@@ -88,16 +135,18 @@ class TestRevision:
                 "next_thought_needed": True,
             }
         )
-        result = state.process(
-            {
-                "thought": "Bad",
-                "thought_number": 2,
-                "total_thoughts": 2,
-                "next_thought_needed": True,
-                "revises_thought": 1,
-            }
+        result = json.loads(
+            state.process(
+                {
+                    "thought": "Coerced revision",
+                    "thought_number": 2,
+                    "total_thoughts": 2,
+                    "next_thought_needed": True,
+                    "revises_thought": 1,
+                }
+            )
         )
-        assert result == "error: revises_thought requires is_revision=true"
+        assert result["history_length"] == 2
 
     def test_revises_nonexistent_thought(self):
         state = ThinkingState()
@@ -115,11 +164,11 @@ class TestRevision:
                 "thought_number": 2,
                 "total_thoughts": 2,
                 "next_thought_needed": True,
-                "is_revision": True,
+                "mode": "revision",
                 "revises_thought": 5,
             }
         )
-        assert result == "error: revises_thought=5 not found in history"
+        assert "revises_thought=5 not found in history" in result
 
     def test_revision_with_nonsequential_numbers(self):
         """thought_number=5 exists in history; revising it should work."""
@@ -140,7 +189,7 @@ class TestRevision:
                     "thought_number": 6,
                     "total_thoughts": 10,
                     "next_thought_needed": True,
-                    "is_revision": True,
+                    "mode": "revision",
                     "revises_thought": 5,
                 }
             )
@@ -153,11 +202,11 @@ class TestRevision:
                 "thought_number": 7,
                 "total_thoughts": 10,
                 "next_thought_needed": True,
-                "is_revision": True,
+                "mode": "revision",
                 "revises_thought": 1,
             }
         )
-        assert result == "error: revises_thought=1 not found in history"
+        assert "revises_thought=1 not found in history" in result
 
 
 class TestBranching:
@@ -178,6 +227,7 @@ class TestBranching:
                     "thought_number": 2,
                     "total_thoughts": 3,
                     "next_thought_needed": True,
+                    "mode": "branch",
                     "branch_from_thought": 1,
                     "branch_id": "approach-b",
                 }
@@ -185,7 +235,7 @@ class TestBranching:
         )
         assert "approach-b" in result["branches"]
 
-    def test_branch_from_without_branch_id(self):
+    def test_branch_mode_without_branch_id(self):
         state = ThinkingState()
         state.process(
             {
@@ -201,12 +251,13 @@ class TestBranching:
                 "thought_number": 2,
                 "total_thoughts": 2,
                 "next_thought_needed": True,
+                "mode": "branch",
                 "branch_from_thought": 1,
             }
         )
-        assert result == "error: branch_from_thought requires branch_id"
+        assert "branch mode requires branch_id" in result
 
-    def test_branch_id_without_branch_from(self):
+    def test_branch_mode_without_branch_from(self):
         state = ThinkingState()
         state.process(
             {
@@ -222,10 +273,11 @@ class TestBranching:
                 "thought_number": 2,
                 "total_thoughts": 2,
                 "next_thought_needed": True,
+                "mode": "branch",
                 "branch_id": "orphan",
             }
         )
-        assert result == "error: branch_id requires branch_from_thought"
+        assert "branch mode requires branch_from_thought" in result
 
     def test_branch_from_nonexistent_thought(self):
         state = ThinkingState()
@@ -243,11 +295,12 @@ class TestBranching:
                 "thought_number": 2,
                 "total_thoughts": 2,
                 "next_thought_needed": True,
+                "mode": "branch",
                 "branch_from_thought": 99,
                 "branch_id": "bad",
             }
         )
-        assert result == "error: branch_from_thought=99 not found in history"
+        assert "branch_from_thought=99 not found in history" in result
 
     def test_branch_with_nonsequential_numbers(self):
         """branch_from_thought should match actual thought_number, not index."""
@@ -268,6 +321,7 @@ class TestBranching:
                     "thought_number": 11,
                     "total_thoughts": 20,
                     "next_thought_needed": True,
+                    "mode": "branch",
                     "branch_from_thought": 10,
                     "branch_id": "alt",
                 }
@@ -281,11 +335,12 @@ class TestBranching:
                 "thought_number": 12,
                 "total_thoughts": 20,
                 "next_thought_needed": True,
+                "mode": "branch",
                 "branch_from_thought": 1,
                 "branch_id": "bad",
             }
         )
-        assert result == "error: branch_from_thought=1 not found in history"
+        assert "branch_from_thought=1 not found in history" in result
 
     def test_branch_id_too_long(self):
         state = ThinkingState()
@@ -303,11 +358,12 @@ class TestBranching:
                 "thought_number": 2,
                 "total_thoughts": 2,
                 "next_thought_needed": True,
+                "mode": "branch",
                 "branch_from_thought": 1,
                 "branch_id": "x" * 51,
             }
         )
-        assert result == "error: branch_id exceeds 50 character limit"
+        assert "branch_id exceeds 50 character limit" in result
 
     def test_blank_branch_id(self):
         state = ThinkingState()
@@ -325,6 +381,7 @@ class TestBranching:
                 "thought_number": 2,
                 "total_thoughts": 2,
                 "next_thought_needed": True,
+                "mode": "branch",
                 "branch_from_thought": 1,
                 "branch_id": "   ",
             }
@@ -351,6 +408,7 @@ class TestBranching:
                     "thought_number": 22 + i,
                     "total_thoughts": 50,
                     "next_thought_needed": True,
+                    "mode": "branch",
                     "branch_from_thought": 1,
                     "branch_id": f"branch-{i}",
                 }
@@ -365,6 +423,7 @@ class TestBranching:
                 "thought_number": 42,
                 "total_thoughts": 50,
                 "next_thought_needed": True,
+                "mode": "branch",
                 "branch_from_thought": 1,
                 "branch_id": "branch-20",
             }
@@ -469,7 +528,7 @@ class TestDefaulting:
             state.process(
                 {
                     "thought": "Revise first",
-                    "is_revision": True,
+                    "mode": "revision",
                     "revises_thought": 1,
                 }
             )
@@ -485,6 +544,7 @@ class TestDefaulting:
             state.process(
                 {
                     "thought": "Alt approach",
+                    "mode": "branch",
                     "branch_from_thought": 1,
                     "branch_id": "alt",
                 }
@@ -548,6 +608,340 @@ class TestHistoryCap:
             }
         )
         assert result == "error: thinking history full (200 steps max)"
+
+
+# ---------------------------------------------------------------------------
+# Sanitizer / coercion tests
+# ---------------------------------------------------------------------------
+
+
+class TestSanitizer:
+    def test_template_payload_first_thought(self):
+        """Full template payload on first call — should succeed as normal thought."""
+        state = ThinkingState()
+        result = json.loads(
+            state.process(
+                {
+                    "thought": "Planning step",
+                    "thought_number": 1,
+                    "total_thoughts": 3,
+                    "next_thought_needed": True,
+                    "is_revision": False,
+                    "revises_thought": 1,
+                    "branch_from_thought": 1,
+                    "branch_id": "main",
+                }
+            )
+        )
+        assert result["history_length"] == 1
+        assert result["thought_number"] == 1
+        # Should NOT be recorded as revision or branch
+        entry = state.history[0]
+        assert entry.is_revision is False
+        assert entry.revises_thought is None
+        assert entry.branch_from_thought is None
+        assert entry.branch_id is None
+
+    def test_is_revision_false_strips_revision_fields(self):
+        """is_revision=false with revises_thought → stripped to normal thought."""
+        state = ThinkingState()
+        state.process({"thought": "First"})
+        result = json.loads(
+            state.process(
+                {
+                    "thought": "Not a revision despite field",
+                    "is_revision": False,
+                    "revises_thought": 1,
+                }
+            )
+        )
+        assert result["history_length"] == 2
+        entry = state.history[1]
+        assert entry.is_revision is False
+        assert entry.revises_thought is None
+
+    def test_revises_thought_without_flag_coerced(self):
+        """revises_thought present, is_revision absent → coerced to revision."""
+        state = ThinkingState()
+        state.process({"thought": "First"})
+        result = json.loads(
+            state.process(
+                {
+                    "thought": "Implicit revision",
+                    "revises_thought": 1,
+                }
+            )
+        )
+        assert result["history_length"] == 2
+        entry = state.history[1]
+        assert entry.is_revision is True
+        assert entry.revises_thought == 1
+
+    def test_branch_fields_without_mode_coerced(self):
+        """branch_from_thought + branch_id without mode → coerced to branch."""
+        state = ThinkingState()
+        state.process({"thought": "First"})
+        result = json.loads(
+            state.process(
+                {
+                    "thought": "Implicit branch",
+                    "branch_from_thought": 1,
+                    "branch_id": "alt",
+                }
+            )
+        )
+        assert result["history_length"] == 2
+        assert "alt" in result["branches"]
+
+    def test_mode_new_strips_all_optional(self):
+        """Explicit mode=new strips revision and branch fields."""
+        state = ThinkingState()
+        state.process({"thought": "First"})
+        result = json.loads(
+            state.process(
+                {
+                    "thought": "Forced new",
+                    "mode": "new",
+                    "revises_thought": 1,
+                    "branch_from_thought": 1,
+                    "branch_id": "x",
+                }
+            )
+        )
+        assert result["history_length"] == 2
+        entry = state.history[1]
+        assert entry.is_revision is False
+        assert entry.revises_thought is None
+        assert entry.branch_from_thought is None
+
+    def test_mode_revision_strips_branch_fields(self):
+        """mode=revision strips branch fields."""
+        state = ThinkingState()
+        state.process({"thought": "First"})
+        result = json.loads(
+            state.process(
+                {
+                    "thought": "Revision ignoring branch",
+                    "mode": "revision",
+                    "revises_thought": 1,
+                    "branch_from_thought": 1,
+                    "branch_id": "stray",
+                }
+            )
+        )
+        assert result["history_length"] == 2
+        entry = state.history[1]
+        assert entry.is_revision is True
+        assert entry.revises_thought == 1
+        assert entry.branch_from_thought is None
+
+    def test_mode_branch_strips_revision_fields(self):
+        """mode=branch strips revision fields."""
+        state = ThinkingState()
+        state.process({"thought": "First"})
+        result = json.loads(
+            state.process(
+                {
+                    "thought": "Branch ignoring revision",
+                    "mode": "branch",
+                    "branch_from_thought": 1,
+                    "branch_id": "alt",
+                    "revises_thought": 1,
+                }
+            )
+        )
+        assert result["history_length"] == 2
+        entry = state.history[1]
+        assert entry.is_revision is False
+        assert entry.revises_thought is None
+        assert "alt" in result["branches"]
+
+    def test_revision_downgraded_when_no_history(self):
+        """mode=revision on first call (no history) → downgraded to new."""
+        state = ThinkingState()
+        result = json.loads(
+            state.process(
+                {
+                    "thought": "Can't revise nothing",
+                    "mode": "revision",
+                    "revises_thought": 1,
+                }
+            )
+        )
+        assert result["history_length"] == 1
+        entry = state.history[0]
+        assert entry.is_revision is False
+        assert entry.revises_thought is None
+
+    def test_branch_downgraded_when_no_history(self):
+        """mode=branch on first call (no history) → downgraded to new."""
+        state = ThinkingState()
+        result = json.loads(
+            state.process(
+                {
+                    "thought": "Can't branch from nothing",
+                    "mode": "branch",
+                    "branch_from_thought": 1,
+                    "branch_id": "alt",
+                }
+            )
+        )
+        assert result["history_length"] == 1
+        entry = state.history[0]
+        assert entry.is_revision is False
+        assert entry.branch_from_thought is None
+
+
+# ---------------------------------------------------------------------------
+# Corrective error payload tests
+# ---------------------------------------------------------------------------
+
+
+class TestCorrectiveErrors:
+    def test_nonexistent_revises_thought_suggests_valid(self):
+        state = ThinkingState()
+        state.process({"thought": "First"})
+        state.process({"thought": "Second"})
+        result = state.process(
+            {
+                "thought": "Bad ref",
+                "mode": "revision",
+                "revises_thought": 99,
+            }
+        )
+        assert "revises_thought=99 not found" in result
+        assert "valid thought numbers: [1, 2]" in result
+
+    def test_revision_without_revises_suggests_valid(self):
+        state = ThinkingState()
+        state.process({"thought": "First"})
+        result = state.process(
+            {
+                "thought": "Missing target",
+                "mode": "revision",
+            }
+        )
+        assert "revision mode requires revises_thought" in result
+        assert "valid thought numbers: [1]" in result
+
+    def test_nonexistent_branch_from_suggests_valid(self):
+        state = ThinkingState()
+        state.process({"thought": "First"})
+        result = state.process(
+            {
+                "thought": "Bad branch",
+                "mode": "branch",
+                "branch_from_thought": 99,
+                "branch_id": "x",
+            }
+        )
+        assert "branch_from_thought=99 not found" in result
+        assert "valid thought numbers: [1]" in result
+
+    def test_branch_missing_id_suggests_both(self):
+        state = ThinkingState()
+        state.process({"thought": "First"})
+        result = state.process(
+            {
+                "thought": "Incomplete branch",
+                "mode": "branch",
+                "branch_from_thought": 1,
+            }
+        )
+        assert "branch mode requires branch_id" in result
+        assert "branch_from_thought and branch_id must be set together" in result
+
+
+# ---------------------------------------------------------------------------
+# One-shot sanitizer tests
+# ---------------------------------------------------------------------------
+
+
+class TestOneShotSanitizer:
+    def test_repeated_error_auto_retries_as_minimal(self):
+        """Same validation error twice → auto-retry as minimal thought."""
+        state = ThinkingState()
+        state.process({"thought": "First"})
+
+        # First call: revision pointing to nonexistent thought
+        r1 = state.process(
+            {
+                "thought": "Bad revision",
+                "mode": "revision",
+                "revises_thought": 99,
+            }
+        )
+        assert r1.startswith("error:")
+
+        # Second call: exact same payload → auto-sanitized, succeeds
+        r2 = state.process(
+            {
+                "thought": "Bad revision",
+                "mode": "revision",
+                "revises_thought": 99,
+            }
+        )
+        parsed = json.loads(r2)
+        assert parsed["history_length"] == 2  # first + auto-sanitized
+
+    def test_different_error_does_not_trigger_sanitizer(self):
+        """Different errors don't trigger auto-retry."""
+        state = ThinkingState()
+        state.process({"thought": "First"})
+
+        # First error: bad revision target
+        r1 = state.process(
+            {
+                "thought": "Bad",
+                "mode": "revision",
+                "revises_thought": 99,
+            }
+        )
+        assert r1.startswith("error:")
+
+        # Different error: missing branch_id
+        r2 = state.process(
+            {
+                "thought": "Also bad",
+                "mode": "branch",
+                "branch_from_thought": 1,
+            }
+        )
+        assert r2.startswith("error:")
+
+    def test_success_resets_error_tracking(self):
+        """A successful call clears the error tracker."""
+        state = ThinkingState()
+        state.process({"thought": "First"})
+
+        # Error
+        r1 = state.process(
+            {
+                "thought": "Bad",
+                "mode": "revision",
+                "revises_thought": 99,
+            }
+        )
+        assert r1.startswith("error:")
+
+        # Success (resets tracker)
+        r2 = json.loads(state.process({"thought": "Good"}))
+        assert r2["history_length"] == 2
+
+        # Same error again — NOT auto-retried (tracker was reset)
+        r3 = state.process(
+            {
+                "thought": "Bad again",
+                "mode": "revision",
+                "revises_thought": 99,
+            }
+        )
+        assert r3.startswith("error:")
+
+
+# ---------------------------------------------------------------------------
+# Logging tests
+# ---------------------------------------------------------------------------
 
 
 class TestLogging:
@@ -619,7 +1013,7 @@ class TestLogging:
                 "thought_number": 2,
                 "total_thoughts": 3,
                 "next_thought_needed": True,
-                "is_revision": True,
+                "mode": "revision",
                 "revises_thought": 1,
             }
         )
@@ -643,6 +1037,7 @@ class TestLogging:
                 "thought_number": 2,
                 "total_thoughts": 3,
                 "next_thought_needed": True,
+                "mode": "branch",
                 "branch_from_thought": 1,
                 "branch_id": "alt",
             }

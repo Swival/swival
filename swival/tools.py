@@ -230,18 +230,21 @@ TOOLS = [
                             "Optional — defaults to true."
                         ),
                     },
-                    "is_revision": {
-                        "type": "boolean",
+                    "mode": {
+                        "type": "string",
+                        "enum": ["new", "revision", "branch"],
                         "description": (
-                            "Set true if this thought corrects or updates a previous one. "
-                            "Must also set revises_thought."
+                            "Type of thought. "
+                            "'new' (default): normal thinking step. "
+                            "'revision': correct a previous thought (set revises_thought). "
+                            "'branch': explore an alternative (set branch_from_thought + branch_id)."
                         ),
                     },
                     "revises_thought": {
                         "type": "integer",
                         "description": (
-                            "Required when is_revision is true. "
-                            "Which thought number is being revised."
+                            "Which thought number is being revised. "
+                            "Used with mode=\"revision\"."
                         ),
                         "minimum": 1,
                     },
@@ -249,15 +252,15 @@ TOOLS = [
                         "type": "integer",
                         "description": (
                             "Thought number to branch from. "
-                            "Must be set together with branch_id."
+                            "Used with mode=\"branch\", together with branch_id."
                         ),
                         "minimum": 1,
                     },
                     "branch_id": {
                         "type": "string",
                         "description": (
-                            "Required when branch_from_thought is set. "
-                            "Label for the branch (e.g. 'approach-b'). 1-50 characters."
+                            "Label for the branch (e.g. 'approach-b'). "
+                            "Used with mode=\"branch\", together with branch_from_thought."
                         ),
                         "minLength": 1,
                         "maxLength": 50,
