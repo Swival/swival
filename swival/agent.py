@@ -2111,7 +2111,7 @@ def run_agent_loop(
             )
             if effective_max_output != max_output_tokens and verbose:
                 fmt.info(
-                    f"Output tokens clamped: {max_output_tokens} -> {effective_max_output} (context_length={context_length}, prompt=~{token_est})"
+                    f"Output tokens: {effective_max_output} (clamped, context_length={context_length}, prompt=~{token_est})"
                 )
 
             _llm_args = (
