@@ -40,27 +40,30 @@ MAX_HISTORY_SIZE = 500 * 1024  # 500KB
 TODO_REMINDER_INTERVAL = 3  # remind after N turns of no todo usage
 
 INIT_PROMPT = (
-    "Find the unexpected conventions in this project — patterns that would "
-    "trip up an AI agent because they're unusual, non-obvious, or contrary "
-    "to typical practices. Look for things that appear CONSISTENTLY across "
-    "multiple files, not quirks of individual files. Examples: 'all error "
-    "returns are strings starting with error:', 'exit code 2 means X not Y', "
-    "'this core data structure is mutated in place'. Read files across the "
-    "codebase to spot patterns that repeat. Use think to reason about what "
-    "is truly conventional (consistent) vs accidental (one-off)."
+    "Scan this project to find its conventions — patterns applied consistently "
+    "across the whole codebase that an AI agent wouldn't know without reading "
+    "the source. Look across all areas: naming schemes, file and directory "
+    "structure, error handling, return value formats, test organisation, "
+    "documentation style, CLI behaviour, exit codes, and API design. Read "
+    "source files, tests, docs, and config. Use think to separate genuine "
+    "project-wide patterns (appear in many independent places) from one-off "
+    "choices."
 )
 
 INIT_ENRICH_PROMPT = (
-    "Review your findings. For each convention you identified, verify it "
-    "appears consistently across multiple files. Remove anything that's only "
-    "true in one place or is just a local implementation detail. Keep only "
-    "project-wide patterns that are (1) consistently applied everywhere they "
-    "apply, (2) unexpected/non-obvious to an AI agent, and (3) unlikely to "
-    "be a one-off choice. Add any conventions you missed. Be specific: name "
-    "the exact convention, not vague descriptions."
+    "Review your list. Cut anything that: (1) only appears in one file or "
+    "module, (2) is standard Python/Unix/web practice that any competent agent "
+    "would already know, or (3) wouldn't affect how an agent writes correct "
+    "code or makes tool calls. Keep only conventions that cross module "
+    "boundaries and would surprise a capable agent new to this project. Check "
+    "tests, docs, and config files for anything missed."
 )
 
-INIT_WRITE_PROMPT = "Create or update a file named AGENT.md with that report."
+INIT_WRITE_PROMPT = (
+    "Write the findings to AGENT.md as a concise bulleted list. "
+    "Two sentences maximum per item. "
+    "The file is injected into every future agent context, so brevity is essential."
+)
 
 _CONTEXT_OVERFLOW_RE = re.compile(
     r"context.{0,10}(length|window|limit)"
@@ -1902,6 +1905,13 @@ def repl_loop(
         elif cmd == "/init":
             if cmd_arg:
                 fmt.warning(f"/init takes no arguments, ignoring {cmd_arg!r}")
+            # Clear conversation history first to start with a clean context
+            _repl_clear(
+                messages,
+                thinking_state,
+                file_tracker=file_tracker,
+                todo_state=todo_state,
+            )
             # Three-pass init: explore, enrich, then write to file
             for _pass, prompt in enumerate(
                 (INIT_PROMPT, INIT_ENRICH_PROMPT, INIT_WRITE_PROMPT), 1
