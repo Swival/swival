@@ -242,7 +242,7 @@ TOOLS = [
                         "type": "integer",
                         "description": (
                             "Which thought number is being revised. "
-                            "Used with mode=\"revision\"."
+                            'Used with mode="revision".'
                         ),
                         "minimum": 1,
                     },
@@ -250,7 +250,7 @@ TOOLS = [
                         "type": "integer",
                         "description": (
                             "Thought number to branch from. "
-                            "Used with mode=\"branch\", together with branch_id."
+                            'Used with mode="branch", together with branch_id.'
                         ),
                         "minimum": 1,
                     },
@@ -258,7 +258,7 @@ TOOLS = [
                         "type": "string",
                         "description": (
                             "Label for the branch (e.g. 'approach-b'). "
-                            "Used with mode=\"branch\", together with branch_from_thought."
+                            'Used with mode="branch", together with branch_from_thought.'
                         ),
                         "minLength": 1,
                         "maxLength": 50,

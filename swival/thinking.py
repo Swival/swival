@@ -113,10 +113,12 @@ class ThinkingState:
             # and retry as a minimal thought to break the loop
             if self._last_error == result:
                 self._last_error = None
-                return self._validate_and_record({
-                    "thought": args.get("thought", ""),
-                    "is_revision": False,
-                })
+                return self._validate_and_record(
+                    {
+                        "thought": args.get("thought", ""),
+                        "is_revision": False,
+                    }
+                )
             self._last_error = result
             return self._add_correction(result)
 
@@ -232,7 +234,7 @@ class ThinkingState:
                 return (
                     f"{error}; valid thought numbers: {valid}. "
                     f'Use mode="revision" with revises_thought={valid[-1]}, '
-                    f'or omit mode for a normal thought'
+                    f"or omit mode for a normal thought"
                 )
             return f"{error}; no thoughts recorded yet. Omit mode for a normal thought"
 
@@ -245,7 +247,9 @@ class ThinkingState:
             return f"{error}; no thoughts recorded yet"
 
         if "branch mode requires" in error:
-            return f"{error}. Both branch_from_thought and branch_id must be set together"
+            return (
+                f"{error}. Both branch_from_thought and branch_id must be set together"
+            )
 
         return error
 
