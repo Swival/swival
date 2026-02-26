@@ -473,23 +473,29 @@ def call_llm(
         raise AgentError(f"unknown provider {provider!r}")
 
     if verbose:
-        seed_info = f", seed={seed}" if seed is not None else ""
+        extras = []
+        if temperature is not None:
+            extras.append(f"temperature={temperature}")
+        if top_p is not None:
+            extras.append(f"top_p={top_p}")
+        if seed is not None:
+            extras.append(f"seed={seed}")
+        extra_str = ", " + ", ".join(extras) if extras else ""
         fmt.model_info(
-            f"Calling model {model_str} with max_tokens={max_output_tokens}, temperature={temperature}, top_p={top_p}{seed_info}"
+            f"Calling model {model_str} with max_tokens={max_output_tokens}{extra_str}"
         )
 
     completion_kwargs = dict(
         model=model_str,
         messages=messages,
         max_tokens=max_output_tokens,
-        temperature=temperature,
-        top_p=top_p,
         tools=tools,
         tool_choice="auto",
         **kwargs,
     )
-    if seed is not None:
-        completion_kwargs["seed"] = seed
+    for key, val in [("temperature", temperature), ("top_p", top_p), ("seed", seed)]:
+        if val is not None:
+            completion_kwargs[key] = val
 
     try:
         response = litellm.completion(**completion_kwargs)
@@ -597,8 +603,8 @@ def build_parser():
     parser.add_argument(
         "--temperature",
         type=float,
-        default=0.55,
-        help="Sampling temperature (default: 0.55).",
+        default=None,
+        help="Sampling temperature (default: provider default).",
     )
     parser.add_argument(
         "--top-p",
