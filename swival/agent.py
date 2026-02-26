@@ -17,7 +17,7 @@ from importlib import metadata
 import tiktoken
 
 from . import fmt
-from .report import AgentError, ReportCollector
+from .report import AgentError, ConfigError, ReportCollector
 from .thinking import ThinkingState, _safe_notes_path
 from .tracker import FileAccessTracker
 from .tools import (
@@ -67,7 +67,9 @@ def _safe_history_path(base_dir: str) -> Path:
     return history_path
 
 
-def append_history(base_dir: str, question: str, answer: str) -> None:
+def append_history(
+    base_dir: str, question: str, answer: str, *, diagnostics: bool = True
+) -> None:
     """Append a timestamped Q&A entry to .swival/HISTORY.md."""
     if not answer or not answer.strip():
         return
@@ -75,7 +77,8 @@ def append_history(base_dir: str, question: str, answer: str) -> None:
     try:
         history_path = _safe_history_path(base_dir)
     except ValueError:
-        fmt.warning("history path escapes base directory, skipping write")
+        if diagnostics:
+            fmt.warning("history path escapes base directory, skipping write")
         return
 
     try:
@@ -83,7 +86,8 @@ def append_history(base_dir: str, question: str, answer: str) -> None:
 
         current_size = history_path.stat().st_size if history_path.exists() else 0
         if current_size >= MAX_HISTORY_SIZE:
-            fmt.warning("history file at capacity, skipping write")
+            if diagnostics:
+                fmt.warning("history file at capacity, skipping write")
             return
 
         # Truncate question for the header
@@ -94,7 +98,8 @@ def append_history(base_dir: str, question: str, answer: str) -> None:
         with history_path.open("a", encoding="utf-8") as f:
             f.write(entry)
     except OSError:
-        fmt.warning("failed to write history entry")
+        if diagnostics:
+            fmt.warning("failed to write history entry")
 
 
 def _canonical_error(error: str) -> str:
@@ -848,126 +853,130 @@ def main():
         sys.exit(1)
 
 
-def _run_main(args, report, _write_report, parser):
-    # Provider-specific model discovery and context configuration
-    if args.provider == "lmstudio":
-        api_base = args.base_url or "http://127.0.0.1:1234"
-        if args.model:
-            model_id = args.model
+def resolve_provider(
+    provider: str,
+    model: str | None,
+    api_key: str | None,
+    base_url: str | None,
+    max_context_tokens: int | None,
+    verbose: bool,
+) -> tuple[str, str | None, str | None, int | None, dict]:
+    """Validate provider args, discover model (LM Studio), return resolved config.
+
+    Returns (model_id, api_base, api_key, context_length, llm_kwargs).
+    Raises ConfigError for invalid configuration.
+    """
+    if provider == "lmstudio":
+        api_base = base_url or "http://127.0.0.1:1234"
+        if model:
+            model_id = model
             current_context = None
-            if args.verbose:
+            if verbose:
                 fmt.model_info(f"Using user-specified model: {model_id}")
         else:
-            model_id, current_context = discover_model(api_base, args.verbose)
+            model_id, current_context = discover_model(api_base, verbose)
             if not model_id:
                 raise AgentError(
                     "no loaded LLM found in LM Studio. "
                     "Load a model in LM Studio or use --model to specify one."
                 )
-        if args.max_context_tokens is not None:
+        if max_context_tokens is not None:
             configure_context(
                 api_base,
                 model_id,
-                args.max_context_tokens,
+                max_context_tokens,
                 current_context,
-                args.verbose,
+                verbose,
             )
-        api_key = None
+        context_length = max_context_tokens or current_context
+        resolved_key = None
 
-    elif args.provider == "huggingface":
-        if not args.model:
-            parser.error("--model is required when --provider is huggingface")
-        bare_model = args.model.removeprefix("huggingface/")
+    elif provider == "huggingface":
+        if not model:
+            raise ConfigError("--model is required when --provider is huggingface")
+        bare_model = model.removeprefix("huggingface/")
         if "/" not in bare_model:
-            parser.error(
+            raise ConfigError(
                 "HuggingFace model must be in org/model format (e.g. zai-org/GLM-5)"
             )
-        api_base = args.base_url  # None unless user set it (dedicated endpoint)
-        model_id = args.model
-        current_context = args.max_context_tokens  # None if not given
-        api_key = args.api_key or os.environ.get("HF_TOKEN")
-        if not api_key:
-            parser.error(
+        api_base = base_url
+        model_id = model
+        context_length = max_context_tokens
+        resolved_key = api_key or os.environ.get("HF_TOKEN")
+        if not resolved_key:
+            raise ConfigError(
                 "--api-key or HF_TOKEN env var required for huggingface provider"
             )
 
-    elif args.provider == "openrouter":
-        if not args.model:
-            parser.error("--model is required when --provider is openrouter")
-        api_base = (
-            args.base_url
-        )  # LiteLLM knows OpenRouter's default; only set if user provides --base-url
-        model_id = args.model
-        current_context = args.max_context_tokens  # None if not given
-        api_key = args.api_key or os.environ.get("OPENROUTER_API_KEY")
-        if not api_key:
-            parser.error(
+    elif provider == "openrouter":
+        if not model:
+            raise ConfigError("--model is required when --provider is openrouter")
+        api_base = base_url
+        model_id = model
+        context_length = max_context_tokens
+        resolved_key = api_key or os.environ.get("OPENROUTER_API_KEY")
+        if not resolved_key:
+            raise ConfigError(
                 "--api-key or OPENROUTER_API_KEY env var required for openrouter provider"
             )
-
-    # Stash resolved model_id for error reporting
-    args._resolved_model_id = model_id
+    else:
+        raise ConfigError(f"unknown provider: {provider!r}")
 
     llm_kwargs = {
-        "provider": args.provider,
-        "api_key": api_key,
+        "provider": provider,
+        "api_key": resolved_key,
     }
+    return model_id, api_base, resolved_key, context_length, llm_kwargs
 
-    # Resolve --allow-dir paths
-    allowed_dirs: list[Path] = []
-    for d in args.allow_dir:
-        p = Path(d).expanduser().resolve()
-        if not p.is_dir():
-            raise AgentError(f"--allow-dir path is not a directory: {d}")
-        if p == Path(p.anchor):
-            raise AgentError(f"--allow-dir cannot be the filesystem root: {d}")
-        allowed_dirs.append(p)
 
-    # Resolve allowed commands
-    base_dir = args.base_dir
-    yolo = args.yolo
+def resolve_commands(
+    allowed_commands: str | None,
+    yolo: bool,
+    base_dir: str,
+) -> dict[str, str]:
+    """Validate commands against PATH, reject commands inside workspace.
 
+    Returns resolved_commands dict mapping name -> absolute path.
+    In yolo mode, returns empty dict (any command can run).
+    Raises ConfigError/AgentError for invalid commands.
+    """
     if yolo:
-        # In yolo mode, skip all command resolution — any command can run
-        resolved_commands: dict[str, str] = {}
-    else:
-        allowed_names = (
-            {c.strip() for c in args.allowed_commands.split(",") if c.strip()}
-            if args.allowed_commands
-            else set()
-        )
-        resolved_commands = {}
-        base_resolved = Path(base_dir).resolve()
-        for name in sorted(allowed_names):
-            cmd_path = shutil.which(name)
-            if cmd_path is None:
-                raise AgentError(f"allowed command {name!r} not found on PATH")
-            abs_path = Path(cmd_path).resolve()
-            if abs_path.is_relative_to(base_resolved):
-                raise AgentError(
-                    f"allowed command {name!r} resolves to {abs_path}, "
-                    f"which is inside base directory {base_resolved}. "
-                    f"Commands inside the workspace can be modified by the model."
-                )
-            resolved_commands[name] = str(abs_path)
+        return {}
 
-    # Discover skills
-    from .skills import discover_skills, format_skill_catalog
+    allowed_names = (
+        {c.strip() for c in allowed_commands.split(",") if c.strip()}
+        if allowed_commands
+        else set()
+    )
+    resolved_commands: dict[str, str] = {}
+    base_resolved = Path(base_dir).resolve()
+    for name in sorted(allowed_names):
+        cmd_path = shutil.which(name)
+        if cmd_path is None:
+            raise AgentError(f"allowed command {name!r} not found on PATH")
+        abs_path = Path(cmd_path).resolve()
+        if abs_path.is_relative_to(base_resolved):
+            raise AgentError(
+                f"allowed command {name!r} resolves to {abs_path}, "
+                f"which is inside base directory {base_resolved}. "
+                f"Commands inside the workspace can be modified by the model."
+            )
+        resolved_commands[name] = str(abs_path)
+    return resolved_commands
 
-    skills_catalog: dict = {}
-    skill_read_roots: list[Path] = []
-    if not args.no_skills:
-        skills_catalog = discover_skills(base_dir, args.skills_dir, args.verbose)
-    args._resolved_skills = skills_catalog
 
-    # Build tools list (conditionally include run_command and use_skill)
+def build_tools(
+    resolved_commands: dict[str, str],
+    skills_catalog: dict,
+    yolo: bool,
+) -> list:
+    """Construct the tools list from base + conditionals."""
     tools = list(TOOLS)
     if skills_catalog:
         tools.append(USE_SKILL_TOOL)
     if yolo:
         tool = copy.deepcopy(RUN_COMMAND_TOOL)
         tool["function"]["description"] = "Run any command and return its output."
-        # Allow shell strings in yolo mode
         tool["function"]["parameters"]["properties"]["command"] = {
             "oneOf": [
                 {
@@ -989,53 +998,124 @@ def _run_main(args, report, _write_report, parser):
             f"Run a command and return its output. Allowed commands: {', '.join(sorted(resolved_commands))}."
         )
         tools.append(tool)
+    return tools
 
-    # Build messages
+
+def build_system_prompt(
+    base_dir: str,
+    system_prompt: str | None,
+    no_system_prompt: bool,
+    no_instructions: bool,
+    skills_catalog: dict,
+    yolo: bool,
+    resolved_commands: dict[str, str],
+    verbose: bool,
+) -> tuple[str | None, list[str]]:
+    """Assemble full system prompt with instructions, date, skills.
+
+    Returns (system_prompt_text, instructions_loaded).
+    system_prompt_text is None if no_system_prompt is True.
+    """
+    if no_system_prompt:
+        return None, []
+
     instructions_loaded: list[str] = []
-    messages = []
-    if not args.no_system_prompt:
-        if args.system_prompt:
-            system_content = args.system_prompt
-        else:
-            system_content = DEFAULT_SYSTEM_PROMPT_FILE.read_text(encoding="utf-8")
-            # Append project/agent instructions (only with default prompt)
-            if not args.no_instructions:
-                instructions, instructions_loaded = load_instructions(
-                    base_dir, args.verbose
-                )
-                if instructions:
-                    system_content += "\n\n" + instructions
-        # Include current date and time
-        now = datetime.now().astimezone()
+    if system_prompt:
+        system_content = system_prompt
+    else:
+        system_content = DEFAULT_SYSTEM_PROMPT_FILE.read_text(encoding="utf-8")
+        if not no_instructions:
+            instructions, instructions_loaded = load_instructions(base_dir, verbose)
+            if instructions:
+                system_content += "\n\n" + instructions
+
+    now = datetime.now().astimezone()
+    system_content += f"\n\nCurrent date and time: {now.strftime('%Y-%m-%d %H:%M %Z')}"
+
+    if skills_catalog and not system_prompt:
+        from .skills import format_skill_catalog
+
+        catalog_text = format_skill_catalog(skills_catalog)
+        if catalog_text:
+            system_content += "\n\n" + catalog_text
+    if yolo:
         system_content += (
-            f"\n\nCurrent date and time: {now.strftime('%Y-%m-%d %H:%M %Z')}"
+            "\n\n**Command execution tool:**\n"
+            "- `run_command`: Run any command and return its output. "
+            'Pass a shell string (e.g. `"ls -la | grep foo"`) or an array (e.g. `["ls", "-la"]`). '
+            "Shell strings support pipes, redirects, `&&`, etc. "
+            "Optional `timeout` (1-120s, default 30)."
         )
-        # Append skill catalog (only with default prompt)
-        if skills_catalog and not args.system_prompt:
-            catalog_text = format_skill_catalog(skills_catalog)
-            if catalog_text:
-                system_content += "\n\n" + catalog_text
-        if yolo:
-            system_content += (
-                "\n\n**Command execution tool:**\n"
-                "- `run_command`: Run any command and return its output. "
-                'Pass a shell string (e.g. `"ls -la | grep foo"`) or an array (e.g. `["ls", "-la"]`). '
-                "Shell strings support pipes, redirects, `&&`, etc. "
-                "Optional `timeout` (1-120s, default 30)."
-            )
-        elif resolved_commands:
-            cmd_list = ", ".join(sorted(resolved_commands))
-            system_content += (
-                "\n\n**Command execution tool:**\n"
-                f"- `run_command`: Run a whitelisted command and return its output. "
-                f'Pass the command and arguments as a list (e.g. `["ls", "-la"]`). '
-                f"Optional `timeout` (1-120s, default 30). "
-                f"Allowed commands: {cmd_list}."
-            )
+    elif resolved_commands:
+        cmd_list = ", ".join(sorted(resolved_commands))
+        system_content += (
+            "\n\n**Command execution tool:**\n"
+            f"- `run_command`: Run a whitelisted command and return its output. "
+            f'Pass the command and arguments as a list (e.g. `["ls", "-la"]`). '
+            f"Optional `timeout` (1-120s, default 30). "
+            f"Allowed commands: {cmd_list}."
+        )
+
+    return system_content, instructions_loaded
+
+
+def _run_main(args, report, _write_report, parser):
+    # Provider-specific model discovery and context configuration
+    try:
+        model_id, api_base, api_key, context_length, llm_kwargs = resolve_provider(
+            provider=args.provider,
+            model=args.model,
+            api_key=args.api_key,
+            base_url=args.base_url,
+            max_context_tokens=args.max_context_tokens,
+            verbose=args.verbose,
+        )
+    except ConfigError as e:
+        parser.error(str(e))
+
+    # Stash resolved model_id for error reporting
+    args._resolved_model_id = model_id
+
+    # Resolve --allow-dir paths
+    allowed_dirs: list[Path] = []
+    for d in args.allow_dir:
+        p = Path(d).expanduser().resolve()
+        if not p.is_dir():
+            raise AgentError(f"--allow-dir path is not a directory: {d}")
+        if p == Path(p.anchor):
+            raise AgentError(f"--allow-dir cannot be the filesystem root: {d}")
+        allowed_dirs.append(p)
+
+    base_dir = args.base_dir
+    yolo = args.yolo
+
+    resolved_commands = resolve_commands(args.allowed_commands, yolo, base_dir)
+
+    # Discover skills
+    from .skills import discover_skills
+
+    skills_catalog: dict = {}
+    skill_read_roots: list[Path] = []
+    if not args.no_skills:
+        skills_catalog = discover_skills(base_dir, args.skills_dir, args.verbose)
+    args._resolved_skills = skills_catalog
+
+    tools = build_tools(resolved_commands, skills_catalog, yolo)
+
+    system_content, instructions_loaded = build_system_prompt(
+        base_dir=base_dir,
+        system_prompt=args.system_prompt,
+        no_system_prompt=args.no_system_prompt,
+        no_instructions=args.no_instructions,
+        skills_catalog=skills_catalog,
+        yolo=yolo,
+        resolved_commands=resolved_commands,
+        verbose=args.verbose,
+    )
+    messages = []
+    if system_content is not None:
         messages.append({"role": "system", "content": system_content})
     args._resolved_instructions = instructions_loaded
-    # Determine context length for output clamping
-    context_length = args.max_context_tokens or current_context
     args._resolved_context_length = context_length
 
     # Clean up stale cmd_output files from previous sessions
@@ -1156,7 +1236,7 @@ def _run_main(args, report, _write_report, parser):
                 break
 
         if not no_history and answer:
-            append_history(base_dir, args.question, answer)
+            append_history(base_dir, args.question, answer, diagnostics=args.verbose)
         if answer is not None:
             print(answer)
         if report:
@@ -1180,7 +1260,7 @@ def _run_main(args, report, _write_report, parser):
         messages.append({"role": "user", "content": args.question})
         answer, exhausted = run_agent_loop(messages, tools, **loop_kwargs)
         if not no_history and answer:
-            append_history(base_dir, args.question, answer)
+            append_history(base_dir, args.question, answer, diagnostics=args.verbose)
         if answer is not None:
             print(answer)
         if exhausted:
@@ -1262,7 +1342,8 @@ def run_agent_loop(
                     turns + turn_offset, elapsed, token_est, "context_overflow"
                 )
 
-            fmt.warning("context window exceeded, compacting history...")
+            if verbose:
+                fmt.warning("context window exceeded, compacting history...")
             tokens_before = estimate_tokens(messages, tools)
             messages[:] = compact_messages(messages)
             effective_max_output = clamp_output_tokens(
@@ -1302,7 +1383,8 @@ def run_agent_loop(
                         retry_reason="compact_messages",
                     )
 
-                fmt.warning("still too large, dropping older turns...")
+                if verbose:
+                    fmt.warning("still too large, dropping older turns...")
                 tokens_before = estimate_tokens(messages, tools)
                 messages[:] = drop_middle_turns(messages)
                 effective_max_output = clamp_output_tokens(
@@ -1434,9 +1516,10 @@ def run_agent_loop(
             # Model produced a final text answer
             if verbose:
                 fmt.completion(turns, "ok")
-            summary = thinking_state.summary_line()
-            if summary:
-                fmt.think_summary(summary)
+            if verbose:
+                summary = thinking_state.summary_line()
+                if summary:
+                    fmt.think_summary(summary)
             return msg.content or "", False
 
         interventions: list[str] = []
@@ -1536,9 +1619,10 @@ def run_agent_loop(
             if content:
                 last_text = content
                 break
-    summary = thinking_state.summary_line()
-    if summary:
-        fmt.think_summary(summary)
+    if verbose:
+        summary = thinking_state.summary_line()
+        if summary:
+            fmt.think_summary(summary)
     return last_text, True
 
 
@@ -1766,7 +1850,7 @@ def repl_loop(
                 fmt.warning("interrupted, continuation aborted.")
                 continue
             if not no_history and answer:
-                append_history(base_dir, "(continued)", answer)
+                append_history(base_dir, "(continued)", answer, diagnostics=verbose)
             if answer is not None:
                 print(answer)
             if exhausted:
@@ -1802,7 +1886,7 @@ def repl_loop(
             continue
 
         if not no_history and answer:
-            append_history(base_dir, line, answer)
+            append_history(base_dir, line, answer, diagnostics=verbose)
         if answer is not None:
             print(answer)
         if exhausted:
