@@ -1175,9 +1175,6 @@ def call_llm(
     return choice.message, choice.finish_reason
 
 
-MAX_REVIEW_ROUNDS = 5
-
-
 def run_reviewer(
     reviewer_cmd: str,
     base_dir: str,
@@ -1386,6 +1383,12 @@ def build_parser():
         "and answer on stdin. Exit 0=accept, 1=retry with stdout as feedback, 2=reviewer error.",
     )
     parser.add_argument(
+        "--max-review-rounds",
+        type=int,
+        default=_UNSET,
+        help="Maximum number of reviewer retry rounds (default: 5). 0 disables retries.",
+    )
+    parser.add_argument(
         "--reviewer-mode",
         action="store_true",
         default=False,
@@ -1554,6 +1557,10 @@ def main():
 
     fmt.init(color=args.color, no_color=args.no_color)
 
+    # Validation: max_review_rounds >= 0
+    if args.max_review_rounds < 0:
+        parser.error("--max-review-rounds must be >= 0")
+
     # Validation: max_output_tokens <= max_context_tokens
     if (
         args.max_context_tokens is not None
@@ -1588,6 +1595,7 @@ def main():
                     if c.strip()
                 )
             ),
+            "max_review_rounds": args.max_review_rounds,
             "skills_discovered": sorted(skills_catalog or {}),
             "instructions_loaded": instructions_loaded or [],
         }
@@ -2050,10 +2058,10 @@ def _run_main(args, report, _write_report, parser):
                     fmt.review_accepted(review_round)
                 break
             elif exit_code == 1:
-                if review_round >= MAX_REVIEW_ROUNDS:
+                if review_round >= args.max_review_rounds:
                     if args.verbose:
                         fmt.warning(
-                            f"Max review rounds ({MAX_REVIEW_ROUNDS}) reached, accepting answer"
+                            f"Max review rounds ({args.max_review_rounds}) reached, accepting answer"
                         )
                     break
                 if args.verbose:

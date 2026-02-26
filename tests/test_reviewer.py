@@ -62,6 +62,7 @@ def _base_args(tmp_path, **overrides):
         review_prompt=None,
         objective=None,
         verify=None,
+        max_review_rounds=5,
     )
     defaults.update(overrides)
     return types.SimpleNamespace(**defaults)
@@ -414,7 +415,7 @@ class TestReviewLoop:
         assert "SHOULD NOT SEE THIS" not in captured.err
 
     def test_max_review_rounds(self, tmp_path, capsys, monkeypatch):
-        """After MAX_REVIEW_ROUNDS retries, answer is accepted."""
+        """After max_review_rounds retries, answer is accepted."""
         script = tmp_path / "reviewer.sh"
         script.write_text("#!/bin/sh\necho 'try again'\nexit 1\n")
         script.chmod(0o755)
@@ -436,10 +437,62 @@ class TestReviewLoop:
         captured = capsys.readouterr()
         # Flow: answer v1 → reviewer retry (round 1) → answer v2 → reviewer retry
         # (round 2) → ... → answer v5 → reviewer retry (round 5, hits cap) → break.
-        # The cap check fires when review_round == MAX_REVIEW_ROUNDS after the
+        # The cap check fires when review_round == args.max_review_rounds after the
         # reviewer returns exit 1, so the last agent loop call is for answer v5.
-        assert call_count == agent.MAX_REVIEW_ROUNDS
+        assert call_count == 5
         assert f"answer v{call_count}" in captured.out
+
+    def test_custom_max_review_rounds(self, tmp_path, capsys, monkeypatch):
+        """Custom --max-review-rounds value is respected."""
+        script = tmp_path / "reviewer.sh"
+        script.write_text("#!/bin/sh\necho 'try again'\nexit 1\n")
+        script.chmod(0o755)
+
+        call_count = 0
+
+        def counting_llm(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return _make_message(content=f"answer v{call_count}"), "stop"
+
+        args = _base_args(tmp_path, reviewer=str(script), max_review_rounds=3)
+        monkeypatch.setattr(agent, "call_llm", counting_llm)
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+        monkeypatch.setattr("argparse.ArgumentParser.parse_args", lambda self: args)
+        fmt.init(color=False, no_color=True)
+
+        agent.main()
+        captured = capsys.readouterr()
+        assert call_count == 3
+        assert "answer v3" in captured.out
+
+    def test_max_review_rounds_zero_disables_retries(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        """--max-review-rounds 0 accepts the first answer without retries."""
+        script = tmp_path / "reviewer.sh"
+        # Reviewer always wants to retry — but with 0 rounds, it should never run
+        script.write_text("#!/bin/sh\necho 'try again'\nexit 1\n")
+        script.chmod(0o755)
+
+        call_count = 0
+
+        def counting_llm(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return _make_message(content=f"answer v{call_count}"), "stop"
+
+        args = _base_args(tmp_path, reviewer=str(script), max_review_rounds=0)
+        monkeypatch.setattr(agent, "call_llm", counting_llm)
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+        monkeypatch.setattr("argparse.ArgumentParser.parse_args", lambda self: args)
+        fmt.init(color=False, no_color=True)
+
+        agent.main()
+        captured = capsys.readouterr()
+        # Agent runs once, reviewer runs once (round 1 >= 0 triggers cap), accepts
+        assert call_count == 1
+        assert "answer v1" in captured.out
 
     def test_context_preserved_across_rounds(self, tmp_path, monkeypatch):
         """Messages list accumulates across review rounds."""

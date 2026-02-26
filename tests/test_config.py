@@ -59,6 +59,7 @@ def _make_args(**overrides):
         "review_prompt": _UNSET,
         "objective": _UNSET,
         "verify": _UNSET,
+        "max_review_rounds": _UNSET,
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -669,3 +670,97 @@ class TestCLIIntegration:
 
         mock_parser.error.assert_called_once()
         assert "max_turns" in mock_parser.error.call_args[0][0]
+
+
+# ===========================================================================
+# max_review_rounds config integration
+# ===========================================================================
+
+
+class TestMaxReviewRoundsConfig:
+    def test_default_value(self):
+        args = _make_args()
+        apply_config_to_args(args, {})
+        assert args.max_review_rounds == 5
+
+    def test_config_fills_unset(self):
+        args = _make_args()
+        apply_config_to_args(args, {"max_review_rounds": 10})
+        assert args.max_review_rounds == 10
+
+    def test_cli_beats_config(self):
+        args = _make_args(max_review_rounds=10)
+        apply_config_to_args(args, {"max_review_rounds": 3})
+        assert args.max_review_rounds == 10
+
+    def test_project_overrides_global(self, tmp_path, monkeypatch):
+        xdg = tmp_path / "xdg"
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+        _write_toml(xdg / "swival" / "config.toml", "max_review_rounds = 3\n")
+        _write_toml(tmp_path / "project" / "swival.toml", "max_review_rounds = 7\n")
+
+        config = load_config(tmp_path / "project")
+        assert config["max_review_rounds"] == 7
+
+    def test_global_used_when_no_project(self, tmp_path, monkeypatch):
+        xdg = tmp_path / "xdg"
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+        _write_toml(xdg / "swival" / "config.toml", "max_review_rounds = 3\n")
+
+        config = load_config(tmp_path / "project")
+        assert config["max_review_rounds"] == 3
+
+    def test_cli_overrides_project_config(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(tmp_path / "swival.toml", "max_review_rounds = 7\n")
+
+        from swival.agent import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["--max-review-rounds", "10", "question"])
+
+        config = load_config(tmp_path)
+        apply_config_to_args(args, config)
+
+        assert args.max_review_rounds == 10
+
+    def test_dropped_from_session_kwargs(self):
+        kwargs = config_to_session_kwargs(
+            {"max_review_rounds": 5, "provider": "lmstudio"}
+        )
+        assert "max_review_rounds" not in kwargs
+        assert kwargs["provider"] == "lmstudio"
+
+    def test_negative_value_rejected_post_merge(self, tmp_path, monkeypatch):
+        """Negative max_review_rounds in toml is rejected after config merge."""
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(tmp_path / "swival.toml", "max_review_rounds = -1\n")
+
+        from swival.agent import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["--base-dir", str(tmp_path), "question"])
+
+        config = load_config(tmp_path)
+        apply_config_to_args(args, config)
+
+        assert args.max_review_rounds == -1  # config merged fine
+
+        # But main() should reject it via parser.error
+        from unittest.mock import MagicMock, patch
+        from swival import agent
+
+        mock_parser = MagicMock()
+        mock_parser.parse_args.return_value = args
+        mock_parser.error.side_effect = SystemExit(2)
+
+        with patch.object(agent, "build_parser", return_value=mock_parser):
+            with pytest.raises(SystemExit):
+                agent.main()
+
+        mock_parser.error.assert_called_once()
+        assert "max-review-rounds" in mock_parser.error.call_args[0][0]
+
+    def test_in_generate_config(self):
+        content = generate_config()
+        assert "max_review_rounds" in content

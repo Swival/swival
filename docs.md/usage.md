@@ -131,6 +131,8 @@ The REPL is built on `prompt-toolkit`, so it supports input history, history sea
 
 `--reviewer COMMAND` runs an external reviewer after each answer. The command string is shell-split, so you can pass arguments inline (e.g. `--reviewer "swival --reviewer-mode"`). This flag is incompatible with `--repl`.
 
+`--max-review-rounds N` limits how many times the reviewer can request retries and defaults to `5`. Set to `0` to accept the first answer without retries.
+
 `--reviewer-mode` runs Swival as a reviewer process that speaks the reviewer protocol. It reads `base_dir` from the positional argument, the answer from standard input, evaluates with the LLM, and exits 0 (accept), 1 (retry), or 2 (error). Incompatible with `--repl` and `--reviewer`.
 
 `--review-prompt TEXT` appends custom instructions to the built-in review prompt when running in reviewer mode.

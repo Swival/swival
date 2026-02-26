@@ -32,6 +32,7 @@ quiet = false
 # Reviewer settings
 reviewer = "swival --reviewer-mode"
 review_prompt = "Focus on correctness and test coverage"
+max_review_rounds = 10
 objective = "objective.md"
 verify = "verification/working.md"
 ```

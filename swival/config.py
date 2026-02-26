@@ -49,6 +49,7 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "review_prompt": str,
     "objective": str,
     "verify": str,
+    "max_review_rounds": int,
     "proactive_summaries": bool,
 }
 
@@ -95,6 +96,7 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "review_prompt": None,
     "objective": None,
     "verify": None,
+    "max_review_rounds": 5,
     "proactive_summaries": False,
 }
 
@@ -332,7 +334,14 @@ def config_to_session_kwargs(config: dict) -> dict:
     (color, reviewer).
     """
     kwargs = {}
-    _DROP_KEYS = {"color", "reviewer", "review_prompt", "objective", "verify"}
+    _DROP_KEYS = {
+        "color",
+        "reviewer",
+        "review_prompt",
+        "objective",
+        "verify",
+        "max_review_rounds",
+    }
     _INVERT_KEYS = {
         "no_read_guard": "read_guard",
         "no_history": "history",
@@ -395,6 +404,7 @@ def generate_config(project: bool = False) -> str:
         "# quiet = false",
         "",
         "# --- External ---",
+        "# max_review_rounds = 5",
         '# reviewer = "./review.sh"',
         '# review_prompt = "Focus on correctness"',
         '# objective = "objective.md"',

@@ -198,7 +198,11 @@ fi
 </code></pre>
 <h2 id="retry-and-round-limits">Retry And Round Limits</h2>
 <p>Every time the reviewer returns exit code <code>1</code>, Swival appends reviewer feedback as a user message and re-enters the loop with a fresh turn budget. The full conversation stays intact, so the model can build on prior work instead of restarting from scratch.</p>
-<p>To prevent infinite cycles, Swival enforces a hard limit of five review rounds. If round five still returns code <code>1</code>, Swival accepts the latest answer and emits a warning when diagnostics are enabled.</p>
+<p>To prevent infinite cycles, Swival limits the number of review rounds. The default is five. You can change this with <code>--max-review-rounds</code> or <code>max_review_rounds</code> in config.</p>
+<pre><code class="language-sh">swival &quot;task&quot; --reviewer ./review.sh --max-review-rounds 10
+</code></pre>
+<p>Setting <code>--max-review-rounds 0</code> disables retries entirely: the reviewer still runs once, but a retry request is immediately capped and the answer is accepted.</p>
+<p>If the limit is reached and the reviewer still returns code <code>1</code>, Swival accepts the latest answer and emits a warning when diagnostics are enabled.</p>
 <h2 id="failure-handling">Failure Handling</h2>
 <p>Startup validation fails fast if the reviewer executable is missing or non-executable.</p>
 <p>After startup, reviewer failures are non-fatal. Timeout failures, process spawn failures, and crash-style exits all degrade to reviewer error handling, which means the current answer is accepted and returned.</p>

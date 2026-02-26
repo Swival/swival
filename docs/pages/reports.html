@@ -75,6 +75,7 @@
     &quot;context_length&quot;: null,
     &quot;yolo&quot;: false,
     &quot;allowed_commands&quot;: [],
+    &quot;max_review_rounds&quot;: 5,
     &quot;skills_discovered&quot;: [],
     &quot;instructions_loaded&quot;: []
   },
@@ -106,7 +107,7 @@
 <h3 id="top-level-fields">Top-Level Fields</h3>
 <p><code>version</code> is the schema version and is currently <code>1</code>. <code>timestamp</code> is the run completion time in UTC ISO 8601 format. <code>task</code> is the original question string passed on the command line. <code>model</code> is the resolved model identifier that was actually used. <code>provider</code> is one of <code>lmstudio</code>, <code>huggingface</code>, or <code>openrouter</code>. <code>settings</code> captures run configuration. <code>result</code> captures outcome and exit semantics. <code>stats</code> captures aggregate counters. <code>timeline</code> captures ordered event records.</p>
 <h3 id="settings"><code>settings</code></h3>
-<p><code>temperature</code> stores the sampling temperature or <code>null</code> when omitted. <code>top_p</code> stores nucleus sampling. <code>seed</code> stores the random seed or <code>null</code>. <code>max_turns</code> and <code>max_output_tokens</code> store turn and output-token limits. <code>context_length</code> stores effective context length after provider resolution. <code>yolo</code> indicates unrestricted mode. <code>allowed_commands</code> records the configured command whitelist as sorted basenames. <code>skills_discovered</code> records skill names discovered at startup. <code>instructions_loaded</code> records loaded instruction files as absolute paths (e.g. the user-level <code>AGENTS.md</code> from <code>~/.config/swival/</code> and the project-level files).</p>
+<p><code>temperature</code> stores the sampling temperature or <code>null</code> when omitted. <code>top_p</code> stores nucleus sampling. <code>seed</code> stores the random seed or <code>null</code>. <code>max_turns</code> and <code>max_output_tokens</code> store turn and output-token limits. <code>context_length</code> stores effective context length after provider resolution. <code>yolo</code> indicates unrestricted mode. <code>allowed_commands</code> records the configured command whitelist as sorted basenames. <code>max_review_rounds</code> records the reviewer retry limit. <code>skills_discovered</code> records skill names discovered at startup. <code>instructions_loaded</code> records loaded instruction files as absolute paths (e.g. the user-level <code>AGENTS.md</code> from <code>~/.config/swival/</code> and the project-level files).</p>
 <h3 id="result"><code>result</code></h3>
 <p><code>outcome</code> is <code>success</code>, <code>exhausted</code>, or <code>error</code>. <code>answer</code> contains final assistant text or <code>null</code> when unavailable. <code>exit_code</code> is the process exit code, which is <code>0</code> for success, <code>2</code> for turn exhaustion, and <code>1</code> for runtime failure. <code>error_message</code> appears only when <code>outcome</code> is <code>error</code>.</p>
 <p>A <code>success</code> outcome means the model produced a final non-tool response. An <code>exhausted</code> outcome means the run reached <code>max_turns</code> before completing. An <code>error</code> outcome means runtime setup or execution failed.</p>
