@@ -30,7 +30,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://swival.github.io/swival/"
+Homepage = "https://swival.dev/"
 Repository = "https://github.com/swival/swival"
 Issues = "https://github.com/swival/swival/issues"
 
