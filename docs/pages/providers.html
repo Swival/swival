@@ -102,7 +102,7 @@ swival --provider openrouter --model z-ai/glm-5 &quot;task&quot;
 <pre><code class="language-sh">swival --provider openrouter --model z-ai/glm-5 \
     --max-context-tokens 131072 &quot;task&quot;
 </code></pre>
-<p>Internally, Swival normalizes OpenRouter models to LiteLLM's <code>openrouter/...</code> format. If you already pass a fully prefixed value like <code>openrouter/z-ai/glm-5</code>, Swival keeps it stable instead of adding another prefix.</p>
+<p>Internally, Swival normalizes OpenRouter models to LiteLLM's <code>openrouter/...</code> format. If the model identifier starts with the literal double prefix <code>openrouter/openrouter/</code>, Swival strips the redundant prefix so LiteLLM does not see a stutter. Any other <code>openrouter/</code> prefix (e.g. <code>openrouter/z-ai/glm-5</code>) is treated as part of the model path and gets prefixed normally, so you should pass bare identifiers like <code>z-ai/glm-5</code>.</p>
 <h2 id="adding-more-providers-later">Adding More Providers Later</h2>
 <p>Because API calls are already abstracted behind LiteLLM, adding a provider is mostly a matter of argument validation, model normalization, and credential wiring. The provider-specific branch in <code>call_llm()</code> is intentionally compact so new providers can be added without changing the rest of the agent loop.</p>
 <p>In practice, each provider branch is only about ten lines of routing logic.</p>

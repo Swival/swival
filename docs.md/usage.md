@@ -163,4 +163,8 @@ See [MCP](mcp.md) for full configuration details.
 
 Neither flag requires a question argument. Both refuse to overwrite an existing config file.
 
+### Other Flags
+
+`--version` prints the version and exits.
+
 For the full report schema and analysis workflow, see [Reports](reports.md). For the reviewer protocol and examples, see [Reviews](reviews.md).

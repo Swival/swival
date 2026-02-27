@@ -6,7 +6,7 @@ Each MCP tool is namespaced as `mcp__<server_name>__<tool_name>` to avoid collis
 
 MCP servers can use stdio transport (local subprocess) or SSE transport (remote HTTP). Both are configured through `swival.toml` or `.mcp.json`.
 
-If an MCP server fails to connect at startup, Swival logs a warning and continues without that server's tools. If a server crashes mid-session, its tools are marked as degraded and return an error message instead of blocking the agent loop. Tool name collisions within a server cause that server's tools to be skipped entirely, with a warning.
+If an MCP server fails to connect at startup, Swival logs a warning and continues without that server's tools. If a server crashes mid-session, its tools are marked as degraded and return an error message instead of blocking the agent loop. Tool name collisions across servers cause the colliding server's tools to be skipped entirely, with a warning.
 
 When MCP tool schemas consume more than 30% of the context window, Swival warns. At 50%, it iteratively drops the most expensive server's tools until usage is under budget.
 

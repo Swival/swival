@@ -81,6 +81,6 @@ Binary MIME types are rejected. Response bodies are capped at 5 MB before conver
 
 Several hard caps keep the conversation bounded. File reads are limited to 50 KB per call and lines are truncated at 2,000 characters. Directory and grep-style listings are capped at 100 results.
 
-Command output is capped at 10 KB inline, with larger output written to `.swival/` for paginated reads and auto-cleaned after roughly ten minutes. MCP tool output uses higher thresholds: 20 KB inline, with larger output written to `.swival/` and hard-capped at 10 MB before writing. MCP error output is inline-capped at 20 KB without file save.
+Command output is capped at 10 KB inline, with larger output written to `.swival/` (hard-capped at 1 MB) for paginated reads and auto-cleaned after roughly ten minutes. MCP tool output uses higher thresholds: 20 KB inline, with larger output written to `.swival/` and hard-capped at 10 MB before writing. MCP error output is inline-capped at 20 KB without file save.
 
 URL fetch output is capped at 50 KB inline, with larger output saved to files. Response history is written to `.swival/HISTORY.md` until that file reaches 500 KB, after which new entries are skipped.

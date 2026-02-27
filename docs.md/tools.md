@@ -74,7 +74,7 @@ swival --allowed-commands ls,git,python3 "Run the tests"
 
 In whitelist mode, the command must be passed as an array of arguments, not as a shell string. Swival resolves each allowed command to an absolute path at startup and rejects commands that resolve inside the base directory, so the model cannot edit and execute workspace scripts in one loop.
 
-Timeout defaults to 30 seconds and is clamped to a maximum of 120 seconds. Inline command output is capped at 10 KB. Larger output is written to `.swival/cmd_output_*.txt`, and those files are cleaned up automatically after roughly ten minutes.
+Timeout defaults to 30 seconds and is clamped to a maximum of 120 seconds. Inline command output is capped at 10 KB. Larger output is written to `.swival/cmd_output_*.txt` and hard-capped at 1 MB before writing to disk. Those files are cleaned up automatically after roughly ten minutes.
 
 In YOLO mode, command execution is unrestricted and Swival also accepts shell command strings through `/bin/sh -c` on Unix or `cmd.exe /c` on Windows.
 

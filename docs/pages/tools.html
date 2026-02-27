@@ -92,7 +92,7 @@
 <pre><code class="language-sh">swival --allowed-commands ls,git,python3 &quot;Run the tests&quot;
 </code></pre>
 <p>In whitelist mode, the command must be passed as an array of arguments, not as a shell string. Swival resolves each allowed command to an absolute path at startup and rejects commands that resolve inside the base directory, so the model cannot edit and execute workspace scripts in one loop.</p>
-<p>Timeout defaults to 30 seconds and is clamped to a maximum of 120 seconds. Inline command output is capped at 10 KB. Larger output is written to <code>.swival/cmd_output_*.txt</code>, and those files are cleaned up automatically after roughly ten minutes.</p>
+<p>Timeout defaults to 30 seconds and is clamped to a maximum of 120 seconds. Inline command output is capped at 10 KB. Larger output is written to <code>.swival/cmd_output_*.txt</code> and hard-capped at 1 MB before writing to disk. Those files are cleaned up automatically after roughly ten minutes.</p>
 <p>In YOLO mode, command execution is unrestricted and Swival also accepts shell command strings through <code>/bin/sh -c</code> on Unix or <code>cmd.exe /c</code> on Windows.</p>
 <h2 id="use_skill"><code>use_skill</code></h2>
 <p>When skills are discovered, Swival exposes <code>use_skill</code> so the model can load full instructions on demand. The system prompt only includes a compact skill catalog at startup, and full skill instructions are injected only when the tool is called. This keeps the default prompt smaller while still allowing rich task-specific guidance.</p>
