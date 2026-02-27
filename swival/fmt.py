@@ -166,12 +166,11 @@ def review_accepted(review_round: int) -> None:
 # -- Diagnostics -------------------------------------------------------------
 
 
-def model_info(msg: str) -> None:
-    _console.print(Text(f"  {msg}", style="dim"))
-
-
 def info(msg: str) -> None:
     _console.print(Text(f"  {msg}", style="dim"))
+
+
+model_info = info
 
 
 def context_stats(label: str, tokens: int) -> None:
@@ -182,8 +181,7 @@ def think_summary(line: str) -> None:
     _console.print(Text(f"  {line}", style="dim"))
 
 
-def todo_summary(line: str) -> None:
-    _console.print(Text(f"  {line}", style="dim"))
+todo_summary = think_summary
 
 
 def warning(msg: str) -> None:

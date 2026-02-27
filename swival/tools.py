@@ -1346,10 +1346,11 @@ def _save_large_output(
         scratch.mkdir(parents=True, exist_ok=True)
     except OSError:
         # Can't create dir — fall back to truncated inline
-        truncated = output.encode("utf-8")[:MAX_INLINE_OUTPUT].decode(
-            "utf-8", errors="replace"
+        return _safe_truncate(
+            output,
+            MAX_INLINE_OUTPUT,
+            "\n[output truncated — failed to create .swival/ directory]",
         )
-        return truncated + "\n[output truncated — failed to create .swival/ directory]"
 
     filename = f"cmd_output_{uuid.uuid4().hex[:12]}.txt"
     filepath = scratch / filename
@@ -1358,10 +1359,11 @@ def _save_large_output(
     try:
         filepath.write_text(output, encoding="utf-8")
     except OSError:
-        truncated = output.encode("utf-8")[:MAX_INLINE_OUTPUT].decode(
-            "utf-8", errors="replace"
+        return _safe_truncate(
+            output,
+            MAX_INLINE_OUTPUT,
+            "\n[output truncated — failed to write temp file]",
         )
-        return truncated + "\n[output truncated — failed to write temp file]"
 
     def _cleanup():
         try:
@@ -1479,13 +1481,9 @@ def _capture_process(proc: subprocess.Popen, timeout: int, base_dir: str) -> str
 _SHELL_CHARS = set("|&;><$`\\\"'*?~#!{}()[]\n\r")
 
 
-def _is_safe_to_split(s: str) -> bool:
-    """Check if a string can be safely split on whitespace into a command array.
-
-    Returns False if the string contains shell metacharacters that would make
-    naive whitespace splitting dangerous or semantically wrong.
-    """
-    return not (_SHELL_CHARS & set(s))
+def _safe_truncate(text: str, limit: int, suffix: str) -> str:
+    """Truncate text to *limit* bytes (UTF-8 safe) and append *suffix*."""
+    return text.encode("utf-8")[:limit].decode("utf-8", errors="replace") + suffix
 
 
 def _run_shell_command(command: str, base_dir: str, timeout: int) -> str:
@@ -1555,7 +1553,7 @@ def _run_command(
             if unrestricted:
                 return _run_shell_command(command, base_dir, timeout)
             # No shell metacharacters — safe to split on whitespace.
-            if _is_safe_to_split(command):
+            if not (_SHELL_CHARS & set(command)):
                 repaired_command = command.split()
             else:
                 return (
@@ -1667,6 +1665,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
     """
     yolo = kwargs.get("yolo", False)
     extra_write_roots = kwargs.get("extra_write_roots", ())
+    skill_read_roots = kwargs.get("skill_read_roots", ())
     file_tracker = kwargs.get("file_tracker")
 
     # MCP tool dispatch
@@ -1679,12 +1678,10 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             # Cap error output to prevent giant error payloads from
             # stuffing context. Errors are diagnostic, not data to
             # page through, so no file save.
-            result_bytes = result.encode("utf-8")
-            if len(result_bytes) > MCP_INLINE_LIMIT:
-                result = result_bytes[:MCP_INLINE_LIMIT].decode(
-                    "utf-8", errors="replace"
+            if len(result.encode("utf-8")) > MCP_INLINE_LIMIT:
+                result = _safe_truncate(
+                    result, MCP_INLINE_LIMIT, "\n[error output truncated]"
                 )
-                result += "\n[error output truncated]"
             return result
         return _guard_mcp_output(result, base_dir, name)
 
@@ -1715,7 +1712,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             offset=offset,
             limit=limit,
             tail=tail,
-            extra_read_roots=kwargs.get("skill_read_roots", ()),
+            extra_read_roots=skill_read_roots,
             extra_write_roots=extra_write_roots,
             unrestricted=yolo,
             tracker=file_tracker,
@@ -1755,7 +1752,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             pattern=args["pattern"],
             path=args.get("path", "."),
             base_dir=base_dir,
-            extra_read_roots=kwargs.get("skill_read_roots", ()),
+            extra_read_roots=skill_read_roots,
             extra_write_roots=extra_write_roots,
             unrestricted=yolo,
         )
@@ -1766,7 +1763,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             base_dir=base_dir,
             include=args.get("include"),
             case_insensitive=args.get("case_insensitive", False),
-            extra_read_roots=kwargs.get("skill_read_roots", ()),
+            extra_read_roots=skill_read_roots,
             extra_write_roots=extra_write_roots,
             unrestricted=yolo,
         )

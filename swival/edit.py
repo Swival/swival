@@ -34,6 +34,17 @@ def _normalize_unicode(s: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _prepare_fuzzy(
+    content: str, old_string: str, normalize=None
+) -> tuple[list[str], list[str], int]:
+    """Shared prep for fuzzy matching: split lines, apply normalize + strip."""
+    content_lines = content.split("\n")
+    old_lines = old_string.split("\n")
+    prep = normalize or (lambda s: s)
+    prepped_old = [prep(line.strip()) for line in old_lines]
+    return content_lines, prepped_old, len(old_lines)
+
+
 def _find_fuzzy(
     content: str, old_string: str, normalize=None
 ) -> tuple[int, int] | None:
@@ -44,15 +55,12 @@ def _find_fuzzy(
 
     Returns (start_index, end_index) into content, or None.
     """
-    content_lines = content.split("\n")
-    old_lines = old_string.split("\n")
-    old_len = len(old_lines)
+    content_lines, prepped_old, old_len = _prepare_fuzzy(content, old_string, normalize)
 
     if old_len == 0:
         return None
 
     prep = normalize or (lambda s: s)
-    prepped_old = [prep(line.strip()) for line in old_lines]
 
     for i in range(len(content_lines) - old_len + 1):
         if all(
@@ -69,13 +77,10 @@ def _find_fuzzy(
 
 def _count_fuzzy_matches(content: str, old_string: str, normalize=None) -> int:
     """Count how many times old_string fuzzy-matches in content."""
-    content_lines = content.split("\n")
-    old_lines = old_string.split("\n")
-    old_len = len(old_lines)
+    content_lines, prepped_old, old_len = _prepare_fuzzy(content, old_string, normalize)
     count = 0
 
     prep = normalize or (lambda s: s)
-    prepped_old = [prep(line.strip()) for line in old_lines]
 
     for i in range(len(content_lines) - old_len + 1):
         if all(

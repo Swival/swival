@@ -13,7 +13,7 @@ import pytest
 from swival.tools import (
     safe_resolve,
     _is_within_base,
-    _is_safe_to_split,
+    _SHELL_CHARS,
     _read_file,
     _write_file,
     _edit_file,
@@ -810,51 +810,55 @@ class TestShellStringWindows:
 # ---------------------------------------------------------------------------
 
 
+def _is_safe(s: str) -> bool:
+    return not (_SHELL_CHARS & set(s))
+
+
 class TestIsSafeToSplit:
     def test_plain_command(self):
-        assert _is_safe_to_split("ls -la src/")
+        assert _is_safe("ls -la src/")
 
     def test_pipe_rejected(self):
-        assert not _is_safe_to_split("echo hello | cat")
+        assert not _is_safe("echo hello | cat")
 
     def test_redirect_rejected(self):
-        assert not _is_safe_to_split("echo hello > out.txt")
+        assert not _is_safe("echo hello > out.txt")
 
     def test_semicolon_rejected(self):
-        assert not _is_safe_to_split("echo a; echo b")
+        assert not _is_safe("echo a; echo b")
 
     def test_dollar_rejected(self):
-        assert not _is_safe_to_split("echo $HOME")
+        assert not _is_safe("echo $HOME")
 
     def test_backtick_rejected(self):
-        assert not _is_safe_to_split("echo `whoami`")
+        assert not _is_safe("echo `whoami`")
 
     def test_backslash_rejected(self):
-        assert not _is_safe_to_split("echo C:\\Users")
+        assert not _is_safe("echo C:\\Users")
 
     def test_single_quote_rejected(self):
-        assert not _is_safe_to_split("echo 'hello world'")
+        assert not _is_safe("echo 'hello world'")
 
     def test_double_quote_rejected(self):
-        assert not _is_safe_to_split('echo "hello world"')
+        assert not _is_safe('echo "hello world"')
 
     def test_glob_star_rejected(self):
-        assert not _is_safe_to_split("ls *.py")
+        assert not _is_safe("ls *.py")
 
     def test_newline_rejected(self):
-        assert not _is_safe_to_split("echo hello\necho world")
+        assert not _is_safe("echo hello\necho world")
 
     def test_carriage_return_rejected(self):
-        assert not _is_safe_to_split("echo hello\recho world")
+        assert not _is_safe("echo hello\recho world")
 
     def test_crlf_rejected(self):
-        assert not _is_safe_to_split("echo hello\r\necho world")
+        assert not _is_safe("echo hello\r\necho world")
 
     def test_empty_string(self):
-        assert _is_safe_to_split("")
+        assert _is_safe("")
 
     def test_tabs_allowed(self):
-        assert _is_safe_to_split("ls\t-la")
+        assert _is_safe("ls\t-la")
 
 
 class TestAutoSplitStringCommand:

@@ -10,6 +10,19 @@ from .todo import TodoState
 from .tracker import FileAccessTracker
 
 
+def _resolve_dir_list(dirs: list, label: str) -> list[Path]:
+    """Resolve a list of directory strings to absolute Paths with validation."""
+    result = []
+    for d in dirs:
+        p = Path(d).expanduser().resolve()
+        if not p.is_dir():
+            raise ConfigError(f"{label} path is not a directory: {d}")
+        if p == Path(p.anchor):
+            raise ConfigError(f"{label} cannot be the filesystem root: {d}")
+        result.append(p)
+    return result
+
+
 @dataclass
 class Result:
     """Result of a session run or ask call."""
@@ -135,25 +148,11 @@ class Session:
             verbose=self.verbose,
         )
 
-        # Resolve --add-dir paths
-        self._allowed_dir_paths = []
-        for d in self.allowed_dirs:
-            p = Path(d).expanduser().resolve()
-            if not p.is_dir():
-                raise ConfigError(f"allowed_dirs path is not a directory: {d}")
-            if p == Path(p.anchor):
-                raise ConfigError(f"allowed_dirs cannot be the filesystem root: {d}")
-            self._allowed_dir_paths.append(p)
-
-        # Resolve --add-dir-ro paths
-        self._allowed_dir_ro_paths = []
-        for d in self.allowed_dirs_ro:
-            p = Path(d).expanduser().resolve()
-            if not p.is_dir():
-                raise ConfigError(f"allowed_dirs_ro path is not a directory: {d}")
-            if p == Path(p.anchor):
-                raise ConfigError(f"allowed_dirs_ro cannot be the filesystem root: {d}")
-            self._allowed_dir_ro_paths.append(p)
+        # Resolve --add-dir and --add-dir-ro paths
+        self._allowed_dir_paths = _resolve_dir_list(self.allowed_dirs, "allowed_dirs")
+        self._allowed_dir_ro_paths = _resolve_dir_list(
+            self.allowed_dirs_ro, "allowed_dirs_ro"
+        )
 
         # Resolve commands
         self._resolved_commands = resolve_commands(

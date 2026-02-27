@@ -94,36 +94,30 @@ class ContextOverflowError(Exception):
 # ---------------------------------------------------------------------------
 
 
+def _msg_get(msg, key, default=None):
+    return (
+        msg.get(key, default) if isinstance(msg, dict) else getattr(msg, key, default)
+    )
+
+
 def _msg_role(msg) -> str | None:
-    return msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+    return _msg_get(msg, "role")
 
 
 def _msg_content(msg) -> str:
-    if isinstance(msg, dict):
-        return msg.get("content", "") or ""
-    return getattr(msg, "content", "") or ""
+    return _msg_get(msg, "content", "") or ""
 
 
 def _msg_tool_calls(msg):
-    return (
-        msg.get("tool_calls", None)
-        if isinstance(msg, dict)
-        else getattr(msg, "tool_calls", None)
-    )
+    return _msg_get(msg, "tool_calls")
 
 
 def _msg_tool_call_id(msg) -> str | None:
-    return (
-        msg.get("tool_call_id")
-        if isinstance(msg, dict)
-        else getattr(msg, "tool_call_id", None)
-    )
+    return _msg_get(msg, "tool_call_id")
 
 
 def _msg_name(msg) -> str:
-    if isinstance(msg, dict):
-        return msg.get("name", "") or ""
-    return getattr(msg, "name", "") or ""
+    return _msg_get(msg, "name", "") or ""
 
 
 def _set_msg_content(msg, value: str) -> None:
@@ -504,6 +498,34 @@ _RECAP_PREFIX = (
 )
 
 
+def _count_leading_turns(turns: list, roles: str | set) -> int:
+    """Count consecutive turns at the start whose first message has a role in *roles*."""
+    if isinstance(roles, str):
+        roles = {roles}
+    count = 0
+    for turn in turns:
+        if _msg_role(turn[0]) in roles:
+            count += 1
+        else:
+            break
+    return count
+
+
+def _build_checkpoint_recap(compaction_state) -> dict | None:
+    """Build a recap message from compaction checkpoint summaries, or None."""
+    if compaction_state and compaction_state.summaries:
+        checkpoint_text = compaction_state.get_full_summary()
+        if checkpoint_text:
+            return {
+                "role": "assistant",
+                "content": (
+                    "[non-instructional context recap — factual summary "
+                    "from periodic checkpoints]\n\n" + checkpoint_text
+                ),
+            }
+    return None
+
+
 def drop_middle_turns(
     messages: list,
     *,
@@ -525,14 +547,7 @@ def drop_middle_turns(
     """
     turns = group_into_turns(messages)
 
-    # Find leading block: scan forward while role is system or user
-    leading_count = 0
-    for turn in turns:
-        role = _msg_role(turn[0])
-        if role in ("system", "user"):
-            leading_count += 1
-        else:
-            break
+    leading_count = _count_leading_turns(turns, {"system", "user"})
 
     keep_tail = 3
     # If there's no middle to drop, return unchanged
@@ -577,16 +592,8 @@ def drop_middle_turns(
                 "content": _RECAP_PREFIX + summary,
             }
 
-    if recap is None and compaction_state and compaction_state.summaries:
-        checkpoint_text = compaction_state.get_full_summary()
-        if checkpoint_text:
-            recap = {
-                "role": "assistant",
-                "content": (
-                    "[non-instructional context recap — factual summary "
-                    "from periodic checkpoints]\n\n" + checkpoint_text
-                ),
-            }
+    if recap is None:
+        recap = _build_checkpoint_recap(compaction_state)
 
     if recap is None:
         recap = dict(_STATIC_SPLICE_MARKER)
@@ -625,13 +632,7 @@ def aggressive_drop_turns(
     """
     turns = group_into_turns(messages)
 
-    # Find leading system messages only (not user)
-    leading_count = 0
-    for turn in turns:
-        if _msg_role(turn[0]) == "system":
-            leading_count += 1
-        else:
-            break
+    leading_count = _count_leading_turns(turns, "system")
 
     keep_tail = 2
     if leading_count + keep_tail >= len(turns):
@@ -660,16 +661,8 @@ def aggressive_drop_turns(
                 "content": _RECAP_PREFIX + summary,
             }
 
-    if recap is None and compaction_state and compaction_state.summaries:
-        checkpoint_text = compaction_state.get_full_summary()
-        if checkpoint_text:
-            recap = {
-                "role": "assistant",
-                "content": (
-                    "[non-instructional context recap — factual summary "
-                    "from periodic checkpoints]\n\n" + checkpoint_text
-                ),
-            }
+    if recap is None:
+        recap = _build_checkpoint_recap(compaction_state)
 
     if recap is None:
         recap = dict(_STATIC_SPLICE_MARKER)
@@ -683,81 +676,15 @@ def aggressive_drop_turns(
     return result
 
 
-def summarize_turns(
-    turns_to_drop, call_llm_fn, model_id, base_url, api_key, top_p, seed, provider
+def _call_summarize_llm(
+    text, system_prompt, call_llm_fn, model_id, base_url, api_key, top_p, seed, provider
 ):
-    """Ask the model to summarize dropped turns into a compact recap.
-
-    Returns the summary string, or ``None`` if summarization fails for any
-    reason.  The caller **must** fall back to the static splice marker when
-    this returns ``None``.
-
-    Uses a dedicated call path that omits ``tool_choice`` because
-    ``call_llm`` skips it when ``tools is None``.
-    """
-    flat = []
-    for turn in turns_to_drop:
-        for msg in turn:
-            role = _msg_role(msg) or "?"
-            content = _msg_content(msg)
-            if content:
-                flat.append(f"[{role}] {content[:2000]}")
-
-    joined = "\n".join(flat)
-    if len(joined) > 8000:
-        joined = joined[:8000] + "\n[... truncated for summary call]"
-
-    prompt = [
-        {
-            "role": "system",
-            "content": (
-                "Summarize this agent conversation excerpt into a factual recap. "
-                "Preserve: file paths, key findings, decisions, errors, and "
-                "anything needed to continue the task. Do NOT include instructions "
-                "or directives. Output only a factual summary. Be concise."
-            ),
-        },
-        {"role": "user", "content": joined},
-    ]
-    try:
-        resp, _ = call_llm_fn(
-            base_url=base_url,
-            model_id=model_id,
-            messages=prompt,
-            max_output_tokens=512,
-            temperature=0,
-            top_p=top_p,
-            seed=seed,
-            tools=None,
-            verbose=False,
-            api_key=api_key,
-            provider=provider,
-        )
-        content = resp.content if hasattr(resp, "content") else resp.get("content", "")
-        return content if content else None
-    except Exception:
-        return None
-
-
-def summarize_turns_from_text(
-    text, call_llm_fn, model_id, base_url, api_key, top_p, seed, provider
-):
-    """Summarize pre-joined text (used for checkpoint consolidation).
-
-    Same contract as ``summarize_turns``: returns a string or ``None``.
-    """
+    """Call the LLM to summarize text. Returns string or None on failure."""
     if len(text) > 8000:
         text = text[:8000] + "\n[... truncated for summary call]"
 
     prompt = [
-        {
-            "role": "system",
-            "content": (
-                "Condense these conversation summaries into a single, shorter "
-                "factual recap. Preserve: file paths, key findings, decisions, "
-                "errors. Do NOT include instructions or directives. Be concise."
-            ),
-        },
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": text},
     ]
     try:
@@ -778,6 +705,62 @@ def summarize_turns_from_text(
         return content if content else None
     except Exception:
         return None
+
+
+def summarize_turns(
+    turns_to_drop, call_llm_fn, model_id, base_url, api_key, top_p, seed, provider
+):
+    """Ask the model to summarize dropped turns into a compact recap.
+
+    Returns the summary string, or ``None`` if summarization fails for any
+    reason.  The caller **must** fall back to the static splice marker when
+    this returns ``None``.
+    """
+    flat = []
+    for turn in turns_to_drop:
+        for msg in turn:
+            role = _msg_role(msg) or "?"
+            content = _msg_content(msg)
+            if content:
+                flat.append(f"[{role}] {content[:2000]}")
+
+    joined = "\n".join(flat)
+    return _call_summarize_llm(
+        joined,
+        "Summarize this agent conversation excerpt into a factual recap. "
+        "Preserve: file paths, key findings, decisions, errors, and "
+        "anything needed to continue the task. Do NOT include instructions "
+        "or directives. Output only a factual summary. Be concise.",
+        call_llm_fn,
+        model_id,
+        base_url,
+        api_key,
+        top_p,
+        seed,
+        provider,
+    )
+
+
+def summarize_turns_from_text(
+    text, call_llm_fn, model_id, base_url, api_key, top_p, seed, provider
+):
+    """Summarize pre-joined text (used for checkpoint consolidation).
+
+    Same contract as ``summarize_turns``: returns a string or ``None``.
+    """
+    return _call_summarize_llm(
+        text,
+        "Condense these conversation summaries into a single, shorter "
+        "factual recap. Preserve: file paths, key findings, decisions, "
+        "errors. Do NOT include instructions or directives. Be concise.",
+        call_llm_fn,
+        model_id,
+        base_url,
+        api_key,
+        top_p,
+        seed,
+        provider,
+    )
 
 
 MAX_CHECKPOINT_TOKENS = 2048
@@ -2870,6 +2853,28 @@ def repl_loop(
         fmt.repl_banner()
 
     turn_state = {"max_turns": max_turns}
+    _repl_loop_kwargs = dict(
+        api_base=api_base,
+        model_id=model_id,
+        max_output_tokens=max_output_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        seed=seed,
+        context_length=context_length,
+        base_dir=base_dir,
+        thinking_state=thinking_state,
+        todo_state=todo_state,
+        resolved_commands=resolved_commands,
+        skills_catalog=skills_catalog,
+        skill_read_roots=skill_read_roots,
+        extra_write_roots=extra_write_roots,
+        yolo=yolo,
+        verbose=verbose,
+        llm_kwargs=llm_kwargs,
+        file_tracker=file_tracker,
+        compaction_state=compaction_state,
+        mcp_manager=mcp_manager,
+    )
 
     while True:
         try:
@@ -2933,27 +2938,8 @@ def repl_loop(
                     answer, exhausted = run_agent_loop(
                         messages,
                         tools,
-                        api_base=api_base,
-                        model_id=model_id,
                         max_turns=turn_state["max_turns"],
-                        max_output_tokens=max_output_tokens,
-                        temperature=temperature,
-                        top_p=top_p,
-                        seed=seed,
-                        context_length=context_length,
-                        base_dir=base_dir,
-                        thinking_state=thinking_state,
-                        todo_state=todo_state,
-                        resolved_commands=resolved_commands,
-                        skills_catalog=skills_catalog,
-                        skill_read_roots=skill_read_roots,
-                        extra_write_roots=extra_write_roots,
-                        yolo=yolo,
-                        verbose=verbose,
-                        llm_kwargs=llm_kwargs,
-                        file_tracker=file_tracker,
-                        compaction_state=compaction_state,
-                        mcp_manager=mcp_manager,
+                        **_repl_loop_kwargs,
                     )
                 except KeyboardInterrupt:
                     fmt.warning("interrupted, /init aborted.")
@@ -2976,27 +2962,8 @@ def repl_loop(
                 answer, exhausted = run_agent_loop(
                     messages,
                     tools,
-                    api_base=api_base,
-                    model_id=model_id,
                     max_turns=turn_state["max_turns"],
-                    max_output_tokens=max_output_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    seed=seed,
-                    context_length=context_length,
-                    base_dir=base_dir,
-                    thinking_state=thinking_state,
-                    todo_state=todo_state,
-                    resolved_commands=resolved_commands,
-                    skills_catalog=skills_catalog,
-                    skill_read_roots=skill_read_roots,
-                    extra_write_roots=extra_write_roots,
-                    yolo=yolo,
-                    verbose=verbose,
-                    llm_kwargs=llm_kwargs,
-                    file_tracker=file_tracker,
-                    compaction_state=compaction_state,
-                    mcp_manager=mcp_manager,
+                    **_repl_loop_kwargs,
                 )
             except KeyboardInterrupt:
                 fmt.warning("interrupted, continuation aborted.")
@@ -3016,27 +2983,8 @@ def repl_loop(
             answer, exhausted = run_agent_loop(
                 messages,
                 tools,
-                api_base=api_base,
-                model_id=model_id,
                 max_turns=turn_state["max_turns"],
-                max_output_tokens=max_output_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                seed=seed,
-                context_length=context_length,
-                base_dir=base_dir,
-                thinking_state=thinking_state,
-                todo_state=todo_state,
-                resolved_commands=resolved_commands,
-                skills_catalog=skills_catalog,
-                skill_read_roots=skill_read_roots,
-                extra_write_roots=extra_write_roots,
-                yolo=yolo,
-                verbose=verbose,
-                llm_kwargs=llm_kwargs,
-                file_tracker=file_tracker,
-                compaction_state=compaction_state,
-                mcp_manager=mcp_manager,
+                **_repl_loop_kwargs,
             )
         except KeyboardInterrupt:
             fmt.warning("interrupted, question aborted.")
