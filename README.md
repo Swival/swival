@@ -52,7 +52,7 @@ You can also point it at a dedicated endpoint with `--base-url` and `--api-key`.
 export OPENROUTER_API_KEY=sk_or_...
 uv tool install swival
 swival "Refactor the error handling in src/api.py" \
-    --provider openrouter --model openrouter/free
+    --provider openrouter --model z-ai/glm-5
 ```
 
 ### Interactive sessions

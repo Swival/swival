@@ -62,14 +62,14 @@ For OpenRouter, `--model` is required and authentication comes from `OPENROUTER_
 
 ```sh
 export OPENROUTER_API_KEY=sk_or_your_token_here
-swival --provider openrouter --model openrouter/free "task"
+swival --provider openrouter --model z-ai/glm-5 "task"
 ```
 
 If you use an OpenRouter-compatible custom endpoint, set `--base-url`.
 
 ```sh
 swival --provider openrouter \
-    --model openrouter/free \
+    --model z-ai/glm-5 \
     --base-url https://custom.openrouter.endpoint \
     --api-key sk_or_key \
     "task"
@@ -78,11 +78,11 @@ swival --provider openrouter \
 OpenRouter models vary widely in context limits, so you should set `--max-context-tokens` to match the model you chose.
 
 ```sh
-swival --provider openrouter --model openrouter/free \
+swival --provider openrouter --model z-ai/glm-5 \
     --max-context-tokens 131072 "task"
 ```
 
-Internally, Swival normalizes OpenRouter models to LiteLLM's `openrouter/...` format. If you already pass a fully prefixed value like `openrouter/openrouter/free`, Swival keeps it stable instead of adding another prefix.
+Internally, Swival normalizes OpenRouter models to LiteLLM's `openrouter/...` format. If you already pass a fully prefixed value like `openrouter/z-ai/glm-5`, Swival keeps it stable instead of adding another prefix.
 
 ## Adding More Providers Later
 

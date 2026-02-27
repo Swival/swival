@@ -100,12 +100,12 @@
 <pre><code class="language-sh">export OPENROUTER_API_KEY=sk_or_your_token_here
 </code></pre>
 <p>Then pass the model you want to use. OpenRouter has both free and paid tiers.</p>
-<pre><code class="language-sh">swival &quot;Hello world&quot; --provider openrouter --model openrouter/free
+<pre><code class="language-sh">swival &quot;Hello world&quot; --provider openrouter --model z-ai/glm-5
 </code></pre>
 <p>OpenRouter models vary widely in context limits, so you should set <code>--max-context-tokens</code> to match the model you chose. Without it, Swival falls back to a conservative default that may not use the full window your model supports.</p>
 <pre><code class="language-sh">swival &quot;Hello world&quot; \
     --provider openrouter \
-    --model openrouter/free \
+    --model z-ai/glm-5 \
     --max-context-tokens 131072
 </code></pre>
 <p>For a deeper look at OpenRouter-specific options, see <a href="providers.html">Providers</a>.</p>

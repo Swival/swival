@@ -89,20 +89,20 @@ swival --provider huggingface --model zai-org/GLM-5 &quot;task&quot;
 <h2 id="openrouter">OpenRouter</h2>
 <p>For OpenRouter, <code>--model</code> is required and authentication comes from <code>OPENROUTER_API_KEY</code> or <code>--api-key</code>.</p>
 <pre><code class="language-sh">export OPENROUTER_API_KEY=sk_or_your_token_here
-swival --provider openrouter --model openrouter/free &quot;task&quot;
+swival --provider openrouter --model z-ai/glm-5 &quot;task&quot;
 </code></pre>
 <p>If you use an OpenRouter-compatible custom endpoint, set <code>--base-url</code>.</p>
 <pre><code class="language-sh">swival --provider openrouter \
-    --model openrouter/free \
+    --model z-ai/glm-5 \
     --base-url https://custom.openrouter.endpoint \
     --api-key sk_or_key \
     &quot;task&quot;
 </code></pre>
 <p>OpenRouter models vary widely in context limits, so you should set <code>--max-context-tokens</code> to match the model you chose.</p>
-<pre><code class="language-sh">swival --provider openrouter --model openrouter/free \
+<pre><code class="language-sh">swival --provider openrouter --model z-ai/glm-5 \
     --max-context-tokens 131072 &quot;task&quot;
 </code></pre>
-<p>Internally, Swival normalizes OpenRouter models to LiteLLM's <code>openrouter/...</code> format. If you already pass a fully prefixed value like <code>openrouter/openrouter/free</code>, Swival keeps it stable instead of adding another prefix.</p>
+<p>Internally, Swival normalizes OpenRouter models to LiteLLM's <code>openrouter/...</code> format. If you already pass a fully prefixed value like <code>openrouter/z-ai/glm-5</code>, Swival keeps it stable instead of adding another prefix.</p>
 <h2 id="adding-more-providers-later">Adding More Providers Later</h2>
 <p>Because API calls are already abstracted behind LiteLLM, adding a provider is mostly a matter of argument validation, model normalization, and credential wiring. The provider-specific branch in <code>call_llm()</code> is intentionally compact so new providers can be added without changing the rest of the agent loop.</p>
 <p>In practice, each provider branch is only about ten lines of routing logic.</p>
