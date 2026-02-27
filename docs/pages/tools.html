@@ -94,7 +94,7 @@
 <h2 id="use_skill"><code>use_skill</code></h2>
 <p>When skills are discovered, Swival exposes <code>use_skill</code> so the model can load full instructions on demand. The system prompt only includes a compact skill catalog at startup, and full skill instructions are injected only when the tool is called. This keeps the default prompt smaller while still allowing rich task-specific guidance.</p>
 <h2 id="mcp-tools">MCP Tools</h2>
-<p>Swival can connect to external tool servers via the <a href="https://modelcontextprotocol.io/">Model Context Protocol</a> (MCP). MCP tools are discovered at startup and exposed alongside built-in tools. See <a href="mcp.html">MCP</a> for configuration and details.</p>
+<p>Swival can connect to external tool servers via the <a href="https://modelcontextprotocol.io/">Model Context Protocol</a> (MCP). MCP tools are discovered at startup and exposed alongside built-in tools. MCP tool output is size-guarded: results up to 20 KB are returned inline, larger results are saved to <code>.swival/</code> for paginated reads via <code>read_file</code>, and output is hard-capped at 10 MB. See <a href="mcp.html">MCP</a> for configuration and details.</p>
         </article>
     </div>
     <footer class="site-footer">

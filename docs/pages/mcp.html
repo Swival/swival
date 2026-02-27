@@ -98,6 +98,10 @@ env = { API_KEY = &quot;secret&quot; }
 <h2 id="cli-flags">CLI Flags</h2>
 <p><code>--no-mcp</code> disables MCP server connections entirely, even if servers are configured in <code>swival.toml</code> or <code>.mcp.json</code>.</p>
 <p><code>--mcp-config FILE</code> provides an explicit path to an MCP JSON config file. When set, this replaces the default <code>.mcp.json</code> lookup in the project root.</p>
+<h2 id="output-handling">Output Handling</h2>
+<p>MCP tool outputs are size-guarded similarly to <code>run_command</code>, with higher thresholds to accommodate richer external tool results. Results up to 20 KB are returned inline. Larger results are saved to <code>.swival/cmd_output_*.txt</code> and the model receives a pointer message telling it to use <code>read_file</code> for paginated access. Output is hard-capped at 10 MB before writing to disk, so a misbehaving server cannot consume unbounded memory or storage.</p>
+<p>Error outputs from MCP tools are kept inline but truncated at 20 KB. Errors are diagnostic, not data the model needs to page through, so they are never saved to file.</p>
+<p>During context compaction, MCP tool results receive head-preserving summaries that retain the first 300 characters of content, unlike the generic fallback which discards content entirely.</p>
 <h2 id="library-api">Library API</h2>
 <p>The <code>Session</code> class accepts <code>mcp_servers</code> as a constructor argument. Pass a dictionary mapping server names to config dicts:</p>
 <pre><code class="language-python">from swival import Session
