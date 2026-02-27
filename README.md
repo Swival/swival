@@ -89,11 +89,6 @@ persistent notes that survive context compaction. A companion todo tool lets the
 agent track work items as a persistent checklist, so it doesn't lose track of
 multi-step plans even when context gets compacted.
 
-**MCP server support.** Connect external tools through the [Model Context
-Protocol](https://modelcontextprotocol.io/). Configure MCP servers in
-`swival.toml` or `.mcp.json` and Swival exposes their tools alongside its
-built-in ones. Stdio and SSE transports are both supported.
-
 **Built for benchmarking.** Pass `--report report.json` and Swival writes a
 machine-readable evaluation report with per-call LLM timing, tool
 success/failure counts, context compaction events, and guardrail interventions.
