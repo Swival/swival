@@ -155,6 +155,40 @@
 				</ol>
 				<h2>Interactive mode</h2>
 				<p>For interactive sessions, use <code>swival --repl</code>.</p>
+
+				<h2>Python library</h2>
+				<p>
+					Swival also works as a Python library, so you can embed an agent
+					loop directly in your own code. The simplest way is the
+					<code>swival.run()</code> one-liner:
+				</p>
+				<pre><code>import swival
+
+answer = swival.run(
+    "What files handle authentication?",
+    provider="openrouter",
+    model="z-ai/glm-5",
+)</code></pre>
+				<p>
+					For multi-turn conversations or finer control, use the
+					<code>Session</code> class:
+				</p>
+				<pre><code>from swival import Session
+
+session = Session(provider="lmstudio", yolo=True)
+
+result = session.run("Add type hints to utils.py")
+print(result.answer)
+
+# Continue the conversation
+follow_up = session.ask("Now add tests for those functions")
+print(follow_up.answer)</code></pre>
+				<p>
+					<code>Session</code> accepts the same options you'd pass on
+					the command line — provider, model, allowed commands, MCP servers,
+					and everything else. Check the
+					<a href="pages/usage.html">usage docs</a> for the full list.
+				</p>
 			</section>
 		</main>
 
