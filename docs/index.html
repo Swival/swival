@@ -111,10 +111,42 @@
                 </li>
             </ol>
             <h3>HuggingFace</h3>
-            <pre><code>export HF_TOKEN=hf_...
-uv tool install swival
-swival "Refactor the error handling in src/api.py" \
+            <ol>
+                <li>
+                    Create a token at
+                    <a href="https://huggingface.co/settings/tokens">huggingface.co/settings/tokens</a>
+                    and export it:
+                    <pre><code>export HF_TOKEN=hf_...</code></pre>
+                </li>
+                <li>
+                    Install Swival:
+                    <pre><code>uv tool install swival</code></pre>
+                </li>
+                <li>
+                    Run with a tool-calling model (e.g.
+                    <a href="https://huggingface.co/zai-org/GLM-5">GLM-5</a>):
+                    <pre><code>swival "Refactor the error handling in src/api.py" \
     --provider huggingface --model zai-org/GLM-5</code></pre>
+                </li>
+            </ol>
+            <h3>OpenRouter</h3>
+            <ol>
+                <li>
+                    Sign up at <a href="https://openrouter.ai/">openrouter.ai</a>
+                    and export your API key:
+                    <pre><code>export OPENROUTER_API_KEY=sk_or_...</code></pre>
+                </li>
+                <li>
+                    Install Swival:
+                    <pre><code>uv tool install swival</code></pre>
+                </li>
+                <li>
+                    Run with any model on the platform (e.g.
+                    <a href="https://openrouter.ai/z-ai/glm-5">GLM-5</a>):
+                    <pre><code>swival "Refactor the error handling in src/api.py" \
+    --provider openrouter --model z-ai/glm-5</code></pre>
+                </li>
+            </ol>
             <p>For interactive sessions, use <code>swival --repl</code>.</p>
         </section>
     </main>
