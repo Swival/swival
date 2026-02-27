@@ -1314,128 +1314,7 @@ def build_parser():
         description="A CLI coding agent with tool-calling, sandboxed file access, and multi-provider LLM support.",
     )
     parser.add_argument(
-        "--version",
-        action="store_true",
-        help="Print the version and exit.",
-    )
-    parser.add_argument(
         "question", nargs="?", default=None, help="The question or task for the model."
-    )
-    parser.add_argument(
-        "--repl",
-        action="store_true",
-        help="Start an interactive session instead of answering a single question.",
-    )
-    parser.add_argument(
-        "--provider",
-        choices=["lmstudio", "huggingface", "openrouter"],
-        default=_UNSET,
-        help="LLM provider: lmstudio (local), huggingface (HF API), openrouter (multi-provider API).",
-    )
-    parser.add_argument(
-        "--api-key",
-        type=str,
-        default=_UNSET,
-        help="API key for the provider (overrides env var).",
-    )
-    parser.add_argument(
-        "--base-url",
-        default=_UNSET,
-        help="Server base URL (default: http://127.0.0.1:1234 for lmstudio).",
-    )
-    parser.add_argument(
-        "--max-context-tokens",
-        type=int,
-        default=_UNSET,
-        help="Requested context length for the model (may trigger a reload).",
-    )
-    parser.add_argument(
-        "--max-output-tokens",
-        type=int,
-        default=_UNSET,
-        help="Maximum output tokens (default: 32768).",
-    )
-    parser.add_argument(
-        "--temperature",
-        type=float,
-        default=_UNSET,
-        help="Sampling temperature (default: provider default).",
-    )
-    parser.add_argument(
-        "--top-p",
-        type=float,
-        default=_UNSET,
-        help="Top-p (nucleus) sampling (default: 1.0).",
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=_UNSET,
-        help="Random seed for reproducible outputs (optional, model support varies).",
-    )
-
-    prompt_group = parser.add_mutually_exclusive_group()
-    prompt_group.add_argument(
-        "--system-prompt",
-        type=str,
-        default=_UNSET,
-        help="System prompt to include.",
-    )
-    prompt_group.add_argument(
-        "--no-system-prompt",
-        action="store_true",
-        default=_UNSET,
-        help="Omit the system message entirely.",
-    )
-
-    parser.add_argument(
-        "--model",
-        type=str,
-        default=_UNSET,
-        help="Override auto-discovered model with a specific model identifier.",
-    )
-    parser.add_argument(
-        "-q",
-        "--quiet",
-        action="store_true",
-        default=_UNSET,
-        help="Suppress all diagnostics; only print the final result.",
-    )
-    parser.add_argument(
-        "--max-turns",
-        type=int,
-        default=_UNSET,
-        help="Maximum agent loop iterations (default: 100).",
-    )
-    parser.add_argument(
-        "--base-dir",
-        type=str,
-        default=".",
-        help="Base directory for file tools (default: current directory).",
-    )
-    parser.add_argument(
-        "--allowed-commands",
-        type=str,
-        default=_UNSET,
-        help='Comma-separated list of allowed command basenames (e.g. "ls,git,python3").',
-    )
-    parser.add_argument(
-        "--no-instructions",
-        action="store_true",
-        default=_UNSET,
-        help="Don't load CLAUDE.md or AGENTS.md from the base directory or user config directory.",
-    )
-    parser.add_argument(
-        "--skills-dir",
-        action="append",
-        default=None,
-        help="Additional directory to scan for skills (can be repeated).",
-    )
-    parser.add_argument(
-        "--no-skills",
-        action="store_true",
-        default=_UNSET,
-        help="Don't load or discover any skills.",
     )
     parser.add_argument(
         "--add-dir",
@@ -1452,57 +1331,27 @@ def build_parser():
         help="Grant read-only access to an extra directory (repeatable).",
     )
     parser.add_argument(
-        "--yolo",
-        action="store_true",
-        default=_UNSET,
-        help="Disable filesystem sandbox and command whitelist (unrestricted mode).",
-    )
-    parser.add_argument(
-        "--report",
-        type=str,
-        default=None,
-        metavar="FILE",
-        help="Write a JSON evaluation report to FILE. Incompatible with --repl.",
-    )
-    parser.add_argument(
-        "--reviewer",
-        metavar="COMMAND",
-        default=_UNSET,
-        help="Reviewer command (shell-split). Called after each answer with base_dir as argument "
-        "and answer on stdin. Exit 0=accept, 1=retry with stdout as feedback, 2=reviewer error.",
-    )
-    parser.add_argument(
-        "--max-review-rounds",
-        type=int,
-        default=_UNSET,
-        help="Maximum number of reviewer retry rounds (default: 5). 0 disables retries.",
-    )
-    parser.add_argument(
-        "--reviewer-mode",
-        action="store_true",
-        default=False,
-        help="Run as a reviewer: read base_dir from positional arg, answer from stdin, "
-        "call LLM to judge, exit 0/1/2.",
-    )
-    parser.add_argument(
-        "--review-prompt",
+        "--allowed-commands",
         type=str,
         default=_UNSET,
-        help="Custom instructions appended to the built-in review prompt (reviewer mode).",
+        help='Comma-separated list of allowed command basenames (e.g. "ls,git,python3").',
     )
     parser.add_argument(
-        "--objective",
+        "--api-key",
         type=str,
         default=_UNSET,
-        metavar="FILE",
-        help="Read the task description from FILE instead of SWIVAL_TASK env var (reviewer mode).",
+        help="API key for the provider (overrides env var).",
     )
     parser.add_argument(
-        "--verify",
+        "--base-dir",
         type=str,
+        default=".",
+        help="Base directory for file tools (default: current directory).",
+    )
+    parser.add_argument(
+        "--base-url",
         default=_UNSET,
-        metavar="FILE",
-        help="Read verification/acceptance criteria from FILE (reviewer mode).",
+        help="Server base URL (default: http://127.0.0.1:1234 for lmstudio).",
     )
 
     color_group = parser.add_mutually_exclusive_group()
@@ -1520,28 +1369,34 @@ def build_parser():
     )
 
     parser.add_argument(
-        "--no-history",
+        "--init-config",
         action="store_true",
-        default=_UNSET,
-        help="Don't write responses to .swival/HISTORY.md",
+        default=False,
+        help="Generate a config file template and exit.",
     )
     parser.add_argument(
-        "--no-read-guard",
-        action="store_true",
+        "--max-context-tokens",
+        type=int,
         default=_UNSET,
-        help="Disable read-before-write guard (allow writing files without reading them first).",
+        help="Requested context length for the model (may trigger a reload).",
     )
     parser.add_argument(
-        "--proactive-summaries",
-        action="store_true",
+        "--max-output-tokens",
+        type=int,
         default=_UNSET,
-        help="Periodically summarize conversation to preserve context across compaction events.",
+        help="Maximum output tokens (default: 32768).",
     )
     parser.add_argument(
-        "--no-mcp",
-        action="store_true",
+        "--max-review-rounds",
+        type=int,
         default=_UNSET,
-        help="Disable MCP server connections entirely.",
+        help="Maximum number of reviewer retry rounds (default: 5). 0 disables retries.",
+    )
+    parser.add_argument(
+        "--max-turns",
+        type=int,
+        default=_UNSET,
+        help="Maximum agent loop iterations (default: 100).",
     )
     parser.add_argument(
         "--mcp-config",
@@ -1551,16 +1406,161 @@ def build_parser():
         help="Path to an MCP JSON config file (replaces .mcp.json default lookup).",
     )
     parser.add_argument(
-        "--init-config",
+        "--model",
+        type=str,
+        default=_UNSET,
+        help="Override auto-discovered model with a specific model identifier.",
+    )
+    parser.add_argument(
+        "--no-history",
         action="store_true",
-        default=False,
-        help="Generate a config file template and exit.",
+        default=_UNSET,
+        help="Don't write responses to .swival/HISTORY.md",
+    )
+    parser.add_argument(
+        "--no-instructions",
+        action="store_true",
+        default=_UNSET,
+        help="Don't load CLAUDE.md or AGENTS.md from the base directory or user config directory.",
+    )
+    parser.add_argument(
+        "--no-mcp",
+        action="store_true",
+        default=_UNSET,
+        help="Disable MCP server connections entirely.",
+    )
+    parser.add_argument(
+        "--no-read-guard",
+        action="store_true",
+        default=_UNSET,
+        help="Disable read-before-write guard (allow writing files without reading them first).",
+    )
+    parser.add_argument(
+        "--no-skills",
+        action="store_true",
+        default=_UNSET,
+        help="Don't load or discover any skills.",
+    )
+    parser.add_argument(
+        "--objective",
+        type=str,
+        default=_UNSET,
+        metavar="FILE",
+        help="Read the task description from FILE instead of SWIVAL_TASK env var (reviewer mode).",
+    )
+    parser.add_argument(
+        "--proactive-summaries",
+        action="store_true",
+        default=_UNSET,
+        help="Periodically summarize conversation to preserve context across compaction events.",
     )
     parser.add_argument(
         "--project",
         action="store_true",
         default=False,
         help="With --init-config, write to <base-dir>/swival.toml instead of global config.",
+    )
+    parser.add_argument(
+        "--provider",
+        choices=["lmstudio", "huggingface", "openrouter"],
+        default=_UNSET,
+        help="LLM provider: lmstudio (local), huggingface (HF API), openrouter (multi-provider API).",
+    )
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        default=_UNSET,
+        help="Suppress all diagnostics; only print the final result.",
+    )
+    parser.add_argument(
+        "--repl",
+        action="store_true",
+        help="Start an interactive session instead of answering a single question.",
+    )
+    parser.add_argument(
+        "--report",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Write a JSON evaluation report to FILE. Incompatible with --repl.",
+    )
+    parser.add_argument(
+        "--review-prompt",
+        type=str,
+        default=_UNSET,
+        help="Custom instructions appended to the built-in review prompt (reviewer mode).",
+    )
+    parser.add_argument(
+        "--reviewer",
+        metavar="COMMAND",
+        default=_UNSET,
+        help="Reviewer command (shell-split). Called after each answer with base_dir as argument "
+        "and answer on stdin. Exit 0=accept, 1=retry with stdout as feedback, 2=reviewer error.",
+    )
+    parser.add_argument(
+        "--reviewer-mode",
+        action="store_true",
+        default=False,
+        help="Run as a reviewer: read base_dir from positional arg, answer from stdin, "
+        "call LLM to judge, exit 0/1/2.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=_UNSET,
+        help="Random seed for reproducible outputs (optional, model support varies).",
+    )
+    parser.add_argument(
+        "--skills-dir",
+        action="append",
+        default=None,
+        help="Additional directory to scan for skills (can be repeated).",
+    )
+
+    prompt_group = parser.add_mutually_exclusive_group()
+    prompt_group.add_argument(
+        "--system-prompt",
+        type=str,
+        default=_UNSET,
+        help="System prompt to include.",
+    )
+    prompt_group.add_argument(
+        "--no-system-prompt",
+        action="store_true",
+        default=_UNSET,
+        help="Omit the system message entirely.",
+    )
+
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=_UNSET,
+        help="Sampling temperature (default: provider default).",
+    )
+    parser.add_argument(
+        "--top-p",
+        type=float,
+        default=_UNSET,
+        help="Top-p (nucleus) sampling (default: 1.0).",
+    )
+    parser.add_argument(
+        "--verify",
+        type=str,
+        default=_UNSET,
+        metavar="FILE",
+        help="Read verification/acceptance criteria from FILE (reviewer mode).",
+    )
+    parser.add_argument(
+        "--version",
+        action="store_true",
+        help="Print the version and exit.",
+    )
+    parser.add_argument(
+        "--yolo",
+        action="store_true",
+        default=_UNSET,
+        help="Disable filesystem sandbox and command whitelist (unrestricted mode).",
     )
 
     return parser
