@@ -61,7 +61,7 @@ The JSON below is from a verified local run using `--model dummy-model --max-tur
 
 ### Top-Level Fields
 
-`version` is the schema version and is currently `1`. `timestamp` is the run completion time in UTC ISO 8601 format. `task` is the original question string passed on the command line. `model` is the resolved model identifier that was actually used. `provider` is one of `lmstudio`, `huggingface`, or `openrouter`.
+`version` is the schema version and is currently `1`. `timestamp` is the run completion time in UTC ISO 8601 format. `task` is the original question string passed on the command line. `model` is the resolved model identifier that was actually used. `provider` is one of `lmstudio`, `huggingface`, `openrouter`, or `generic`.
 
 `settings` captures run configuration. `result` captures outcome and exit semantics. `stats` captures aggregate counters. `timeline` captures ordered event records.
 

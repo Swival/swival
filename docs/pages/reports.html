@@ -106,7 +106,7 @@
 </code></pre>
 <h2 id="report-structure">Report Structure</h2>
 <h3 id="top-level-fields">Top-Level Fields</h3>
-<p><code>version</code> is the schema version and is currently <code>1</code>. <code>timestamp</code> is the run completion time in UTC ISO 8601 format. <code>task</code> is the original question string passed on the command line. <code>model</code> is the resolved model identifier that was actually used. <code>provider</code> is one of <code>lmstudio</code>, <code>huggingface</code>, or <code>openrouter</code>.</p>
+<p><code>version</code> is the schema version and is currently <code>1</code>. <code>timestamp</code> is the run completion time in UTC ISO 8601 format. <code>task</code> is the original question string passed on the command line. <code>model</code> is the resolved model identifier that was actually used. <code>provider</code> is one of <code>lmstudio</code>, <code>huggingface</code>, <code>openrouter</code>, or <code>generic</code>.</p>
 <p><code>settings</code> captures run configuration. <code>result</code> captures outcome and exit semantics. <code>stats</code> captures aggregate counters. <code>timeline</code> captures ordered event records.</p>
 <h3 id="settings"><code>settings</code></h3>
 <p><code>temperature</code> stores the sampling temperature or <code>null</code> when omitted. <code>top_p</code> stores nucleus sampling. <code>seed</code> stores the random seed or <code>null</code>. <code>max_turns</code> and <code>max_output_tokens</code> store turn and output-token limits. <code>context_length</code> stores effective context length after provider resolution. <code>yolo</code> indicates unrestricted mode.</p>
