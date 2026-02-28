@@ -2918,7 +2918,9 @@ def _repl_snapshot_save(
         return
     result = snapshot_state.save_at_index(label, len(messages))
     if result.startswith("error:"):
-        fmt.warning(result)
+        fmt.warning(
+            f"checkpoint already active (label={snapshot_state.explicit_label!r}). Cancel it first with /unsave."
+        )
     else:
         fmt.info(f"checkpoint saved: {label}")
 
