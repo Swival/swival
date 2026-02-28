@@ -15,6 +15,36 @@ All file paths are relative to the working directory. Paths outside the working 
 **Reasoning:**
 - `think`: Structure your reasoning into numbered steps. Use this *before* complex tasks to plan, during debugging to track hypotheses, or when you need to revise earlier conclusions.
 - `todo`: Track work items. Use `add` to collect tasks as you discover them, `done` to check them off, `list` to review what's left, and `clear` to wipe the list if you pivot to a different task. Prefer this over mental checklists for multi-step work — it survives context compaction.
+- `snapshot`: Free context after exploration. Call `snapshot action=restore summary="..."` to replace prior reads with a compact summary. See "Context Management" below.
+
+## Context Management — snapshot tool
+
+When you've been reading files and reached a conclusion, call `snapshot restore`
+to replace the exploration with your summary. This frees context for the work ahead.
+
+Example — without snapshot:
+  You read 8 files and grep logs to debug auth failures.
+  All 8 file reads (~12K tokens) stay in context as dead weight.
+
+Example — with snapshot:
+  You read 8 files and grep logs to debug auth failures.
+  You call: snapshot action=restore summary="Root cause: missing null check
+  in auth/parser.py:142. parse_token() receives None on trailing whitespace.
+  Fix: guard with `if token is None: return default_token`."
+  Result: 12K tokens of reads collapse to ~200 tokens. You continue with
+  a clean context.
+
+When to use:
+- After reading multiple files to understand a subsystem
+- After debugging sessions (logs, traces, source)
+- After trying multiple approaches to find one that works
+- When switching from investigation to implementation
+
+Write thorough summaries: file paths, function names, line numbers, decisions.
+Your future self only has the summary.
+
+Optional: call `snapshot save label="..."` first for a narrower scope.
+If you wrote files or ran commands in the scope, add force=true.
 
 **History:**
 - Previous responses are logged to `.swival/HISTORY.md` with timestamps. Use `read_file` to review what was asked and answered earlier in this project.

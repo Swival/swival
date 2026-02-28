@@ -82,6 +82,48 @@ In YOLO mode, command execution is unrestricted and Swival also accepts shell co
 
 When skills are discovered, Swival exposes `use_skill` so the model can load full instructions on demand. The system prompt only includes a compact skill catalog at startup, and full skill instructions are injected only when the tool is called. This keeps the default prompt smaller while still allowing rich task-specific guidance.
 
+## `snapshot`
+
+`snapshot` is a context management tool for collapsing exploration into compact summaries. When the model spends many turns reading files, grepping, and reasoning before arriving at a conclusion, `snapshot` lets it collapse all of that into a single short message so the context window stays clean for the actual work.
+
+The tool supports four actions: `save`, `restore`, `cancel`, and `status`.
+
+`save` sets an explicit checkpoint to mark the start of a focused investigation. It takes a required `label` parameter (max 100 characters). Only one explicit checkpoint can exist at a time.
+
+`restore` collapses all turns since the checkpoint into a single summary message. It takes a required `summary` parameter (max 4,000 characters) and an optional `force` parameter that defaults to false. If no explicit checkpoint exists, it collapses from the last implicit checkpoint instead.
+
+`cancel` clears the explicit checkpoint without collapsing anything. `status` reports the current checkpoint state, dirty status, and history.
+
+### Implicit Checkpoints
+
+Calling `save` before `restore` is not required. The system automatically creates implicit checkpoints at every user message, after each successful restore, and on conversation reset. When `restore` is called without a prior `save`, it collapses everything since the last implicit checkpoint, which is typically the most recent user message.
+
+### Dirty Scopes
+
+Tools are classified as read-only or mutating. Read-only tools (`read_file`, `list_files`, `grep`, `glob`, `fetch_url`, `think`, `todo`, `snapshot`) are safe to collapse because they don't change anything on disk. Mutating tools (`write_file`, `edit_file`, `delete_file`, `run_command`, and unknown MCP tools) dirty the scope.
+
+If the scope contains mutating tool calls, `restore` fails with a list of the dirty tools. Pass `force=true` to override when you are confident the summary captures the mutations.
+
+### Snapshot History
+
+Completed snapshots are preserved across context compaction. Up to 10 past summaries are retained and injected into the system prompt so knowledge survives aggressive compaction.
+
+The collapsed message that replaces all intermediate turns looks like this:
+
+```
+[snapshot: <label>]
+<your summary>
+(collapsed N turns, saved ~K tokens)
+```
+
+### Example Workflow
+
+1. User asks to debug a performance issue.
+2. Agent reads six files, greps for bottlenecks, thinks through options.
+3. Agent calls `snapshot` with `action=restore` and `summary="Bottleneck is in db/queries.py:89. The get_users() query does N+1 selects. Fix: add .select_related('profile') to the queryset."`.
+4. All exploration collapses to roughly 100 tokens.
+5. Agent proceeds to implement the fix with a clean context.
+
 ## MCP Tools
 
 Swival can connect to external tool servers via the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP). MCP tools are discovered at startup and exposed alongside built-in tools. MCP tool output is size-guarded: results up to 20 KB are returned inline, larger results are saved to `.swival/` for paginated reads via `read_file`, and output is hard-capped at 10 MB. See [MCP](mcp.md) for configuration and details.

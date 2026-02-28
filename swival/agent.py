@@ -20,6 +20,7 @@ import tiktoken
 from . import fmt
 from .config import _UNSET
 from .report import AgentError, ConfigError, ReportCollector
+from .snapshot import SNAPSHOT_HISTORY_SENTINEL, SnapshotState, READ_ONLY_TOOLS
 from .thinking import ThinkingState
 from .todo import TodoState
 from .tracker import FileAccessTracker
@@ -481,6 +482,9 @@ def score_turn(turn: list) -> int:
         # Thinking turns are important — the agent reasoned
         if "think" in _msg_name(msg):
             score += 2
+        # Snapshot recap messages are high-value distilled knowledge
+        if content.startswith("[snapshot:"):
+            score += 5
     return score
 
 
@@ -1009,7 +1013,9 @@ def handle_tool_call(
     yolo=False,
     file_tracker=None,
     todo_state=None,
+    snapshot_state=None,
     mcp_manager=None,
+    messages=None,
 ):
     """Execute a single tool call and return (tool_msg, metadata).
 
@@ -1034,7 +1040,7 @@ def handle_tool_call(
             {"name": name, "arguments": None, "elapsed": 0.0, "succeeded": False},
         )
 
-    _skip_generic_log = name in ("think", "todo")
+    _skip_generic_log = name in ("think", "todo", "snapshot")
     if not _skip_generic_log and verbose:
         pretty = json.dumps(parsed_args, indent=2)
         if len(pretty) > MAX_ARG_LOG:
@@ -1049,6 +1055,7 @@ def handle_tool_call(
             base_dir,
             thinking_state=thinking_state,
             todo_state=todo_state,
+            snapshot_state=snapshot_state,
             resolved_commands=resolved_commands or {},
             skills_catalog=skills_catalog or {},
             skill_read_roots=skill_read_roots if skill_read_roots is not None else [],
@@ -1059,6 +1066,7 @@ def handle_tool_call(
             file_tracker=file_tracker,
             tool_call_id=tool_call.id,
             mcp_manager=mcp_manager,
+            messages=messages,
         )
     except McpShutdownError:
         result = "error: MCP server is shutting down"
@@ -1739,6 +1747,7 @@ def main():
         instructions_loaded=None,
         review_rounds=0,
         todo_state=None,
+        snapshot_state=None,
     ):
         if not report:
             return
@@ -1751,6 +1760,11 @@ def main():
                 "completed": todo_state.done_count,
                 "remaining": remaining,
             }
+        snapshot_stats = None
+        if snapshot_state is not None:
+            total = snapshot_state.stats["restores"] + snapshot_state.stats["saves"]
+            if total > 0:
+                snapshot_stats = dict(snapshot_state.stats)
         report.finalize(
             task=args.question or "",
             model=model_id,
@@ -1763,6 +1777,7 @@ def main():
             error_message=error_message,
             review_rounds=review_rounds,
             todo_stats=todo_stats,
+            snapshot_stats=snapshot_stats,
         )
         try:
             report.write(args.report)
@@ -2151,6 +2166,7 @@ def _run_main(args, report, _write_report, parser):
 
     thinking_state = ThinkingState(verbose=args.verbose)
     todo_state = TodoState(notes_dir=base_dir, verbose=args.verbose)
+    snapshot_state = SnapshotState(verbose=args.verbose)
     file_tracker = (
         None if getattr(args, "no_read_guard", False) else FileAccessTracker()
     )
@@ -2167,6 +2183,7 @@ def _run_main(args, report, _write_report, parser):
         base_dir=base_dir,
         thinking_state=thinking_state,
         todo_state=todo_state,
+        snapshot_state=snapshot_state,
         resolved_commands=resolved_commands,
         skills_catalog=skills_catalog,
         skill_read_roots=skill_read_roots,
@@ -2292,6 +2309,7 @@ def _run_main(args, report, _write_report, parser):
                 instructions_loaded=instructions_loaded,
                 review_rounds=review_round,
                 todo_state=todo_state,
+                snapshot_state=snapshot_state,
             )
         if exhausted:
             if args.verbose:
@@ -2330,6 +2348,7 @@ def run_agent_loop(
     base_dir: str,
     thinking_state: ThinkingState,
     todo_state: TodoState,
+    snapshot_state: SnapshotState | None = None,
     resolved_commands: dict,
     skills_catalog: dict,
     skill_read_roots: list,
@@ -2355,9 +2374,39 @@ def run_agent_loop(
     think_used = False
     think_nudge_fired = False
     todo_last_used = 0
+    snapshot_read_streak = 0
+    snapshot_nudge_fired = False
+
+    # Reset dirty state only if the last message is a user message
+    # (new scope boundary). Skip on /continue where the last message
+    # is an assistant or tool message from the previous run.
+    if snapshot_state is not None:
+        last_role = _msg_role(messages[-1]) if messages else ""
+        if last_role == "user":
+            snapshot_state.reset_dirty()
+
+    _snapshot_strip_marker = "\n\n" + SNAPSHOT_HISTORY_SENTINEL
 
     while turns < max_turns:
         turns += 1
+
+        # Inject snapshot history into system message so the LLM
+        # can see prior investigation summaries even after compaction.
+        # Always strip any prior injection first (handles re-entry
+        # via /continue or repeated run_agent_loop calls).
+        if snapshot_state is not None and messages:
+            sys_msg = messages[0] if _msg_role(messages[0]) == "system" else None
+            if sys_msg is not None and isinstance(sys_msg, dict):
+                base = sys_msg["content"]
+                idx = base.find(_snapshot_strip_marker)
+                if idx != -1:
+                    base = base[:idx]
+                history_text = snapshot_state.inject_into_prompt()
+                if history_text:
+                    sys_msg["content"] = base + "\n\n" + history_text
+                else:
+                    sys_msg["content"] = base
+
         token_est = estimate_tokens(messages, tools)
         if verbose:
             fmt.turn_header(turns, max_turns, token_est)
@@ -2575,9 +2624,14 @@ def run_agent_loop(
                     summary = todo_state.summary_line()
                     if summary:
                         fmt.todo_summary(summary)
+                if snapshot_state:
+                    summary = snapshot_state.summary_line()
+                    if summary:
+                        fmt.info(summary)
             return msg.content or "", False
 
         interventions: list[str] = []
+        all_tools_readonly = True
         for tool_call in msg.tool_calls:
             tool_msg, tool_meta = handle_tool_call(
                 tool_call,
@@ -2591,7 +2645,9 @@ def run_agent_loop(
                 yolo=yolo,
                 file_tracker=file_tracker,
                 todo_state=todo_state,
+                snapshot_state=snapshot_state,
                 mcp_manager=mcp_manager,
+                messages=messages,
             )
             messages.append(tool_msg)
 
@@ -2611,6 +2667,11 @@ def run_agent_loop(
                 think_used = True
             if tool_name == "todo":
                 todo_last_used = turns
+
+            if snapshot_state is not None:
+                if tool_name not in READ_ONLY_TOOLS:
+                    snapshot_state.mark_dirty(tool_name)
+                    all_tools_readonly = False
 
             result = tool_msg["content"]
             if result.startswith("error:"):
@@ -2671,6 +2732,20 @@ def run_agent_loop(
                     "Use the `todo` tool to review and work through them."
                 )
 
+        if snapshot_state is not None:
+            if all_tools_readonly:
+                snapshot_read_streak += 1
+                if snapshot_read_streak >= 5 and not snapshot_nudge_fired:
+                    snapshot_nudge_fired = True
+                    interventions.append(
+                        "Tip: You've done a lot of reading. Consider calling "
+                        '`snapshot restore summary="..."` to collapse your '
+                        "investigation into a summary and free context."
+                    )
+            else:
+                snapshot_read_streak = 0
+                snapshot_nudge_fired = False
+
         if interventions:
             messages.append({"role": "user", "content": "\n\n".join(interventions)})
         if verbose:
@@ -2709,6 +2784,10 @@ def run_agent_loop(
             summary = todo_state.summary_line()
             if summary:
                 fmt.todo_summary(summary)
+        if snapshot_state:
+            summary = snapshot_state.summary_line()
+            if summary:
+                fmt.info(summary)
     return last_text, True
 
 
@@ -2738,6 +2817,7 @@ def _repl_clear(
     thinking_state: ThinkingState,
     file_tracker: FileAccessTracker | None = None,
     todo_state: TodoState | None = None,
+    snapshot_state: SnapshotState | None = None,
 ) -> None:
     """Clear conversation history, keeping only the leading system messages."""
     leading = []
@@ -2760,6 +2840,9 @@ def _repl_clear(
 
     if todo_state is not None:
         todo_state.reset()
+
+    if snapshot_state is not None:
+        snapshot_state.reset()
 
     fmt.info(f"context cleared ({dropped} messages removed)")
 
@@ -2858,6 +2941,7 @@ def repl_loop(
     base_dir: str,
     thinking_state: ThinkingState,
     todo_state: TodoState,
+    snapshot_state: SnapshotState | None = None,
     resolved_commands: dict,
     skills_catalog: dict,
     skill_read_roots: list,
@@ -2898,6 +2982,7 @@ def repl_loop(
         base_dir=base_dir,
         thinking_state=thinking_state,
         todo_state=todo_state,
+        snapshot_state=snapshot_state,
         resolved_commands=resolved_commands,
         skills_catalog=skills_catalog,
         skill_read_roots=skill_read_roots,
@@ -2939,6 +3024,7 @@ def repl_loop(
                 thinking_state,
                 file_tracker=file_tracker,
                 todo_state=todo_state,
+                snapshot_state=snapshot_state,
             )
             continue
         elif cmd == "/add-dir":
@@ -2962,6 +3048,7 @@ def repl_loop(
                 thinking_state,
                 file_tracker=file_tracker,
                 todo_state=todo_state,
+                snapshot_state=snapshot_state,
             )
             # Three-pass init: explore, enrich, then write to file
             for _pass, prompt in enumerate(

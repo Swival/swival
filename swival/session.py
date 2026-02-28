@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .report import ConfigError, ReportCollector
+from .snapshot import SnapshotState
 from .thinking import ThinkingState
 from .todo import TodoState
 from .tracker import FileAccessTracker
@@ -233,6 +234,7 @@ class Session:
         state = {
             "thinking_state": ThinkingState(verbose=self.verbose),
             "todo_state": TodoState(notes_dir=self.base_dir, verbose=self.verbose),
+            "snapshot_state": SnapshotState(verbose=self.verbose),
             "file_tracker": FileAccessTracker() if self.read_guard else None,
             "skill_read_roots": list(self._allowed_dir_ro_paths),
             "messages": self._make_initial_messages(),
@@ -254,6 +256,7 @@ class Session:
             base_dir=self.base_dir,
             thinking_state=state["thinking_state"],
             todo_state=state["todo_state"],
+            snapshot_state=state["snapshot_state"],
             resolved_commands=self._resolved_commands,
             skills_catalog=self._skills_catalog,
             skill_read_roots=state["skill_read_roots"],

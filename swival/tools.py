@@ -370,6 +370,59 @@ FETCH_URL_TOOL = {
 
 TOOLS.append(FETCH_URL_TOOL)
 
+SNAPSHOT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "snapshot",
+        "description": (
+            "Context management: collapse exploration into a compact summary. "
+            "After reading files, grepping, or investigating, call restore to "
+            "replace the exploration turns with your summary, freeing context. "
+            "Summaries survive compaction."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["save", "restore", "cancel", "status"],
+                    "description": (
+                        "save: Set an explicit checkpoint (requires label). "
+                        "restore: Collapse turns since checkpoint into summary. "
+                        "cancel: Clear explicit checkpoint. "
+                        "status: Report current state."
+                    ),
+                },
+                "label": {
+                    "type": "string",
+                    "description": "Label for save checkpoint (max 100 chars). Required for save.",
+                    "maxLength": 100,
+                },
+                "summary": {
+                    "type": "string",
+                    "description": (
+                        "Summary to replace the collapsed turns (max 4000 chars). "
+                        "Required for restore. Include file paths, function names, "
+                        "line numbers, and key decisions."
+                    ),
+                    "maxLength": 4000,
+                },
+                "force": {
+                    "type": "boolean",
+                    "description": (
+                        "Override dirty scope protection. Use when the scope "
+                        "contains writes/commands and you're confident the "
+                        "summary captures them. Default false."
+                    ),
+                },
+            },
+            "required": ["action"],
+        },
+    },
+}
+
+TOOLS.append(SNAPSHOT_TOOL)
+
 USE_SKILL_TOOL = {
     "type": "function",
     "function": {
@@ -1772,6 +1825,15 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
         if todo_state is None:
             return "error: todo tool is not available"
         return todo_state.process(args)
+    elif name == "snapshot":
+        snapshot_state = kwargs.get("snapshot_state")
+        if snapshot_state is None:
+            return "error: snapshot tool is not available"
+        return snapshot_state.process(
+            args,
+            messages=kwargs.get("messages"),
+            tool_call_id=kwargs.get("tool_call_id"),
+        )
     elif name == "fetch_url":
         from .fetch import fetch_url as _fetch_url
 

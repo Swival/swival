@@ -775,7 +775,7 @@ class TestExtraBody:
         project.mkdir()
         _write_toml(
             project / "swival.toml",
-            'extra_body = { chat_template_kwargs = { enable_thinking = false } }\n',
+            "extra_body = { chat_template_kwargs = { enable_thinking = false } }\n",
         )
         result = load_config(project)
         assert result["extra_body"] == {
@@ -797,7 +797,7 @@ class TestExtraBody:
         project.mkdir()
         _write_toml(
             project / "swival.toml",
-            'extra_body = { top_k = 20 }\nmax_turns = 5\n',
+            "extra_body = { top_k = 20 }\nmax_turns = 5\n",
         )
         result = load_config(project)
         assert result["max_turns"] == 5

@@ -511,7 +511,7 @@ def generate_config(project: bool = False) -> str:
         "# temperature = 0.7",
         "# top_p = 1.0",
         "# seed = 42",
-        '# extra_body = { chat_template_kwargs = { enable_thinking = false } }',
+        "# extra_body = { chat_template_kwargs = { enable_thinking = false } }",
         "",
         "# --- Agent behaviour ---",
         "# max_turns = 50",
