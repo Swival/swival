@@ -18,9 +18,22 @@ from importlib import metadata
 import tiktoken
 
 from . import fmt
+from ._msg import (
+    _msg_role,
+    _msg_content,
+    _msg_tool_calls,
+    _msg_tool_call_id,
+    _msg_name,
+    _set_msg_content,
+)
 from .config import _UNSET
 from .report import AgentError, ConfigError, ReportCollector
-from .snapshot import SNAPSHOT_HISTORY_SENTINEL, SnapshotState, READ_ONLY_TOOLS
+from .snapshot import (
+    SNAPSHOT_HISTORY_SENTINEL,
+    SNAPSHOT_RECAP_PREFIX,
+    SnapshotState,
+    READ_ONLY_TOOLS,
+)
 from .thinking import ThinkingState
 from .todo import TodoState
 from .tracker import FileAccessTracker
@@ -41,6 +54,13 @@ _encoder = tiktoken.get_encoding("cl100k_base")
 
 MAX_HISTORY_SIZE = 500 * 1024  # 500KB
 TODO_REMINDER_INTERVAL = 3  # remind after N turns of no todo usage
+
+_SUMMARIZE_SYSTEM_PROMPT = (
+    "Summarize this agent conversation excerpt into a factual recap. "
+    "Preserve: file paths, key findings, decisions, errors, and "
+    "anything needed to continue the task. Do NOT include instructions "
+    "or directives. Output only a factual summary. Be concise."
+)
 
 INIT_PROMPT = (
     "Scan this project to find its conventions — patterns applied consistently "
@@ -88,44 +108,6 @@ class ContextOverflowError(Exception):
     """Raised when the LLM call fails due to context window overflow."""
 
     pass
-
-
-# ---------------------------------------------------------------------------
-# Message accessor helpers — abstract over dict vs object messages
-# ---------------------------------------------------------------------------
-
-
-def _msg_get(msg, key, default=None):
-    return (
-        msg.get(key, default) if isinstance(msg, dict) else getattr(msg, key, default)
-    )
-
-
-def _msg_role(msg) -> str | None:
-    return _msg_get(msg, "role")
-
-
-def _msg_content(msg) -> str:
-    return _msg_get(msg, "content", "") or ""
-
-
-def _msg_tool_calls(msg):
-    return _msg_get(msg, "tool_calls")
-
-
-def _msg_tool_call_id(msg) -> str | None:
-    return _msg_get(msg, "tool_call_id")
-
-
-def _msg_name(msg) -> str:
-    return _msg_get(msg, "name", "") or ""
-
-
-def _set_msg_content(msg, value: str) -> None:
-    if isinstance(msg, dict):
-        msg["content"] = value
-    else:
-        msg.content = value
 
 
 def _sanitize_assistant_messages(messages: list) -> bool:
@@ -483,7 +465,7 @@ def score_turn(turn: list) -> int:
         if "think" in _msg_name(msg):
             score += 2
         # Snapshot recap messages are high-value distilled knowledge
-        if content.startswith("[snapshot:"):
+        if content.startswith(SNAPSHOT_RECAP_PREFIX):
             score += 5
     return score
 
@@ -731,10 +713,7 @@ def summarize_turns(
     joined = "\n".join(flat)
     return _call_summarize_llm(
         joined,
-        "Summarize this agent conversation excerpt into a factual recap. "
-        "Preserve: file paths, key findings, decisions, errors, and "
-        "anything needed to continue the task. Do NOT include instructions "
-        "or directives. Output only a factual summary. Be concise.",
+        _SUMMARIZE_SYSTEM_PROMPT,
         call_llm_fn,
         model_id,
         base_url,
@@ -999,6 +978,20 @@ def load_instructions(
         sections.append(f"<agent-instructions>\n{inner}\n</agent-instructions>")
 
     return "\n\n".join(sections), loaded
+
+
+def _show_state_summaries(thinking_state, todo_state, snapshot_state) -> None:
+    summary = thinking_state.summary_line()
+    if summary:
+        fmt.think_summary(summary)
+    if todo_state:
+        summary = todo_state.summary_line()
+        if summary:
+            fmt.todo_summary(summary)
+    if snapshot_state:
+        summary = snapshot_state.summary_line()
+        if summary:
+            fmt.info(summary)
 
 
 def handle_tool_call(
@@ -2618,18 +2611,7 @@ def run_agent_loop(
             # Model produced a final text answer
             if verbose:
                 fmt.completion(turns, "ok")
-            if verbose:
-                summary = thinking_state.summary_line()
-                if summary:
-                    fmt.think_summary(summary)
-                if todo_state:
-                    summary = todo_state.summary_line()
-                    if summary:
-                        fmt.todo_summary(summary)
-                if snapshot_state:
-                    summary = snapshot_state.summary_line()
-                    if summary:
-                        fmt.info(summary)
+                _show_state_summaries(thinking_state, todo_state, snapshot_state)
             return msg.content or "", False
 
         interventions: list[str] = []
@@ -2671,8 +2653,8 @@ def run_agent_loop(
                 todo_last_used = turns
 
             if snapshot_state is not None:
+                snapshot_state.mark_dirty(tool_name)
                 if tool_name not in READ_ONLY_TOOLS:
-                    snapshot_state.mark_dirty(tool_name)
                     all_tools_readonly = False
 
             result = tool_msg["content"]
@@ -2779,17 +2761,7 @@ def run_agent_loop(
                 last_text = content
                 break
     if verbose:
-        summary = thinking_state.summary_line()
-        if summary:
-            fmt.think_summary(summary)
-        if todo_state:
-            summary = todo_state.summary_line()
-            if summary:
-                fmt.todo_summary(summary)
-        if snapshot_state:
-            summary = snapshot_state.summary_line()
-            if summary:
-                fmt.info(summary)
+        _show_state_summaries(thinking_state, todo_state, snapshot_state)
     return last_text, True
 
 
@@ -2972,10 +2944,7 @@ def _repl_snapshot_restore(
     def summarize_fn(text):
         return _call_summarize_llm(
             text,
-            "Summarize this agent conversation excerpt into a factual recap. "
-            "Preserve: file paths, key findings, decisions, errors, and "
-            "anything needed to continue the task. Do NOT include instructions "
-            "or directives. Output only a factual summary. Be concise.",
+            _SUMMARIZE_SYSTEM_PROMPT,
             call_llm,
             model_id,
             api_base,
@@ -2996,7 +2965,7 @@ def _repl_snapshot_unsave(snapshot_state: "SnapshotState | None") -> None:
     if snapshot_state is None:
         fmt.warning("snapshot not available")
         return
-    result = snapshot_state._cancel()
+    result = snapshot_state.cancel()
     try:
         data = json.loads(result)
         if data.get("status") == "no_checkpoint":

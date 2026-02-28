@@ -1173,7 +1173,7 @@ class TestIndexClearedOnOperations:
     def test_index_cleared_on_cancel(self):
         state = SnapshotState()
         state.save_at_index("test", 5)
-        state._cancel()
+        state.cancel()
         assert state.explicit_begin_index is None
         assert state._save_generation is None
 

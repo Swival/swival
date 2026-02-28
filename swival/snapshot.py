@@ -3,6 +3,7 @@
 import json
 
 from . import fmt
+from ._msg import _msg_get, _msg_content, _msg_role, _msg_tool_call_id, _msg_tool_calls
 
 MAX_LABEL_LENGTH = 100
 MAX_SUMMARY_LENGTH = 4000
@@ -12,6 +13,7 @@ MAX_SUMMARY_DISPLAY = 1200
 VALID_ACTIONS = {"save", "restore", "cancel", "status"}
 
 SNAPSHOT_HISTORY_SENTINEL = "<!-- swival:snapshot-history-39a7c -->"
+SNAPSHOT_RECAP_PREFIX = "[snapshot:"
 
 READ_ONLY_TOOLS = frozenset(
     {
@@ -50,7 +52,6 @@ class SnapshotState:
         self.last_restore_tool_call_id: str | None = None
 
         # Dirty tracking (resets at every scope boundary)
-        self.dirty: bool = False
         self.dirty_tools: set[str] = set()
 
         # Completed history (survives compaction via prompt injection)
@@ -65,6 +66,22 @@ class SnapshotState:
             "force_restores": 0,
             "tokens_saved": 0,
         }
+
+        # Cached rendered prompt injection (invalidated on restore/reset)
+        self._cached_injection: str | None = None
+        self._injection_dirty: bool = False
+
+    @property
+    def dirty(self) -> bool:
+        return bool(self.dirty_tools)
+
+    def _clear_explicit(self) -> None:
+        """Reset explicit checkpoint state."""
+        self.explicit_active = False
+        self.explicit_label = None
+        self.explicit_begin_tool_call_id = None
+        self.explicit_begin_index = None
+        self._save_generation = None
 
     def process(
         self,
@@ -87,7 +104,7 @@ class SnapshotState:
                 return "error: restore requires access to the message list"
             return self._restore(summary, messages, force, tool_call_id)
         elif action == "cancel":
-            return self._cancel()
+            return self.cancel()
         elif action == "status":
             return self._status(messages)
 
@@ -175,11 +192,7 @@ class SnapshotState:
             for i in range(len(messages) - 1, max(start_idx - 1, -1), -1):
                 msg_i = messages[i]
                 role = _msg_role(msg_i)
-                tc = (
-                    msg_i.get("tool_calls")
-                    if isinstance(msg_i, dict)
-                    else getattr(msg_i, "tool_calls", None)
-                )
+                tc = _msg_tool_calls(msg_i)
                 if role == "assistant" and tc:
                     end_idx = i
                     break
@@ -194,9 +207,11 @@ class SnapshotState:
             )
 
         # Calculate stats before collapsing
-        scope_messages = messages[start_idx:end_idx]
-        turns_collapsed = len(scope_messages)
-        tokens_before = sum(_estimate_tokens(_msg_content(m)) for m in scope_messages)
+        turns_collapsed = end_idx - start_idx
+        tokens_before = sum(
+            _estimate_tokens(_msg_content(messages[i]))
+            for i in range(start_idx, end_idx)
+        )
         tokens_after = _estimate_tokens(summary)
         tokens_saved = max(0, tokens_before - tokens_after)
 
@@ -240,14 +255,10 @@ class SnapshotState:
         if force and self.dirty:
             self.stats["force_restores"] += 1
 
-        # Clear explicit checkpoint and reset dirty
-        self.explicit_active = False
-        self.explicit_label = None
-        self.explicit_begin_tool_call_id = None
-        self.explicit_begin_index = None
-        self._save_generation = None
+        self._clear_explicit()
         self.last_restore_tool_call_id = tool_call_id
         self.reset_dirty()
+        self._injection_dirty = True
 
         if self.verbose:
             fmt.info(
@@ -302,11 +313,7 @@ class SnapshotState:
                 # Check both tool_call_id (for tool responses) and
                 # _snapshot_restore_id (for recap messages)
                 tc_id = _msg_tool_call_id(msg)
-                restore_marker = (
-                    msg.get("_snapshot_restore_id")
-                    if isinstance(msg, dict)
-                    else getattr(msg, "_snapshot_restore_id", None)
-                )
+                restore_marker = _msg_get(msg, "_snapshot_restore_id")
                 if (
                     tc_id == self.last_restore_tool_call_id
                     or restore_marker == self.last_restore_tool_call_id
@@ -332,7 +339,7 @@ class SnapshotState:
         boundary = max(candidates)
         return boundary + 1
 
-    def _cancel(self) -> str:
+    def cancel(self) -> str:
         if not self.explicit_active:
             return json.dumps(
                 {
@@ -343,11 +350,7 @@ class SnapshotState:
             )
 
         label = self.explicit_label
-        self.explicit_active = False
-        self.explicit_label = None
-        self.explicit_begin_tool_call_id = None
-        self.explicit_begin_index = None
-        self._save_generation = None
+        self._clear_explicit()
         self.stats["cancels"] += 1
 
         if self.verbose:
@@ -400,17 +403,18 @@ class SnapshotState:
 
     def mark_dirty(self, tool_name: str) -> None:
         if tool_name not in READ_ONLY_TOOLS:
-            self.dirty = True
             self.dirty_tools.add(tool_name)
 
     def reset_dirty(self) -> None:
-        self.dirty = False
         self.dirty_tools.clear()
 
     def inject_into_prompt(self) -> str | None:
-        """Render history for system prompt injection."""
+        """Render history for system prompt injection. Cached until next restore."""
         if not self.history:
             return None
+
+        if not self._injection_dirty and self._cached_injection is not None:
+            return self._cached_injection
 
         lines = [
             SNAPSHOT_HISTORY_SENTINEL
@@ -429,20 +433,20 @@ class SnapshotState:
             lines.append(line)
             total_chars += len(line)
 
-        return "".join(lines) if len(lines) > 1 else None
+        result = "".join(lines) if len(lines) > 1 else None
+        self._cached_injection = result
+        self._injection_dirty = False
+        return result
 
     def reset(self) -> None:
         """Full reset for /clear."""
-        self.explicit_active = False
-        self.explicit_label = None
-        self.explicit_begin_tool_call_id = None
-        self.explicit_begin_index = None
+        self._clear_explicit()
         self._generation = 0
-        self._save_generation = None
         self.last_restore_tool_call_id = None
-        self.dirty = False
         self.dirty_tools.clear()
         self.history.clear()
+        self._cached_injection = None
+        self._injection_dirty = False
         self.stats = {
             "saves": 0,
             "restores": 0,
@@ -458,21 +462,3 @@ class SnapshotState:
             return None
         saved = self.stats["tokens_saved"]
         return f"snapshot: {self.stats['restores']} restore(s), ~{saved} tokens saved"
-
-
-def _msg_content(msg) -> str:
-    if isinstance(msg, dict):
-        return msg.get("content", "") or ""
-    return getattr(msg, "content", "") or ""
-
-
-def _msg_role(msg) -> str:
-    if isinstance(msg, dict):
-        return msg.get("role", "")
-    return getattr(msg, "role", "")
-
-
-def _msg_tool_call_id(msg) -> str | None:
-    if isinstance(msg, dict):
-        return msg.get("tool_call_id")
-    return getattr(msg, "tool_call_id", None)
