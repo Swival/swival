@@ -84,7 +84,7 @@ When skills are discovered, Swival exposes `use_skill` so the model can load ful
 
 ## `snapshot`
 
-`snapshot` is a context management tool for collapsing exploration into compact summaries. When the model spends many turns reading files, grepping, and reasoning before arriving at a conclusion, `snapshot` lets it collapse all of that into a single short message so the context window stays clean for the actual work.
+`snapshot` is a context management tool for collapsing exploration into compact summaries. When the model spends many turns reading files, grepping, and reasoning before arriving at a conclusion, `snapshot` lets it collapse all of that into a single short message so the context window stays clean for the actual work. For the full picture of how this fits into Swival's context management architecture, see [Context Management](context-management.md).
 
 The tool supports four actions: `save`, `restore`, `cancel`, and `status`.
 

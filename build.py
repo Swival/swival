@@ -43,6 +43,11 @@ NAV = [
                 "Tools",
                 "File ops, search, editing, web fetching, thinking, command execution",
             ),
+            (
+                "context-management",
+                "Context Management",
+                "How Swival fits large tasks into small context windows",
+            ),
         ],
     ),
     (

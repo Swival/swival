@@ -37,6 +37,7 @@
 <li><a href="getting-started.html">Getting Started</a></li>
 <li><a href="usage.html">Usage</a></li>
 <li><a href="tools.html" class="active">Tools</a></li>
+<li><a href="context-management.html">Context Management</a></li>
 </ul>
 </div>
 <div class="sidebar-section">
@@ -97,7 +98,7 @@
 <h2 id="use_skill"><code>use_skill</code></h2>
 <p>When skills are discovered, Swival exposes <code>use_skill</code> so the model can load full instructions on demand. The system prompt only includes a compact skill catalog at startup, and full skill instructions are injected only when the tool is called. This keeps the default prompt smaller while still allowing rich task-specific guidance.</p>
 <h2 id="snapshot"><code>snapshot</code></h2>
-<p><code>snapshot</code> is a context management tool for collapsing exploration into compact summaries. When the model spends many turns reading files, grepping, and reasoning before arriving at a conclusion, <code>snapshot</code> lets it collapse all of that into a single short message so the context window stays clean for the actual work.</p>
+<p><code>snapshot</code> is a context management tool for collapsing exploration into compact summaries. When the model spends many turns reading files, grepping, and reasoning before arriving at a conclusion, <code>snapshot</code> lets it collapse all of that into a single short message so the context window stays clean for the actual work. For the full picture of how this fits into Swival's context management architecture, see <a href="context-management.html">Context Management</a>.</p>
 <p>The tool supports four actions: <code>save</code>, <code>restore</code>, <code>cancel</code>, and <code>status</code>.</p>
 <p><code>save</code> sets an explicit checkpoint to mark the start of a focused investigation. It takes a required <code>label</code> parameter (max 100 characters). Only one explicit checkpoint can exist at a time.</p>
 <p><code>restore</code> collapses all turns since the checkpoint into a single summary message. It takes a required <code>summary</code> parameter (max 4,000 characters) and an optional <code>force</code> parameter that defaults to false. If no explicit checkpoint exists, it collapses from the last implicit checkpoint instead.</p>

@@ -120,4 +120,4 @@ For a deeper look at generic provider options and server-specific examples, see 
 
 If you want the full command surface and mode behavior, continue with [Usage](usage.md). If you want a deeper look at built-in capabilities, read [Tools](tools.md). If you need to understand trust boundaries before enabling stronger actions, read [Safety and Sandboxing](safety-and-sandboxing.md).
 
-If you want to connect external tool servers via MCP, see [MCP](mcp.md). If you want copy-on-write isolation so you can review and apply changes only when ready, read [Using Swival with AgentFS](agentfs.md).
+If you want to understand how Swival fits large tasks into small context windows, read [Context Management](context-management.md). If you want to connect external tool servers via MCP, see [MCP](mcp.md). If you want copy-on-write isolation so you can review and apply changes only when ready, read [Using Swival with AgentFS](agentfs.md).
