@@ -82,6 +82,9 @@
 <p><code>/help</code> prints the command reference in the terminal.</p>
 <p><code>/clear</code> drops conversation history back to the initial system state and also resets internal thinking and file-tracking state.</p>
 <p><code>/compact</code> compacts older tool output in memory. <code>/compact --drop</code> is more aggressive and also drops middle turns.</p>
+<p><code>/save [label]</code> sets a context checkpoint at the current position. If you omit the label, it defaults to <code>user-checkpoint</code>. Only one checkpoint can be active at a time.</p>
+<p><code>/restore</code> summarizes everything since the last checkpoint and collapses it into a single recap message. The summary is generated automatically by calling the LLM. If no explicit checkpoint was set with <code>/save</code>, it collapses from the last implicit checkpoint (typically the most recent user message). If context was compacted between <code>/save</code> and <code>/restore</code>, the checkpoint is invalidated and you'll need to <code>/unsave</code> and start over.</p>
+<p><code>/unsave</code> cancels the active checkpoint without collapsing anything.</p>
 <p><code>/add-dir &lt;path&gt;</code> grants read and write access to an additional directory for the current session.</p>
 <p><code>/add-dir-ro &lt;path&gt;</code> grants read-only access to an additional directory. The agent can read, list, and grep files there but cannot write, edit, or delete them.</p>
 <p><code>/extend</code> doubles the current turn budget. <code>/extend &lt;N&gt;</code> sets the turn budget to an exact value.</p>

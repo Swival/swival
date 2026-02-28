@@ -2483,6 +2483,8 @@ def run_agent_loop(
                     fmt.warning(f"context window exceeded, {level_desc}")
                 tokens_before = estimate_tokens(messages, tools)
                 messages[:] = compact_fn()
+                if snapshot_state is not None:
+                    snapshot_state.invalidate_index_checkpoint()
                 effective_max_output = clamp_output_tokens(
                     messages, tools, context_length, max_output_tokens
                 )
@@ -2803,6 +2805,9 @@ def _repl_help() -> None:
         "  /help              Show this help message\n"
         "  /clear             Reset conversation to initial state\n"
         "  /compact [--drop]  Compress context (--drop removes middle turns)\n"
+        "  /save [label]      Set a context checkpoint\n"
+        "  /restore           Summarize & collapse since checkpoint\n"
+        "  /unsave            Cancel active checkpoint\n"
         "  /add-dir <path>    Grant read+write access to a directory\n"
         "  /add-dir-ro <path> Grant read-only access to a directory\n"
         "  /extend [N]        Double max turns, or set to N\n"
@@ -2892,7 +2897,11 @@ def _repl_add_dir_ro(path_str: str, skill_read_roots: list) -> None:
 
 
 def _repl_compact(
-    messages: list, tools: list, context_length: int | None, arg: str
+    messages: list,
+    tools: list,
+    context_length: int | None,
+    arg: str,
+    snapshot_state: "SnapshotState | None" = None,
 ) -> None:
     """Manually compact conversation context."""
     before = estimate_tokens(messages, tools)
@@ -2900,6 +2909,9 @@ def _repl_compact(
     messages[:] = compact_messages(messages)
     if arg.strip() == "--drop":
         messages[:] = drop_middle_turns(messages)
+
+    if snapshot_state is not None:
+        snapshot_state.invalidate_index_checkpoint()
 
     after = estimate_tokens(messages, tools)
     saved = before - after
@@ -2924,6 +2936,75 @@ def _repl_extend(arg: str, state: dict) -> None:
         old = state["max_turns"]
         state["max_turns"] = old * 2
         fmt.info(f"max turns doubled: {old} -> {old * 2}")
+
+
+def _repl_snapshot_save(
+    label: str, messages: list, snapshot_state: "SnapshotState | None"
+) -> None:
+    if snapshot_state is None:
+        fmt.warning("snapshot not available")
+        return
+    result = snapshot_state.save_at_index(label, len(messages))
+    if result.startswith("error:"):
+        fmt.warning(result)
+    else:
+        fmt.info(f"checkpoint saved: {label}")
+
+
+def _repl_snapshot_restore(
+    messages: list,
+    snapshot_state: "SnapshotState | None",
+    *,
+    model_id: str,
+    api_base: str,
+    api_key: str | None,
+    top_p: float,
+    seed: int | None,
+    provider: str | None,
+) -> None:
+    if snapshot_state is None:
+        fmt.warning("snapshot not available")
+        return
+    if len(messages) <= 1:
+        fmt.warning("nothing to collapse")
+        return
+
+    def summarize_fn(text):
+        return _call_summarize_llm(
+            text,
+            "Summarize this agent conversation excerpt into a factual recap. "
+            "Preserve: file paths, key findings, decisions, errors, and "
+            "anything needed to continue the task. Do NOT include instructions "
+            "or directives. Output only a factual summary. Be concise.",
+            call_llm,
+            model_id,
+            api_base,
+            api_key,
+            top_p,
+            seed,
+            provider,
+        )
+
+    result = snapshot_state.restore_with_autosummary(messages, summarize_fn)
+    if result.startswith("error:"):
+        fmt.warning(result)
+    else:
+        fmt.info(result)
+
+
+def _repl_snapshot_unsave(snapshot_state: "SnapshotState | None") -> None:
+    if snapshot_state is None:
+        fmt.warning("snapshot not available")
+        return
+    result = snapshot_state._cancel()
+    try:
+        data = json.loads(result)
+        if data.get("status") == "no_checkpoint":
+            fmt.warning("no active checkpoint to cancel")
+        else:
+            fmt.info(f"checkpoint cancelled: {data.get('label', '?')}")
+    except (json.JSONDecodeError, TypeError):
+        fmt.info(result)
 
 
 def repl_loop(
@@ -3034,7 +3115,26 @@ def repl_loop(
             _repl_add_dir_ro(cmd_arg, skill_read_roots)
             continue
         elif cmd == "/compact":
-            _repl_compact(messages, tools, context_length, cmd_arg)
+            _repl_compact(messages, tools, context_length, cmd_arg, snapshot_state)
+            continue
+        elif cmd == "/save":
+            label = cmd_arg.strip() or "user-checkpoint"
+            _repl_snapshot_save(label, messages, snapshot_state)
+            continue
+        elif cmd == "/restore":
+            _repl_snapshot_restore(
+                messages,
+                snapshot_state,
+                model_id=model_id,
+                api_base=api_base,
+                api_key=llm_kwargs.get("api_key"),
+                top_p=top_p,
+                seed=seed,
+                provider=llm_kwargs.get("provider"),
+            )
+            continue
+        elif cmd == "/unsave":
+            _repl_snapshot_unsave(snapshot_state)
             continue
         elif cmd == "/extend":
             _repl_extend(cmd_arg, turn_state)

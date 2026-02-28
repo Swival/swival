@@ -19,7 +19,11 @@ from swival.agent import (
     _repl_add_dir_ro,
     _repl_compact,
     _repl_extend,
+    _repl_snapshot_save,
+    _repl_snapshot_restore,
+    _repl_snapshot_unsave,
 )
+from swival.snapshot import SnapshotState
 from swival.thinking import ThinkingState
 from swival.todo import TodoState
 from swival.tools import dispatch
@@ -1042,3 +1046,240 @@ class TestUnknownSlashCommand:
 
         assert len(call_messages) == 1
         assert call_messages[0][1]["content"] == "/foo bar"
+
+
+# ---------------------------------------------------------------------------
+# /save, /restore, /unsave commands
+# ---------------------------------------------------------------------------
+
+
+class TestSnapshotSaveCommand:
+    def test_save_sets_checkpoint(self, capsys):
+        state = SnapshotState()
+        msgs = [_sys("system"), _user("q1")]
+        _repl_snapshot_save("my-label", msgs, state)
+        assert state.explicit_active is True
+        assert state.explicit_label == "my-label"
+        assert state.explicit_begin_index == 2
+        captured = capsys.readouterr()
+        assert "checkpoint saved" in captured.err
+
+    def test_save_default_label(self, capsys):
+        state = SnapshotState()
+        msgs = [_sys("system")]
+        _repl_snapshot_save("user-checkpoint", msgs, state)
+        assert state.explicit_label == "user-checkpoint"
+
+    def test_save_error_duplicate(self, capsys):
+        state = SnapshotState()
+        msgs = [_sys("system")]
+        _repl_snapshot_save("first", msgs, state)
+        _repl_snapshot_save("second", msgs, state)
+        captured = capsys.readouterr()
+        assert "already active" in captured.err
+
+    def test_save_none_snapshot_state(self, capsys):
+        msgs = [_sys("system")]
+        _repl_snapshot_save("test", msgs, None)
+        captured = capsys.readouterr()
+        assert "not available" in captured.err
+
+
+class TestSnapshotRestoreCommand:
+    def test_restore_collapses_messages(self, capsys):
+        state = SnapshotState()
+        msgs = [_sys("system"), _user("q1"), {"role": "assistant", "content": "a1"}]
+        state.save_at_index("test", 1)
+
+        with patch("swival.agent.call_llm") as mock_llm:
+            resp = SimpleNamespace(content="LLM summary", tool_calls=None)
+            mock_llm.return_value = (resp, "stop")
+            _repl_snapshot_restore(
+                msgs,
+                state,
+                model_id="test",
+                api_base="http://localhost",
+                api_key=None,
+                top_p=1.0,
+                seed=None,
+                provider="lmstudio",
+            )
+
+        assert state.explicit_active is False
+        assert len(state.history) == 1
+        captured = capsys.readouterr()
+        assert "collapsed" in captured.err
+
+    def test_restore_no_messages_warns(self, capsys):
+        state = SnapshotState()
+        msgs = [_sys("system")]
+        _repl_snapshot_restore(
+            msgs,
+            state,
+            model_id="test",
+            api_base="http://localhost",
+            api_key=None,
+            top_p=1.0,
+            seed=None,
+            provider="lmstudio",
+        )
+        captured = capsys.readouterr()
+        assert "nothing to collapse" in captured.err
+
+    def test_restore_none_snapshot_state(self, capsys):
+        msgs = [_sys("system"), _user("q")]
+        _repl_snapshot_restore(
+            msgs,
+            None,
+            model_id="test",
+            api_base="http://localhost",
+            api_key=None,
+            top_p=1.0,
+            seed=None,
+            provider="lmstudio",
+        )
+        captured = capsys.readouterr()
+        assert "not available" in captured.err
+
+
+class TestSnapshotUnsaveCommand:
+    def test_unsave_clears_checkpoint(self, capsys):
+        state = SnapshotState()
+        state.save_at_index("test", 5)
+        _repl_snapshot_unsave(state)
+        assert state.explicit_active is False
+        captured = capsys.readouterr()
+        assert "cancelled" in captured.err
+
+    def test_unsave_no_checkpoint(self, capsys):
+        state = SnapshotState()
+        _repl_snapshot_unsave(state)
+        captured = capsys.readouterr()
+        assert "no active checkpoint" in captured.err
+
+    def test_unsave_none_snapshot_state(self, capsys):
+        _repl_snapshot_unsave(None)
+        captured = capsys.readouterr()
+        assert "not available" in captured.err
+
+
+class TestSnapshotHelpInclusion:
+    def test_help_includes_snapshot_commands(self, capsys):
+        _repl_help()
+        captured = capsys.readouterr()
+        assert "/save" in captured.err
+        assert "/restore" in captured.err
+        assert "/unsave" in captured.err
+
+
+class TestSnapshotReplIntegration:
+    def _mock_session(self, inputs):
+        mock_session = MagicMock()
+        side = []
+        for v in inputs:
+            if v is EOFError:
+                side.append(EOFError())
+            else:
+                side.append(v)
+        mock_session.prompt.side_effect = side
+        return mock_session
+
+    def test_save_command_in_repl(self, tmp_path):
+        """/save foo sets a checkpoint without calling the model."""
+        state = SnapshotState()
+        messages = [_sys("system")]
+        inputs = ["/save foo", "/exit"]
+        mock_session = self._mock_session(inputs)
+
+        with (
+            patch("prompt_toolkit.PromptSession", return_value=mock_session),
+            patch("swival.agent.run_agent_loop") as mock_loop,
+        ):
+            repl_loop(messages, [], **_loop_kwargs(tmp_path, snapshot_state=state))
+
+        assert mock_loop.call_count == 0
+        assert state.explicit_active is True
+        assert state.explicit_label == "foo"
+
+    def test_save_default_label_in_repl(self, tmp_path):
+        """/save (no arg) uses 'user-checkpoint'."""
+        state = SnapshotState()
+        messages = [_sys("system")]
+        inputs = ["/save", "/exit"]
+        mock_session = self._mock_session(inputs)
+
+        with (
+            patch("prompt_toolkit.PromptSession", return_value=mock_session),
+        ):
+            repl_loop(messages, [], **_loop_kwargs(tmp_path, snapshot_state=state))
+
+        assert state.explicit_label == "user-checkpoint"
+
+    def test_unsave_command_in_repl(self, tmp_path):
+        """/unsave clears an active checkpoint."""
+        state = SnapshotState()
+        messages = [_sys("system")]
+        inputs = ["/save foo", "/unsave", "/exit"]
+        mock_session = self._mock_session(inputs)
+
+        with patch("prompt_toolkit.PromptSession", return_value=mock_session):
+            repl_loop(messages, [], **_loop_kwargs(tmp_path, snapshot_state=state))
+
+        assert state.explicit_active is False
+
+    def test_save_then_compact_then_restore_error(self, tmp_path, capsys):
+        """/save, /compact --drop, /restore returns invalidation error."""
+        state = SnapshotState()
+        messages = [
+            _sys("system"),
+            _user("q1"),
+            {"role": "assistant", "content": "a1"},
+            _user("q2"),
+            {"role": "assistant", "content": "a2"},
+            _user("q3"),
+            {"role": "assistant", "content": "a3"},
+        ]
+        inputs = ["/save checkpoint", "/compact --drop", "/restore", "/exit"]
+        mock_session = self._mock_session(inputs)
+
+        with patch("prompt_toolkit.PromptSession", return_value=mock_session):
+            repl_loop(messages, [], **_loop_kwargs(tmp_path, snapshot_state=state))
+
+        captured = capsys.readouterr()
+        assert "invalidated" in captured.err
+
+    def test_save_then_autocompact_then_restore_error(self, tmp_path, capsys):
+        """Auto-compaction (ContextOverflowError path) invalidates index checkpoint."""
+        state = SnapshotState()
+        messages = [
+            _sys("system"),
+            _user("q1"),
+            {"role": "assistant", "content": "a1"},
+        ]
+
+        # Save checkpoint at current message count
+        state.save_at_index("before-overflow", len(messages))
+        assert state.explicit_active is True
+
+        call_count = 0
+
+        def fake_call_llm(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise ContextOverflowError("overflow")
+            return _make_text_response("recovered")
+
+        # Add a user message to trigger a loop iteration
+        messages.append(_user("trigger"))
+
+        with patch("swival.agent.call_llm", side_effect=fake_call_llm):
+            run_agent_loop(messages, [], **_loop_kwargs(tmp_path, snapshot_state=state))
+
+        # The auto-compaction path should have called invalidate_index_checkpoint
+        assert state._generation > 0
+
+        # Attempting to resolve the checkpoint should fail
+        result = state._resolve_start(messages)
+        assert isinstance(result, str)
+        assert "invalidated" in result

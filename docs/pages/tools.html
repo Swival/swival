@@ -96,6 +96,34 @@
 <p>In YOLO mode, command execution is unrestricted and Swival also accepts shell command strings through <code>/bin/sh -c</code> on Unix or <code>cmd.exe /c</code> on Windows.</p>
 <h2 id="use_skill"><code>use_skill</code></h2>
 <p>When skills are discovered, Swival exposes <code>use_skill</code> so the model can load full instructions on demand. The system prompt only includes a compact skill catalog at startup, and full skill instructions are injected only when the tool is called. This keeps the default prompt smaller while still allowing rich task-specific guidance.</p>
+<h2 id="snapshot"><code>snapshot</code></h2>
+<p><code>snapshot</code> is a context management tool for collapsing exploration into compact summaries. When the model spends many turns reading files, grepping, and reasoning before arriving at a conclusion, <code>snapshot</code> lets it collapse all of that into a single short message so the context window stays clean for the actual work.</p>
+<p>The tool supports four actions: <code>save</code>, <code>restore</code>, <code>cancel</code>, and <code>status</code>.</p>
+<p><code>save</code> sets an explicit checkpoint to mark the start of a focused investigation. It takes a required <code>label</code> parameter (max 100 characters). Only one explicit checkpoint can exist at a time.</p>
+<p><code>restore</code> collapses all turns since the checkpoint into a single summary message. It takes a required <code>summary</code> parameter (max 4,000 characters) and an optional <code>force</code> parameter that defaults to false. If no explicit checkpoint exists, it collapses from the last implicit checkpoint instead.</p>
+<p><code>cancel</code> clears the explicit checkpoint without collapsing anything. <code>status</code> reports the current checkpoint state, dirty status, and history.</p>
+<h3 id="implicit-checkpoints">Implicit Checkpoints</h3>
+<p>Calling <code>save</code> before <code>restore</code> is not required. The system automatically creates implicit checkpoints at every user message, after each successful restore, and on conversation reset. When <code>restore</code> is called without a prior <code>save</code>, it collapses everything since the last implicit checkpoint, which is typically the most recent user message.</p>
+<h3 id="dirty-scopes">Dirty Scopes</h3>
+<p>Tools are classified as read-only or mutating. Read-only tools (<code>read_file</code>, <code>list_files</code>, <code>grep</code>, <code>glob</code>, <code>fetch_url</code>, <code>think</code>, <code>todo</code>, <code>snapshot</code>) are safe to collapse because they don't change anything on disk. Mutating tools (<code>write_file</code>, <code>edit_file</code>, <code>delete_file</code>, <code>run_command</code>, and unknown MCP tools) dirty the scope.</p>
+<p>If the scope contains mutating tool calls, <code>restore</code> fails with a list of the dirty tools. Pass <code>force=true</code> to override when you are confident the summary captures the mutations.</p>
+<h3 id="snapshot-history">Snapshot History</h3>
+<p>Completed snapshots are preserved across context compaction. Up to 10 past summaries are retained and injected into the system prompt so knowledge survives aggressive compaction.</p>
+<p>The collapsed message that replaces all intermediate turns looks like this:</p>
+<pre><code>[snapshot: &lt;label&gt;]
+&lt;your summary&gt;
+(collapsed N turns, saved ~K tokens)
+</code></pre>
+<h3 id="repl-commands">REPL Commands</h3>
+<p>In REPL mode, you can also trigger snapshots manually with <code>/save</code>, <code>/restore</code>, and <code>/unsave</code>. These work like the tool actions but are initiated by the user instead of the model. <code>/restore</code> auto-generates the summary by calling the LLM, so you don't need to write one yourself. See <a href="usage.html">Usage</a> for details.</p>
+<h3 id="example-workflow">Example Workflow</h3>
+<ol>
+<li>User asks to debug a performance issue.</li>
+<li>Agent reads six files, greps for bottlenecks, thinks through options.</li>
+<li>Agent calls <code>snapshot</code> with <code>action=restore</code> and <code>summary="Bottleneck is in db/queries.py:89. The get_users() query does N+1 selects. Fix: add .select_related('profile') to the queryset."</code>.</li>
+<li>All exploration collapses to roughly 100 tokens.</li>
+<li>Agent proceeds to implement the fix with a clean context.</li>
+</ol>
 <h2 id="mcp-tools">MCP Tools</h2>
 <p>Swival can connect to external tool servers via the <a href="https://modelcontextprotocol.io/">Model Context Protocol</a> (MCP). MCP tools are discovered at startup and exposed alongside built-in tools. MCP tool output is size-guarded: results up to 20 KB are returned inline, larger results are saved to <code>.swival/</code> for paginated reads via <code>read_file</code>, and output is hard-capped at 10 MB. See <a href="mcp.html">MCP</a> for configuration and details.</p>
         </article>

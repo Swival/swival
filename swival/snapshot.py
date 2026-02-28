@@ -40,6 +40,11 @@ class SnapshotState:
         self.explicit_active: bool = False
         self.explicit_label: str | None = None
         self.explicit_begin_tool_call_id: str | None = None
+        self.explicit_begin_index: int | None = None
+
+        # Generation counter for stale-index detection
+        self._generation: int = 0
+        self._save_generation: int | None = None
 
         # Implicit scope resolved at restore-time via backward scan
         self.last_restore_tool_call_id: str | None = None
@@ -88,7 +93,8 @@ class SnapshotState:
 
         return f"error: unhandled action {action!r}"
 
-    def _save(self, label: str, tool_call_id: str | None) -> str:
+    def _save_common(self, label: str) -> str | None:
+        """Validate and set shared save state. Returns error string or None."""
         if not label:
             return "error: save requires a non-empty 'label' parameter"
         if len(label) > MAX_LABEL_LENGTH:
@@ -98,9 +104,31 @@ class SnapshotState:
 
         self.explicit_active = True
         self.explicit_label = label
-        self.explicit_begin_tool_call_id = tool_call_id
         self.reset_dirty()
         self.stats["saves"] += 1
+        return None
+
+    def _save(self, label: str, tool_call_id: str | None) -> str:
+        err = self._save_common(label)
+        if err:
+            return err
+
+        self.explicit_begin_tool_call_id = tool_call_id
+
+        if self.verbose:
+            fmt.info(f"snapshot: checkpoint saved — {label}")
+
+        return json.dumps(
+            {"action": "save", "label": label, "status": "checkpoint_set"}
+        )
+
+    def save_at_index(self, label: str, index: int) -> str:
+        err = self._save_common(label)
+        if err:
+            return err
+
+        self.explicit_begin_index = index
+        self._save_generation = self._generation
 
         if self.verbose:
             fmt.info(f"snapshot: checkpoint saved — {label}")
@@ -110,7 +138,13 @@ class SnapshotState:
         )
 
     def _restore(
-        self, summary: str, messages: list, force: bool, tool_call_id: str | None
+        self,
+        summary: str,
+        messages: list,
+        force: bool,
+        tool_call_id: str | None,
+        *,
+        end_idx: int | None = None,
     ) -> str:
         if not summary:
             return "error: restore requires a non-empty 'summary' parameter"
@@ -130,24 +164,25 @@ class SnapshotState:
         if isinstance(start_idx, str):
             return start_idx
 
-        # Find the end of the collapsible scope.  The current turn's
-        # assistant message (which issued this restore call) and any
-        # tool-result messages already appended for earlier tool calls
-        # in the same batch must be excluded — collapsing them would
-        # orphan tool_call_ids.  Scan backwards for the last assistant
-        # message with tool_calls; that marks the current turn boundary.
-        end_idx = len(messages)
-        for i in range(len(messages) - 1, max(start_idx - 1, -1), -1):
-            msg_i = messages[i]
-            role = _msg_role(msg_i)
-            tc = (
-                msg_i.get("tool_calls")
-                if isinstance(msg_i, dict)
-                else getattr(msg_i, "tool_calls", None)
-            )
-            if role == "assistant" and tc:
-                end_idx = i
-                break
+        if end_idx is None:
+            # Find the end of the collapsible scope.  The current turn's
+            # assistant message (which issued this restore call) and any
+            # tool-result messages already appended for earlier tool calls
+            # in the same batch must be excluded — collapsing them would
+            # orphan tool_call_ids.  Scan backwards for the last assistant
+            # message with tool_calls; that marks the current turn boundary.
+            end_idx = len(messages)
+            for i in range(len(messages) - 1, max(start_idx - 1, -1), -1):
+                msg_i = messages[i]
+                role = _msg_role(msg_i)
+                tc = (
+                    msg_i.get("tool_calls")
+                    if isinstance(msg_i, dict)
+                    else getattr(msg_i, "tool_calls", None)
+                )
+                if role == "assistant" and tc:
+                    end_idx = i
+                    break
 
         if end_idx - start_idx <= 0:
             return json.dumps(
@@ -209,6 +244,8 @@ class SnapshotState:
         self.explicit_active = False
         self.explicit_label = None
         self.explicit_begin_tool_call_id = None
+        self.explicit_begin_index = None
+        self._save_generation = None
         self.last_restore_tool_call_id = tool_call_id
         self.reset_dirty()
 
@@ -243,6 +280,14 @@ class SnapshotState:
                 "error: explicit checkpoint marker was removed (likely by compaction). "
                 "Call `snapshot cancel` and try again."
             )
+
+        # Explicit checkpoint via index (user-initiated /save)
+        if self.explicit_active and self.explicit_begin_index is not None:
+            if self._save_generation != self._generation:
+                return (
+                    "error: checkpoint invalidated (context was modified). Use /unsave."
+                )
+            return self.explicit_begin_index
 
         # Implicit checkpoint: scan backwards for the most recent user message
         # or last restore boundary, whichever is newer
@@ -301,6 +346,8 @@ class SnapshotState:
         self.explicit_active = False
         self.explicit_label = None
         self.explicit_begin_tool_call_id = None
+        self.explicit_begin_index = None
+        self._save_generation = None
         self.stats["cancels"] += 1
 
         if self.verbose:
@@ -320,6 +367,37 @@ class SnapshotState:
         }
         return json.dumps(info)
 
+    def invalidate_index_checkpoint(self) -> None:
+        """Increment generation to invalidate any index-based checkpoint."""
+        self._generation += 1
+
+    def restore_with_autosummary(self, messages: list, summarize_fn) -> str:
+        """Restore with auto-generated summary (for REPL /restore command)."""
+        start_idx = self._resolve_start(messages)
+        if isinstance(start_idx, str):
+            return start_idx
+
+        end_idx = len(messages)
+        if end_idx - start_idx <= 0:
+            return "nothing to collapse"
+
+        scope_messages = messages[start_idx:end_idx]
+        lines = []
+        for m in scope_messages:
+            role = _msg_role(m)
+            content = _msg_content(m)
+            if content:
+                lines.append(f"[{role}] {content}")
+        text = "\n".join(lines)
+
+        summary = summarize_fn(text) if text else None
+        if not summary:
+            summary = "(context collapsed by user)"
+
+        return self._restore(
+            summary, messages, force=True, tool_call_id=None, end_idx=end_idx
+        )
+
     def mark_dirty(self, tool_name: str) -> None:
         if tool_name not in READ_ONLY_TOOLS:
             self.dirty = True
@@ -334,7 +412,10 @@ class SnapshotState:
         if not self.history:
             return None
 
-        lines = [SNAPSHOT_HISTORY_SENTINEL + "\n[Snapshot history — prior investigation summaries]"]
+        lines = [
+            SNAPSHOT_HISTORY_SENTINEL
+            + "\n[Snapshot history — prior investigation summaries]"
+        ]
         total_chars = 0
         budget = 6000  # ~1500 tokens
         for entry in self.history:
@@ -355,6 +436,9 @@ class SnapshotState:
         self.explicit_active = False
         self.explicit_label = None
         self.explicit_begin_tool_call_id = None
+        self.explicit_begin_index = None
+        self._generation = 0
+        self._save_generation = None
         self.last_restore_tool_call_id = None
         self.dirty = False
         self.dirty_tools.clear()

@@ -2,7 +2,12 @@
 
 import json
 
-from swival.snapshot import SNAPSHOT_HISTORY_SENTINEL, SnapshotState, READ_ONLY_TOOLS, MAX_HISTORY
+from swival.snapshot import (
+    SNAPSHOT_HISTORY_SENTINEL,
+    SnapshotState,
+    READ_ONLY_TOOLS,
+    MAX_HISTORY,
+)
 from swival.tools import dispatch
 
 
@@ -1055,3 +1060,150 @@ class TestCompactionScoring:
         )
         score = score_turn([recap])
         assert score >= 5
+
+
+class TestSaveAtIndex:
+    def test_save_at_index_basic(self):
+        state = SnapshotState()
+        result = json.loads(state.save_at_index("checkpoint-1", 5))
+        assert result["action"] == "save"
+        assert result["status"] == "checkpoint_set"
+        assert state.explicit_active is True
+        assert state.explicit_label == "checkpoint-1"
+        assert state.explicit_begin_index == 5
+        assert state._save_generation == 0
+
+    def test_save_at_index_resets_dirty(self):
+        state = SnapshotState()
+        state.mark_dirty("edit_file")
+        state.save_at_index("test", 3)
+        assert state.dirty is False
+
+    def test_save_at_index_increments_stats(self):
+        state = SnapshotState()
+        state.save_at_index("test", 0)
+        assert state.stats["saves"] == 1
+
+    def test_save_at_index_empty_label_rejected(self):
+        state = SnapshotState()
+        result = state.save_at_index("", 0)
+        assert result.startswith("error:")
+        assert "label" in result
+
+    def test_save_at_index_duplicate_rejected(self):
+        state = SnapshotState()
+        state.save_at_index("first", 0)
+        result = state.save_at_index("second", 5)
+        assert result.startswith("error:")
+        assert "already active" in result
+
+    def test_save_at_index_label_too_long(self):
+        state = SnapshotState()
+        result = state.save_at_index("x" * 101, 0)
+        assert result.startswith("error:")
+
+
+class TestResolveStartWithIndex:
+    def test_resolve_start_returns_saved_index(self):
+        state = SnapshotState()
+        msgs = [_user("q1"), _assistant("a1"), _user("q2"), _assistant("a2")]
+        state.save_at_index("test", 2)
+        idx = state._resolve_start(msgs)
+        assert idx == 2
+
+    def test_resolve_start_stale_generation(self):
+        state = SnapshotState()
+        msgs = [_user("q1"), _assistant("a1"), _user("q2"), _assistant("a2")]
+        state.save_at_index("test", 2)
+        state.invalidate_index_checkpoint()
+        result = state._resolve_start(msgs)
+        assert isinstance(result, str)
+        assert "invalidated" in result
+
+
+class TestRestoreWithAutosummary:
+    def test_basic_autosummary(self):
+        state = SnapshotState()
+        msgs = [_user("q"), _assistant("a1"), _assistant("a2")]
+        state.save_at_index("test", 1)
+
+        result = state.restore_with_autosummary(
+            msgs, lambda t: "auto-generated summary"
+        )
+        parsed = json.loads(result)
+        assert parsed["status"] == "collapsed"
+        assert parsed["turns_collapsed"] == 2
+        assert state.explicit_active is False
+        assert len(state.history) == 1
+        assert state.history[0]["summary"] == "auto-generated summary"
+
+    def test_autosummary_fallback_on_none(self):
+        state = SnapshotState()
+        msgs = [_user("q"), _assistant("a1"), _assistant("a2")]
+        state.save_at_index("test", 1)
+
+        result = state.restore_with_autosummary(msgs, lambda text: None)
+        parsed = json.loads(result)
+        assert parsed["status"] == "collapsed"
+        assert state.history[0]["summary"] == "(context collapsed by user)"
+
+    def test_manual_end_boundary_includes_full_tail(self):
+        state = SnapshotState()
+        msgs = [
+            _user("q"),
+            _assistant_tc("read_file", "tc1"),
+            _tool("tc1", "content"),
+            _assistant_tc("read_file", "tc2"),
+        ]
+        state.save_at_index("test", 1)
+
+        result = state.restore_with_autosummary(msgs, lambda t: "summary")
+        parsed = json.loads(result)
+        assert parsed["turns_collapsed"] == 3
+
+    def test_empty_scope_returns_message(self):
+        state = SnapshotState()
+        msgs = [_user("q")]
+        state.save_at_index("test", 1)
+        result = state.restore_with_autosummary(msgs, lambda t: "summary")
+        assert "nothing to collapse" in result
+
+
+class TestIndexClearedOnOperations:
+    def test_index_cleared_on_cancel(self):
+        state = SnapshotState()
+        state.save_at_index("test", 5)
+        state._cancel()
+        assert state.explicit_begin_index is None
+        assert state._save_generation is None
+
+    def test_index_cleared_on_reset(self):
+        state = SnapshotState()
+        state.save_at_index("test", 5)
+        state.reset()
+        assert state.explicit_begin_index is None
+        assert state._save_generation is None
+        assert state._generation == 0
+
+    def test_index_cleared_on_restore(self):
+        state = SnapshotState()
+        msgs = [_user("q"), _assistant("a1"), _assistant("a2")]
+        state.save_at_index("test", 1)
+        state.restore_with_autosummary(msgs, lambda t: "summary")
+        assert state.explicit_begin_index is None
+        assert state._save_generation is None
+        assert state.explicit_active is False
+
+
+class TestInvalidateIndexCheckpoint:
+    def test_invalidate_increments_generation(self):
+        state = SnapshotState()
+        assert state._generation == 0
+        state.invalidate_index_checkpoint()
+        assert state._generation == 1
+
+    def test_multiple_invalidations(self):
+        state = SnapshotState()
+        state.invalidate_index_checkpoint()
+        state.invalidate_index_checkpoint()
+        assert state._generation == 2

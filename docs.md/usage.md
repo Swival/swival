@@ -53,6 +53,12 @@ The REPL is built on `prompt-toolkit`, so it supports input history, history sea
 
 `/compact` compacts older tool output in memory. `/compact --drop` is more aggressive and also drops middle turns.
 
+`/save [label]` sets a context checkpoint at the current position. If you omit the label, it defaults to `user-checkpoint`. Only one checkpoint can be active at a time.
+
+`/restore` summarizes everything since the last checkpoint and collapses it into a single recap message. The summary is generated automatically by calling the LLM. If no explicit checkpoint was set with `/save`, it collapses from the last implicit checkpoint (typically the most recent user message). If context was compacted between `/save` and `/restore`, the checkpoint is invalidated and you'll need to `/unsave` and start over.
+
+`/unsave` cancels the active checkpoint without collapsing anything.
+
 `/add-dir <path>` grants read and write access to an additional directory for the current session.
 
 `/add-dir-ro <path>` grants read-only access to an additional directory. The agent can read, list, and grep files there but cannot write, edit, or delete them.
