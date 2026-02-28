@@ -1,6 +1,6 @@
 # Context Management
 
-Most AI coding agents assume large context windows — 128K tokens or more. Swival is designed for models that have 8K, 16K, or 32K tokens to work with. Every token matters, so Swival manages context aggressively at every stage: preventing bloat before it happens, giving the agent tools to compress its own history, and recovering gracefully when the window fills up.
+Most AI coding agents assume large context windows — 128K tokens or more. Swival is designed to work well with models that have less tokens to work with. Every token matters, so Swival manages context aggressively at every stage: preventing bloat before it happens, giving the agent tools to compress its own history, and recovering gracefully when the window fills up.
 
 You don't need to configure any of this. It works out of the box. But understanding how it works helps you get the most out of small models and explains what's happening when you see compaction messages in the logs.
 
