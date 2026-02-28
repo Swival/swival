@@ -69,6 +69,7 @@ class Session:
         config_dir: "Path | None" = None,
         proactive_summaries: bool = False,
         mcp_servers: dict | None = None,
+        extra_body: dict | None = None,
     ):
         self.base_dir = base_dir
         self.config_dir = config_dir
@@ -96,6 +97,7 @@ class Session:
         self.read_guard = read_guard
         self.history = history
         self.mcp_servers = mcp_servers
+        self.extra_body = extra_body
 
         # Setup state (cached after first _setup())
         self._setup_done = False
@@ -147,6 +149,8 @@ class Session:
             max_context_tokens=self.max_context_tokens,
             verbose=self.verbose,
         )
+        if self.extra_body is not None:
+            self._llm_kwargs["extra_body"] = self.extra_body
 
         # Resolve --add-dir and --add-dir-ro paths
         self._allowed_dir_paths = _resolve_dir_list(self.allowed_dirs, "allowed_dirs")

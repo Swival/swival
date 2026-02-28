@@ -1176,6 +1176,7 @@ def call_llm(
     *,
     provider="lmstudio",
     api_key=None,
+    extra_body=None,
 ):
     """Call LiteLLM with the appropriate provider. Returns (message, finish_reason)."""
     import litellm
@@ -1237,6 +1238,8 @@ def call_llm(
     for key, val in [("temperature", temperature), ("top_p", top_p), ("seed", seed)]:
         if val is not None:
             completion_kwargs[key] = val
+    if extra_body is not None:
+        completion_kwargs["extra_body"] = extra_body
 
     try:
         response = litellm.completion(**completion_kwargs)
@@ -1371,6 +1374,20 @@ def build_parser():
         action="store_true",
         default=_UNSET,
         help="Disable ANSI color even when stderr is a TTY.",
+    )
+
+    def _parse_extra_body(value):
+        parsed = json.loads(value)
+        if not isinstance(parsed, dict):
+            raise argparse.ArgumentTypeError("--extra-body must be a JSON object")
+        return parsed
+
+    parser.add_argument(
+        "--extra-body",
+        type=_parse_extra_body,
+        default=_UNSET,
+        metavar="JSON",
+        help='Extra parameters to pass to the LLM API as JSON (e.g. \'{"chat_template_kwargs": {"enable_thinking": false}}\').',
     )
 
     parser.add_argument(
@@ -2022,6 +2039,8 @@ def _run_main(args, report, _write_report, parser):
         )
     except ConfigError as e:
         parser.error(str(e))
+    if args.extra_body is not None:
+        llm_kwargs["extra_body"] = args.extra_body
 
     # Stash resolved model_id for error reporting
     args._resolved_model_id = model_id
