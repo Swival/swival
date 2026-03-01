@@ -152,6 +152,7 @@ class ReportCollector:
         sandbox_session: str | None = None,
         sandbox_strict_read: bool = False,
         agentfs_version: str | None = None,
+        diff_hint: str | None = None,
     ) -> dict:
         tool_calls_succeeded = sum(s["succeeded"] for s in self.tool_stats.values())
         tool_calls_failed = sum(s["failed"] for s in self.tool_stats.values())
@@ -171,6 +172,8 @@ class ReportCollector:
             sandbox["strict_read"] = sandbox_strict_read
             if agentfs_version is not None:
                 sandbox["agentfs_version"] = agentfs_version
+            if diff_hint is not None:
+                sandbox["diff_hint"] = diff_hint
 
         return {
             "version": 1,
@@ -226,6 +229,7 @@ class ReportCollector:
         sandbox_session: str | None = None,
         sandbox_strict_read: bool = False,
         agentfs_version: str | None = None,
+        diff_hint: str | None = None,
     ) -> dict:
         """Build the report and write it to disk in one step."""
         self._last_report = self.build_report(
@@ -245,5 +249,6 @@ class ReportCollector:
             sandbox_session=sandbox_session,
             sandbox_strict_read=sandbox_strict_read,
             agentfs_version=agentfs_version,
+            diff_hint=diff_hint,
         )
         return self._last_report

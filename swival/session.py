@@ -68,6 +68,7 @@ class Session:
         sandbox: str = "builtin",
         sandbox_session: str | None = None,
         sandbox_strict_read: bool = False,
+        sandbox_auto_session: bool = True,
         read_guard: bool = True,
         history: bool = True,
         config_dir: "Path | None" = None,
@@ -101,6 +102,7 @@ class Session:
         self.sandbox = sandbox
         self.sandbox_session = sandbox_session
         self.sandbox_strict_read = sandbox_strict_read
+        self.sandbox_auto_session = sandbox_auto_session
         self.read_guard = read_guard
         self.history = history
         self.mcp_servers = mcp_servers

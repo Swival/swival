@@ -13,11 +13,15 @@ from swival.report import ReportCollector
 from swival.sandbox_agentfs import (
     _AGENTFS_ENV,
     _ENV_MARKER,
+    _SESSION_ENV,
     _VERSION_ENV,
     _absolutize_argv,
     _find_agentfs,
+    auto_session_id,
     build_agentfs_argv,
     check_sandbox_available,
+    diff_hint,
+    get_agentfs_session,
     get_agentfs_version,
     is_inside_agentfs,
     is_sandboxed,
@@ -53,6 +57,7 @@ def _make_args(**overrides):
         "sandbox": _UNSET,
         "sandbox_session": _UNSET,
         "sandbox_strict_read": _UNSET,
+        "no_sandbox_auto_session": _UNSET,
         "no_read_guard": _UNSET,
         "no_instructions": _UNSET,
         "no_skills": _UNSET,
@@ -1095,3 +1100,287 @@ class TestStrictReadCLI:
         args = _make_args()
         apply_config_to_args(args, {"sandbox_strict_read": True})
         assert args.sandbox_strict_read is True
+
+
+# ===========================================================================
+# auto_session_id()
+# ===========================================================================
+
+
+class TestAutoSessionId:
+    def test_deterministic_for_same_dir(self, tmp_path):
+        id1 = auto_session_id(str(tmp_path))
+        id2 = auto_session_id(str(tmp_path))
+        assert id1 == id2
+
+    def test_different_dirs_produce_different_ids(self, tmp_path):
+        d1 = tmp_path / "proj1"
+        d2 = tmp_path / "proj2"
+        d1.mkdir()
+        d2.mkdir()
+        assert auto_session_id(str(d1)) != auto_session_id(str(d2))
+
+    def test_prefix(self, tmp_path):
+        sid = auto_session_id(str(tmp_path))
+        assert sid.startswith("swival-")
+
+    def test_length(self, tmp_path):
+        sid = auto_session_id(str(tmp_path))
+        assert len(sid) == 19  # "swival-" (7) + 12 hex chars
+
+
+# ===========================================================================
+# get_agentfs_session()
+# ===========================================================================
+
+
+class TestGetAgentfsSession:
+    def test_returns_env_var_when_set(self, monkeypatch):
+        monkeypatch.setenv(_SESSION_ENV, "swival-abc123def456")
+        assert get_agentfs_session() == "swival-abc123def456"
+
+    def test_returns_none_when_not_set(self, monkeypatch):
+        monkeypatch.delenv(_SESSION_ENV, raising=False)
+        assert get_agentfs_session() is None
+
+
+# ===========================================================================
+# diff_hint()
+# ===========================================================================
+
+
+class TestDiffHint:
+    def test_returns_command_when_session_provided(self):
+        assert diff_hint("swival-abc123") == "agentfs diff swival-abc123"
+
+    def test_returns_none_when_session_is_none(self):
+        assert diff_hint(None) is None
+
+
+# ===========================================================================
+# Auto-session in maybe_reexec()
+# ===========================================================================
+
+
+class TestAutoSessionReexec:
+    def test_auto_session_used_when_no_explicit_session(self, tmp_path, monkeypatch):
+        _clear_sandboxed(monkeypatch)
+        _mock_agentfs_script(tmp_path)
+        monkeypatch.setenv("PATH", str(tmp_path))
+        monkeypatch.setattr(sys, "argv", ["swival", "task"])
+
+        captured = {}
+
+        def fake_execvpe(file, args, env):
+            captured["args"] = args
+            captured["env"] = env
+
+        monkeypatch.setattr(os, "execvpe", fake_execvpe)
+        monkeypatch.setattr(os, "chdir", lambda p: None)
+
+        maybe_reexec(
+            sandbox="agentfs",
+            sandbox_session=None,
+            base_dir=str(tmp_path),
+            add_dirs=[],
+            sandbox_auto_session=True,
+        )
+
+        expected_session = auto_session_id(str(tmp_path))
+        session_idx = captured["args"].index("--session")
+        assert captured["args"][session_idx + 1] == expected_session
+        assert captured["env"][_SESSION_ENV] == expected_session
+
+    def test_explicit_session_overrides_auto(self, tmp_path, monkeypatch):
+        _clear_sandboxed(monkeypatch)
+        _mock_agentfs_script(tmp_path)
+        monkeypatch.setenv("PATH", str(tmp_path))
+        monkeypatch.setattr(sys, "argv", ["swival", "task"])
+
+        captured = {}
+
+        def fake_execvpe(file, args, env):
+            captured["args"] = args
+            captured["env"] = env
+
+        monkeypatch.setattr(os, "execvpe", fake_execvpe)
+        monkeypatch.setattr(os, "chdir", lambda p: None)
+
+        maybe_reexec(
+            sandbox="agentfs",
+            sandbox_session="my-explicit",
+            base_dir=str(tmp_path),
+            add_dirs=[],
+            sandbox_auto_session=True,
+        )
+
+        session_idx = captured["args"].index("--session")
+        assert captured["args"][session_idx + 1] == "my-explicit"
+        assert captured["env"][_SESSION_ENV] == "my-explicit"
+
+    def test_auto_session_disabled(self, tmp_path, monkeypatch):
+        _clear_sandboxed(monkeypatch)
+        _mock_agentfs_script(tmp_path)
+        monkeypatch.setenv("PATH", str(tmp_path))
+        monkeypatch.setattr(sys, "argv", ["swival", "task"])
+
+        captured = {}
+
+        def fake_execvpe(file, args, env):
+            captured["args"] = args
+            captured["env"] = env
+
+        monkeypatch.setattr(os, "execvpe", fake_execvpe)
+        monkeypatch.setattr(os, "chdir", lambda p: None)
+
+        maybe_reexec(
+            sandbox="agentfs",
+            sandbox_session=None,
+            base_dir=str(tmp_path),
+            add_dirs=[],
+            sandbox_auto_session=False,
+        )
+
+        assert "--session" not in captured["args"]
+        assert _SESSION_ENV not in captured["env"]
+
+
+# ===========================================================================
+# Session env var propagation
+# ===========================================================================
+
+
+class TestSessionEnvPropagation:
+    def test_session_env_set_with_session(self, tmp_path, monkeypatch):
+        _clear_sandboxed(monkeypatch)
+        _mock_agentfs_script(tmp_path)
+        monkeypatch.setenv("PATH", str(tmp_path))
+        monkeypatch.setattr(sys, "argv", ["swival", "task"])
+
+        captured = {}
+
+        def fake_execvpe(file, args, env):
+            captured["env"] = env
+
+        monkeypatch.setattr(os, "execvpe", fake_execvpe)
+        monkeypatch.setattr(os, "chdir", lambda p: None)
+
+        maybe_reexec(
+            sandbox="agentfs",
+            sandbox_session="test-sess",
+            base_dir=str(tmp_path),
+            add_dirs=[],
+        )
+
+        assert captured["env"][_SESSION_ENV] == "test-sess"
+
+    def test_session_env_not_set_when_no_session(self, tmp_path, monkeypatch):
+        _clear_sandboxed(monkeypatch)
+        _mock_agentfs_script(tmp_path)
+        monkeypatch.setenv("PATH", str(tmp_path))
+        monkeypatch.setattr(sys, "argv", ["swival", "task"])
+
+        captured = {}
+
+        def fake_execvpe(file, args, env):
+            captured["env"] = env
+
+        monkeypatch.setattr(os, "execvpe", fake_execvpe)
+        monkeypatch.setattr(os, "chdir", lambda p: None)
+
+        maybe_reexec(
+            sandbox="agentfs",
+            sandbox_session=None,
+            base_dir=str(tmp_path),
+            add_dirs=[],
+            sandbox_auto_session=False,
+        )
+
+        assert _SESSION_ENV not in captured["env"]
+
+
+# ===========================================================================
+# Config: --no-sandbox-auto-session
+# ===========================================================================
+
+
+class TestAutoSessionConfig:
+    def test_flag_parsed(self):
+        parser = agent.build_parser()
+        args = parser.parse_args(["--no-sandbox-auto-session", "question"])
+        assert args.no_sandbox_auto_session is True
+
+    def test_default_enabled(self):
+        args = _make_args()
+        apply_config_to_args(args, {})
+        assert args.no_sandbox_auto_session is False
+
+    def test_config_disables(self):
+        args = _make_args()
+        apply_config_to_args(args, {"sandbox_auto_session": False})
+        assert args.no_sandbox_auto_session is True
+
+    def test_config_enables(self):
+        args = _make_args()
+        apply_config_to_args(args, {"sandbox_auto_session": True})
+        assert args.no_sandbox_auto_session is False
+
+    def test_cli_flag_overrides_config(self):
+        args = _make_args(no_sandbox_auto_session=True)
+        apply_config_to_args(args, {"sandbox_auto_session": True})
+        assert args.no_sandbox_auto_session is True
+
+
+# ===========================================================================
+# Report: diff_hint
+# ===========================================================================
+
+
+class TestDiffHintReport:
+    def test_report_includes_diff_hint(self):
+        rc = ReportCollector()
+        r = rc.build_report(
+            task="test",
+            model="m",
+            provider="lmstudio",
+            settings={},
+            outcome="success",
+            answer="ok",
+            exit_code=0,
+            turns=1,
+            sandbox_mode="agentfs",
+            sandbox_session="swival-abc123",
+            diff_hint="agentfs diff swival-abc123",
+        )
+        assert r["sandbox"]["diff_hint"] == "agentfs diff swival-abc123"
+
+    def test_report_omits_diff_hint_when_none(self):
+        rc = ReportCollector()
+        r = rc.build_report(
+            task="test",
+            model="m",
+            provider="lmstudio",
+            settings={},
+            outcome="success",
+            answer="ok",
+            exit_code=0,
+            turns=1,
+            sandbox_mode="agentfs",
+        )
+        assert "diff_hint" not in r["sandbox"]
+
+    def test_report_omits_diff_hint_for_builtin(self):
+        rc = ReportCollector()
+        r = rc.build_report(
+            task="test",
+            model="m",
+            provider="lmstudio",
+            settings={},
+            outcome="success",
+            answer="ok",
+            exit_code=0,
+            turns=1,
+            sandbox_mode="builtin",
+            diff_hint="agentfs diff something",
+        )
+        assert "diff_hint" not in r["sandbox"]

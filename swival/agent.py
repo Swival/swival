@@ -1477,6 +1477,12 @@ def build_parser():
         help="Enable strict read isolation in AgentFS sandbox (requires agentfs with strict read support).",
     )
     parser.add_argument(
+        "--no-sandbox-auto-session",
+        action="store_true",
+        default=_UNSET,
+        help="Disable automatic session ID generation for AgentFS sandbox.",
+    )
+    parser.add_argument(
         "--no-skills",
         action="store_true",
         default=_UNSET,
@@ -1727,7 +1733,13 @@ def main():
 
     # AgentFS sandbox: re-exec inside agentfs if requested.
     # This replaces the current process on success (does not return).
-    from .sandbox_agentfs import maybe_reexec, is_sandboxed, get_agentfs_version
+    from .sandbox_agentfs import (
+        maybe_reexec,
+        is_sandboxed,
+        get_agentfs_version,
+        get_agentfs_session,
+        diff_hint,
+    )
 
     maybe_reexec(
         sandbox=args.sandbox,
@@ -1735,13 +1747,19 @@ def main():
         base_dir=str(Path(args.base_dir).resolve()),
         add_dirs=getattr(args, "add_dir", []) or [],
         sandbox_strict_read=args.sandbox_strict_read,
+        sandbox_auto_session=not args.no_sandbox_auto_session,
     )
 
     if args.sandbox == "agentfs" and is_sandboxed() and args.verbose:
-        fmt.info(
-            "Sandbox: agentfs"
-            + (f" (session: {args.sandbox_session})" if args.sandbox_session else "")
-        )
+        session = get_agentfs_session()
+        parts = ["Sandbox: agentfs"]
+        if session:
+            parts.append(f"(session: {session})")
+        fmt.info(" ".join(parts))
+        if session:
+            fmt.info(
+                f"Resume: swival --sandbox agentfs --sandbox-session {session} ..."
+            )
 
     report = ReportCollector() if args.report else None
 
@@ -1803,6 +1821,8 @@ def main():
             total = snapshot_state.stats["restores"] + snapshot_state.stats["saves"]
             if total > 0:
                 snapshot_stats = dict(snapshot_state.stats)
+        _session = get_agentfs_session()
+        _diff = diff_hint(_session)
         report.finalize(
             task=args.question or "",
             model=model_id,
@@ -1817,9 +1837,10 @@ def main():
             todo_stats=todo_stats,
             snapshot_stats=snapshot_stats,
             sandbox_mode=args.sandbox,
-            sandbox_session=args.sandbox_session,
+            sandbox_session=_session or args.sandbox_session,
             sandbox_strict_read=args.sandbox_strict_read,
             agentfs_version=get_agentfs_version(),
+            diff_hint=_diff,
         )
         try:
             report.write(args.report)
@@ -2353,6 +2374,17 @@ def _run_main(args, report, _write_report, parser):
                 todo_state=todo_state,
                 snapshot_state=snapshot_state,
             )
+        if args.sandbox == "agentfs" and args.verbose:
+            from .sandbox_agentfs import (
+                is_sandboxed,
+                get_agentfs_session,
+                diff_hint as _diff_hint,
+            )
+
+            if is_sandboxed():
+                _hint = _diff_hint(get_agentfs_session())
+                if _hint:
+                    fmt.sandbox_hint(f"Review changes: {_hint}")
         if exhausted:
             if args.verbose:
                 fmt.warning("max turns reached, agent stopped.")
@@ -2373,6 +2405,17 @@ def _run_main(args, report, _write_report, parser):
             )
 
     repl_loop(messages, tools, **loop_kwargs, no_history=no_history)
+    if args.sandbox == "agentfs" and args.verbose:
+        from .sandbox_agentfs import (
+            is_sandboxed,
+            get_agentfs_session,
+            diff_hint as _diff_hint,
+        )
+
+        if is_sandboxed():
+            _hint = _diff_hint(get_agentfs_session())
+            if _hint:
+                fmt.sandbox_hint(f"Review changes: {_hint}")
 
 
 def run_agent_loop(

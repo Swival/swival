@@ -100,7 +100,7 @@ Calling `save` before `restore` is not required. The system automatically create
 
 ### Dirty Scopes
 
-Tools are classified as read-only or mutating. Read-only tools (`read_file`, `list_files`, `grep`, `glob`, `fetch_url`, `think`, `todo`, `snapshot`) are safe to collapse because they don't change anything on disk. Mutating tools (`write_file`, `edit_file`, `delete_file`, `run_command`, and unknown MCP tools) dirty the scope.
+Tools are classified as read-only or mutating. Read-only tools (`read_file`, `list_files`, `grep`, `fetch_url`, `think`, `todo`, `snapshot`) are safe to collapse because they don't change anything on disk. Mutating tools (`write_file`, `edit_file`, `delete_file`, `run_command`, and unknown MCP tools) dirty the scope.
 
 If the scope contains mutating tool calls, `restore` fails with a list of the dirty tools. Pass `force=true` to override when you are confident the summary captures the mutations.
 

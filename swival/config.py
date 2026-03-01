@@ -44,6 +44,7 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "sandbox": str,
     "sandbox_session": str,
     "sandbox_strict_read": bool,
+    "sandbox_auto_session": bool,
     "no_read_guard": bool,
     "no_instructions": bool,
     "no_skills": bool,
@@ -95,6 +96,7 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "sandbox": "builtin",
     "sandbox_session": None,
     "sandbox_strict_read": False,
+    "no_sandbox_auto_session": False,
     "no_read_guard": False,
     "no_instructions": False,
     "no_skills": False,
@@ -454,10 +456,16 @@ def apply_config_to_args(args: argparse.Namespace, config: dict) -> None:
             args.color = color_val
             args.no_color = not color_val
 
+    # Special handling: positive config key -> negative argparse dest
+    if "sandbox_auto_session" in config:
+        if _is_unset("no_sandbox_auto_session"):
+            args.no_sandbox_auto_session = not config["sandbox_auto_session"]
+
     # Apply all other config keys
+    _SKIP_KEYS = {"color", "sandbox_auto_session"}
     for key, value in config.items():
-        if key == "color":
-            continue  # Already handled above
+        if key in _SKIP_KEYS:
+            continue
 
         dest = _CONFIG_TO_ARGPARSE.get(key, key)
         if _is_unset(dest):
@@ -491,6 +499,7 @@ def config_to_session_kwargs(config: dict) -> dict:
     _INVERT_KEYS = {
         "no_read_guard": "read_guard",
         "no_history": "history",
+        "no_sandbox_auto_session": "sandbox_auto_session",
         "quiet": "verbose",
     }
 
@@ -537,6 +546,7 @@ def generate_config(project: bool = False) -> str:
         '# sandbox = "builtin"             # "builtin" | "agentfs"',
         '# sandbox_session = "my-session"  # agentfs session ID (optional)',
         "# sandbox_strict_read = false",
+        "# sandbox_auto_session = true",
         '# allowed_commands = ["ls", "git", "python3"]',
         "# yolo = false",
         '# allowed_dirs = ["../shared-lib", "/data/assets"]',

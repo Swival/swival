@@ -63,8 +63,14 @@
 <pre><code class="language-sh">swival --sandbox agentfs &quot;Refactor the auth module&quot; --yolo
 </code></pre>
 <p>In this mode, <code>--base-dir</code> and each <code>--add-dir</code> path are mapped to AgentFS <code>--allow</code> rules so the agent can write to those directories inside the overlay. Everything else on the host filesystem is read-only to subprocesses.</p>
-<p>To reuse sandbox state across runs, pass a session ID:</p>
+<p>Swival automatically generates a deterministic session ID from the project directory, so re-running <code>swival --sandbox agentfs</code> in the same directory reuses the overlay. You can see the session ID and a resume command in verbose mode (<code>-v</code>). To provide your own session ID instead:</p>
 <pre><code class="language-sh">swival --sandbox agentfs --sandbox-session my-feature &quot;Continue the refactor&quot; --yolo
+</code></pre>
+<p>To get a fresh, ephemeral overlay with no session reuse:</p>
+<pre><code class="language-sh">swival --sandbox agentfs --no-sandbox-auto-session &quot;One-off task&quot; --yolo
+</code></pre>
+<p>After a run, Swival prints a diff hint in verbose mode showing how to review changes:</p>
+<pre><code>  Review changes: agentfs diff swival-a1b2c3d4e5f6
 </code></pre>
 <p>This requires the <code>agentfs</code> binary on PATH. If it is not found, Swival exits with an actionable error. See <a href="agentfs.html">Using Swival With AgentFS</a> for more workflows.</p>
 <h3 id="strict-read-mode">Strict Read Mode</h3>

@@ -198,6 +198,10 @@ def error(msg: str) -> None:
     _console.print(line)
 
 
+def sandbox_hint(msg: str) -> None:
+    _console.print(Text(f"  {msg}", style="dim"))
+
+
 def repl_banner() -> None:
     _console.print(Text("Interactive mode. Type /exit or Ctrl-D to quit.", style="dim"))
 

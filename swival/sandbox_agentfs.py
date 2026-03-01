@@ -1,5 +1,6 @@
 """AgentFS sandbox bootstrap: re-exec Swival inside an AgentFS overlay."""
 
+import hashlib
 import os
 import re
 import shutil
@@ -12,6 +13,7 @@ from .report import ConfigError
 _ENV_MARKER = "SWIVAL_AGENTFS_ACTIVE"
 _AGENTFS_ENV = "AGENTFS"
 _VERSION_ENV = "SWIVAL_AGENTFS_VERSION"
+_SESSION_ENV = "SWIVAL_AGENTFS_SESSION"
 
 # Minimum agentfs version that supports --strict-read.
 # None means no released version supports it yet.
@@ -123,6 +125,33 @@ def get_agentfs_version() -> str | None:
     return os.environ.get(_VERSION_ENV)
 
 
+def auto_session_id(base_dir: str) -> str:
+    """Generate a deterministic session ID from the resolved base directory.
+
+    Same project directory always produces the same ID, so re-running
+    ``swival --sandbox agentfs`` in the same directory reuses the overlay.
+    """
+    resolved = str(Path(base_dir).resolve())
+    digest = hashlib.sha256(resolved.encode()).hexdigest()[:12]
+    return f"swival-{digest}"
+
+
+def get_agentfs_session() -> str | None:
+    """Return the effective session ID if running inside an AgentFS sandbox.
+
+    The session ID is propagated via ``SWIVAL_AGENTFS_SESSION`` during re-exec.
+    Returns ``None`` when not sandboxed or when no session was used.
+    """
+    return os.environ.get(_SESSION_ENV)
+
+
+def diff_hint(session: str | None) -> str | None:
+    """Return the agentfs diff command for the given session, or None."""
+    if session is not None:
+        return f"agentfs diff {session}"
+    return None
+
+
 def _absolutize_argv(argv: list[str]) -> list[str]:
     """Return a copy of argv with path-bearing flag values resolved to absolute paths.
 
@@ -196,12 +225,16 @@ def maybe_reexec(
     base_dir: str,
     add_dirs: list[str],
     sandbox_strict_read: bool = False,
+    sandbox_auto_session: bool = True,
 ) -> None:
     """Re-exec Swival inside AgentFS if sandbox mode requires it.
 
     Called early in startup, before the agent loop. Does nothing if:
     - sandbox != "agentfs"
     - Already running inside AgentFS (both env markers set)
+
+    When *sandbox_auto_session* is True and no explicit *sandbox_session* is
+    provided, a deterministic session ID is generated from the base directory.
 
     When *sandbox_strict_read* is True, probes the agentfs binary for
     strict-read support and raises ``ConfigError`` if the installed
@@ -229,6 +262,10 @@ def maybe_reexec(
 
     resolved_base = str(Path(base_dir).resolve())
 
+    effective_session = sandbox_session
+    if effective_session is None and sandbox_auto_session:
+        effective_session = auto_session_id(base_dir)
+
     # Resolve all path-bearing flags to absolute before re-exec, because
     # we chdir to base_dir below and relative paths would break.
     child_argv = _absolutize_argv(sys.argv)
@@ -237,13 +274,15 @@ def maybe_reexec(
         agentfs_bin=agentfs_bin,
         base_dir=resolved_base,
         add_dirs=add_dirs,
-        session=sandbox_session,
+        session=effective_session,
         swival_argv=child_argv,
     )
 
     env = os.environ.copy()
     env[_ENV_MARKER] = "1"
     env[_VERSION_ENV] = probe["version"]
+    if effective_session is not None:
+        env[_SESSION_ENV] = effective_session
 
     # AgentFS overlays the process CWD. Ensure it matches base_dir so the
     # overlay workspace aligns with the directory Swival considers writable.

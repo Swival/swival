@@ -720,7 +720,6 @@ class TestReadOnlyAllowlist:
             "read_file",
             "list_files",
             "grep",
-            "glob",
             "fetch_url",
             "think",
             "todo",
