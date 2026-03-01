@@ -254,13 +254,22 @@ class TestAbsolutizeArgv:
         result = _absolutize_argv(["swival", "--model=gpt-4", "question"])
         assert result[1] == "--model=gpt-4"
 
-    def test_stops_at_double_dash(self, tmp_path, monkeypatch):
+    def test_stops_at_double_dash_equals_form(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         result = _absolutize_argv(
             ["swival", "--base-dir", "proj", "--", "--base-dir=subdir"]
         )
         assert result[2] == str((tmp_path / "proj").resolve())
         assert result[4] == "--base-dir=subdir"  # untouched
+
+    def test_stops_at_double_dash_split_form(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        result = _absolutize_argv(
+            ["swival", "--add-dir", "proj", "--", "--add-dir", "rel"]
+        )
+        assert result[2] == str((tmp_path / "proj").resolve())
+        assert result[4] == "--add-dir"  # untouched
+        assert result[5] == "rel"  # untouched
 
 
 # ===========================================================================
