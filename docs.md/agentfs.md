@@ -28,7 +28,7 @@ You also need a working model provider for Swival itself, such as LM Studio or H
 
 ## Run Swival Inside A Session Overlay
 
-`agentfs run` wraps a command in a session-backed sandbox. If you name the session, you can return to the same overlay state later.
+The integrated mode handles this automatically, but you can also invoke `agentfs run` directly when you want full control over session naming and overlay lifecycle.
 
 ```sh
 cd ~/my-project
@@ -37,9 +37,7 @@ agentfs run --session add-config -- \
     swival "Add a config module that reads from env vars, and update main.py to use it" --yolo --max-turns 20
 ```
 
-This pairing of AgentFS and `--yolo` is intentional. AgentFS provides filesystem isolation externally, so Swival can run with full command and file capability without mutating your real tree.
-
-After the run, your working copy is unchanged. The overlay delta for this example lives at `~/.agentfs/run/add-config/delta.db`.
+After the run, your working copy is unchanged. The overlay delta lives at `~/.agentfs/run/add-config/delta.db`.
 
 ## Review The Delta
 
@@ -101,14 +99,14 @@ If you decide not to keep the work, delete the session directory at `~/.agentfs/
 
 ## Iterate Without Starting Over
 
-You can continue improving the same feature by reusing the session name. Each run sees prior overlay changes.
+With `--sandbox agentfs`, Swival automatically reuses the same overlay when you run it again from the same project directory. Each run sees prior overlay changes, giving you a natural loop of generate, validate, and refine before applying files.
+
+If you used a manual session above, reuse the same session name:
 
 ```sh
 agentfs run --session add-config -- \
     swival "The tests are failing because config.py doesn't handle missing env vars. Fix it." --yolo
 ```
-
-This lets you run a natural loop of generate, validate, and refine before applying files.
 
 ## Alternative Workflow With `agentfs init -c`
 
@@ -149,25 +147,16 @@ kill %1
 
 If you do not want the result, remove `.agentfs/add-config.db`.
 
-## Alternative Workflow For REPL Sessions
+## REPL Sessions
 
-For live conversational editing, mount first and point Swival's base directory at the mount.
-
-```sh
-cd ~/my-project
-agentfs init --base . sandbox
-mkdir -p /tmp/sandbox
-agentfs mount -f --auto-unmount sandbox /tmp/sandbox
-```
-
-In another terminal, run REPL mode against the mounted view.
+The integrated sandbox mode works with REPL mode directly:
 
 ```sh
-swival --repl --base-dir /tmp/sandbox --yolo
+swival --sandbox agentfs --repl --yolo
 ```
 
-This setup gives you an interactive agent session while you test changes from a separate terminal against the mounted sandbox.
+This gives you an interactive agent session inside the overlay. You can test changes from a separate terminal by re-entering the same session with `agentfs run --session <id> -- bash`.
 
 ## Practical Guidance
 
-In day-to-day use, AgentFS plus `--yolo` is often the most productive combination because it gives the model full capability while still protecting your real workspace. Session names make iteration resumable across multiple agent runs. Swival does not need special AgentFS integration because it simply sees whatever filesystem tree you point it at, whether that tree is your real directory or a mounted copy-on-write overlay.
+In day-to-day use, `--sandbox agentfs --yolo` is often the most productive combination because it gives the model full capability while still protecting your real workspace. Deterministic session IDs make iteration resumable across runs in the same project directory — or pass `--sandbox-session <id>` for explicit control.
