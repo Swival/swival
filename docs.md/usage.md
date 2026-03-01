@@ -123,6 +123,8 @@ Useful for long-running sessions.
 
 `--sandbox-session` sets an AgentFS session ID so sandbox state persists across runs. Only valid with `--sandbox agentfs`.
 
+`--sandbox-strict-read` enables strict read isolation inside the AgentFS sandbox. When set, the agent process can only read files that have been explicitly allowed, rather than having unrestricted read access to the host filesystem. This requires an AgentFS version with strict read support. If the installed version does not support it, Swival exits with an error. Only valid with `--sandbox agentfs`.
+
 `--no-read-guard` disables the read-before-write guard that normally prevents editing existing files before reading them.
 
 ### System Prompt And Instruction Flags

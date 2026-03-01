@@ -67,6 +67,11 @@
 <pre><code class="language-sh">swival --sandbox agentfs --sandbox-session my-feature &quot;Continue the refactor&quot; --yolo
 </code></pre>
 <p>This requires the <code>agentfs</code> binary on PATH. If it is not found, Swival exits with an actionable error. See <a href="agentfs.html">Using Swival With AgentFS</a> for more workflows.</p>
+<h3 id="strict-read-mode">Strict Read Mode</h3>
+<p>By default, the AgentFS sandbox only isolates writes — the agent can still read any file on the host filesystem. Pass <code>--sandbox-strict-read</code> to also restrict reads to explicitly allowed directories:</p>
+<pre><code class="language-sh">swival --sandbox agentfs --sandbox-strict-read &quot;Analyze the project&quot; --yolo
+</code></pre>
+<p>This flag requires an AgentFS version that supports strict read isolation. No current release supports it yet, so using the flag today produces a clear error with the installed version. When AgentFS ships the feature, Swival will detect it automatically and pass the appropriate flags through.</p>
 <p>You can also combine <code>sandbox-exec</code> with AgentFS when you want additional kernel-level controls like network restriction:</p>
 <pre><code class="language-sh">sandbox-exec -p '(version 1)(allow default)(deny network*)' \
     swival --sandbox agentfs &quot;task&quot; --yolo

@@ -118,6 +118,7 @@
 <p><code>--yolo</code> disables both filesystem sandbox checks and command whitelisting, except that filesystem root access is still blocked.</p>
 <p><code>--sandbox</code> selects the sandbox backend. The default is <code>builtin</code>, which uses application-layer path guards. Set it to <code>agentfs</code> to re-exec Swival inside an <a href="agentfs.html">AgentFS</a> overlay for OS-enforced write isolation. Requires the <code>agentfs</code> binary on PATH.</p>
 <p><code>--sandbox-session</code> sets an AgentFS session ID so sandbox state persists across runs. Only valid with <code>--sandbox agentfs</code>.</p>
+<p><code>--sandbox-strict-read</code> enables strict read isolation inside the AgentFS sandbox. When set, the agent process can only read files that have been explicitly allowed, rather than having unrestricted read access to the host filesystem. This requires an AgentFS version with strict read support. If the installed version does not support it, Swival exits with an error. Only valid with <code>--sandbox agentfs</code>.</p>
 <p><code>--no-read-guard</code> disables the read-before-write guard that normally prevents editing existing files before reading them.</p>
 <h3 id="system-prompt-and-instruction-flags">System Prompt And Instruction Flags</h3>
 <p><code>--system-prompt</code> replaces the built-in prompt with your own prompt text.</p>

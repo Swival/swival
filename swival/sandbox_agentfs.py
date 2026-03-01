@@ -1,7 +1,9 @@
 """AgentFS sandbox bootstrap: re-exec Swival inside an AgentFS overlay."""
 
 import os
+import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -9,6 +11,11 @@ from .report import ConfigError
 
 _ENV_MARKER = "SWIVAL_AGENTFS_ACTIVE"
 _AGENTFS_ENV = "AGENTFS"
+_VERSION_ENV = "SWIVAL_AGENTFS_VERSION"
+
+# Minimum agentfs version that supports --strict-read.
+# None means no released version supports it yet.
+_STRICT_READ_MIN_VERSION: str | None = None
 
 _PATH_FLAGS = frozenset(
     {
@@ -65,6 +72,55 @@ def _find_agentfs() -> str:
             "or use --sandbox builtin."
         )
     return path
+
+
+def probe_agentfs(agentfs_bin: str) -> dict:
+    """Probe the agentfs binary for version and capability information.
+
+    Runs ``agentfs --version``, parses the output, and returns a dict with:
+    - ``version``: version string (e.g. ``"0.6.2"``) or ``"unknown"``
+    - ``supports_strict_read``: whether the installed version supports strict read mode
+
+    On any failure (crash, timeout, unparsable output), returns a safe fallback.
+    """
+    try:
+        proc = subprocess.run(
+            [agentfs_bin, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        output = proc.stdout.strip()
+        # Parse patterns like "agentfs v0.6.2" or "agentfs 0.6.2-3-gabcdef-dirty"
+        m = re.search(r"v?(\d+\.\d+\.\d+)", output)
+        version = m.group(1) if m else "unknown"
+    except (OSError, subprocess.TimeoutExpired):
+        version = "unknown"
+
+    supports_strict_read = False
+    if _STRICT_READ_MIN_VERSION is not None and version != "unknown":
+        supports_strict_read = _version_gte(version, _STRICT_READ_MIN_VERSION)
+
+    return {"version": version, "supports_strict_read": supports_strict_read}
+
+
+def _version_gte(version: str, minimum: str) -> bool:
+    """Return True if *version* >= *minimum* using simple numeric comparison."""
+
+    def _parts(v: str) -> tuple[int, ...]:
+        return tuple(int(x) for x in v.split("."))
+
+    return _parts(version) >= _parts(minimum)
+
+
+def get_agentfs_version() -> str | None:
+    """Return the agentfs version string if running inside an AgentFS sandbox.
+
+    The version is propagated via the ``SWIVAL_AGENTFS_VERSION`` env var
+    during re-exec.  Returns ``None`` when not sandboxed or when the env
+    var is absent.
+    """
+    return os.environ.get(_VERSION_ENV)
 
 
 def _absolutize_argv(argv: list[str]) -> list[str]:
@@ -139,12 +195,17 @@ def maybe_reexec(
     sandbox_session: str | None,
     base_dir: str,
     add_dirs: list[str],
+    sandbox_strict_read: bool = False,
 ) -> None:
     """Re-exec Swival inside AgentFS if sandbox mode requires it.
 
     Called early in startup, before the agent loop. Does nothing if:
     - sandbox != "agentfs"
     - Already running inside AgentFS (both env markers set)
+
+    When *sandbox_strict_read* is True, probes the agentfs binary for
+    strict-read support and raises ``ConfigError`` if the installed
+    version does not support it.
 
     On success, this function does not return (os.execvpe replaces the process).
     On failure, raises ConfigError.
@@ -156,6 +217,15 @@ def maybe_reexec(
         return
 
     agentfs_bin = _find_agentfs()
+
+    probe = probe_agentfs(agentfs_bin)
+
+    if sandbox_strict_read and not probe["supports_strict_read"]:
+        raise ConfigError(
+            f"--sandbox-strict-read requires AgentFS with strict read support "
+            f"(installed: {probe['version']}). "
+            f"No current version supports this feature yet."
+        )
 
     resolved_base = str(Path(base_dir).resolve())
 
@@ -173,6 +243,7 @@ def maybe_reexec(
 
     env = os.environ.copy()
     env[_ENV_MARKER] = "1"
+    env[_VERSION_ENV] = probe["version"]
 
     # AgentFS overlays the process CWD. Ensure it matches base_dir so the
     # overlay workspace aligns with the directory Swival considers writable.

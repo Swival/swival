@@ -150,6 +150,8 @@ class ReportCollector:
         snapshot_stats: dict | None = None,
         sandbox_mode: str = "builtin",
         sandbox_session: str | None = None,
+        sandbox_strict_read: bool = False,
+        agentfs_version: str | None = None,
     ) -> dict:
         tool_calls_succeeded = sum(s["succeeded"] for s in self.tool_stats.values())
         tool_calls_failed = sum(s["failed"] for s in self.tool_stats.values())
@@ -165,6 +167,10 @@ class ReportCollector:
         sandbox: dict = {"mode": sandbox_mode}
         if sandbox_session is not None:
             sandbox["session"] = sandbox_session
+        if sandbox_mode == "agentfs":
+            sandbox["strict_read"] = sandbox_strict_read
+            if agentfs_version is not None:
+                sandbox["agentfs_version"] = agentfs_version
 
         return {
             "version": 1,
@@ -218,6 +224,8 @@ class ReportCollector:
         snapshot_stats: dict | None = None,
         sandbox_mode: str = "builtin",
         sandbox_session: str | None = None,
+        sandbox_strict_read: bool = False,
+        agentfs_version: str | None = None,
     ) -> dict:
         """Build the report and write it to disk in one step."""
         self._last_report = self.build_report(
@@ -235,5 +243,7 @@ class ReportCollector:
             snapshot_stats=snapshot_stats,
             sandbox_mode=sandbox_mode,
             sandbox_session=sandbox_session,
+            sandbox_strict_read=sandbox_strict_read,
+            agentfs_version=agentfs_version,
         )
         return self._last_report

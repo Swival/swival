@@ -67,6 +67,7 @@ class Session:
         allowed_dirs_ro: list[str] | None = None,
         sandbox: str = "builtin",
         sandbox_session: str | None = None,
+        sandbox_strict_read: bool = False,
         read_guard: bool = True,
         history: bool = True,
         config_dir: "Path | None" = None,
@@ -99,6 +100,7 @@ class Session:
         self.allowed_dirs_ro = allowed_dirs_ro or []
         self.sandbox = sandbox
         self.sandbox_session = sandbox_session
+        self.sandbox_strict_read = sandbox_strict_read
         self.read_guard = read_guard
         self.history = history
         self.mcp_servers = mcp_servers
@@ -321,6 +323,7 @@ class Session:
                 turns=collector.max_turn_seen,
                 sandbox_mode=self.sandbox,
                 sandbox_session=self.sandbox_session,
+                sandbox_strict_read=self.sandbox_strict_read,
             )
 
         return Result(

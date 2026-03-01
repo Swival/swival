@@ -13,13 +13,16 @@ from swival.report import ReportCollector
 from swival.sandbox_agentfs import (
     _AGENTFS_ENV,
     _ENV_MARKER,
+    _VERSION_ENV,
     _absolutize_argv,
     _find_agentfs,
     build_agentfs_argv,
     check_sandbox_available,
+    get_agentfs_version,
     is_inside_agentfs,
     is_sandboxed,
     maybe_reexec,
+    probe_agentfs,
 )
 
 
@@ -49,6 +52,7 @@ def _make_args(**overrides):
         "add_dir_ro": None,
         "sandbox": _UNSET,
         "sandbox_session": _UNSET,
+        "sandbox_strict_read": _UNSET,
         "no_read_guard": _UNSET,
         "no_instructions": _UNSET,
         "no_skills": _UNSET,
@@ -67,10 +71,13 @@ def _make_args(**overrides):
     return argparse.Namespace(**defaults)
 
 
-def _mock_agentfs_script(tmp_path):
-    """Write a dummy agentfs script that just prints its args."""
+def _mock_agentfs_script(tmp_path, *, version_output="agentfs v0.6.2"):
+    """Write a dummy agentfs script that prints its args or version."""
     script = tmp_path / "agentfs"
-    script.write_text("#!/bin/sh\necho $@\n", encoding="utf-8")
+    script.write_text(
+        f'#!/bin/sh\nif [ "$1" = "--version" ]; then echo "{version_output}"; exit 0; fi\necho $@\n',
+        encoding="utf-8",
+    )
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
     return str(script)
 
@@ -666,7 +673,11 @@ class TestReportSandboxMetadata:
             sandbox_mode="agentfs",
             sandbox_session="abc123",
         )
-        assert r["sandbox"] == {"mode": "agentfs", "session": "abc123"}
+        assert r["sandbox"] == {
+            "mode": "agentfs",
+            "session": "abc123",
+            "strict_read": False,
+        }
 
     def test_report_sandbox_no_session_key_when_none(self):
         rc = ReportCollector()
@@ -681,7 +692,7 @@ class TestReportSandboxMetadata:
             turns=1,
             sandbox_mode="agentfs",
         )
-        assert r["sandbox"] == {"mode": "agentfs"}
+        assert r["sandbox"] == {"mode": "agentfs", "strict_read": False}
         assert "session" not in r["sandbox"]
 
     def test_finalize_passes_sandbox_through(self, tmp_path):
@@ -805,3 +816,282 @@ class TestMockAgentfsBinary:
         )
 
         assert call_count["n"] == 0
+
+
+# ===========================================================================
+# probe_agentfs()
+# ===========================================================================
+
+
+class TestProbeAgentfs:
+    def test_parses_standard_version(self, tmp_path):
+        script = _mock_agentfs_script(tmp_path, version_output="agentfs v0.6.2")
+        result = probe_agentfs(script)
+        assert result["version"] == "0.6.2"
+        assert result["supports_strict_read"] is False
+
+    def test_parses_version_without_v_prefix(self, tmp_path):
+        script = _mock_agentfs_script(tmp_path, version_output="agentfs 0.6.2")
+        result = probe_agentfs(script)
+        assert result["version"] == "0.6.2"
+
+    def test_parses_dirty_version(self, tmp_path):
+        script = _mock_agentfs_script(
+            tmp_path, version_output="agentfs 0.6.2-3-gabcdef-dirty"
+        )
+        result = probe_agentfs(script)
+        assert result["version"] == "0.6.2"
+
+    def test_returns_unknown_on_unparsable_output(self, tmp_path):
+        script = _mock_agentfs_script(tmp_path, version_output="something weird")
+        result = probe_agentfs(script)
+        assert result["version"] == "unknown"
+        assert result["supports_strict_read"] is False
+
+    def test_returns_unknown_on_missing_binary(self):
+        result = probe_agentfs("/nonexistent/binary/agentfs")
+        assert result["version"] == "unknown"
+        assert result["supports_strict_read"] is False
+
+    def test_supports_strict_read_always_false_today(self, tmp_path):
+        script = _mock_agentfs_script(tmp_path, version_output="agentfs v99.99.99")
+        result = probe_agentfs(script)
+        assert result["supports_strict_read"] is False
+
+
+# ===========================================================================
+# get_agentfs_version()
+# ===========================================================================
+
+
+class TestGetAgentfsVersion:
+    def test_returns_env_var_when_set(self, monkeypatch):
+        monkeypatch.setenv(_VERSION_ENV, "0.6.2")
+        assert get_agentfs_version() == "0.6.2"
+
+    def test_returns_none_when_not_set(self, monkeypatch):
+        monkeypatch.delenv(_VERSION_ENV, raising=False)
+        assert get_agentfs_version() is None
+
+
+# ===========================================================================
+# Strict read validation in maybe_reexec()
+# ===========================================================================
+
+
+class TestStrictReadValidation:
+    def test_strict_read_unsupported_raises(self, tmp_path, monkeypatch):
+        """--sandbox-strict-read with no agentfs support -> ConfigError."""
+        _clear_sandboxed(monkeypatch)
+        _mock_agentfs_script(tmp_path)
+        monkeypatch.setenv("PATH", str(tmp_path))
+
+        with pytest.raises(ConfigError, match="strict read support"):
+            maybe_reexec(
+                sandbox="agentfs",
+                sandbox_session=None,
+                base_dir=str(tmp_path),
+                add_dirs=[],
+                sandbox_strict_read=True,
+            )
+
+    def test_strict_read_false_does_not_raise(self, tmp_path, monkeypatch):
+        """sandbox_strict_read=False should not trigger the check."""
+        _clear_sandboxed(monkeypatch)
+        _mock_agentfs_script(tmp_path)
+        monkeypatch.setenv("PATH", str(tmp_path))
+        monkeypatch.setattr(sys, "argv", ["swival", "task"])
+        monkeypatch.setattr(os, "execvpe", lambda f, a, e: None)
+        monkeypatch.setattr(os, "chdir", lambda p: None)
+
+        # Should not raise
+        maybe_reexec(
+            sandbox="agentfs",
+            sandbox_session=None,
+            base_dir=str(tmp_path),
+            add_dirs=[],
+            sandbox_strict_read=False,
+        )
+
+    def test_strict_read_error_includes_version(self, tmp_path, monkeypatch):
+        _clear_sandboxed(monkeypatch)
+        _mock_agentfs_script(tmp_path, version_output="agentfs v0.7.0")
+        monkeypatch.setenv("PATH", str(tmp_path))
+
+        with pytest.raises(ConfigError, match="0.7.0"):
+            maybe_reexec(
+                sandbox="agentfs",
+                sandbox_session=None,
+                base_dir=str(tmp_path),
+                add_dirs=[],
+                sandbox_strict_read=True,
+            )
+
+    def test_strict_read_noop_for_builtin(self, tmp_path, monkeypatch):
+        """sandbox_strict_read is ignored when sandbox is not agentfs."""
+        _clear_sandboxed(monkeypatch)
+        # Should not raise even with strict_read=True because sandbox != agentfs
+        maybe_reexec(
+            sandbox="builtin",
+            sandbox_session=None,
+            base_dir=str(tmp_path),
+            add_dirs=[],
+            sandbox_strict_read=True,
+        )
+
+
+# ===========================================================================
+# Version env var propagation during re-exec
+# ===========================================================================
+
+
+class TestVersionPropagation:
+    def test_version_env_set_during_reexec(self, tmp_path, monkeypatch):
+        _clear_sandboxed(monkeypatch)
+        _mock_agentfs_script(tmp_path, version_output="agentfs v0.8.1")
+        monkeypatch.setenv("PATH", str(tmp_path))
+        monkeypatch.setattr(sys, "argv", ["swival", "task"])
+
+        captured = {}
+
+        def fake_execvpe(file, args, env):
+            captured["env"] = env
+
+        monkeypatch.setattr(os, "execvpe", fake_execvpe)
+        monkeypatch.setattr(os, "chdir", lambda p: None)
+
+        maybe_reexec(
+            sandbox="agentfs",
+            sandbox_session=None,
+            base_dir=str(tmp_path),
+            add_dirs=[],
+        )
+
+        assert captured["env"][_VERSION_ENV] == "0.8.1"
+
+    def test_unknown_version_propagated(self, tmp_path, monkeypatch):
+        _clear_sandboxed(monkeypatch)
+        _mock_agentfs_script(tmp_path, version_output="garbage")
+        monkeypatch.setenv("PATH", str(tmp_path))
+        monkeypatch.setattr(sys, "argv", ["swival", "task"])
+
+        captured = {}
+
+        def fake_execvpe(file, args, env):
+            captured["env"] = env
+
+        monkeypatch.setattr(os, "execvpe", fake_execvpe)
+        monkeypatch.setattr(os, "chdir", lambda p: None)
+
+        maybe_reexec(
+            sandbox="agentfs",
+            sandbox_session=None,
+            base_dir=str(tmp_path),
+            add_dirs=[],
+        )
+
+        assert captured["env"][_VERSION_ENV] == "unknown"
+
+
+# ===========================================================================
+# Report: strict_read and agentfs_version
+# ===========================================================================
+
+
+class TestStrictReadReport:
+    def test_agentfs_report_includes_strict_read(self):
+        rc = ReportCollector()
+        r = rc.build_report(
+            task="test",
+            model="m",
+            provider="lmstudio",
+            settings={},
+            outcome="success",
+            answer="ok",
+            exit_code=0,
+            turns=1,
+            sandbox_mode="agentfs",
+            sandbox_strict_read=True,
+            agentfs_version="0.6.2",
+        )
+        assert r["sandbox"]["strict_read"] is True
+        assert r["sandbox"]["agentfs_version"] == "0.6.2"
+
+    def test_builtin_report_omits_strict_read(self):
+        rc = ReportCollector()
+        r = rc.build_report(
+            task="test",
+            model="m",
+            provider="lmstudio",
+            settings={},
+            outcome="success",
+            answer="ok",
+            exit_code=0,
+            turns=1,
+            sandbox_mode="builtin",
+        )
+        assert "strict_read" not in r["sandbox"]
+        assert "agentfs_version" not in r["sandbox"]
+
+    def test_agentfs_version_omitted_when_none(self):
+        rc = ReportCollector()
+        r = rc.build_report(
+            task="test",
+            model="m",
+            provider="lmstudio",
+            settings={},
+            outcome="success",
+            answer="ok",
+            exit_code=0,
+            turns=1,
+            sandbox_mode="agentfs",
+        )
+        assert r["sandbox"]["strict_read"] is False
+        assert "agentfs_version" not in r["sandbox"]
+
+    def test_finalize_passes_strict_read_through(self):
+        rc = ReportCollector()
+        r = rc.finalize(
+            task="test",
+            model="m",
+            provider="lmstudio",
+            settings={},
+            outcome="success",
+            answer="ok",
+            exit_code=0,
+            turns=1,
+            sandbox_mode="agentfs",
+            sandbox_strict_read=True,
+            agentfs_version="0.7.0",
+        )
+        assert r["sandbox"]["strict_read"] is True
+        assert r["sandbox"]["agentfs_version"] == "0.7.0"
+
+
+# ===========================================================================
+# CLI: --sandbox-strict-read
+# ===========================================================================
+
+
+class TestStrictReadCLI:
+    def test_flag_parsed_as_store_true(self):
+        parser = agent.build_parser()
+        args = parser.parse_args(
+            ["--sandbox", "agentfs", "--sandbox-strict-read", "question"]
+        )
+        assert args.sandbox_strict_read is True
+
+    def test_default_is_unset(self):
+        parser = agent.build_parser()
+        args = parser.parse_args(["question"])
+        assert args.sandbox_strict_read is _UNSET
+
+    def test_config_default_is_false(self):
+        args = _make_args()
+        apply_config_to_args(args, {})
+        assert args.sandbox_strict_read is False
+
+    def test_config_sets_value(self):
+        args = _make_args()
+        apply_config_to_args(args, {"sandbox_strict_read": True})
+        assert args.sandbox_strict_read is True

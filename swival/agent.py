@@ -1471,6 +1471,12 @@ def build_parser():
         help="AgentFS session ID for persistent sandbox state across runs (only with --sandbox agentfs).",
     )
     parser.add_argument(
+        "--sandbox-strict-read",
+        action="store_true",
+        default=_UNSET,
+        help="Enable strict read isolation in AgentFS sandbox (requires agentfs with strict read support).",
+    )
+    parser.add_argument(
         "--no-skills",
         action="store_true",
         default=_UNSET,
@@ -1702,6 +1708,10 @@ def main():
     if args.sandbox_session is not None and args.sandbox != "agentfs":
         parser.error("--sandbox-session requires --sandbox agentfs")
 
+    # Validation: --sandbox-strict-read requires --sandbox agentfs
+    if args.sandbox_strict_read and args.sandbox != "agentfs":
+        parser.error("--sandbox-strict-read requires --sandbox agentfs")
+
     # Validation: max_review_rounds >= 0
     if args.max_review_rounds < 0:
         parser.error("--max-review-rounds must be >= 0")
@@ -1717,13 +1727,14 @@ def main():
 
     # AgentFS sandbox: re-exec inside agentfs if requested.
     # This replaces the current process on success (does not return).
-    from .sandbox_agentfs import maybe_reexec, is_sandboxed
+    from .sandbox_agentfs import maybe_reexec, is_sandboxed, get_agentfs_version
 
     maybe_reexec(
         sandbox=args.sandbox,
         sandbox_session=args.sandbox_session,
         base_dir=str(Path(args.base_dir).resolve()),
         add_dirs=getattr(args, "add_dir", []) or [],
+        sandbox_strict_read=args.sandbox_strict_read,
     )
 
     if args.sandbox == "agentfs" and is_sandboxed() and args.verbose:
@@ -1807,6 +1818,8 @@ def main():
             snapshot_stats=snapshot_stats,
             sandbox_mode=args.sandbox,
             sandbox_session=args.sandbox_session,
+            sandbox_strict_read=args.sandbox_strict_read,
+            agentfs_version=get_agentfs_version(),
         )
         try:
             report.write(args.report)
