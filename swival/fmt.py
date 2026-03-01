@@ -198,8 +198,7 @@ def error(msg: str) -> None:
     _console.print(line)
 
 
-def sandbox_hint(msg: str) -> None:
-    _console.print(Text(f"  {msg}", style="dim"))
+sandbox_hint = info
 
 
 def repl_banner() -> None:

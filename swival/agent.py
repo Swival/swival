@@ -2104,6 +2104,19 @@ def _format_mcp_tool_info(tool_info: dict[str, list[tuple[str, str]]]) -> str:
     return "\n".join(lines)
 
 
+def _show_agentfs_diff_hint(args) -> None:
+    """Show agentfs diff command hint on exit (verbose mode only)."""
+    if args.sandbox != "agentfs" or not args.verbose:
+        return
+    from .sandbox_agentfs import is_sandboxed, get_agentfs_session, diff_hint
+
+    if not is_sandboxed():
+        return
+    hint = diff_hint(get_agentfs_session())
+    if hint:
+        fmt.sandbox_hint(f"Review changes: {hint}")
+
+
 def _run_main(args, report, _write_report, parser):
     # Provider-specific model discovery and context configuration
     try:
@@ -2374,17 +2387,7 @@ def _run_main(args, report, _write_report, parser):
                 todo_state=todo_state,
                 snapshot_state=snapshot_state,
             )
-        if args.sandbox == "agentfs" and args.verbose:
-            from .sandbox_agentfs import (
-                is_sandboxed,
-                get_agentfs_session,
-                diff_hint as _diff_hint,
-            )
-
-            if is_sandboxed():
-                _hint = _diff_hint(get_agentfs_session())
-                if _hint:
-                    fmt.sandbox_hint(f"Review changes: {_hint}")
+        _show_agentfs_diff_hint(args)
         if exhausted:
             if args.verbose:
                 fmt.warning("max turns reached, agent stopped.")
@@ -2405,17 +2408,7 @@ def _run_main(args, report, _write_report, parser):
             )
 
     repl_loop(messages, tools, **loop_kwargs, no_history=no_history)
-    if args.sandbox == "agentfs" and args.verbose:
-        from .sandbox_agentfs import (
-            is_sandboxed,
-            get_agentfs_session,
-            diff_hint as _diff_hint,
-        )
-
-        if is_sandboxed():
-            _hint = _diff_hint(get_agentfs_session())
-            if _hint:
-                fmt.sandbox_hint(f"Review changes: {_hint}")
+    _show_agentfs_diff_hint(args)
 
 
 def run_agent_loop(
