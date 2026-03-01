@@ -57,6 +57,13 @@
         <article class="docs-content">
             <h1 id="using-swival-with-agentfs">Using Swival With AgentFS</h1>
 <p><a href="https://www.agentfs.ai/">AgentFS</a> gives Swival a copy-on-write filesystem overlay. The agent can edit freely, but your real project files remain unchanged until you explicitly copy changes back. This is a practical workflow for high-autonomy runs because you can inspect and test everything before applying it.</p>
+<h2 id="integrated-sandbox-mode">Integrated Sandbox Mode</h2>
+<p>The simplest way to use AgentFS with Swival is the built-in sandbox mode:</p>
+<pre><code class="language-sh">swival --sandbox agentfs &quot;Refactor the auth module&quot; --yolo
+</code></pre>
+<p>This re-executes Swival inside <code>agentfs run</code> automatically. Your <code>--base-dir</code> and <code>--add-dir</code> paths are mapped to writable overlay directories; everything else is read-only to subprocesses. To persist sandbox state across runs, add <code>--sandbox-session &lt;id&gt;</code>.</p>
+<p>See <a href="safety-and-sandboxing.html">Safety and Sandboxing</a> for details on what the integrated mode enforces.</p>
+<p>The rest of this page covers manual workflows for cases where you want more control over the overlay lifecycle.</p>
 <h2 id="prerequisites">Prerequisites</h2>
 <p>Install AgentFS first.</p>
 <pre><code class="language-sh">curl -fsSL https://agentfs.ai/install | bash

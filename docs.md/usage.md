@@ -119,6 +119,10 @@ Useful for long-running sessions.
 
 `--yolo` disables both filesystem sandbox checks and command whitelisting, except that filesystem root access is still blocked.
 
+`--sandbox` selects the sandbox backend. The default is `builtin`, which uses application-layer path guards. Set it to `agentfs` to re-exec Swival inside an [AgentFS](agentfs.md) overlay for OS-enforced write isolation. Requires the `agentfs` binary on PATH.
+
+`--sandbox-session` sets an AgentFS session ID so sandbox state persists across runs. Only valid with `--sandbox agentfs`.
+
 `--no-read-guard` disables the read-before-write guard that normally prevents editing existing files before reading them.
 
 ### System Prompt And Instruction Flags

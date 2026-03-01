@@ -2,14 +2,32 @@
 
 Swival's built-in sandbox is implemented at the application layer. It validates paths and enforces command policy in Python, but it is not an operating-system isolation boundary. You should treat it as a strong guardrail for normal use, not as a hard security perimeter against untrusted or adversarial models.
 
-If you need stronger isolation, wrap Swival with an OS-level sandbox. [AgentFS](agentfs.md) gives you copy-on-write filesystem isolation so agent edits do not touch your real tree until you copy files back. On macOS, `sandbox-exec` can additionally limit network, process, and filesystem capabilities at the kernel policy level.
+If you need stronger isolation, Swival has a built-in AgentFS integration that enforces filesystem boundaries at the OS level.
+
+## AgentFS Sandbox Mode
+
+Pass `--sandbox agentfs` to run Swival inside an AgentFS overlay. At startup, Swival re-executes itself inside `agentfs run`, which provides copy-on-write filesystem isolation. The agent can edit files and run commands freely, but writes are confined to the overlay — your real project tree stays untouched until you copy changes back.
+
+```sh
+swival --sandbox agentfs "Refactor the auth module" --yolo
+```
+
+In this mode, `--base-dir` and each `--add-dir` path are mapped to AgentFS `--allow` rules so the agent can write to those directories inside the overlay. Everything else on the host filesystem is read-only to subprocesses.
+
+To reuse sandbox state across runs, pass a session ID:
+
+```sh
+swival --sandbox agentfs --sandbox-session my-feature "Continue the refactor" --yolo
+```
+
+This requires the `agentfs` binary on PATH. If it is not found, Swival exits with an actionable error. See [Using Swival With AgentFS](agentfs.md) for more workflows.
+
+You can also combine `sandbox-exec` with AgentFS when you want additional kernel-level controls like network restriction:
 
 ```sh
 sandbox-exec -p '(version 1)(allow default)(deny network*)' \
-    swival "task" --yolo
+    swival --sandbox agentfs "task" --yolo
 ```
-
-AgentFS and `sandbox-exec` can be combined when you want both writable sandboxed development flow and stricter system-level controls.
 
 ## Base Directory Enforcement
 

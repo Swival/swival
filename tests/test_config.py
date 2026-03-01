@@ -47,6 +47,8 @@ def _make_args(**overrides):
         "yolo": _UNSET,
         "add_dir": None,  # append actions use None sentinel
         "add_dir_ro": None,  # append actions use None sentinel
+        "sandbox": _UNSET,
+        "sandbox_session": _UNSET,
         "no_read_guard": _UNSET,
         "no_instructions": _UNSET,
         "no_skills": _UNSET,

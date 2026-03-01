@@ -1459,6 +1459,18 @@ def build_parser():
         help="Disable read-before-write guard (allow writing files without reading them first).",
     )
     parser.add_argument(
+        "--sandbox",
+        choices=["builtin", "agentfs"],
+        default=_UNSET,
+        help='Sandbox backend: "builtin" (app-layer path guards) or "agentfs" (OS-enforced via AgentFS). Default: builtin.',
+    )
+    parser.add_argument(
+        "--sandbox-session",
+        type=str,
+        default=_UNSET,
+        help="AgentFS session ID for persistent sandbox state across runs (only with --sandbox agentfs).",
+    )
+    parser.add_argument(
         "--no-skills",
         action="store_true",
         default=_UNSET,
@@ -1686,6 +1698,10 @@ def main():
 
     fmt.init(color=args.color, no_color=args.no_color)
 
+    # Validation: --sandbox-session requires --sandbox agentfs
+    if args.sandbox_session is not None and args.sandbox != "agentfs":
+        parser.error("--sandbox-session requires --sandbox agentfs")
+
     # Validation: max_review_rounds >= 0
     if args.max_review_rounds < 0:
         parser.error("--max-review-rounds must be >= 0")
@@ -1697,6 +1713,23 @@ def main():
     ):
         parser.error(
             "--max-output-tokens must be <= --max-context-tokens when both are specified."
+        )
+
+    # AgentFS sandbox: re-exec inside agentfs if requested.
+    # This replaces the current process on success (does not return).
+    from .sandbox_agentfs import maybe_reexec, is_sandboxed
+
+    maybe_reexec(
+        sandbox=args.sandbox,
+        sandbox_session=args.sandbox_session,
+        base_dir=str(Path(args.base_dir).resolve()),
+        add_dirs=getattr(args, "add_dir", []) or [],
+    )
+
+    if args.sandbox == "agentfs" and is_sandboxed() and args.verbose:
+        fmt.info(
+            "Sandbox: agentfs"
+            + (f" (session: {args.sandbox_session})" if args.sandbox_session else "")
         )
 
     report = ReportCollector() if args.report else None
@@ -1715,6 +1748,7 @@ def main():
                 args, "_resolved_context_length", args.max_context_tokens
             ),
             "yolo": args.yolo,
+            "sandbox": args.sandbox,
             "allowed_commands": (
                 sorted(args.allowed_commands)
                 if isinstance(args.allowed_commands, list)
@@ -1771,6 +1805,8 @@ def main():
             review_rounds=review_rounds,
             todo_stats=todo_stats,
             snapshot_stats=snapshot_stats,
+            sandbox_mode=args.sandbox,
+            sandbox_session=args.sandbox_session,
         )
         try:
             report.write(args.report)

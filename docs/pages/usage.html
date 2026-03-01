@@ -116,6 +116,8 @@
 <p><code>--add-dir</code> grants read and write access to additional directories and can be repeated.</p>
 <p><code>--add-dir-ro</code> grants read-only access to additional directories and can be repeated. The agent can read, list, and grep files in these directories but cannot write, edit, or delete them.</p>
 <p><code>--yolo</code> disables both filesystem sandbox checks and command whitelisting, except that filesystem root access is still blocked.</p>
+<p><code>--sandbox</code> selects the sandbox backend. The default is <code>builtin</code>, which uses application-layer path guards. Set it to <code>agentfs</code> to re-exec Swival inside an <a href="agentfs.html">AgentFS</a> overlay for OS-enforced write isolation. Requires the <code>agentfs</code> binary on PATH.</p>
+<p><code>--sandbox-session</code> sets an AgentFS session ID so sandbox state persists across runs. Only valid with <code>--sandbox agentfs</code>.</p>
 <p><code>--no-read-guard</code> disables the read-before-write guard that normally prevents editing existing files before reading them.</p>
 <h3 id="system-prompt-and-instruction-flags">System Prompt And Instruction Flags</h3>
 <p><code>--system-prompt</code> replaces the built-in prompt with your own prompt text.</p>

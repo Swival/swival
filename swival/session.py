@@ -65,6 +65,8 @@ class Session:
         skills_dir: list[str] | None = None,
         allowed_dirs: list[str] | None = None,
         allowed_dirs_ro: list[str] | None = None,
+        sandbox: str = "builtin",
+        sandbox_session: str | None = None,
         read_guard: bool = True,
         history: bool = True,
         config_dir: "Path | None" = None,
@@ -95,6 +97,8 @@ class Session:
         self.skills_dir = skills_dir or []
         self.allowed_dirs = allowed_dirs or []
         self.allowed_dirs_ro = allowed_dirs_ro or []
+        self.sandbox = sandbox
+        self.sandbox_session = sandbox_session
         self.read_guard = read_guard
         self.history = history
         self.mcp_servers = mcp_servers
@@ -125,6 +129,11 @@ class Session:
         """Perform one-time setup: resolve provider, commands, tools, system prompt."""
         if self._setup_done:
             return
+
+        if self.sandbox == "agentfs":
+            from .sandbox_agentfs import check_sandbox_available
+
+            check_sandbox_available()
 
         from .agent import (
             resolve_provider,
@@ -310,6 +319,8 @@ class Session:
                 answer=answer,
                 exit_code=2 if exhausted else 0,
                 turns=collector.max_turn_seen,
+                sandbox_mode=self.sandbox,
+                sandbox_session=self.sandbox_session,
             )
 
         return Result(

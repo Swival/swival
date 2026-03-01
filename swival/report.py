@@ -148,6 +148,8 @@ class ReportCollector:
         review_rounds: int = 0,
         todo_stats: dict | None = None,
         snapshot_stats: dict | None = None,
+        sandbox_mode: str = "builtin",
+        sandbox_session: str | None = None,
     ) -> dict:
         tool_calls_succeeded = sum(s["succeeded"] for s in self.tool_stats.values())
         tool_calls_failed = sum(s["failed"] for s in self.tool_stats.values())
@@ -160,6 +162,10 @@ class ReportCollector:
         if error_message is not None:
             result["error_message"] = error_message
 
+        sandbox: dict = {"mode": sandbox_mode}
+        if sandbox_session is not None:
+            sandbox["session"] = sandbox_session
+
         return {
             "version": 1,
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -167,6 +173,7 @@ class ReportCollector:
             "model": model,
             "provider": provider,
             "settings": settings,
+            "sandbox": sandbox,
             "result": result,
             "stats": {
                 "turns": turns,
@@ -209,6 +216,8 @@ class ReportCollector:
         review_rounds: int = 0,
         todo_stats: dict | None = None,
         snapshot_stats: dict | None = None,
+        sandbox_mode: str = "builtin",
+        sandbox_session: str | None = None,
     ) -> dict:
         """Build the report and write it to disk in one step."""
         self._last_report = self.build_report(
@@ -224,5 +233,7 @@ class ReportCollector:
             review_rounds=review_rounds,
             todo_stats=todo_stats,
             snapshot_stats=snapshot_stats,
+            sandbox_mode=sandbox_mode,
+            sandbox_session=sandbox_session,
         )
         return self._last_report

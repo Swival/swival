@@ -57,11 +57,20 @@
         <article class="docs-content">
             <h1 id="safety-and-sandboxing">Safety and Sandboxing</h1>
 <p>Swival's built-in sandbox is implemented at the application layer. It validates paths and enforces command policy in Python, but it is not an operating-system isolation boundary. You should treat it as a strong guardrail for normal use, not as a hard security perimeter against untrusted or adversarial models.</p>
-<p>If you need stronger isolation, wrap Swival with an OS-level sandbox. <a href="agentfs.html">AgentFS</a> gives you copy-on-write filesystem isolation so agent edits do not touch your real tree until you copy files back. On macOS, <code>sandbox-exec</code> can additionally limit network, process, and filesystem capabilities at the kernel policy level.</p>
-<pre><code class="language-sh">sandbox-exec -p '(version 1)(allow default)(deny network*)' \
-    swival &quot;task&quot; --yolo
+<p>If you need stronger isolation, Swival has a built-in AgentFS integration that enforces filesystem boundaries at the OS level.</p>
+<h2 id="agentfs-sandbox-mode">AgentFS Sandbox Mode</h2>
+<p>Pass <code>--sandbox agentfs</code> to run Swival inside an AgentFS overlay. At startup, Swival re-executes itself inside <code>agentfs run</code>, which provides copy-on-write filesystem isolation. The agent can edit files and run commands freely, but writes are confined to the overlay — your real project tree stays untouched until you copy changes back.</p>
+<pre><code class="language-sh">swival --sandbox agentfs &quot;Refactor the auth module&quot; --yolo
 </code></pre>
-<p>AgentFS and <code>sandbox-exec</code> can be combined when you want both writable sandboxed development flow and stricter system-level controls.</p>
+<p>In this mode, <code>--base-dir</code> and each <code>--add-dir</code> path are mapped to AgentFS <code>--allow</code> rules so the agent can write to those directories inside the overlay. Everything else on the host filesystem is read-only to subprocesses.</p>
+<p>To reuse sandbox state across runs, pass a session ID:</p>
+<pre><code class="language-sh">swival --sandbox agentfs --sandbox-session my-feature &quot;Continue the refactor&quot; --yolo
+</code></pre>
+<p>This requires the <code>agentfs</code> binary on PATH. If it is not found, Swival exits with an actionable error. See <a href="agentfs.html">Using Swival With AgentFS</a> for more workflows.</p>
+<p>You can also combine <code>sandbox-exec</code> with AgentFS when you want additional kernel-level controls like network restriction:</p>
+<pre><code class="language-sh">sandbox-exec -p '(version 1)(allow default)(deny network*)' \
+    swival --sandbox agentfs &quot;task&quot; --yolo
+</code></pre>
 <h2 id="base-directory-enforcement">Base Directory Enforcement</h2>
 <p>All filesystem operations are anchored to <code>--base-dir</code>, which defaults to the current directory. Path checks resolve both the base directory and target path through symlinks, then verify that the resolved target remains inside an allowed root. If a path escapes through traversal or symlink indirection, the operation fails.</p>
 <p>Even in YOLO mode, Swival blocks the filesystem root itself. You cannot grant the agent unrestricted access to <code>/</code> by accident.</p>

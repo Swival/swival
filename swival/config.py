@@ -22,6 +22,8 @@ _UNSET = object()  # Sentinel for "not set by CLI"
 
 # --- Schema ---
 
+SANDBOX_MODES = ("builtin", "agentfs")
+
 CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "provider": str,
     "model": str,
@@ -39,6 +41,8 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "yolo": bool,
     "allowed_dirs": list,
     "allowed_dirs_ro": list,
+    "sandbox": str,
+    "sandbox_session": str,
     "no_read_guard": bool,
     "no_instructions": bool,
     "no_skills": bool,
@@ -87,6 +91,8 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "yolo": False,
     "add_dir": [],
     "add_dir_ro": [],
+    "sandbox": "builtin",
+    "sandbox_session": None,
     "no_read_guard": False,
     "no_instructions": False,
     "no_skills": False,
@@ -157,6 +163,13 @@ def _validate_config(config: dict, source: str) -> None:
                     raise ConfigError(
                         f"{source}: {key}[{i}]: expected string, got {type(elem).__name__}"
                     )
+
+    # Validate sandbox enum value
+    if "sandbox" in config and config["sandbox"] not in SANDBOX_MODES:
+        raise ConfigError(
+            f"{source}: 'sandbox' must be one of {SANDBOX_MODES!r}, "
+            f"got {config['sandbox']!r}"
+        )
 
     # Mutual exclusion: system_prompt + no_system_prompt
     if config.get("system_prompt") and config.get("no_system_prompt"):
@@ -519,6 +532,8 @@ def generate_config(project: bool = False) -> str:
         "# no_system_prompt = false",
         "",
         "# --- Sandbox / security ---",
+        '# sandbox = "builtin"             # "builtin" | "agentfs"',
+        '# sandbox_session = "my-session"  # agentfs session ID (optional)',
         '# allowed_commands = ["ls", "git", "python3"]',
         "# yolo = false",
         '# allowed_dirs = ["../shared-lib", "/data/assets"]',
