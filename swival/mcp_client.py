@@ -45,8 +45,8 @@ class McpManager:
         server_configs: {
             "server-name": {
                 "command": "npx",
-                "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
-                "env": {"KEY": "val"},
+                "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+                "env": {"BRAVE_API_KEY": "your-key-here"},
                 # OR for HTTP:
                 "url": "http://localhost:8080/mcp",
                 "headers": {"Authorization": "Bearer ..."},

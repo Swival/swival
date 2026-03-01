@@ -63,9 +63,10 @@
 <p>When MCP tool schemas consume more than 30% of the context window, Swival warns. At 50%, it iteratively drops the most expensive server's tools until usage is under budget.</p>
 <h2 id="toml-configuration">TOML Configuration</h2>
 <p>Add <code>[mcp_servers.&lt;name&gt;]</code> tables to <code>swival.toml</code>. Each server needs either <code>command</code> (for stdio transport) or <code>url</code> (for SSE transport), but not both.</p>
-<pre><code class="language-toml">[mcp_servers.filesystem]
+<pre><code class="language-toml">[mcp_servers.brave-search]
 command = &quot;npx&quot;
-args = [&quot;-y&quot;, &quot;@modelcontextprotocol/server-filesystem&quot;, &quot;/tmp&quot;]
+args = [&quot;-y&quot;, &quot;@modelcontextprotocol/server-brave-search&quot;]
+env = { BRAVE_API_KEY = &quot;your-key-here&quot; }
 
 [mcp_servers.remote-api]
 url = &quot;https://api.example.com/mcp&quot;
@@ -83,9 +84,10 @@ env = { API_KEY = &quot;secret&quot; }
 <p>Swival also reads <code>.mcp.json</code> from the project root directory. This uses the same format as other MCP-compatible tools:</p>
 <pre><code class="language-json">{
   &quot;mcpServers&quot;: {
-    &quot;filesystem&quot;: {
+    &quot;brave-search&quot;: {
       &quot;command&quot;: &quot;npx&quot;,
-      &quot;args&quot;: [&quot;-y&quot;, &quot;@modelcontextprotocol/server-filesystem&quot;, &quot;/tmp&quot;]
+      &quot;args&quot;: [&quot;-y&quot;, &quot;@modelcontextprotocol/server-brave-search&quot;],
+      &quot;env&quot;: { &quot;BRAVE_API_KEY&quot;: &quot;your-key-here&quot; }
     }
   }
 }
@@ -110,13 +112,14 @@ env = { API_KEY = &quot;secret&quot; }
 
 session = Session(
     mcp_servers={
-        &quot;filesystem&quot;: {
+        &quot;brave-search&quot;: {
             &quot;command&quot;: &quot;npx&quot;,
-            &quot;args&quot;: [&quot;-y&quot;, &quot;@modelcontextprotocol/server-filesystem&quot;, &quot;/tmp&quot;],
+            &quot;args&quot;: [&quot;-y&quot;, &quot;@modelcontextprotocol/server-brave-search&quot;],
+            &quot;env&quot;: {&quot;BRAVE_API_KEY&quot;: &quot;your-key-here&quot;},
         }
     }
 )
-result = session.run(&quot;List files in /tmp&quot;)
+result = session.run(&quot;Search for Python async best practices&quot;)
 </code></pre>
 <p>Use <code>Session</code> as a context manager to ensure MCP connections are cleaned up:</p>
 <pre><code class="language-python">with Session(mcp_servers={&quot;fs&quot;: {&quot;command&quot;: &quot;...&quot;}}) as session:

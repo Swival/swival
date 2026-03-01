@@ -15,9 +15,10 @@ When MCP tool schemas consume more than 30% of the context window, Swival warns.
 Add `[mcp_servers.<name>]` tables to `swival.toml`. Each server needs either `command` (for stdio transport) or `url` (for SSE transport), but not both.
 
 ```toml
-[mcp_servers.filesystem]
+[mcp_servers.brave-search]
 command = "npx"
-args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+args = ["-y", "@modelcontextprotocol/server-brave-search"]
+env = { BRAVE_API_KEY = "your-key-here" }
 
 [mcp_servers.remote-api]
 url = "https://api.example.com/mcp"
@@ -44,9 +45,10 @@ Swival also reads `.mcp.json` from the project root directory. This uses the sam
 ```json
 {
   "mcpServers": {
-    "filesystem": {
+    "brave-search": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "env": { "BRAVE_API_KEY": "your-key-here" }
     }
   }
 }
@@ -89,13 +91,14 @@ from swival import Session
 
 session = Session(
     mcp_servers={
-        "filesystem": {
+        "brave-search": {
             "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+            "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+            "env": {"BRAVE_API_KEY": "your-key-here"},
         }
     }
 )
-result = session.run("List files in /tmp")
+result = session.run("Search for Python async best practices")
 ```
 
 Use `Session` as a context manager to ensure MCP connections are cleaned up:
