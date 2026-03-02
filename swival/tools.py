@@ -1859,4 +1859,39 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             unrestricted=yolo,
         )
     else:
-        raise KeyError(f"Unknown tool: {name!r}")
+        _TOOL_ALIASES = {
+            "run_shell_command": "run_command",
+            "execute_command": "run_command",
+            "execute_shell_command": "run_command",
+            "shell_command": "run_command",
+            "shell": "run_command",
+            "bash": "run_command",
+            "terminal": "run_command",
+            "search": "grep",
+            "search_files": "grep",
+            "find_files": "list_files",
+            "create_file": "write_file",
+            "file_read": "read_file",
+            "file_write": "write_file",
+            "file_edit": "edit_file",
+        }
+        suggestion = _TOOL_ALIASES.get(name)
+        available = [
+            "think",
+            "read_file",
+            "write_file",
+            "edit_file",
+            "delete_file",
+            "list_files",
+            "grep",
+            "todo",
+            "snapshot",
+            "fetch_url",
+            "use_skill",
+            "run_command",
+        ]
+        if suggestion:
+            raise KeyError(f"Unknown tool: {name!r}. Did you mean '{suggestion}'?")
+        raise KeyError(
+            f"Unknown tool: {name!r}. Available tools: {', '.join(available)}"
+        )

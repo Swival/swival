@@ -380,6 +380,21 @@ class TestErrorHandling:
         with pytest.raises(KeyError, match="Unknown tool"):
             dispatch("no_such_tool", {}, str(tmp_path))
 
+    def test_dispatch_unknown_tool_lists_available(self, tmp_path):
+        """Unknown tool error lists available tools."""
+        with pytest.raises(KeyError, match="Available tools:.*run_command"):
+            dispatch("no_such_tool", {}, str(tmp_path))
+
+    def test_dispatch_hallucinated_tool_suggests_alias(self, tmp_path):
+        """Hallucinated tool names get a 'did you mean' suggestion."""
+        with pytest.raises(KeyError, match="Did you mean 'run_command'"):
+            dispatch("run_shell_command", {}, str(tmp_path))
+
+    def test_dispatch_hallucinated_search_suggests_grep(self, tmp_path):
+        """Hallucinated 'search' suggests 'grep'."""
+        with pytest.raises(KeyError, match="Did you mean 'grep'"):
+            dispatch("search", {}, str(tmp_path))
+
     def test_read_binary_file_returns_error(self, tmp_path):
         """Reading a binary file (containing null bytes) returns an error string."""
         f = tmp_path / "img.bin"
