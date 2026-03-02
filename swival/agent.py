@@ -1211,6 +1211,16 @@ def call_llm(
         stripped = base_url.rstrip("/")
         api_base = stripped if stripped.endswith("/v1") else f"{stripped}/v1"
         kwargs = {"api_base": api_base, "api_key": api_key or "none"}
+    elif provider == "chatgpt":
+        bare_id = model_id
+        while bare_id.startswith("chatgpt/"):
+            bare_id = bare_id[len("chatgpt/") :]
+        model_str = f"chatgpt/{bare_id}"
+        kwargs = {}
+        if api_key:
+            kwargs["api_key"] = api_key
+        if base_url:
+            kwargs["api_base"] = base_url
     else:
         raise AgentError(f"unknown provider {provider!r}")
 
@@ -1235,9 +1245,11 @@ def call_llm(
     )
     if tools is not None:
         completion_kwargs["tools"] = tools
-        completion_kwargs["tool_choice"] = "auto"
+        if provider != "chatgpt":
+            completion_kwargs["tool_choice"] = "auto"
+    _unsupported = {"top_p", "seed"} if provider == "chatgpt" else set()
     for key, val in [("temperature", temperature), ("top_p", top_p), ("seed", seed)]:
-        if val is not None:
+        if val is not None and key not in _unsupported:
             completion_kwargs[key] = val
     if extra_body is not None:
         completion_kwargs["extra_body"] = extra_body
@@ -1509,9 +1521,9 @@ def build_parser():
     )
     parser.add_argument(
         "--provider",
-        choices=["lmstudio", "huggingface", "openrouter", "generic"],
+        choices=["lmstudio", "huggingface", "openrouter", "generic", "chatgpt"],
         default=_UNSET,
-        help="LLM provider: lmstudio (local), huggingface (HF API), openrouter (multi-provider API), generic (any OpenAI-compatible server).",
+        help="LLM provider: lmstudio (local), huggingface (HF API), openrouter (multi-provider API), generic (any OpenAI-compatible server), chatgpt (ChatGPT subscription via OAuth).",
     )
     parser.add_argument(
         "-q",
@@ -1941,6 +1953,30 @@ def resolve_provider(
         model_id = model
         context_length = max_context_tokens
         resolved_key = api_key or os.environ.get("OPENAI_API_KEY")
+
+    elif provider == "chatgpt":
+        if not model:
+            raise ConfigError(
+                "--model is required when --provider is chatgpt. "
+                "Available models: gpt-5.2-codex, gpt-5.2. "
+                "See https://docs.litellm.ai/docs/providers/chatgpt"
+            )
+        api_base = base_url
+        model_id = model
+        resolved_key = api_key
+        context_length = max_context_tokens
+        if context_length is None:
+            try:
+                import litellm
+
+                _bare = model_id
+                while _bare.startswith("chatgpt/"):
+                    _bare = _bare[len("chatgpt/") :]
+                _model_str = f"chatgpt/{_bare}"
+                info = litellm.get_model_info(_model_str)
+                context_length = info.get("max_input_tokens")
+            except Exception:
+                pass
 
     else:
         raise ConfigError(f"unknown provider: {provider!r}")

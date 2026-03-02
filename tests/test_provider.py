@@ -6,7 +6,7 @@ import types
 import pytest
 from unittest.mock import patch, MagicMock
 
-from swival.agent import call_llm
+from swival.agent import call_llm, resolve_provider
 
 
 # ---------------------------------------------------------------------------
@@ -922,3 +922,338 @@ class TestGenericProviderValidation:
 
         monkeypatch.setattr(agent, "call_llm", fake_call_llm)
         agent.main()  # Should not raise
+
+
+# ---------------------------------------------------------------------------
+# ChatGPT provider — call_llm routing
+# ---------------------------------------------------------------------------
+
+
+class TestChatGPTRouting:
+    """Verify that call_llm passes the right model string and kwargs for chatgpt."""
+
+    def _mock_response(self):
+        choice = MagicMock()
+        choice.message = MagicMock(content="ok", tool_calls=None)
+        choice.finish_reason = "stop"
+        resp = MagicMock()
+        resp.choices = [choice]
+        return resp
+
+    def test_chatgpt_routing_basic(self):
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                None,
+                "gpt-5.3-codex",
+                [],
+                100,
+                0.5,
+                1.0,
+                None,
+                None,
+                False,
+                provider="chatgpt",
+                api_key=None,
+            )
+            mock_comp.assert_called_once()
+            kwargs = mock_comp.call_args[1]
+            assert kwargs["model"] == "chatgpt/gpt-5.3-codex"
+            assert "api_key" not in kwargs
+            assert "api_base" not in kwargs
+
+    def test_chatgpt_with_explicit_key(self):
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                None,
+                "gpt-5.3-codex",
+                [],
+                100,
+                0.5,
+                1.0,
+                None,
+                None,
+                False,
+                provider="chatgpt",
+                api_key="bearer-token-123",
+            )
+            mock_comp.assert_called_once()
+            kwargs = mock_comp.call_args[1]
+            assert kwargs["api_key"] == "bearer-token-123"
+
+    def test_chatgpt_with_base_url(self):
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                "https://proxy.example.com",
+                "gpt-5.3-codex",
+                [],
+                100,
+                0.5,
+                1.0,
+                None,
+                None,
+                False,
+                provider="chatgpt",
+                api_key=None,
+            )
+            mock_comp.assert_called_once()
+            kwargs = mock_comp.call_args[1]
+            assert kwargs["api_base"] == "https://proxy.example.com"
+
+    def test_chatgpt_drops_unsupported_params(self):
+        """ChatGPT backend doesn't support top_p, seed, or tool_choice."""
+        tools = [{"type": "function", "function": {"name": "test"}}]
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                None,
+                "gpt-5.3-codex",
+                [],
+                100,
+                0.7,
+                0.9,
+                42,
+                tools,
+                False,
+                provider="chatgpt",
+                api_key=None,
+            )
+            mock_comp.assert_called_once()
+            kwargs = mock_comp.call_args[1]
+            assert kwargs["temperature"] == 0.7
+            assert kwargs["tools"] == tools
+            assert "top_p" not in kwargs
+            assert "seed" not in kwargs
+            assert "tool_choice" not in kwargs
+
+
+# ---------------------------------------------------------------------------
+# ChatGPT model normalization (double-prefix guard)
+# ---------------------------------------------------------------------------
+
+
+class TestChatGPTModelNormalization:
+    def _mock_response(self):
+        choice = MagicMock()
+        choice.message = MagicMock(content="ok", tool_calls=None)
+        choice.finish_reason = "stop"
+        resp = MagicMock()
+        resp.choices = [choice]
+        return resp
+
+    def test_chatgpt_no_double_prefix(self):
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                None,
+                "chatgpt/gpt-5.3-codex",
+                [],
+                100,
+                0.5,
+                1.0,
+                None,
+                None,
+                False,
+                provider="chatgpt",
+                api_key=None,
+            )
+            assert mock_comp.call_args[1]["model"] == "chatgpt/gpt-5.3-codex"
+
+    def test_chatgpt_bare_model_id(self):
+        """Bare model (no prefix) gets chatgpt/ prepended."""
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                None,
+                "gpt-5.3-codex",
+                [],
+                100,
+                0.5,
+                1.0,
+                None,
+                None,
+                False,
+                provider="chatgpt",
+                api_key=None,
+            )
+            assert mock_comp.call_args[1]["model"] == "chatgpt/gpt-5.3-codex"
+
+    def test_chatgpt_double_prefix_stripped(self):
+        """chatgpt/chatgpt/model collapses to chatgpt/model."""
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                None,
+                "chatgpt/chatgpt/gpt-5.3-codex",
+                [],
+                100,
+                0.5,
+                1.0,
+                None,
+                None,
+                False,
+                provider="chatgpt",
+                api_key=None,
+            )
+            assert mock_comp.call_args[1]["model"] == "chatgpt/gpt-5.3-codex"
+
+
+# ---------------------------------------------------------------------------
+# ChatGPT CLI validation
+# ---------------------------------------------------------------------------
+
+
+class TestChatGPTCLIValidation:
+    def test_chatgpt_requires_model(self, monkeypatch):
+        from swival import agent
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "agent",
+                "hello",
+                "--provider",
+                "chatgpt",
+            ],
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            agent.main()
+        assert exc_info.value.code == 2
+
+    def test_chatgpt_no_key_ok(self, monkeypatch, tmp_path):
+        from swival import agent
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "agent",
+                "hello",
+                "--provider",
+                "chatgpt",
+                "--model",
+                "gpt-5.3-codex",
+                "--no-system-prompt",
+                "--base-dir",
+                str(tmp_path),
+            ],
+        )
+
+        captured = {}
+
+        def fake_call_llm(*args, **kwargs):
+            captured["api_key"] = kwargs.get("api_key")
+            msg = types.SimpleNamespace(
+                content="done", tool_calls=None, role="assistant"
+            )
+            msg.get = lambda key, default=None: getattr(msg, key, default)
+            return msg, "stop"
+
+        monkeypatch.setattr(agent, "call_llm", fake_call_llm)
+        agent.main()
+        assert captured["api_key"] is None
+
+    def test_chatgpt_never_calls_discover_or_configure(self, monkeypatch, tmp_path):
+        from swival import agent
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "agent",
+                "hello",
+                "--provider",
+                "chatgpt",
+                "--model",
+                "gpt-5.3-codex",
+                "--no-system-prompt",
+                "--base-dir",
+                str(tmp_path),
+            ],
+        )
+
+        def boom(*args, **kwargs):
+            raise AssertionError("Should not be called for chatgpt provider")
+
+        monkeypatch.setattr(agent, "discover_model", boom)
+        monkeypatch.setattr(agent, "configure_context", boom)
+
+        def fake_call_llm(*args, **kwargs):
+            msg = types.SimpleNamespace(
+                content="done", tool_calls=None, role="assistant"
+            )
+            msg.get = lambda key, default=None: getattr(msg, key, default)
+            return msg, "stop"
+
+        monkeypatch.setattr(agent, "call_llm", fake_call_llm)
+        agent.main()  # Should not raise
+
+
+# ---------------------------------------------------------------------------
+# ChatGPT resolve_provider direct unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestResolveProviderChatGPT:
+    """Direct unit tests for resolve_provider() with provider='chatgpt'."""
+
+    def test_returns_model_id(self):
+        model_id, _, _, _, _ = resolve_provider(
+            "chatgpt", "gpt-5.3-codex", None, None, None, False
+        )
+        assert model_id == "gpt-5.3-codex"
+
+    def test_no_model_raises(self):
+        from swival.config import ConfigError
+
+        with pytest.raises(ConfigError, match="--model is required"):
+            resolve_provider("chatgpt", None, None, None, None, False)
+
+    def test_resolved_key_none_when_no_key(self):
+        _, _, resolved_key, _, _ = resolve_provider(
+            "chatgpt", "gpt-5.3-codex", None, None, None, False
+        )
+        assert resolved_key is None
+
+    def test_resolved_key_passthrough(self):
+        _, _, resolved_key, _, _ = resolve_provider(
+            "chatgpt", "gpt-5.3-codex", "bearer-xyz", None, None, False
+        )
+        assert resolved_key == "bearer-xyz"
+
+    def test_api_base_none_by_default(self):
+        _, api_base, _, _, _ = resolve_provider(
+            "chatgpt", "gpt-5.3-codex", None, None, None, False
+        )
+        assert api_base is None
+
+    def test_api_base_passthrough(self):
+        _, api_base, _, _, _ = resolve_provider(
+            "chatgpt", "gpt-5.3-codex", None, "https://proxy.example.com", None, False
+        )
+        assert api_base == "https://proxy.example.com"
+
+    def test_context_from_litellm_metadata(self):
+        _, _, _, context_length, _ = resolve_provider(
+            "chatgpt", "gpt-5.3-codex", None, None, None, False
+        )
+        # Should resolve from litellm metadata (or None if not in cost map).
+        # Don't assert a specific value since it depends on litellm version.
+        assert context_length is None or (
+            isinstance(context_length, int) and context_length > 0
+        )
+
+    def test_context_override(self):
+        _, _, _, context_length, _ = resolve_provider(
+            "chatgpt", "gpt-5.3-codex", None, None, 65536, False
+        )
+        assert context_length == 65536
+
+    def test_llm_kwargs_provider(self):
+        _, _, _, _, llm_kwargs = resolve_provider(
+            "chatgpt", "gpt-5.3-codex", None, None, None, False
+        )
+        assert llm_kwargs["provider"] == "chatgpt"

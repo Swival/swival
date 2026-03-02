@@ -38,6 +38,13 @@ objective = "objective.md"
 verify = "verification/working.md"
 ```
 
+For the ChatGPT provider, no API key is needed since authentication is handled through OAuth:
+
+```toml
+provider = "chatgpt"
+model = "gpt-5.2-codex"
+```
+
 Relative paths in `allowed_dirs`, `allowed_dirs_ro`, `skills_dir`, `objective`, and `verify` resolve against the config file's parent directory, not the working directory. Tilde paths like `~/projects` expand to the home directory.
 
 The `reviewer` value is shell-split; only path-like first tokens (`./`, `../`, `~`) are resolved against the config directory, while bare command names like `swival` are left for PATH lookup at runtime.

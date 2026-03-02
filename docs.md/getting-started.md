@@ -116,6 +116,20 @@ Both `--model` and `--base-url` are required. No API key is needed for most loca
 
 For a deeper look at generic provider options and server-specific examples, see [Providers](providers.md).
 
+## Running with ChatGPT
+
+If you have a ChatGPT account and want to use OpenAI's models without dealing with API keys, the ChatGPT provider authenticates through an OAuth device-code flow.
+
+```sh
+swival "Hello world" --provider chatgpt --model gpt-5.2-codex
+```
+
+On the first run, Swival will print a URL and a code. Open the URL in your browser, enter the code, and authorize. After that, tokens are cached at `~/.config/litellm/chatgpt/auth.json` and you won't be prompted again.
+
+`--model` is required -- there is no default. Currently available models are `gpt-5.2-codex` and `gpt-5.2`.
+
+For a deeper look at ChatGPT-specific options, see [Providers](providers.md).
+
 ## Where To Go Next
 
 If you want the full command surface and mode behavior, continue with [Usage](usage.md). If you want a deeper look at built-in capabilities, read [Tools](tools.md). If you need to understand trust boundaries before enabling stronger actions, read [Safety and Sandboxing](safety-and-sandboxing.md).

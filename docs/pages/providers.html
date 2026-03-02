@@ -56,7 +56,7 @@
         </aside>
         <article class="docs-content">
             <h1 id="providers">Providers</h1>
-<p>Swival supports LM Studio for local inference, HuggingFace Inference API for hosted inference, OpenRouter for multi-provider access through a single API, and a generic provider for any OpenAI-compatible server. All provider calls are normalized through <a href="https://docs.litellm.ai/">LiteLLM</a>, so the runtime loop stays consistent while credential and model routing change per provider.</p>
+<p>Swival supports LM Studio for local inference, HuggingFace Inference API for hosted inference, OpenRouter for multi-provider access through a single API, ChatGPT for direct access to OpenAI models via OAuth, and a generic provider for any OpenAI-compatible server. All provider calls are normalized through <a href="https://docs.litellm.ai/">LiteLLM</a>, so the runtime loop stays consistent while credential and model routing change per provider.</p>
 <h2 id="lm-studio">LM Studio</h2>
 <p>LM Studio is the default provider and usually requires no flags when the local server is already running with a loaded model.</p>
 <p>At startup, Swival calls <code>http://127.0.0.1:1234/api/v1/models</code> unless you override <code>--base-url</code>. It looks for the first model entry with <code>type: "llm"</code> and a non-empty <code>loaded_instances</code> array, then extracts the model identifier and current context length from that payload. If no loaded model is found, Swival exits and asks you to load a model or pass <code>--model</code> explicitly.</p>
@@ -134,6 +134,21 @@ swival --provider generic \
 </code></pre>
 <p>There is no model auto-discovery and no context window reload. Set <code>--max-context-tokens</code> manually if you need Swival to know the window size.</p>
 <p>Internally, generic calls are routed through LiteLLM as <code>openai/&lt;model_id&gt;</code> with <code>api_base</code> pointing at your server's <code>/v1</code> path.</p>
+<h2 id="chatgpt">ChatGPT</h2>
+<p>The ChatGPT provider connects directly to OpenAI's models using an OAuth device-code flow handled by LiteLLM. There is no API key to manage -- on first use, LiteLLM prints a device code and a verification URL to your terminal. Open the URL, enter the code, and authorize. The resulting tokens are cached locally and refreshed automatically on subsequent runs.</p>
+<p><code>--model</code> is required. There is no default model.</p>
+<pre><code class="language-sh">swival --provider chatgpt --model gpt-5.2-codex &quot;task&quot;
+</code></pre>
+<p>On the first run, you will see a device-code prompt with a URL and a code to enter in your browser. Once you complete the flow, the OAuth tokens are stored at <code>~/.config/litellm/chatgpt/auth.json</code> and refreshed automatically.</p>
+<p>Currently available models are <code>gpt-5.2-codex</code> and <code>gpt-5.2</code>. Use whichever your ChatGPT account has access to.</p>
+<pre><code class="language-sh">swival --provider chatgpt --model gpt-5.2 &quot;task&quot;
+</code></pre>
+<p>Two environment variables are available for advanced use. <code>CHATGPT_TOKEN_DIR</code> overrides the default token storage directory. <code>CHATGPT_API_BASE</code> overrides the API base URL.</p>
+<pre><code class="language-sh">export CHATGPT_TOKEN_DIR=/path/to/tokens
+swival --provider chatgpt --model gpt-5.2 &quot;task&quot;
+</code></pre>
+<p>The <code>--top-p</code>, <code>--seed</code>, and <code>tool_choice</code> parameters are not supported by the ChatGPT backend. Swival drops them automatically when using this provider.</p>
+<p>All OAuth handling happens inside LiteLLM. Swival normalizes the model to <code>chatgpt/&lt;model_id&gt;</code> and passes it through. No other configuration is needed.</p>
 <h2 id="extra-provider-parameters">Extra Provider Parameters</h2>
 <p>Some models and servers accept parameters that go beyond the standard OpenAI API. Use <code>--extra-body</code> to pass them through. The value is a JSON object that gets forwarded directly to the API call.</p>
 <p>For example, Qwen models served through vLLM can disable internal thinking mode:</p>

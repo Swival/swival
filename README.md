@@ -12,7 +12,8 @@ apart.
 
 It connects to [LM Studio](https://lmstudio.ai/),
 [HuggingFace Inference API](https://huggingface.co/inference-api),
-[OpenRouter](https://openrouter.ai/), or any OpenAI-compatible server (ollama,
+[OpenRouter](https://openrouter.ai/),
+[ChatGPT](https://chatgpt.com/), or any OpenAI-compatible server (ollama,
 llama.cpp, mlx_lm.server, vLLM, etc.), sends your task, and runs an autonomous
 tool loop until it produces an answer. With LM Studio it auto-discovers your
 loaded model, so there's nothing to configure. A few thousand lines of Python,
@@ -62,6 +63,18 @@ swival "Refactor the error handling in src/api.py" \
     --provider openrouter --model z-ai/glm-5
 ```
 
+### ChatGPT
+
+```sh
+uv tool install swival
+swival "Refactor the error handling in src/api.py" \
+    --provider chatgpt --model gpt-5.2-codex
+```
+
+On first use, a device code and URL are printed to your terminal. Open the URL,
+enter the code, and authorize. No API key needed. Tokens are cached locally for
+subsequent runs.
+
 ### Generic (OpenAI-compatible)
 
 ```sh
@@ -100,11 +113,12 @@ persistent thinking notes, and a todo checklist all survive context resets, so
 the agent doesn't lose track of multi-step plans even under pressure.
 
 **Your models, your way.** Works with LM Studio, HuggingFace Inference API,
-OpenRouter, and any OpenAI-compatible server. With LM Studio, it auto-discovers
-whatever model you have loaded. With HuggingFace or OpenRouter, point it at any
-supported model. With the generic provider, connect to ollama, llama.cpp,
-mlx_lm.server, vLLM, or any other compatible server. You pick the model and the
-infrastructure.
+OpenRouter, ChatGPT, and any OpenAI-compatible server. With LM Studio, it
+auto-discovers whatever model you have loaded. With HuggingFace or OpenRouter,
+point it at any supported model. With ChatGPT, authenticate through your browser
+and use OpenAI's models directly. With the generic provider, connect to ollama,
+llama.cpp, mlx_lm.server, vLLM, or any other compatible server. You pick the
+model and the infrastructure.
 
 **Review loop and LLM-as-a-judge.** Swival has a configurable review loop that
 can run external reviewer scripts or use a built-in LLM-as-judge to
@@ -142,8 +156,8 @@ Full documentation is available at [swival.dev](https://swival.dev/).
 - [Skills](docs.md/skills.md) -- creating and using SKILL.md-based agent skills
 - [Customization](docs.md/customization.md) -- config files, project instructions,
   system prompt overrides, tuning parameters
-- [Providers](docs.md/providers.md) -- LM Studio, HuggingFace, OpenRouter, and
-  generic OpenAI-compatible server configuration
+- [Providers](docs.md/providers.md) -- LM Studio, HuggingFace, OpenRouter,
+  ChatGPT, and generic OpenAI-compatible server configuration
 - [MCP](docs.md/mcp.md) -- connecting external tool servers via the Model Context
   Protocol
 - [Reports](docs.md/reports.md) -- JSON reports for benchmarking and evaluation

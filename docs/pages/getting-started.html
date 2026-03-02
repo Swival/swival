@@ -119,6 +119,13 @@
 </code></pre>
 <p>Both <code>--model</code> and <code>--base-url</code> are required. No API key is needed for most local servers. If your server requires one, pass <code>--api-key</code> or set <code>OPENAI_API_KEY</code>.</p>
 <p>For a deeper look at generic provider options and server-specific examples, see <a href="providers.html">Providers</a>.</p>
+<h2 id="running-with-chatgpt">Running with ChatGPT</h2>
+<p>If you have a ChatGPT account and want to use OpenAI's models without dealing with API keys, the ChatGPT provider authenticates through an OAuth device-code flow.</p>
+<pre><code class="language-sh">swival &quot;Hello world&quot; --provider chatgpt --model gpt-5.2-codex
+</code></pre>
+<p>On the first run, Swival will print a URL and a code. Open the URL in your browser, enter the code, and authorize. After that, tokens are cached at <code>~/.config/litellm/chatgpt/auth.json</code> and you won't be prompted again.</p>
+<p><code>--model</code> is required -- there is no default. Currently available models are <code>gpt-5.2-codex</code> and <code>gpt-5.2</code>.</p>
+<p>For a deeper look at ChatGPT-specific options, see <a href="providers.html">Providers</a>.</p>
 <h2 id="where-to-go-next">Where To Go Next</h2>
 <p>If you want the full command surface and mode behavior, continue with <a href="usage.html">Usage</a>. If you want a deeper look at built-in capabilities, read <a href="tools.html">Tools</a>. If you need to understand trust boundaries before enabling stronger actions, read <a href="safety-and-sandboxing.html">Safety and Sandboxing</a>.</p>
 <p>If you want to understand how Swival fits large tasks into small context windows, read <a href="context-management.html">Context Management</a>. If you want to connect external tool servers via MCP, see <a href="mcp.html">MCP</a>. If you want copy-on-write isolation so you can review and apply changes only when ready, read <a href="agentfs.html">Using Swival with AgentFS</a>.</p>

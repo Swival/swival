@@ -1,6 +1,6 @@
 # Providers
 
-Swival supports LM Studio for local inference, HuggingFace Inference API for hosted inference, OpenRouter for multi-provider access through a single API, and a generic provider for any OpenAI-compatible server. All provider calls are normalized through [LiteLLM](https://docs.litellm.ai/), so the runtime loop stays consistent while credential and model routing change per provider.
+Swival supports LM Studio for local inference, HuggingFace Inference API for hosted inference, OpenRouter for multi-provider access through a single API, ChatGPT for direct access to OpenAI models via OAuth, and a generic provider for any OpenAI-compatible server. All provider calls are normalized through [LiteLLM](https://docs.litellm.ai/), so the runtime loop stays consistent while credential and model routing change per provider.
 
 ## LM Studio
 
@@ -127,6 +127,35 @@ swival --provider generic \
 There is no model auto-discovery and no context window reload. Set `--max-context-tokens` manually if you need Swival to know the window size.
 
 Internally, generic calls are routed through LiteLLM as `openai/<model_id>` with `api_base` pointing at your server's `/v1` path.
+
+## ChatGPT
+
+The ChatGPT provider connects directly to OpenAI's models using an OAuth device-code flow handled by LiteLLM. There is no API key to manage -- on first use, LiteLLM prints a device code and a verification URL to your terminal. Open the URL, enter the code, and authorize. The resulting tokens are cached locally and refreshed automatically on subsequent runs.
+
+`--model` is required. There is no default model.
+
+```sh
+swival --provider chatgpt --model gpt-5.2-codex "task"
+```
+
+On the first run, you will see a device-code prompt with a URL and a code to enter in your browser. Once you complete the flow, the OAuth tokens are stored at `~/.config/litellm/chatgpt/auth.json` and refreshed automatically.
+
+Currently available models are `gpt-5.2-codex` and `gpt-5.2`. Use whichever your ChatGPT account has access to.
+
+```sh
+swival --provider chatgpt --model gpt-5.2 "task"
+```
+
+Two environment variables are available for advanced use. `CHATGPT_TOKEN_DIR` overrides the default token storage directory. `CHATGPT_API_BASE` overrides the API base URL.
+
+```sh
+export CHATGPT_TOKEN_DIR=/path/to/tokens
+swival --provider chatgpt --model gpt-5.2 "task"
+```
+
+The `--top-p`, `--seed`, and `tool_choice` parameters are not supported by the ChatGPT backend. Swival drops them automatically when using this provider.
+
+All OAuth handling happens inside LiteLLM. Swival normalizes the model to `chatgpt/<model_id>` and passes it through. No other configuration is needed.
 
 ## Extra Provider Parameters
 
