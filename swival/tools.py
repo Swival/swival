@@ -1081,6 +1081,8 @@ def _write_file(
 
     # --- Write path ---
     resolved.parent.mkdir(parents=True, exist_ok=True)
+    if not isinstance(content, str):
+        content = json.dumps(content, indent=2, ensure_ascii=False)
     data = content.encode("utf-8")
     resolved.write_bytes(data)
     if tracker is not None:
