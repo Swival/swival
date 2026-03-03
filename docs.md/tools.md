@@ -20,7 +20,9 @@ When `move_from` is used and no `content` is provided, Swival moves the source p
 
 `edit_file` is the main incremental editing tool. It replaces `old_string` with `new_string` in an existing file and supports `replace_all` when you intentionally want multiple replacements.
 
-Matching is done in three passes. Swival tries an exact string match first. If that fails, it retries with per-line trimmed matching so leading and trailing whitespace differences do not break the edit. If that still fails, it retries with Unicode normalization so smart quotes, em dashes, and ellipsis variants map to ASCII equivalents. If multiple matches are found and `replace_all` is false, the call fails to prevent accidental bulk edits.
+Matching is done in three passes. Swival tries an exact string match first. If that fails, it retries with per-line trimmed matching so leading and trailing whitespace differences do not break the edit. If that still fails, it retries with Unicode normalization so smart quotes, em dashes, and ellipsis variants map to ASCII equivalents.
+
+If multiple matches are found and `replace_all` is false, the call fails to prevent accidental bulk edits.
 
 ## `delete_file`
 
@@ -84,7 +86,9 @@ When skills are discovered, Swival exposes `use_skill` so the model can load ful
 
 ## `snapshot`
 
-`snapshot` is a context management tool for collapsing exploration into compact summaries. When the model spends many turns reading files, grepping, and reasoning before arriving at a conclusion, `snapshot` lets it collapse all of that into a single short message so the context window stays clean for the actual work. For the full picture of how this fits into Swival's context management architecture, see [Context Management](context-management.md).
+`snapshot` is a context management tool for collapsing exploration into compact summaries. When the model spends many turns reading files, grepping, and reasoning before arriving at a conclusion, `snapshot` lets it collapse all of that into a single short message so the context window stays clean for the actual work.
+
+For the full picture of how this fits into Swival's context management architecture, see [Context Management](context-management.md).
 
 The tool supports four actions: `save`, `restore`, `cancel`, and `status`.
 
@@ -130,4 +134,6 @@ In REPL mode, you can also trigger snapshots manually with `/save`, `/restore`, 
 
 ## MCP Tools
 
-Swival can connect to external tool servers via the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP). MCP tools are discovered at startup and exposed alongside built-in tools. MCP tool output is size-guarded: results up to 20 KB are returned inline, larger results are saved to `.swival/` for paginated reads via `read_file`, and output is hard-capped at 10 MB. See [MCP](mcp.md) for configuration and details.
+Swival can connect to external tool servers via the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP). MCP tools are discovered at startup and exposed alongside built-in tools. MCP tool output is size-guarded: results up to 20 KB are returned inline, larger results are saved to `.swival/` for paginated reads via `read_file`, and output is hard-capped at 10 MB.
+
+See [MCP](mcp.md) for configuration and details.

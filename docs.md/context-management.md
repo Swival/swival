@@ -90,7 +90,9 @@ User messages are never silently dropped at this level. Only agent and tool turn
 
 ### Level 3: Nuclear Drop
 
-Last resort. Everything in the middle is dropped — including user messages. Only the system prompt, a summary of what was lost, and the last two turns survive. If the LLM summary fails, Swival falls back to checkpoint summaries (if proactive summaries are enabled) or a static splice marker.
+Last resort. Everything in the middle is dropped — including user messages. Only the system prompt, a summary of what was lost, and the last two turns survive.
+
+If the LLM summary fails, Swival falls back to checkpoint summaries (if proactive summaries are enabled) or a static splice marker.
 
 After any compaction level, the agent retries the LLM call. If all three levels fail to free enough space, the run is aborted with an error.
 
@@ -104,7 +106,9 @@ The `think` tool maintains a history of numbered reasoning steps in memory. Thes
 
 ### Todo State
 
-The `todo` tool tracks work items both in memory and on disk (`.swival/todo.md`). When aggressive compaction drops the turns where the agent planned its work, the todo list still exists. Swival also injects periodic reminders — if the agent hasn't checked its todo list for 3 turns and there are unfinished items, a reminder surfaces the list back into the conversation.
+The `todo` tool tracks work items both in memory and on disk (`.swival/todo.md`). When aggressive compaction drops the turns where the agent planned its work, the todo list still exists.
+
+Swival also injects periodic reminders — if the agent hasn't checked its todo list for 3 turns and there are unfinished items, a reminder surfaces the list back into the conversation.
 
 ### Snapshot History
 

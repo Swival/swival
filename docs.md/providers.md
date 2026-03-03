@@ -27,6 +27,7 @@ swival --max-context-tokens 131072 "task"
 ```
 
 If the requested value already matches the loaded context length, no reload happens.
+
 When a reload is required, it can take noticeable time depending on model size and hardware.
 
 Internally, LM Studio calls are routed through LiteLLM as an OpenAI-compatible endpoint. Swival sends the model as `openai/<model_id>`, sets `api_base` to `<base_url>/v1`, and uses the placeholder API key `lm-studio`.
@@ -82,7 +83,9 @@ swival --provider openrouter --model z-ai/glm-5 \
     --max-context-tokens 131072 "task"
 ```
 
-Internally, Swival normalizes OpenRouter models to LiteLLM's `openrouter/...` format. If the model identifier starts with the literal double prefix `openrouter/openrouter/`, Swival strips the redundant prefix so LiteLLM does not see a stutter. Any other `openrouter/` prefix (e.g. `openrouter/z-ai/glm-5`) is treated as part of the model path and gets prefixed normally, so you should pass bare identifiers like `z-ai/glm-5`.
+Internally, Swival normalizes OpenRouter models to LiteLLM's `openrouter/...` format. If the model identifier starts with the literal double prefix `openrouter/openrouter/`, Swival strips the redundant prefix so LiteLLM does not see a stutter.
+
+Any other `openrouter/` prefix (e.g. `openrouter/z-ai/glm-5`) is treated as part of the model path and gets prefixed normally, so you should pass bare identifiers like `z-ai/glm-5`.
 
 ## Generic (OpenAI-compatible)
 
@@ -130,7 +133,9 @@ Internally, generic calls are routed through LiteLLM as `openai/<model_id>` with
 
 ## ChatGPT Plus/Pro
 
-The `chatgpt` provider lets you use OpenAI models through your existing ChatGPT Plus or ChatGPT Pro subscription, without needing a separate API key. Authentication uses an OAuth device-code flow handled by LiteLLM -- on first use, LiteLLM prints a device code and a verification URL to your terminal. Open the URL, enter the code, and authorize with your ChatGPT account. The resulting tokens are cached locally and refreshed automatically on subsequent runs.
+The `chatgpt` provider lets you use OpenAI models through your existing ChatGPT Plus or ChatGPT Pro subscription, without needing a separate API key.
+
+Authentication uses an OAuth device-code flow handled by LiteLLM -- on first use, LiteLLM prints a device code and a verification URL to your terminal. Open the URL, enter the code, and authorize with your ChatGPT account. The resulting tokens are cached locally and refreshed automatically on subsequent runs.
 
 `--model` is required. There is no default model.
 

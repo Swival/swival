@@ -168,4 +168,6 @@ diff <(jq '{turns: .stats.turns, tools: .stats.tool_calls_total}' a.json) \
 
 ## What Reports Do Not Prove
 
-The report captures behavior, not semantic correctness. It tells you whether the run completed cleanly, how the model spent time, which tools it used, and how context recovery behaved. It does not prove that generated code compiles, passes tests, or satisfies business requirements. Those checks still belong in your evaluator, CI pipeline, or reviewer script.
+The report captures behavior, not semantic correctness. It tells you whether the run completed cleanly, how the model spent time, which tools it used, and how context recovery behaved.
+
+It does not prove that generated code compiles, passes tests, or satisfies business requirements. Those checks still belong in your evaluator, CI pipeline, or reviewer script.
