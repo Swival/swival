@@ -192,6 +192,50 @@ class TestMarkupEscaping:
         assert "[italic]markup[/]" in out
 
 
+class TestToolDiff:
+    def test_formatting(self):
+        old = "aaa\nbbb\nccc\n"
+        new = "aaa\nBBB\nccc\n"
+        out = _capture(fmt.tool_diff, "file.txt", old, new)
+        assert "---" in out
+        assert "+++" in out
+        assert "-bbb" in out
+        assert "+BBB" in out
+
+    def test_no_diff_when_identical(self):
+        text = "aaa\nbbb\n"
+        out = _capture(fmt.tool_diff, "file.txt", text, text)
+        assert out == ""
+
+    def test_truncation_by_lines(self):
+        old = "".join(f"line{i}\n" for i in range(100))
+        new = "".join(f"LINE{i}\n" for i in range(100))
+        out = _capture(fmt.tool_diff, "file.txt", old, new)
+        assert "more lines" in out
+
+    def test_truncation_by_bytes(self):
+        old = "x" * 500 + "\n"
+        new = "y" * 500 + "\n"
+        # Each diff line is ~500 bytes, so 4KB cap should trigger before 50 lines
+        old_big = old * 20
+        new_big = new * 20
+        out = _capture(fmt.tool_diff, "file.txt", old_big, new_big)
+        assert "more lines" in out
+
+    def test_single_long_line_capped(self):
+        old = "a" * 8000 + "\n"
+        new = "b" * 8000 + "\n"
+        out = _capture(fmt.tool_diff, "file.txt", old, new)
+        assert len(out.encode("utf-8")) < 4096 + 512  # headers + indent overhead
+
+    def test_markup_safety(self):
+        old = "before [bold]markup[/bold] after\n"
+        new = "before [italic]changed[/italic] after\n"
+        out = _capture(fmt.tool_diff, "file.txt", old, new)
+        assert "[bold]markup[/bold]" in out
+        assert "[italic]changed[/italic]" in out
+
+
 class TestInit:
     def test_default(self):
         old = fmt._console

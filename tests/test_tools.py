@@ -366,6 +366,60 @@ class TestEditFilePositive:
         content = (tmp_path / "data.txt").read_text(encoding="utf-8")
         assert content == "X\ny\nX\nz\n"
 
+    def test_edit_file_no_diff_when_quiet(self, tmp_path, capsys):
+        """_edit_file(verbose=False) produces no stderr diff output."""
+        (tmp_path / "data.txt").write_text("aaa\nbbb\nccc\n", encoding="utf-8")
+        result = _edit_file("data.txt", "bbb", "BBB", str(tmp_path), verbose=False)
+        assert "Edited" in result
+        captured = capsys.readouterr()
+        assert captured.err == ""
+
+    def test_edit_file_return_value_unchanged(self, tmp_path):
+        """_edit_file still returns 'Edited {path}' regardless of verbose."""
+        (tmp_path / "data.txt").write_text("aaa\nbbb\nccc\n", encoding="utf-8")
+        result = _edit_file("data.txt", "bbb", "BBB", str(tmp_path), verbose=True)
+        assert result == "Edited data.txt"
+
+    def test_dispatch_edit_quiet_no_diff(self, tmp_path, monkeypatch):
+        """dispatch('edit_file', verbose=False) does not call fmt.tool_diff."""
+        (tmp_path / "data.txt").write_text("aaa\nbbb\nccc\n", encoding="utf-8")
+        from unittest.mock import patch
+
+        with patch("swival.fmt.tool_diff") as mock_diff:
+            dispatch(
+                "edit_file",
+                {"file_path": "data.txt", "old_string": "bbb", "new_string": "BBB"},
+                str(tmp_path),
+                verbose=False,
+            )
+            mock_diff.assert_not_called()
+
+    def test_dispatch_edit_verbose_calls_diff(self, tmp_path):
+        """dispatch('edit_file', verbose=True) calls fmt.tool_diff with correct args."""
+        (tmp_path / "data.txt").write_text("aaa\nbbb\nccc\n", encoding="utf-8")
+        from unittest.mock import patch
+
+        with patch("swival.fmt.tool_diff") as mock_diff:
+            dispatch(
+                "edit_file",
+                {"file_path": "data.txt", "old_string": "bbb", "new_string": "BBB"},
+                str(tmp_path),
+                verbose=True,
+            )
+            mock_diff.assert_called_once_with(
+                "data.txt", "aaa\nbbb\nccc\n", "aaa\nBBB\nccc\n"
+            )
+
+    def test_edit_file_diff_exception_swallowed(self, tmp_path):
+        """If fmt.tool_diff raises, edit still succeeds."""
+        (tmp_path / "data.txt").write_text("aaa\nbbb\nccc\n", encoding="utf-8")
+        from unittest.mock import patch
+
+        with patch("swival.fmt.tool_diff", side_effect=RuntimeError("boom")):
+            result = _edit_file("data.txt", "bbb", "BBB", str(tmp_path), verbose=True)
+        assert result == "Edited data.txt"
+        assert (tmp_path / "data.txt").read_text() == "aaa\nBBB\nccc\n"
+
 
 # =========================================================================
 # Error handling

@@ -1,5 +1,7 @@
 """ANSI-formatted stderr output using Rich."""
 
+import difflib
+
 from rich.console import Console
 from rich.markup import escape
 from rich.rule import Rule
@@ -75,6 +77,55 @@ def tool_result(name: str, elapsed: float, preview: str) -> None:
     _console.print(header)
     if preview:
         _console.print(Text(f"    {preview}", style="dim"))
+
+
+_DIFF_MAX_LINES = 50
+_DIFF_MAX_BYTES = 4096
+
+
+def tool_diff(file_path: str, old: str, new: str) -> None:
+    """Print a colored unified diff of an edit to stderr."""
+    lines = list(
+        difflib.unified_diff(
+            old.splitlines(keepends=True),
+            new.splitlines(keepends=True),
+            fromfile=file_path,
+            tofile=file_path,
+        )
+    )
+    if not lines:
+        return
+
+    output = Text()
+    total_bytes = 0
+    shown = 0
+    for line in lines:
+        if shown >= _DIFF_MAX_LINES or total_bytes >= _DIFF_MAX_BYTES:
+            remaining = len(lines) - shown
+            output.append(f"    ... {remaining} more lines\n", style="dim")
+            break
+        if line.startswith("---") or line.startswith("+++"):
+            style = "bold"
+        elif line.startswith("@@"):
+            style = "cyan"
+        elif line.startswith("-"):
+            style = "red"
+        elif line.startswith("+"):
+            style = "green"
+        else:
+            style = "dim"
+        line_bytes = len(line.encode("utf-8"))
+        budget = _DIFF_MAX_BYTES - total_bytes
+        if line_bytes > budget:
+            line = line.encode("utf-8")[:budget].decode("utf-8", errors="ignore")
+        display = f"    {line}"
+        output.append(display, style=style)
+        if not display.endswith("\n"):
+            output.append("\n")
+        total_bytes += len(line.encode("utf-8"))
+        shown += 1
+
+    _console.print(output, end="")
 
 
 def tool_error(name: str, msg: str) -> None:

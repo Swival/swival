@@ -1121,6 +1121,7 @@ def _edit_file(
     extra_write_roots: list[Path] = (),
     unrestricted: bool = False,
     tracker=None,
+    verbose: bool = False,
 ) -> str:
     """Replace old_string with new_string in an existing file."""
     from .edit import replace
@@ -1157,6 +1158,17 @@ def _edit_file(
         return f"error: {exc}"
 
     resolved.write_text(new_content, encoding="utf-8")
+
+    if verbose:
+        try:
+            from . import fmt
+
+            fmt.tool_diff(file_path, content, new_content)
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).debug("tool_diff failed: %s", exc)
+
     return f"Edited {file_path}"
 
 
@@ -1814,6 +1826,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             extra_write_roots=extra_write_roots,
             unrestricted=yolo,
             tracker=file_tracker,
+            verbose=kwargs.get("verbose", False),
         )
     elif name == "delete_file":
         return _delete_file(

@@ -1060,6 +1060,7 @@ def handle_tool_call(
             tool_call_id=tool_call.id,
             mcp_manager=mcp_manager,
             messages=messages,
+            verbose=verbose,
         )
     except McpShutdownError:
         result = "error: MCP server is shutting down"
