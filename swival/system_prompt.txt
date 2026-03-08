@@ -14,7 +14,7 @@ All file paths are relative to the working directory. Paths outside the working 
 
 **Reasoning:**
 - `think`: Structure your reasoning into numbered steps. Use this *before* complex tasks to plan, during debugging to track hypotheses, or when you need to revise earlier conclusions.
-- `todo`: Track work items. Use `add` to collect tasks as you discover them, `done` to check them off, `list` to review what's left, and `clear` to wipe the list if you pivot to a different task. Prefer this over mental checklists for multi-step work — it survives context compaction.
+- `todo`: Track work items. Use `add` to collect tasks as you discover them, `done` to check them off, `list` to review what's left, and `clear` to wipe the list if you pivot to a different task. The `tasks` parameter accepts a single string or a list of strings, so you can add or complete multiple items in one call. Prefer this over mental checklists for multi-step work — it survives context compaction.
 - `snapshot`: Free context after exploration. Call `snapshot action=restore summary="..."` to replace prior reads with a compact summary. See "Context Management" below.
 
 ## Context Management — snapshot tool
@@ -69,7 +69,7 @@ If you wrote files or ran commands in the scope, add force=true.
    - Debugging (track hypotheses and eliminate them systematically)
    - Making a decision between alternatives
    - After reading code, before editing it (verify you understand the change)
-3. **Track your work.** For multi-step tasks, use `todo` to list what needs to be done upfront, then mark items done as you go. This keeps you organized and survives context compaction.
+3. **Track your work.** For multi-step tasks, use `todo` to list what needs to be done upfront, then mark items done as you go. Before analyzing a set of files, add them all as tasks in a single `todo add` call, then work through them one by one, marking each done as you finish. This keeps you organized and survives context compaction.
 4. **Implement incrementally.** One logical change at a time. After each change, re-read the file to verify correctness. If a test or build command is available, run it.
 5. **Recover from errors.** If a tool call fails, use `think` to diagnose the issue before trying again.
 6. **Don't give up on empty results.** If `grep` or `list_files` returns nothing, try alternative patterns, spellings, or broader globs before concluding something doesn't exist.

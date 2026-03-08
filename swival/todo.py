@@ -9,6 +9,7 @@ from . import fmt
 MAX_ITEMS = 50
 MAX_ITEM_TEXT = 500
 VALID_ACTIONS = {"add", "done", "remove", "clear", "list"}
+_REASON_LIST_FULL = "todo list full"
 
 
 @dataclass
@@ -26,6 +27,15 @@ def _safe_todo_path(notes_dir: str) -> Path:
     return todo_path
 
 
+def _to_stripped_list(raw) -> list[str]:
+    """Coerce a string, list, or other value into a list of stripped strings."""
+    if isinstance(raw, str):
+        return [raw.strip()]
+    if isinstance(raw, list):
+        return [t.strip() if isinstance(t, str) else str(t) for t in raw]
+    return [str(raw).strip()]
+
+
 def _normalize_tasks(args: dict) -> list[str] | str:
     """Extract and normalize the task list from args.
 
@@ -35,33 +45,17 @@ def _normalize_tasks(args: dict) -> list[str] | str:
     has_task = "task" in args
 
     if has_tasks and has_task:
-        # Both present — check for conflict
-        raw_tasks = args["tasks"]
-        raw_task = args["task"]
-        norm_tasks = [raw_tasks] if isinstance(raw_tasks, str) else list(raw_tasks)
-        norm_tasks = [t.strip() for t in norm_tasks]
-        norm_task = (
-            [raw_task.strip()]
-            if isinstance(raw_task, str)
-            else [t.strip() for t in raw_task]
-        )
-        if norm_tasks != norm_task:
+        if _to_stripped_list(args["tasks"]) != _to_stripped_list(args["task"]):
             return "error: provide either 'tasks' or legacy alias 'task', not conflicting values"
-        raw = raw_tasks
-    elif has_tasks:
+
+    if has_tasks:
         raw = args["tasks"]
     elif has_task:
         raw = args["task"]
     else:
         return "error: action requires a 'tasks' parameter"
 
-    if isinstance(raw, str):
-        items = [raw.strip()]
-    elif isinstance(raw, list):
-        items = [t.strip() if isinstance(t, str) else str(t) for t in raw]
-    else:
-        items = [str(raw).strip()]
-
+    items = _to_stripped_list(raw)
     if not items:
         return "error: 'tasks' must not be empty"
 
@@ -161,24 +155,21 @@ class TodoState:
                 skipped.append(task)
                 continue
             if len(self.items) >= MAX_ITEMS:
-                errors.append({"task": task[:80], "reason": "todo list full"})
+                errors.append({"task": task[:80], "reason": _REASON_LIST_FULL})
                 continue
             self.items.append(TodoItem(text=task))
             self.add_count += 1
             added += 1
 
         succeeded = added + len(skipped)
-        failed = len(errors)
-
-        # All failed — top-level error
-        if succeeded == 0 and failed > 0:
-            if all(e["reason"] == "todo list full" for e in errors):
+        if succeeded == 0 and errors:
+            if all(e["reason"] == _REASON_LIST_FULL for e in errors):
                 return f"error: todo list full ({MAX_ITEMS} items max)"
-            return f"error: all {failed} items failed — {errors[0]['reason']}"
+            return self._all_failed_error(errors, tasks)
 
         self._save()
         if self.verbose:
-            note = self._batch_note("added", added, len(skipped), failed)
+            note = self._batch_note("added", added, len(skipped), len(errors))
             fmt.todo_list(self.items, action="add", note=note)
         return self._response("add", skipped=skipped or None, errors=errors or None)
 
@@ -195,15 +186,9 @@ class TodoState:
             done_count += 1
 
         if done_count == 0 and errors:
-            if len(tasks) == 1:
-                return f"error: {errors[0]['reason']}"
-            return f"error: all {len(errors)} items failed — {errors[0]['reason']}"
+            return self._all_failed_error(errors, tasks)
 
-        self._save()
-        if self.verbose:
-            note = self._batch_note("marked done", done_count, 0, len(errors))
-            fmt.todo_list(self.items, action="done", note=note)
-        return self._response("done", errors=errors or None)
+        return self._finalize_batch("done", "marked done", done_count, errors)
 
     def _batch_remove(self, tasks: list[str], errors: list[dict]) -> str:
         removed = 0
@@ -216,18 +201,31 @@ class TodoState:
             removed += 1
 
         if removed == 0 and errors:
-            if len(tasks) == 1:
-                return f"error: {errors[0]['reason']}"
-            return f"error: all {len(errors)} items failed — {errors[0]['reason']}"
+            return self._all_failed_error(errors, tasks)
 
+        return self._finalize_batch("remove", "removed", removed, errors)
+
+    def _finalize_batch(
+        self,
+        action: str,
+        verb: str,
+        count: int,
+        errors: list[dict],
+    ) -> str:
         self._save()
         if self.verbose:
-            note = self._batch_note("removed", removed, 0, len(errors))
-            fmt.todo_list(self.items, action="remove", note=note)
-        return self._response("remove", errors=errors or None)
+            note = self._batch_note(verb, count, 0, len(errors))
+            fmt.todo_list(self.items, action=action, note=note)
+        return self._response(action, errors=errors or None)
 
     @staticmethod
-    def _batch_note(verb: str, count: int, skipped: int, failed: int) -> str:
+    def _all_failed_error(errors: list[dict], tasks: list[str]) -> str:
+        if len(tasks) == 1:
+            return f"error: {errors[0]['reason']}"
+        return f"error: all {len(errors)} items failed — {errors[0]['reason']}"
+
+    @staticmethod
+    def _batch_note(verb: str, count: int, skipped: int = 0, failed: int = 0) -> str:
         parts = [f"{verb} {count} item{'s' if count != 1 else ''}"]
         extras = []
         if skipped:
@@ -275,7 +273,6 @@ class TodoState:
     def _response(
         self,
         action: str,
-        note: str | None = None,
         skipped: list[str] | None = None,
         errors: list[dict] | None = None,
     ) -> str:
@@ -287,8 +284,6 @@ class TodoState:
             "remaining": remaining,
             "items": items,
         }
-        if note:
-            resp["note"] = note
         if skipped:
             resp["skipped"] = skipped
         if errors:
