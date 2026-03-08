@@ -125,7 +125,11 @@
 <p>Swival also injects periodic reminders — if the agent hasn't checked its todo list for 3 turns and there are unfinished items, a reminder surfaces the list back into the conversation.</p>
 <h3 id="snapshot-history">Snapshot History</h3>
 <p>As described above, completed snapshot summaries are injected directly into the system prompt. This is the most durable persistence channel — the system prompt survives every compaction level, so investigation conclusions are never lost.</p>
-<p>Together, these three channels mean that even after nuclear compaction wipes the conversation to nearly nothing, the agent still has its reasoning chain, its task list, and a record of what it learned from previous investigation.</p>
+<h3 id="continue-here-files">Continue-Here Files</h3>
+<p>When a session ends abnormally — Ctrl+C, max turns exhausted, compaction failure, or REPL exit — Swival writes a structured <code>.swival/continue.md</code> file capturing the current task, todo state, recent tool activity, and key reasoning. On the next session start, this file is loaded into the system prompt and deleted, so the agent picks up where it left off without re-explanation.</p>
+<p>The file is always written deterministically first (no network call). On the max-turns path only, Swival optionally enhances it with an LLM-generated summary. If the LLM call fails, the deterministic version is already on disk.</p>
+<p>Continue-here files are capped at 4,000 characters. Files older than 24 hours trigger a staleness warning but are still loaded. Use <code>--no-continue</code> to disable both writing and reading. The <code>/continue-status</code> REPL command previews an existing continue file without consuming it.</p>
+<p>Together, these four channels mean that even after nuclear compaction wipes the conversation to nearly nothing, the agent still has its reasoning chain, its task list, a record of what it learned during investigation, and — if the session was interrupted — a structured resume plan for the next run.</p>
 <h2 id="proactive-checkpoint-summaries">Proactive Checkpoint Summaries</h2>
 <p>Enabled with <code>--proactive-summaries</code>, this feature periodically summarizes recent turns in the background. Every 10 turns, the last batch is summarized via an LLM call and stored internally.</p>
 <p>These summaries serve as a safety net. When Level 2 or Level 3 compaction fires and can't get an LLM summary of the dropped turns, it falls back to these pre-computed checkpoint summaries instead of losing the context entirely.</p>

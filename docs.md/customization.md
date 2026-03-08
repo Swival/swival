@@ -27,6 +27,7 @@ allowed_commands = ["ls", "git", "python3"]
 allowed_dirs = ["/tmp"]
 allowed_dirs_ro = ["/opt/zig/lib/std"]
 proactive_summaries = true
+# no_continue = false
 quiet = false
 extra_body = { chat_template_kwargs = { enable_thinking = false } }
 reasoning_effort = "high"

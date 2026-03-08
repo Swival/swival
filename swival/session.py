@@ -77,6 +77,7 @@ class Session:
         mcp_servers: dict | None = None,
         extra_body: dict | None = None,
         reasoning_effort: str | None = None,
+        continue_here: bool = True,
     ):
         self.base_dir = base_dir
         self.config_dir = config_dir
@@ -111,6 +112,7 @@ class Session:
         self.mcp_servers = mcp_servers
         self.extra_body = extra_body
         self.reasoning_effort = reasoning_effort
+        self.continue_here = continue_here
 
         # Setup state (cached after first _setup())
         self._setup_done = False
@@ -228,6 +230,7 @@ class Session:
             verbose=self.verbose,
             config_dir=self.config_dir,
             mcp_tool_info=mcp_tool_info,
+            no_continue=not self.continue_here,
         )
 
         # Clean up stale cmd_output files
@@ -285,6 +288,7 @@ class Session:
             verbose=self.verbose,
             llm_kwargs=self._llm_kwargs,
             file_tracker=state["file_tracker"],
+            continue_here=self.continue_here,
         )
         if state.get("compaction_state") is not None:
             kwargs["compaction_state"] = state["compaction_state"]

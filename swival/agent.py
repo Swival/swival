@@ -55,6 +55,17 @@ _encoder = tiktoken.get_encoding("cl100k_base")
 MAX_HISTORY_SIZE = 500 * 1024  # 500KB
 TODO_REMINDER_INTERVAL = 3  # remind after N turns of no todo usage
 
+# Canonical prefixes for synthetic user messages injected by the agent loop.
+# Used by continue_here._find_last_user_task to skip interventions.
+SYNTHETIC_USER_PREFIXES: tuple[str, ...] = (
+    "Your response was empty.",
+    "Your response was cut off.",
+    "IMPORTANT:",
+    "STOP:",
+    "Tip:",
+    "Reminder:",
+)
+
 _SUMMARIZE_SYSTEM_PROMPT = (
     "Summarize this agent conversation excerpt into a factual recap. "
     "Preserve: file paths, key findings, decisions, errors, and "
@@ -1594,6 +1605,12 @@ def build_parser():
         help="Don't load auto-memory from .swival/memory/.",
     )
     parser.add_argument(
+        "--no-continue",
+        action="store_true",
+        default=_UNSET,
+        help="Don't write or read .swival/continue.md on session interruption.",
+    )
+    parser.add_argument(
         "--no-instructions",
         action="store_true",
         default=_UNSET,
@@ -2100,7 +2117,7 @@ def resolve_provider(
         if not model:
             raise ConfigError(
                 "--model is required when --provider is chatgpt. "
-                "Available models: gpt-5.4, gpt-5.2-codex, gpt-5.2. "
+                "Available models: gpt-5.4, gpt-5.3-codex, gpt-5.3-codex-spark. "
                 "See https://docs.litellm.ai/docs/providers/chatgpt"
             )
         api_base = base_url
@@ -2213,6 +2230,7 @@ def build_system_prompt(
     verbose: bool,
     config_dir: "Path | None" = None,
     mcp_tool_info: dict | None = None,
+    no_continue: bool = False,
 ) -> tuple[str | None, list[str]]:
     """Assemble full system prompt with instructions, date, skills, memory.
 
@@ -2270,6 +2288,16 @@ def build_system_prompt(
 
     if mcp_tool_info and not system_prompt:
         system_content += "\n\n" + _format_mcp_tool_info(mcp_tool_info)
+
+    # Load continue-here file from a previous interrupted session
+    if not no_continue:
+        from .continue_here import load_continue_file, format_continue_prompt
+
+        continue_content = load_continue_file(base_dir)
+        if continue_content:
+            system_content += "\n\n" + format_continue_prompt(continue_content)
+            if verbose:
+                fmt.info("Loaded continue file from previous session")
 
     return system_content, instructions_loaded
 
@@ -2409,6 +2437,7 @@ def _run_main(args, report, _write_report, parser):
         verbose=args.verbose,
         config_dir=getattr(args, "config_dir", None),
         mcp_tool_info=mcp_tool_info,
+        no_continue=getattr(args, "no_continue", False),
     )
     messages = []
     if system_content is not None:
@@ -2460,6 +2489,9 @@ def _run_main(args, report, _write_report, parser):
         loop_kwargs["compaction_state"] = CompactionState()
 
     no_history = getattr(args, "no_history", False)
+    no_continue = getattr(args, "no_continue", False)
+    _continue_here = not no_continue
+    loop_kwargs["continue_here"] = _continue_here
 
     # Validate reviewer executable at startup
     reviewer_cmd = None
@@ -2500,13 +2532,27 @@ def _run_main(args, report, _write_report, parser):
                 reviewer_env["SWIVAL_MODEL"] = model_id
 
         while True:
-            answer, exhausted = run_agent_loop(
-                messages,
-                tools,
-                **loop_kwargs,
-                report=report,
-                turn_offset=turn_offset,
-            )
+            try:
+                answer, exhausted = run_agent_loop(
+                    messages,
+                    tools,
+                    **loop_kwargs,
+                    report=report,
+                    turn_offset=turn_offset,
+                )
+            except KeyboardInterrupt:
+                fmt.warning("interrupted.")
+                if _continue_here:
+                    from .continue_here import write_continue_file
+
+                    write_continue_file(
+                        base_dir,
+                        messages,
+                        todo_state=todo_state,
+                        snapshot_state=snapshot_state,
+                        thinking_state=thinking_state,
+                    )
+                sys.exit(130)
 
             if not reviewer_cmd or answer is None or exhausted:
                 break
@@ -2582,7 +2628,21 @@ def _run_main(args, report, _write_report, parser):
     # REPL path
     if args.question:
         messages.append({"role": "user", "content": args.question})
-        answer, exhausted = run_agent_loop(messages, tools, **loop_kwargs)
+        try:
+            answer, exhausted = run_agent_loop(messages, tools, **loop_kwargs)
+        except KeyboardInterrupt:
+            fmt.warning("interrupted during initial question.")
+            if _continue_here:
+                from .continue_here import write_continue_file
+
+                write_continue_file(
+                    base_dir,
+                    messages,
+                    todo_state=todo_state,
+                    snapshot_state=snapshot_state,
+                    thinking_state=thinking_state,
+                )
+            answer, exhausted = None, False
         if not no_history and answer:
             append_history(base_dir, args.question, answer, diagnostics=args.verbose)
         if answer is not None:
@@ -2624,6 +2684,7 @@ def run_agent_loop(
     turn_offset: int = 0,
     compaction_state: "CompactionState | None" = None,
     mcp_manager=None,
+    continue_here: bool = True,
 ) -> tuple[str | None, bool]:
     """Run the tool-calling loop until a final answer or max turns.
 
@@ -2819,7 +2880,17 @@ def run_agent_loop(
                         )
                     break  # success
             else:
-                # All compaction levels exhausted
+                # All compaction levels exhausted — save state before dying
+                if continue_here:
+                    from .continue_here import write_continue_file
+
+                    write_continue_file(
+                        base_dir,
+                        messages,
+                        todo_state=todo_state,
+                        snapshot_state=snapshot_state,
+                        thinking_state=thinking_state,
+                    )
                 raise AgentError("context window exceeded even after compaction")
 
         except AgentError:
@@ -3040,6 +3111,26 @@ def run_agent_loop(
                 break
     if verbose:
         _show_state_summaries(thinking_state, todo_state, snapshot_state)
+
+    # Save continue file (with LLM enhancement since we're not in a hurry)
+    if continue_here:
+        from .continue_here import write_continue_file
+
+        write_continue_file(
+            base_dir,
+            messages,
+            todo_state=todo_state,
+            snapshot_state=snapshot_state,
+            thinking_state=thinking_state,
+            call_llm_fn=call_llm,
+            model_id=model_id,
+            base_url=api_base,
+            api_key=llm_kwargs.get("api_key"),
+            top_p=top_p,
+            seed=seed,
+            provider=llm_kwargs.get("provider"),
+        )
+
     return last_text, True
 
 
@@ -3062,6 +3153,7 @@ def _repl_help() -> None:
         "  /add-dir-ro <path> Grant read-only access to a directory\n"
         "  /extend [N]        Double max turns, or set to N\n"
         "  /continue          Reset turn counter and continue the agent loop\n"
+        "  /continue-status   Show if a continue file exists from a prior session\n"
         "  /init              Generate AGENTS.md for the current project\n"
         "  /exit, /quit       Exit the REPL"
     )
@@ -3284,6 +3376,7 @@ def repl_loop(
     no_history: bool = False,
     compaction_state: "CompactionState | None" = None,
     mcp_manager=None,
+    continue_here: bool = True,
 ) -> None:
     """Interactive read-eval-print loop."""
     from prompt_toolkit import PromptSession
@@ -3333,6 +3426,16 @@ def repl_loop(
             line = session.prompt(prompt_text)
         except (EOFError, KeyboardInterrupt):
             print(file=sys.stderr)  # newline after ^D / ^C
+            if continue_here and any(_msg_role(m) != "system" for m in messages):
+                from .continue_here import write_continue_file
+
+                write_continue_file(
+                    base_dir,
+                    messages,
+                    todo_state=todo_state,
+                    snapshot_state=snapshot_state,
+                    thinking_state=thinking_state,
+                )
             break
 
         line = line.strip()
@@ -3390,6 +3493,18 @@ def repl_loop(
         elif cmd == "/extend":
             _repl_extend(cmd_arg, turn_state)
             continue
+        elif cmd == "/continue-status":
+            from .continue_here import load_continue_file
+
+            content = load_continue_file(base_dir, delete=False)
+            if content:
+                preview = content[:500]
+                if len(content) > 500:
+                    preview += "\n... (truncated)"
+                fmt.info(f"Continue file exists ({len(content)} chars):\n{preview}")
+            else:
+                fmt.info("No continue file found.")
+            continue
         elif cmd == "/init":
             if cmd_arg:
                 fmt.warning(f"/init takes no arguments, ignoring {cmd_arg!r}")
@@ -3415,6 +3530,16 @@ def repl_loop(
                     )
                 except KeyboardInterrupt:
                     fmt.warning("interrupted, /init aborted.")
+                    if continue_here:
+                        from .continue_here import write_continue_file
+
+                        write_continue_file(
+                            base_dir,
+                            messages,
+                            todo_state=todo_state,
+                            snapshot_state=snapshot_state,
+                            thinking_state=thinking_state,
+                        )
                     break
                 if not no_history and answer:
                     append_history(
@@ -3439,6 +3564,16 @@ def repl_loop(
                 )
             except KeyboardInterrupt:
                 fmt.warning("interrupted, continuation aborted.")
+                if continue_here:
+                    from .continue_here import write_continue_file
+
+                    write_continue_file(
+                        base_dir,
+                        messages,
+                        todo_state=todo_state,
+                        snapshot_state=snapshot_state,
+                        thinking_state=thinking_state,
+                    )
                 continue
             if not no_history and answer:
                 append_history(base_dir, "(continued)", answer, diagnostics=verbose)
@@ -3460,6 +3595,16 @@ def repl_loop(
             )
         except KeyboardInterrupt:
             fmt.warning("interrupted, question aborted.")
+            if continue_here:
+                from .continue_here import write_continue_file
+
+                write_continue_file(
+                    base_dir,
+                    messages,
+                    todo_state=todo_state,
+                    snapshot_state=snapshot_state,
+                    thinking_state=thinking_state,
+                )
             continue
 
         if not no_history and answer:

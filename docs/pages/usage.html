@@ -90,6 +90,7 @@
 <p><code>/add-dir-ro &lt;path&gt;</code> grants read-only access to an additional directory. The agent can read, list, and grep files there but cannot write, edit, or delete them.</p>
 <p><code>/extend</code> doubles the current turn budget. <code>/extend &lt;N&gt;</code> sets the turn budget to an exact value.</p>
 <p><code>/continue</code> restarts the agent loop for the existing conversation without adding a new user message.</p>
+<p><code>/continue-status</code> shows whether a continue file exists from a prior interrupted session and previews its contents.</p>
 <p><code>/init</code> runs a three-pass workflow that scans your project and generates an <code>AGENTS.md</code> file.</p>
 <p><code>/exit</code> and <code>/quit</code> leave the REPL. Pressing <code>Ctrl-D</code> exits as well.</p>
 <h2 id="cli-flags">CLI Flags</h2>
@@ -147,6 +148,7 @@
 <p><code>--objective FILE</code> reads the task description from a file instead of the <code>SWIVAL_TASK</code> environment variable when running in reviewer mode.</p>
 <p><code>--verify FILE</code> reads verification criteria from a file and includes them in the review prompt when running in reviewer mode.</p>
 <p><code>--no-history</code> disables writes to <code>.swival/HISTORY.md</code>.</p>
+<p><code>--no-continue</code> disables continue-here files. When set, Swival will not write <code>.swival/continue.md</code> on interruption and will not load it on startup.</p>
 <p><code>--color</code> forces ANSI color on standard error, and <code>--no-color</code> disables ANSI color even on TTY output.</p>
 <h3 id="configuration-flags">Configuration Flags</h3>
 <p><code>--init-config</code> generates a global config file at <code>~/.config/swival/config.toml</code> and exits. The file is a fully commented template showing all available settings.</p>

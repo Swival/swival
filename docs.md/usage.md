@@ -67,6 +67,8 @@ The REPL is built on `prompt-toolkit`, so it supports input history, history sea
 
 `/continue` restarts the agent loop for the existing conversation without adding a new user message.
 
+`/continue-status` shows whether a continue file exists from a prior interrupted session and previews its contents.
+
 `/init` runs a three-pass workflow that scans your project and generates an `AGENTS.md` file.
 
 `/exit` and `/quit` leave the REPL. Pressing `Ctrl-D` exits as well.
@@ -180,6 +182,8 @@ See [MCP](mcp.md) for full configuration details.
 `--verify FILE` reads verification criteria from a file and includes them in the review prompt when running in reviewer mode.
 
 `--no-history` disables writes to `.swival/HISTORY.md`.
+
+`--no-continue` disables continue-here files. When set, Swival will not write `.swival/continue.md` on interruption and will not load it on startup.
 
 `--color` forces ANSI color on standard error, and `--no-color` disables ANSI color even on TTY output.
 
