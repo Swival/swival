@@ -1,9 +1,11 @@
 """ANSI-formatted stderr output using Rich."""
 
+import contextlib
 import difflib
 
 from rich.console import Console
 from rich.markup import escape
+from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.rule import Rule
 from rich.text import Text
 
@@ -41,9 +43,20 @@ def llm_timing(elapsed: float, finish_reason: str) -> None:
     _console.print(text)
 
 
+@contextlib.contextmanager
 def llm_spinner(label: str = "Waiting for LLM"):
-    """Return a Rich Status context manager that spins on stderr."""
-    return _console.status(f"  {label}", spinner="dots")
+    """Context manager showing a spinner with elapsed time on stderr."""
+    progress = Progress(
+        SpinnerColumn("arc", style="cyan"),
+        TextColumn("  {task.description}"),
+        TimeElapsedColumn(),
+        console=_console,
+        transient=True,
+        disable=not _console.is_terminal,
+    )
+    with progress:
+        progress.add_task(label, total=None)
+        yield
 
 
 def completion(turns: int, exit_code: str) -> None:

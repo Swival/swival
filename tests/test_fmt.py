@@ -56,6 +56,32 @@ class TestLlmTiming:
         assert "finish_reason=length" in out
 
 
+class TestLlmSpinner:
+    def test_no_output_when_not_terminal(self):
+        """Redirected stderr must produce zero bytes (no stray newlines)."""
+        buf = StringIO()
+        old = fmt._console
+        fmt._console = Console(file=buf, no_color=True, width=80)
+        try:
+            with fmt.llm_spinner("Testing spinner"):
+                pass
+        finally:
+            fmt._console = old
+        assert buf.getvalue() == ""
+
+    def test_label_shown_on_terminal(self):
+        """On a terminal console the label text appears in the output."""
+        buf = StringIO()
+        old = fmt._console
+        fmt._console = Console(file=buf, force_terminal=True, width=80)
+        try:
+            with fmt.llm_spinner("Custom label"):
+                pass
+        finally:
+            fmt._console = old
+        assert "Custom label" in buf.getvalue()
+
+
 class TestCompletion:
     def test_ok(self):
         out = _capture(fmt.completion, 5, "ok")
