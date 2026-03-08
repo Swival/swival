@@ -145,17 +145,17 @@ swival --provider chatgpt --model gpt-5.4 "task"
 
 On the first run, you will see a device-code prompt with a URL and a code to enter in your browser. Once you complete the flow, the OAuth tokens are stored at `~/.config/litellm/chatgpt/auth.json` and refreshed automatically.
 
-Currently available models are `gpt-5.4`, `gpt-5.3-codex-spark`, `gpt-5.2-codex`, and `gpt-5.2`. Use whichever your ChatGPT Plus or Pro plan has access to.
+Currently available models are `gpt-5.4`, `gpt-5.3-codex`, and `gpt-5.3-codex-spark`. Use whichever your ChatGPT Plus or Pro plan has access to.
 
 ```sh
-swival --provider chatgpt --model gpt-5.2 "task"
+swival --provider chatgpt --model gpt-5.4 "task"
 ```
 
 Two environment variables are available for advanced use. `CHATGPT_TOKEN_DIR` overrides the default token storage directory. `CHATGPT_API_BASE` overrides the API base URL.
 
 ```sh
 export CHATGPT_TOKEN_DIR=/path/to/tokens
-swival --provider chatgpt --model gpt-5.2 "task"
+swival --provider chatgpt --model gpt-5.4 "task"
 ```
 
 The `--top-p`, `--seed`, and `tool_choice` parameters are not supported by the ChatGPT Plus/Pro backend. Swival drops them automatically when using this provider.

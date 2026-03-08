@@ -142,12 +142,12 @@ swival --provider generic \
 <pre><code class="language-sh">swival --provider chatgpt --model gpt-5.4 &quot;task&quot;
 </code></pre>
 <p>On the first run, you will see a device-code prompt with a URL and a code to enter in your browser. Once you complete the flow, the OAuth tokens are stored at <code>~/.config/litellm/chatgpt/auth.json</code> and refreshed automatically.</p>
-<p>Currently available models are <code>gpt-5.4</code>, <code>gpt-5.3-codex-spark</code>, <code>gpt-5.2-codex</code>, and <code>gpt-5.2</code>. Use whichever your ChatGPT Plus or Pro plan has access to.</p>
-<pre><code class="language-sh">swival --provider chatgpt --model gpt-5.2 &quot;task&quot;
+<p>Currently available models are <code>gpt-5.4</code>, <code>gpt-5.3-codex</code>, and <code>gpt-5.3-codex-spark</code>. Use whichever your ChatGPT Plus or Pro plan has access to.</p>
+<pre><code class="language-sh">swival --provider chatgpt --model gpt-5.4 &quot;task&quot;
 </code></pre>
 <p>Two environment variables are available for advanced use. <code>CHATGPT_TOKEN_DIR</code> overrides the default token storage directory. <code>CHATGPT_API_BASE</code> overrides the API base URL.</p>
 <pre><code class="language-sh">export CHATGPT_TOKEN_DIR=/path/to/tokens
-swival --provider chatgpt --model gpt-5.2 &quot;task&quot;
+swival --provider chatgpt --model gpt-5.4 &quot;task&quot;
 </code></pre>
 <p>The <code>--top-p</code>, <code>--seed</code>, and <code>tool_choice</code> parameters are not supported by the ChatGPT Plus/Pro backend. Swival drops them automatically when using this provider.</p>
 <p>Models like <code>gpt-5.4</code> support tunable reasoning effort. Use <code>--reasoning-effort</code> to control how much the model thinks before responding:</p>

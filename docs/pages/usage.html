@@ -70,7 +70,7 @@
     &quot;Create a tool that returns a random number between 0 and 42&quot;
 </code></pre>
 <p>That whitelist changes what the agent can do. If <code>python3</code> is available, it can use Python for implementation and verification. If no commands are whitelisted, <code>run_command</code> is unavailable unless you enable YOLO mode.</p>
-<p>A successful run exits with code <code>0</code>. A runtime or configuration failure exits with code <code>1</code>. A run that reaches the turn limit before finishing exits with code <code>2</code>.</p>
+<p>A successful run exits with code <code>0</code>. A runtime or configuration failure exits with code <code>1</code>. A run that reaches the turn limit before finishing exits with code <code>2</code>. A run interrupted with Ctrl+C exits with code <code>130</code>.</p>
 <h2 id="interactive-mode">Interactive Mode</h2>
 <p>REPL mode keeps a shared conversation state, so each new question can build on earlier turns.</p>
 <pre><code class="language-sh">swival --repl
@@ -91,6 +91,7 @@
 <p><code>/extend</code> doubles the current turn budget. <code>/extend &lt;N&gt;</code> sets the turn budget to an exact value.</p>
 <p><code>/continue</code> restarts the agent loop for the existing conversation without adding a new user message.</p>
 <p><code>/continue-status</code> shows whether a continue file exists from a prior interrupted session and previews its contents.</p>
+<p><code>/learn</code> reviews the current session for mistakes and confusions, then persists notes to <code>.swival/memory/MEMORY.md</code> for future sessions to learn from.</p>
 <p><code>/init</code> runs a three-pass workflow that scans your project and generates an <code>AGENTS.md</code> file.</p>
 <p><code>/exit</code> and <code>/quit</code> leave the REPL. Pressing <code>Ctrl-D</code> exits as well.</p>
 <h2 id="cli-flags">CLI Flags</h2>

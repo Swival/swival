@@ -29,7 +29,7 @@ no framework.
    (great quality/speed tradeoff on local hardware).
    Crank the context size as high as your hardware allows.
 2. Start the LM Studio server.
-3. Install Swival:
+3. Install Swival (requires Python 3.13+):
 
 ```sh
 uv tool install swival

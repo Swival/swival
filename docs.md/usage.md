@@ -27,7 +27,7 @@ swival --allowed-commands ls,git,python3 \
 
 That whitelist changes what the agent can do. If `python3` is available, it can use Python for implementation and verification. If no commands are whitelisted, `run_command` is unavailable unless you enable YOLO mode.
 
-A successful run exits with code `0`. A runtime or configuration failure exits with code `1`. A run that reaches the turn limit before finishing exits with code `2`.
+A successful run exits with code `0`. A runtime or configuration failure exits with code `1`. A run that reaches the turn limit before finishing exits with code `2`. A run interrupted with Ctrl+C exits with code `130`.
 
 ## Interactive Mode
 
@@ -68,6 +68,8 @@ The REPL is built on `prompt-toolkit`, so it supports input history, history sea
 `/continue` restarts the agent loop for the existing conversation without adding a new user message.
 
 `/continue-status` shows whether a continue file exists from a prior interrupted session and previews its contents.
+
+`/learn` reviews the current session for mistakes and confusions, then persists notes to `.swival/memory/MEMORY.md` for future sessions to learn from.
 
 `/init` runs a three-pass workflow that scans your project and generates an `AGENTS.md` file.
 

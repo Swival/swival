@@ -126,7 +126,7 @@ swival "Hello world" --provider chatgpt --model gpt-5.4
 
 On the first run, Swival will print a URL and a code. Open the URL in your browser, enter the code, and authorize. After that, tokens are cached at `~/.config/litellm/chatgpt/auth.json` and you won't be prompted again.
 
-`--model` is required -- there is no default. Currently available models are `gpt-5.4`, `gpt-5.3-codex-spark`, `gpt-5.2-codex`, and `gpt-5.2`.
+`--model` is required -- there is no default. Currently available models are `gpt-5.4`, `gpt-5.3-codex`, and `gpt-5.3-codex-spark`.
 
 For a deeper look at ChatGPT Plus/Pro-specific options, see [Providers](providers.md).
 
