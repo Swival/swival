@@ -3099,6 +3099,7 @@ def _repl_clear(
     if snapshot_state is not None:
         snapshot_state.reset()
 
+    fmt.reset_state()
     fmt.info(f"context cleared ({dropped} messages removed)")
 
 

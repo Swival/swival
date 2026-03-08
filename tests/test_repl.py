@@ -463,6 +463,33 @@ class TestClearCommand:
         assert ts.history == []
         assert ts.branches == {}
 
+    def test_clear_resets_fmt_think_tree(self):
+        """After /clear, fmt think tree state is reset so next think prints header."""
+        from io import StringIO
+        from rich.console import Console
+        from swival import fmt
+
+        ts = ThinkingState(verbose=False)
+        messages = [_sys("system"), _user("q1")]
+
+        buf = StringIO()
+        old = fmt._console
+        fmt._console = Console(file=buf, no_color=True, width=80)
+        fmt.reset_state()
+        try:
+            # First think prints header
+            fmt.think_step(1, 2, "Before clear")
+            _repl_clear(messages, ts)
+            buf.truncate(0)
+            buf.seek(0)
+            # After clear, next think must print a fresh header
+            fmt.think_step(1, 2, "After clear")
+            out = buf.getvalue()
+            assert "[think]" in out
+        finally:
+            fmt.reset_state()
+            fmt._console = old
+
     def test_clear_in_repl(self, tmp_path):
         """Full integration: /clear in REPL resets messages between questions."""
         messages = [_sys("system")]
