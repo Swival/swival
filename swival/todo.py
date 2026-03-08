@@ -100,7 +100,6 @@ class TodoState:
         self.items.append(TodoItem(text=task))
         self.add_count += 1
         self._save()
-        remaining = self.remaining_count
         if self.verbose:
             fmt.todo_list(self.items, action="add", changed_task=task)
         return self._response("add")
@@ -114,7 +113,6 @@ class TodoState:
             match.done = True
             self.done_count += 1
             self._save()
-        remaining = self.remaining_count
         if self.verbose:
             fmt.todo_list(self.items, action="done", changed_task=match.text)
         return self._response("done")
@@ -125,7 +123,6 @@ class TodoState:
             return match  # error string
         self.items.remove(match)
         self._save()
-        remaining = self.remaining_count
         if self.verbose:
             fmt.todo_list(self.items, action="remove")
         return self._response("remove")
