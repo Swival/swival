@@ -39,9 +39,9 @@ class TestAdd:
         assert result["total"] == 1
         assert result["remaining"] == 1
         assert state.add_count == 1
-        # Duplicate response must include a note so models know to move on
-        assert "note" in result
-        assert "already in list" in result["note"]
+        # Duplicate response reports skipped items
+        assert "skipped" in result
+        assert "Same task" in result["skipped"]
 
     def test_add_deduplicates_case_insensitive(self):
         state = TodoState()
@@ -49,7 +49,7 @@ class TestAdd:
         result = json.loads(state.process({"action": "add", "task": "fix login bug"}))
         assert result["total"] == 1
         assert result["items"] == [{"task": "Fix login bug", "done": False}]
-        assert "note" in result
+        assert "skipped" in result
 
     def test_add_without_task(self):
         state = TodoState()
@@ -469,7 +469,7 @@ class TestLogging:
         state.process({"action": "add", "task": "Write unit tests"})
         captured = capsys.readouterr()
         assert "[todo]" in captured.err
-        assert "Already listed" in captured.err
+        assert "skipped" in captured.err
         assert "Write unit tests" in captured.err
 
     def test_verbose_clear_empty(self, capsys):
@@ -487,6 +487,281 @@ class TestLogging:
         state.process({"action": "add", "task": "Silent task"})
         captured = capsys.readouterr()
         assert captured.err == ""
+
+
+# ---------------------------------------------------------------------------
+# Batch operation tests
+# ---------------------------------------------------------------------------
+
+
+class TestBatchAdd:
+    def test_batch_add_multiple(self):
+        state = TodoState()
+        result = json.loads(state.process({"action": "add", "tasks": ["A", "B", "C"]}))
+        assert result["total"] == 3
+        assert result["remaining"] == 3
+        assert state.add_count == 3
+        assert [i["task"] for i in result["items"]] == ["A", "B", "C"]
+
+    def test_batch_add_with_duplicates(self):
+        state = TodoState()
+        state.process({"action": "add", "tasks": "Existing"})
+        result = json.loads(
+            state.process({"action": "add", "tasks": ["Existing", "New one"]})
+        )
+        assert result["total"] == 2
+        assert state.add_count == 2  # 1 from setup + 1 new
+        assert "skipped" in result
+        assert "Existing" in result["skipped"]
+        assert "errors" not in result
+
+    def test_batch_add_hitting_max(self):
+        state = TodoState()
+        for i in range(MAX_ITEMS - 1):
+            state.process({"action": "add", "tasks": f"Task {i}"})
+        # Try to add 3 more — only 1 should fit
+        result = json.loads(state.process({"action": "add", "tasks": ["A", "B", "C"]}))
+        assert result["total"] == MAX_ITEMS
+        assert state.add_count == MAX_ITEMS
+        assert "errors" in result
+        assert len(result["errors"]) == 2
+        assert all(e["reason"] == "todo list full" for e in result["errors"])
+
+    def test_batch_add_when_already_full(self):
+        state = TodoState()
+        for i in range(MAX_ITEMS):
+            state.process({"action": "add", "tasks": f"Task {i}"})
+        result = state.process({"action": "add", "tasks": ["X", "Y"]})
+        assert result.startswith("error:")
+        assert "full" in result
+
+    def test_single_string_for_tasks(self):
+        state = TodoState()
+        result = json.loads(state.process({"action": "add", "tasks": "Single"}))
+        assert result["total"] == 1
+        assert result["items"][0]["task"] == "Single"
+
+
+class TestBatchDone:
+    def test_batch_done_multiple(self):
+        state = TodoState()
+        state.process({"action": "add", "tasks": ["A", "B", "C"]})
+        result = json.loads(state.process({"action": "done", "tasks": ["A", "C"]}))
+        assert result["items"][0]["done"] is True
+        assert result["items"][1]["done"] is False
+        assert result["items"][2]["done"] is True
+        assert state.done_count == 2
+
+    def test_batch_done_partial_failure(self):
+        state = TodoState()
+        state.process({"action": "add", "tasks": ["Real task"]})
+        result = json.loads(
+            state.process({"action": "done", "tasks": ["Real task", "Ghost"]})
+        )
+        assert result["items"][0]["done"] is True
+        assert "errors" in result
+        assert len(result["errors"]) == 1
+        assert "Ghost" in result["errors"][0]["task"]
+
+    def test_batch_done_all_miss(self):
+        state = TodoState()
+        state.process({"action": "add", "tasks": "X"})
+        result = state.process({"action": "done", "tasks": ["Ghost1", "Ghost2"]})
+        assert result.startswith("error:")
+        assert "all 2 items failed" in result
+
+
+class TestBatchRemove:
+    def test_batch_remove_multiple(self):
+        state = TodoState()
+        state.process({"action": "add", "tasks": ["A", "B", "C"]})
+        result = json.loads(state.process({"action": "remove", "tasks": ["A", "C"]}))
+        assert result["total"] == 1
+        assert result["items"][0]["task"] == "B"
+
+    def test_batch_remove_partial_failure(self):
+        state = TodoState()
+        state.process({"action": "add", "tasks": ["Keep", "Remove"]})
+        result = json.loads(
+            state.process({"action": "remove", "tasks": ["Remove", "Nonexistent"]})
+        )
+        assert result["total"] == 1
+        assert "errors" in result
+        assert len(result["errors"]) == 1
+
+    def test_batch_remove_all_miss(self):
+        state = TodoState()
+        state.process({"action": "add", "tasks": "X"})
+        result = state.process({"action": "remove", "tasks": ["Ghost"]})
+        assert result.startswith("error:")
+
+
+class TestInputNormalization:
+    def test_task_alias_accepted(self):
+        """Legacy 'task' key still works."""
+        state = TodoState()
+        result = json.loads(state.process({"action": "add", "task": "Via alias"}))
+        assert result["total"] == 1
+        assert result["items"][0]["task"] == "Via alias"
+
+    def test_tasks_string_wrapped(self):
+        """A single string for 'tasks' is wrapped as a list."""
+        state = TodoState()
+        result = json.loads(state.process({"action": "add", "tasks": "One item"}))
+        assert result["total"] == 1
+
+    def test_conflicting_task_and_tasks(self):
+        state = TodoState()
+        result = state.process({"action": "add", "tasks": ["X"], "task": "Y"})
+        assert result.startswith("error:")
+        assert "conflicting" in result
+
+    def test_matching_task_and_tasks_list(self):
+        """tasks: ["x"] and task: "x" agree — no error."""
+        state = TodoState()
+        result = json.loads(
+            state.process({"action": "add", "tasks": ["hello"], "task": "hello"})
+        )
+        assert result["total"] == 1
+
+    def test_matching_task_and_tasks_string(self):
+        """tasks: "x" and task: "x" agree — no error."""
+        state = TodoState()
+        result = json.loads(
+            state.process({"action": "add", "tasks": "hello", "task": "hello"})
+        )
+        assert result["total"] == 1
+
+    def test_alias_match_after_normalization(self):
+        """tasks: ' x ' and task: 'x' agree after strip."""
+        state = TodoState()
+        result = json.loads(
+            state.process({"action": "add", "tasks": " hello ", "task": "hello"})
+        )
+        assert result["total"] == 1
+        assert result["items"][0]["task"] == "hello"
+
+    def test_per_item_strip(self):
+        state = TodoState()
+        result = json.loads(state.process({"action": "add", "tasks": ["  A  ", "B  "]}))
+        assert result["items"][0]["task"] == "A"
+        assert result["items"][1]["task"] == "B"
+
+    def test_empty_items_are_errors(self):
+        """Whitespace-only entries are per-item failures, not silently dropped."""
+        state = TodoState()
+        result = json.loads(
+            state.process({"action": "add", "tasks": ["Good", "  ", "Also good"]})
+        )
+        assert result["total"] == 2
+        assert "errors" in result
+        assert len(result["errors"]) == 1
+        assert result["errors"][0]["reason"] == "empty or whitespace-only task"
+
+    def test_all_empty_items_top_level_error(self):
+        state = TodoState()
+        result = state.process({"action": "add", "tasks": ["", "  "]})
+        assert result.startswith("error:")
+
+    def test_per_item_length_validation(self):
+        state = TodoState()
+        long_task = "x" * (MAX_ITEM_TEXT + 1)
+        result = json.loads(
+            state.process({"action": "add", "tasks": ["Short", long_task]})
+        )
+        assert result["total"] == 1
+        assert result["items"][0]["task"] == "Short"
+        assert "errors" in result
+        assert "limit" in result["errors"][0]["reason"]
+
+    def test_list_ignores_tasks(self):
+        state = TodoState()
+        state.process({"action": "add", "tasks": "A"})
+        result = json.loads(state.process({"action": "list", "tasks": "ignored"}))
+        assert result["total"] == 1
+
+    def test_clear_ignores_tasks(self):
+        state = TodoState()
+        state.process({"action": "add", "tasks": "A"})
+        result = json.loads(state.process({"action": "clear", "tasks": "ignored"}))
+        assert result["total"] == 0
+
+
+class TestBatchPersistence:
+    def test_save_called_once_on_batch_add(self, tmp_path, monkeypatch):
+        state = TodoState(notes_dir=str(tmp_path))
+        save_calls = []
+        original_save = state._save
+
+        def counting_save():
+            save_calls.append(1)
+            original_save()
+
+        monkeypatch.setattr(state, "_save", counting_save)
+        state.process({"action": "add", "tasks": ["A", "B", "C"]})
+        assert len(save_calls) == 1
+
+    def test_save_called_once_on_partial_failure(self, tmp_path, monkeypatch):
+        state = TodoState(notes_dir=str(tmp_path))
+        state.process({"action": "add", "tasks": ["Exists"]})
+        save_calls = []
+        original_save = state._save
+
+        def counting_save():
+            save_calls.append(1)
+            original_save()
+
+        monkeypatch.setattr(state, "_save", counting_save)
+        # "Exists" will be skipped, "New" will be added, "Ghost" done will fail
+        state.process({"action": "add", "tasks": ["Exists", "New"]})
+        assert len(save_calls) == 1
+
+    def test_batch_add_persists_all_items(self, tmp_path):
+        todo_path = tmp_path / ".swival" / "todo.md"
+        state = TodoState(notes_dir=str(tmp_path))
+        state.process({"action": "add", "tasks": ["First", "Second", "Third"]})
+        content = todo_path.read_text()
+        assert "- [ ] First" in content
+        assert "- [ ] Second" in content
+        assert "- [ ] Third" in content
+
+
+class TestBatchVerbose:
+    def _reinit_console(self):
+        from swival import fmt
+
+        fmt.init(color=False, no_color=False)
+
+    def test_verbose_batch_add(self, capsys):
+        self._reinit_console()
+        state = TodoState(verbose=True)
+        state.process({"action": "add", "tasks": ["A", "B"]})
+        captured = capsys.readouterr()
+        assert "[todo]" in captured.err
+        assert "added 2 items" in captured.err
+
+    def test_verbose_batch_with_errors_and_skips(self, capsys):
+        self._reinit_console()
+        state = TodoState(verbose=True)
+        state.process({"action": "add", "tasks": "Existing"})
+        _ = capsys.readouterr()
+        # "Existing" → skip, "" → error, "New" → success
+        state.process({"action": "add", "tasks": ["Existing", "  ", "New"]})
+        captured = capsys.readouterr()
+        assert "[todo]" in captured.err
+        assert "added 1 item" in captured.err
+        assert "1 skipped" in captured.err
+        assert "1 failed" in captured.err
+
+    def test_verbose_batch_done(self, capsys):
+        self._reinit_console()
+        state = TodoState(verbose=True)
+        state.process({"action": "add", "tasks": ["A", "B"]})
+        _ = capsys.readouterr()
+        state.process({"action": "done", "tasks": ["A", "B"]})
+        captured = capsys.readouterr()
+        assert "[todo]" in captured.err
+        assert "marked done 2 items" in captured.err
 
 
 # ---------------------------------------------------------------------------

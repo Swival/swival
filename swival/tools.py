@@ -297,13 +297,17 @@ TOOLS = [
                             "list: Return the current list (no other params needed)."
                         ),
                     },
-                    "task": {
-                        "type": "string",
+                    "tasks": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}},
+                        ],
                         "description": (
-                            "For 'add': the task description (max 500 chars). "
-                            "For 'done'/'remove': text that matches an existing task "
+                            "For 'add': one or more task descriptions (each max 500 chars). "
+                            "For 'done'/'remove': text matching existing tasks "
                             "(prefix match, case-insensitive). "
-                            "Not needed for 'list' or 'clear'."
+                            "Not needed for 'list' or 'clear'. "
+                            "Accepts a single string or a list of strings."
                         ),
                     },
                 },

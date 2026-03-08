@@ -26,6 +26,48 @@ def _safe_todo_path(notes_dir: str) -> Path:
     return todo_path
 
 
+def _normalize_tasks(args: dict) -> list[str] | str:
+    """Extract and normalize the task list from args.
+
+    Returns a list of stripped task strings, or an error string.
+    """
+    has_tasks = "tasks" in args
+    has_task = "task" in args
+
+    if has_tasks and has_task:
+        # Both present — check for conflict
+        raw_tasks = args["tasks"]
+        raw_task = args["task"]
+        norm_tasks = [raw_tasks] if isinstance(raw_tasks, str) else list(raw_tasks)
+        norm_tasks = [t.strip() for t in norm_tasks]
+        norm_task = (
+            [raw_task.strip()]
+            if isinstance(raw_task, str)
+            else [t.strip() for t in raw_task]
+        )
+        if norm_tasks != norm_task:
+            return "error: provide either 'tasks' or legacy alias 'task', not conflicting values"
+        raw = raw_tasks
+    elif has_tasks:
+        raw = args["tasks"]
+    elif has_task:
+        raw = args["task"]
+    else:
+        return "error: action requires a 'tasks' parameter"
+
+    if isinstance(raw, str):
+        items = [raw.strip()]
+    elif isinstance(raw, list):
+        items = [t.strip() if isinstance(t, str) else str(t) for t in raw]
+    else:
+        items = [str(raw).strip()]
+
+    if not items:
+        return "error: 'tasks' must not be empty"
+
+    return items
+
+
 class TodoState:
     def __init__(self, notes_dir: str | None = None, verbose: bool = False):
         self.items: list[TodoItem] = []
@@ -69,63 +111,132 @@ class TodoState:
                 fmt.todo_list(self.items, action="clear", note=f"{count} items removed")
             return self._response("clear")
 
-        task = args.get("task", "").strip()
-        if not task:
-            return f"error: '{action}' requires a non-empty 'task' parameter"
+        # Normalize input for add/done/remove
+        normalized = _normalize_tasks(args)
+        if isinstance(normalized, str):
+            return normalized  # error string
 
+        # Validate per-item: empty/whitespace and length
+        valid_tasks: list[str] = []
+        errors: list[dict] = []
+        for task in normalized:
+            if not task:
+                errors.append({"task": "", "reason": "empty or whitespace-only task"})
+            elif len(task) > MAX_ITEM_TEXT:
+                errors.append(
+                    {
+                        "task": task[:80],
+                        "reason": f"exceeds {MAX_ITEM_TEXT} character limit",
+                    }
+                )
+            else:
+                valid_tasks.append(task)
+
+        if not valid_tasks:
+            if len(normalized) == 1:
+                # Single-item failure — match legacy error format
+                if not normalized[0]:
+                    return f"error: '{action}' requires a non-empty 'tasks' parameter"
+                return f"error: task text exceeds {MAX_ITEM_TEXT} character limit, please shorten it"
+            return (
+                f"error: all {len(normalized)} items failed — no valid tasks provided"
+            )
+
+        # Dispatch to batch handler
         if action == "add":
-            return self._add(task)
+            return self._batch_add(valid_tasks, errors)
         elif action == "done":
-            return self._done(task)
+            return self._batch_done(valid_tasks, errors)
         elif action == "remove":
-            return self._remove(task)
+            return self._batch_remove(valid_tasks, errors)
 
         return f"error: unhandled action {action!r}"
 
-    def _add(self, task: str) -> str:
-        if len(task) > MAX_ITEM_TEXT:
-            return f"error: task text exceeds {MAX_ITEM_TEXT} character limit, please shorten it"
-        task_key = self._task_key(task)
-        if any(self._task_key(i.text) == task_key for i in self.items):
-            if self.verbose:
-                fmt.todo_list(
-                    self.items, action="add", note=f"Already listed: {task[:80]}"
-                )
-            return self._response(
-                "add",
-                note=f"'{task}' already in list — not added. Continue with your next action.",
-            )
-        if len(self.items) >= MAX_ITEMS:
-            return f"error: todo list full ({MAX_ITEMS} items max)"
-        self.items.append(TodoItem(text=task))
-        self.add_count += 1
+    def _batch_add(self, tasks: list[str], errors: list[dict]) -> str:
+        skipped: list[str] = []
+        added = 0
+        for task in tasks:
+            task_key = self._task_key(task)
+            if any(self._task_key(i.text) == task_key for i in self.items):
+                skipped.append(task)
+                continue
+            if len(self.items) >= MAX_ITEMS:
+                errors.append({"task": task[:80], "reason": "todo list full"})
+                continue
+            self.items.append(TodoItem(text=task))
+            self.add_count += 1
+            added += 1
+
+        succeeded = added + len(skipped)
+        failed = len(errors)
+
+        # All failed — top-level error
+        if succeeded == 0 and failed > 0:
+            if all(e["reason"] == "todo list full" for e in errors):
+                return f"error: todo list full ({MAX_ITEMS} items max)"
+            return f"error: all {failed} items failed — {errors[0]['reason']}"
+
         self._save()
         if self.verbose:
-            fmt.todo_list(self.items, action="add", changed_task=task)
-        return self._response("add")
+            note = self._batch_note("added", added, len(skipped), failed)
+            fmt.todo_list(self.items, action="add", note=note)
+        return self._response("add", skipped=skipped or None, errors=errors or None)
 
-    def _done(self, task: str) -> str:
-        match = self._match_item(task, include_done=True)
-        if isinstance(match, str):
-            return match  # error string
-        # No-op if already done
-        if not match.done:
-            match.done = True
-            self.done_count += 1
-            self._save()
-        if self.verbose:
-            fmt.todo_list(self.items, action="done", changed_task=match.text)
-        return self._response("done")
+    def _batch_done(self, tasks: list[str], errors: list[dict]) -> str:
+        done_count = 0
+        for task in tasks:
+            match = self._match_item(task, include_done=True)
+            if isinstance(match, str):
+                errors.append({"task": task, "reason": match.removeprefix("error: ")})
+                continue
+            if not match.done:
+                match.done = True
+                self.done_count += 1
+            done_count += 1
 
-    def _remove(self, task: str) -> str:
-        match = self._match_item(task, include_done=True)
-        if isinstance(match, str):
-            return match  # error string
-        self.items.remove(match)
+        if done_count == 0 and errors:
+            if len(tasks) == 1:
+                return f"error: {errors[0]['reason']}"
+            return f"error: all {len(errors)} items failed — {errors[0]['reason']}"
+
         self._save()
         if self.verbose:
-            fmt.todo_list(self.items, action="remove")
-        return self._response("remove")
+            note = self._batch_note("marked done", done_count, 0, len(errors))
+            fmt.todo_list(self.items, action="done", note=note)
+        return self._response("done", errors=errors or None)
+
+    def _batch_remove(self, tasks: list[str], errors: list[dict]) -> str:
+        removed = 0
+        for task in tasks:
+            match = self._match_item(task, include_done=True)
+            if isinstance(match, str):
+                errors.append({"task": task, "reason": match.removeprefix("error: ")})
+                continue
+            self.items.remove(match)
+            removed += 1
+
+        if removed == 0 and errors:
+            if len(tasks) == 1:
+                return f"error: {errors[0]['reason']}"
+            return f"error: all {len(errors)} items failed — {errors[0]['reason']}"
+
+        self._save()
+        if self.verbose:
+            note = self._batch_note("removed", removed, 0, len(errors))
+            fmt.todo_list(self.items, action="remove", note=note)
+        return self._response("remove", errors=errors or None)
+
+    @staticmethod
+    def _batch_note(verb: str, count: int, skipped: int, failed: int) -> str:
+        parts = [f"{verb} {count} item{'s' if count != 1 else ''}"]
+        extras = []
+        if skipped:
+            extras.append(f"{skipped} skipped")
+        if failed:
+            extras.append(f"{failed} failed")
+        if extras:
+            parts.append(f"({', '.join(extras)})")
+        return " ".join(parts)
 
     def _match_item(self, task: str, include_done: bool = False) -> TodoItem | str:
         """Find a matching item. Returns the item or an error string."""
@@ -161,7 +272,13 @@ class TodoState:
     def _task_key(task: str) -> str:
         return task.casefold()
 
-    def _response(self, action: str, note: str | None = None) -> str:
+    def _response(
+        self,
+        action: str,
+        note: str | None = None,
+        skipped: list[str] | None = None,
+        errors: list[dict] | None = None,
+    ) -> str:
         items = [{"task": i.text, "done": i.done} for i in self.items]
         remaining = self.remaining_count
         resp: dict = {
@@ -172,6 +289,10 @@ class TodoState:
         }
         if note:
             resp["note"] = note
+        if skipped:
+            resp["skipped"] = skipped
+        if errors:
+            resp["errors"] = errors
         return json.dumps(resp)
 
     def _save(self) -> None:
