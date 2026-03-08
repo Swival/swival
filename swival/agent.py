@@ -1025,8 +1025,6 @@ def load_memory(base_dir: str, *, verbose: bool = False) -> str:
     if not raw or not raw.strip():
         return ""
 
-    read_was_truncated = len(raw) > MAX_MEMORY_CHARS
-
     lines = raw.splitlines(keepends=True)
     truncated_by = None
     if len(lines) > MAX_MEMORY_LINES:
@@ -1035,12 +1033,12 @@ def load_memory(base_dir: str, *, verbose: bool = False) -> str:
 
     content = "".join(lines)
 
-    if len(content) > MAX_MEMORY_CHARS or read_was_truncated:
+    if len(content) > MAX_MEMORY_CHARS:
         cut = content.rfind("\n", 0, MAX_MEMORY_CHARS)
         if cut == -1:
             content = content[:MAX_MEMORY_CHARS]
         else:
-            content = content[:cut + 1]
+            content = content[: cut + 1]
         truncated_by = "char"
 
     n_lines = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
@@ -1051,7 +1049,9 @@ def load_memory(base_dir: str, *, verbose: bool = False) -> str:
         content += f"\n[... truncated at {MAX_MEMORY_CHARS} characters]"
 
     if verbose:
-        fmt.info(f"Loaded memory ({n_lines} lines, {len(content)} chars) from {memory_path}")
+        fmt.info(
+            f"Loaded memory ({n_lines} lines, {len(content)} chars) from {memory_path}"
+        )
         if truncated_by:
             fmt.info(f"Memory truncated by {truncated_by} cap")
 
@@ -1441,6 +1441,17 @@ def run_reviewer(
     return proc.returncode, stdout, stderr
 
 
+def _sort_parser_options(parser: argparse.ArgumentParser) -> None:
+    """Sort optional arguments lexicographically in help output."""
+
+    def key(action: argparse.Action) -> tuple[str, ...]:
+        return tuple(s.lstrip("-") for s in action.option_strings) or ("",)
+
+    parser._optionals._group_actions.sort(key=key)
+    for group in parser._mutually_exclusive_groups:
+        group._group_actions.sort(key=key)
+
+
 def build_parser():
     """Build and return the argument parser."""
     parser = argparse.ArgumentParser(
@@ -1752,6 +1763,7 @@ def build_parser():
         help="Disable filesystem sandbox and command whitelist (unrestricted mode).",
     )
 
+    _sort_parser_options(parser)
     return parser
 
 
@@ -2390,7 +2402,7 @@ def _run_main(args, report, _write_report, parser):
         system_prompt=args.system_prompt,
         no_system_prompt=args.no_system_prompt,
         no_instructions=args.no_instructions,
-        no_memory=args.no_memory,
+        no_memory=getattr(args, "no_memory", False),
         skills_catalog=skills_catalog,
         yolo=yolo,
         resolved_commands=resolved_commands,

@@ -1,6 +1,5 @@
 """Tests for auto-memory (.swival/memory/MEMORY.md)."""
 
-import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -145,6 +144,14 @@ class TestLoadMemory:
         if "[... truncated" in inner:
             inner = inner.rsplit("\n[... truncated", 1)[0]
         assert len(inner) <= MAX_MEMORY_CHARS
+
+    def test_line_limit_short_lines(self, tmp_path):
+        """300 short lines (~6.2K chars) — only line cap fires, not char cap."""
+        lines = [f"- line {i}\n" for i in range(300)]  # ~20 chars each
+        _write_memory(tmp_path, "".join(lines))
+        result = load_memory(str(tmp_path))
+        assert f"truncated at {MAX_MEMORY_LINES} lines" in result
+        assert "truncated at 8000 characters" not in result
 
     def test_line_and_char_limit(self, tmp_path):
         line = "x" * 199 + "\n"  # 200 chars per line

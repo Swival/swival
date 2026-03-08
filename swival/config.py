@@ -181,7 +181,10 @@ def _validate_config(config: dict, source: str) -> None:
         )
 
     # Validate reasoning_effort enum value
-    if "reasoning_effort" in config and config["reasoning_effort"] not in REASONING_LEVELS:
+    if (
+        "reasoning_effort" in config
+        and config["reasoning_effort"] not in REASONING_LEVELS
+    ):
         raise ConfigError(
             f"{source}: 'reasoning_effort' must be one of {REASONING_LEVELS!r}, "
             f"got {config['reasoning_effort']!r}"

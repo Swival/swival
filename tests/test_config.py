@@ -417,7 +417,12 @@ class TestConfigToSessionKwargs:
 
     def test_inverted_keys(self):
         kwargs = config_to_session_kwargs(
-            {"no_read_guard": True, "no_history": False, "no_memory": True, "quiet": True}
+            {
+                "no_read_guard": True,
+                "no_history": False,
+                "no_memory": True,
+                "quiet": True,
+            }
         )
         assert kwargs["read_guard"] is False
         assert kwargs["history"] is True
@@ -626,6 +631,35 @@ class TestCLIIntegration:
         apply_config_to_args(args, config)
 
         assert args.max_turns == 200  # CLI wins
+
+    def test_help_lists_all_cli_flags(self):
+        from swival.agent import build_parser
+
+        parser = build_parser()
+        help_text = parser.format_help()
+
+        option_strings = [
+            option
+            for action in parser._actions
+            for option in action.option_strings
+            if option.startswith("-")
+        ]
+
+        missing = [option for option in option_strings if option not in help_text]
+        assert missing == []
+
+    def test_help_sorts_cli_flags_lexicographically(self):
+        from swival.agent import build_parser
+
+        parser = build_parser()
+        optional_actions = [
+            action
+            for action in parser._optionals._group_actions
+            if action.option_strings and action.dest != "help"
+        ]
+
+        rendered = [action.option_strings[-1] for action in optional_actions]
+        assert rendered == sorted(rendered)
 
     def test_allowed_commands_list_flows_through(self, tmp_path, monkeypatch):
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))

@@ -59,13 +59,21 @@ NAV = [
                 "Path resolution, symlink protection, command whitelisting",
             ),
             ("skills", "Skills", "Creating and using SKILL.md-based agent skills"),
-            ("mcp", "MCP", "Connecting external tool servers via Model Context Protocol"),
+            (
+                "mcp",
+                "MCP",
+                "Connecting external tool servers via Model Context Protocol",
+            ),
             (
                 "customization",
                 "Customization",
                 "Config files, project instructions, system prompt overrides, tuning parameters",
             ),
-            ("providers", "Providers", "LM Studio, HuggingFace, OpenRouter, and generic server configuration"),
+            (
+                "providers",
+                "Providers",
+                "LM Studio, HuggingFace, OpenRouter, and generic server configuration",
+            ),
             ("reports", "Reports", "JSON reports for benchmarking and evaluation"),
             ("reviews", "Reviews", "External reviewer scripts for automated QA gates"),
             ("agentfs", "AgentFS", "Copy-on-write filesystem sandboxing"),
