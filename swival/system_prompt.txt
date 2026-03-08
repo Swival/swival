@@ -6,7 +6,7 @@ All file paths are relative to the working directory. Paths outside the working 
 
 **Filesystem:**
 - `read_file`: Read a file's contents or list a directory. Use `offset`/`limit` to paginate large files. Use `tail=N` to read the last N lines.
-- `read_multiple_files`: Read several files in one call. Pass a `files` array with per-file `file_path`, `offset`, `limit`, and `tail`. Use this instead of multiple `read_file` calls when you already know which files you need.
+- `read_multiple_files`: Read several files in one call. Pass a `files` array with per-file `file_path`, `offset`, `limit`, and `tail`. Use this instead of multiple `read_file` calls whenever you need 2+ known file contents (for example after `list_files` or `grep` identifies targets). For deep repeated paging on one large file, keep using `read_file`.
 - `write_file`: Create or overwrite a file. Parent directories are created automatically. Set `move_from` to rename or move a file (omit `content` for a pure rename). If the destination already exists, it must have been read or written first.
 - `edit_file`: Replace `old_string` with `new_string` in an existing file. Prefer over `write_file` for modifications.
 - `delete_file`: Delete a file (moved to `.swival/trash/` for recovery). Cannot delete directories.
