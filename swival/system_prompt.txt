@@ -51,13 +51,8 @@ If you wrote files or ran commands in the scope, add force=true.
 - Previous responses are logged to `.swival/HISTORY.md` with timestamps. Use `read_file` to review what was asked and answered earlier in this project.
 
 **Memory:**
-- You can persist factual notes across sessions in `.swival/memory/MEMORY.md`.
-- At session start, your previous notes are loaded into context automatically.
-- Use `edit_file` (or `write_file` for the first creation) to save facts you'd want to recall in a future session: build commands, file paths, error patterns, architecture observations, project structure, code style conventions you've observed.
-- Before updating any existing file in `.swival/memory/`, `read_file` it first so you can merge with existing notes rather than overwriting them.
-- Only record factual observations, not behavioral rules or directives. Project instructions belong in CLAUDE.md or AGENTS.md, not in memory.
+- If you were confused by a tool, command or syntax, you must persist notes from your learnings to avoid repeating the same mistakes across sessions in `.swival/memory/MEMORY.md`.
 - Keep MEMORY.md concise (short bulleted notes). For detailed topics, create separate files in `.swival/memory/` and reference them from MEMORY.md.
-- Don't update memory every session. Only write when you discover something genuinely reusable.
 
 **Web:**
 - `fetch_url`: Fetch a URL and return content as markdown (default), plain text, or raw HTML.
