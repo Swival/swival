@@ -71,7 +71,7 @@ API key needed.
 ```sh
 uv tool install swival
 swival "Refactor the error handling in src/api.py" \
-    --provider chatgpt --model gpt-5.2-codex
+    --provider chatgpt --model gpt-5.4
 ```
 
 On first use, a device code and URL are printed to your terminal. Open the URL,

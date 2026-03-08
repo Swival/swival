@@ -6,7 +6,7 @@ import types
 import pytest
 from unittest.mock import patch, MagicMock
 
-from swival.agent import call_llm, resolve_provider
+from swival.agent import call_llm, resolve_provider, _pick_best_choice
 
 
 # ---------------------------------------------------------------------------
@@ -1262,3 +1262,41 @@ class TestResolveProviderChatGPT:
             "chatgpt", "gpt-5.3-codex", None, None, None, False
         )
         assert llm_kwargs["provider"] == "chatgpt"
+
+
+class TestPickBestChoice:
+    """Verify that _pick_best_choice prefers tool_calls over text-only choices."""
+
+    def _make_choice(self, *, content=None, tool_calls=None, finish_reason="stop"):
+        c = MagicMock()
+        c.message = MagicMock(content=content, tool_calls=tool_calls)
+        c.finish_reason = finish_reason
+        return c
+
+    def test_single_choice(self):
+        c = self._make_choice(content="done")
+        assert _pick_best_choice([c]) is c
+
+    def test_tool_calls_only(self):
+        c = self._make_choice(tool_calls=[{"id": "1"}], finish_reason="tool_calls")
+        assert _pick_best_choice([c]) is c
+
+    def test_text_plus_tool_calls_prefers_tools(self):
+        text = self._make_choice(content="I will read the file")
+        tools = self._make_choice(tool_calls=[{"id": "1"}], finish_reason="tool_calls")
+        result = _pick_best_choice([text, tools])
+        assert result is tools
+        assert result.message.content == "I will read the file"
+
+    def test_multiple_text_merged_into_tool_choice(self):
+        t1 = self._make_choice(content="Step 1")
+        t2 = self._make_choice(content="Step 2")
+        tools = self._make_choice(tool_calls=[{"id": "1"}], finish_reason="tool_calls")
+        result = _pick_best_choice([t1, t2, tools])
+        assert result is tools
+        assert result.message.content == "Step 1\n\nStep 2"
+
+    def test_no_tool_calls_returns_first(self):
+        c1 = self._make_choice(content="answer 1")
+        c2 = self._make_choice(content="answer 2")
+        assert _pick_best_choice([c1, c2]) is c1

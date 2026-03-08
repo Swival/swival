@@ -1165,6 +1165,34 @@ def configure_context(base_url, model_key, requested_context, current_context, v
         fmt.model_info("Model reloaded successfully.")
 
 
+def _pick_best_choice(choices):
+    """Select the most actionable choice from a multi-choice response.
+
+    The Responses-API bridge in litellm may split a single LLM turn into
+    multiple choices: one for text output (finish_reason='stop') and another
+    for tool calls (finish_reason='tool_calls').  When both exist, tool calls
+    take priority — the text is merged into the tool-call choice so it isn't
+    lost.
+    """
+    if len(choices) <= 1:
+        return choices[0]
+
+    tool_choice = None
+    text_parts = []
+    for c in choices:
+        if getattr(c.message, "tool_calls", None):
+            tool_choice = c
+        elif getattr(c.message, "content", None):
+            text_parts.append(c.message.content)
+
+    if tool_choice is not None:
+        if text_parts:
+            tool_choice.message.content = "\n\n".join(text_parts)
+        return tool_choice
+
+    return choices[0]
+
+
 def call_llm(
     base_url,
     model_id,
@@ -1278,13 +1306,13 @@ def call_llm(
                     raise AgentError(
                         f"LLM call failed after message sanitization: {e2}"
                     )
-                choice = response.choices[0]
+                choice = _pick_best_choice(response.choices)
                 return choice.message, choice.finish_reason
         raise AgentError(f"LLM call failed: {e}")
     except Exception as e:
         raise AgentError(f"LLM call failed: {e}")
 
-    choice = response.choices[0]
+    choice = _pick_best_choice(response.choices)
     return choice.message, choice.finish_reason
 
 
@@ -1961,7 +1989,7 @@ def resolve_provider(
         if not model:
             raise ConfigError(
                 "--model is required when --provider is chatgpt. "
-                "Available models: gpt-5.2-codex, gpt-5.2. "
+                "Available models: gpt-5.4, gpt-5.2-codex, gpt-5.2. "
                 "See https://docs.litellm.ai/docs/providers/chatgpt"
             )
         api_base = base_url

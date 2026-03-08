@@ -140,12 +140,12 @@ Authentication uses an OAuth device-code flow handled by LiteLLM -- on first use
 `--model` is required. There is no default model.
 
 ```sh
-swival --provider chatgpt --model gpt-5.2-codex "task"
+swival --provider chatgpt --model gpt-5.4 "task"
 ```
 
 On the first run, you will see a device-code prompt with a URL and a code to enter in your browser. Once you complete the flow, the OAuth tokens are stored at `~/.config/litellm/chatgpt/auth.json` and refreshed automatically.
 
-Currently available models are `gpt-5.2-codex` and `gpt-5.2`. Use whichever your ChatGPT Plus or Pro plan has access to.
+Currently available models are `gpt-5.4`, `gpt-5.2-codex`, and `gpt-5.2`. Use whichever your ChatGPT Plus or Pro plan has access to.
 
 ```sh
 swival --provider chatgpt --model gpt-5.2 "task"

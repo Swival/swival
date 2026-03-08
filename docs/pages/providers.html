@@ -137,10 +137,10 @@ swival --provider generic \
 <h2 id="chatgpt-pluspro">ChatGPT Plus/Pro</h2>
 <p>The <code>chatgpt</code> provider lets you use OpenAI models through your existing ChatGPT Plus or ChatGPT Pro subscription, without needing a separate API key. Authentication uses an OAuth device-code flow handled by LiteLLM -- on first use, LiteLLM prints a device code and a verification URL to your terminal. Open the URL, enter the code, and authorize with your ChatGPT account. The resulting tokens are cached locally and refreshed automatically on subsequent runs.</p>
 <p><code>--model</code> is required. There is no default model.</p>
-<pre><code class="language-sh">swival --provider chatgpt --model gpt-5.2-codex &quot;task&quot;
+<pre><code class="language-sh">swival --provider chatgpt --model gpt-5.4 &quot;task&quot;
 </code></pre>
 <p>On the first run, you will see a device-code prompt with a URL and a code to enter in your browser. Once you complete the flow, the OAuth tokens are stored at <code>~/.config/litellm/chatgpt/auth.json</code> and refreshed automatically.</p>
-<p>Currently available models are <code>gpt-5.2-codex</code> and <code>gpt-5.2</code>. Use whichever your ChatGPT Plus or Pro plan has access to.</p>
+<p>Currently available models are <code>gpt-5.4</code>, <code>gpt-5.2-codex</code>, and <code>gpt-5.2</code>. Use whichever your ChatGPT Plus or Pro plan has access to.</p>
 <pre><code class="language-sh">swival --provider chatgpt --model gpt-5.2 &quot;task&quot;
 </code></pre>
 <p>Two environment variables are available for advanced use. <code>CHATGPT_TOKEN_DIR</code> overrides the default token storage directory. <code>CHATGPT_API_BASE</code> overrides the API base URL.</p>

@@ -42,7 +42,7 @@ For the `chatgpt` provider (ChatGPT Plus/Pro subscriptions), no API key is neede
 
 ```toml
 provider = "chatgpt"
-model = "gpt-5.2-codex"
+model = "gpt-5.4"
 ```
 
 Relative paths in `allowed_dirs`, `allowed_dirs_ro`, `skills_dir`, `objective`, and `verify` resolve against the config file's parent directory, not the working directory. Tilde paths like `~/projects` expand to the home directory.

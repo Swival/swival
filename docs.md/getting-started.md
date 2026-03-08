@@ -121,12 +121,12 @@ For a deeper look at generic provider options and server-specific examples, see 
 If you have a ChatGPT Plus or ChatGPT Pro subscription and want to use OpenAI's models without a separate API key, the `chatgpt` provider authenticates through an OAuth device-code flow using your existing subscription.
 
 ```sh
-swival "Hello world" --provider chatgpt --model gpt-5.2-codex
+swival "Hello world" --provider chatgpt --model gpt-5.4
 ```
 
 On the first run, Swival will print a URL and a code. Open the URL in your browser, enter the code, and authorize. After that, tokens are cached at `~/.config/litellm/chatgpt/auth.json` and you won't be prompted again.
 
-`--model` is required -- there is no default. Currently available models are `gpt-5.2-codex` and `gpt-5.2`.
+`--model` is required -- there is no default. Currently available models are `gpt-5.4`, `gpt-5.2-codex`, and `gpt-5.2`.
 
 For a deeper look at ChatGPT Plus/Pro-specific options, see [Providers](providers.md).
 
