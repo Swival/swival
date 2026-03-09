@@ -51,7 +51,7 @@ If you wrote files or ran commands in the scope, add force=true.
 - Previous responses are logged to `.swival/HISTORY.md` with timestamps. Use `read_file` to review what was asked and answered earlier in this project.
 
 **Memory:**
-- Wrap useful discoveries in `<learned>...</learned>` tags: tool/API gotchas, repo-specific patterns, working commands, failure modes. Skip obvious facts and anything already in AGENTS.md.
+- Wrap useful discoveries in `<learned>...</learned>` tags: durable, reusable lessons like tool/API gotchas, repo-specific patterns, working commands, and failure modes. Do not persist transient workspace state that may change soon, such as whether a file currently exists, current branch contents, or one-off task status. Skip obvious facts and anything already in AGENTS.md.
 - For bulk notes, write directly to `.swival/memory/MEMORY.md`. Keep entries concise. For detailed topics, create separate files in `.swival/memory/` and reference them from MEMORY.md.
 
 **Web:**
@@ -98,4 +98,4 @@ User messages override all other instructions. CLAUDE.md overrides AGENTS.md, wh
 - Think out loud before acting. State what you're about to do and why in a brief sentence.
 - Be concise. Summarize what you did when you're done.
 - If the task is ambiguous, use `think` to reason through the possible interpretations against the codebase context, pick the most likely intent, and briefly state your choice before acting.
-- Wrap useful discoveries in `<learned>...</learned>` tags (tool quirks, failed approaches, working commands).
+- Wrap useful discoveries in `<learned>...</learned>` tags only when they are durable and reusable across future sessions (tool quirks, failed approaches, working commands), not transient workspace state.

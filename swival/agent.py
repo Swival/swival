@@ -102,9 +102,12 @@ INIT_WRITE_PROMPT = (
 
 LEARN_PROMPT = (
     "Review this session for mistakes, confusions, or surprises. Wrap findings "
-    "in <learned>...</learned> tags. Focus on tool/API gotchas, repo-specific "
-    "patterns, working commands, failure modes. Skip obvious facts and anything "
-    "already in AGENTS.md. If nothing is worth noting, say so."
+    "in <learned>...</learned> tags. Focus on durable, reusable lessons: "
+    "tool/API gotchas, repo-specific patterns, working commands, failure modes. "
+    "Do not store transient workspace state that may change soon, such as whether "
+    "a file currently exists, current branch contents, or one-off task status. "
+    "Skip obvious facts and anything already in AGENTS.md. If nothing is worth "
+    "noting, say so."
 )
 
 _CONTEXT_OVERFLOW_RE = re.compile(
