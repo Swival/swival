@@ -374,12 +374,106 @@ def format_skill_catalog(catalog: dict[str, SkillInfo]) -> str:
         return ""
 
     lines = [
-        "<available-skills>",
-        "The following skills are available. To activate a skill, call the `use_skill` tool with its name.",
+        "## Skills",
+        "A skill is a set of local instructions stored in a `SKILL.md` file.",
+        "### Available skills",
         "",
     ]
     for name in sorted(catalog):
         skill = catalog[name]
-        lines.append(f"- {name}: {skill.description}")
-    lines.append("</available-skills>")
+        if skill.is_local:
+            path_str = str(skill.path / "SKILL.md")
+            lines.append(f"- {name}: {skill.description} (file: {path_str})")
+        else:
+            lines.append(f"- {name}: {skill.description}")
+    lines.append("")
+    lines.append("### How to use skills")
+    lines.append(
+        "- **Trigger rules**: If the user mentions a skill with `$skill-name` in their message, "
+        "the skill instructions are automatically injected. If the task clearly matches a "
+        "skill's description above, you **must** use that skill by calling `use_skill` or "
+        "reading the SKILL.md file directly.\n"
+        "- **Progressive disclosure**: After deciding to use a skill, open its `SKILL.md` "
+        "at the path listed above. Read only enough to follow the workflow.\n"
+        "- **Supporting files**: If `SKILL.md` references relative paths (e.g. `scripts/foo.py`), "
+        "resolve them relative to the skill directory.\n"
+        "- **Multiple skills**: If multiple skills apply, use the minimal set that covers the "
+        "request and state the order you'll use them.\n"
+        "- **Missing/blocked**: If a named skill isn't in the list, say so briefly and continue "
+        "with the best fallback."
+    )
     return "\n".join(lines)
+
+
+# =========================================================================
+# $skill-name mention extraction
+# =========================================================================
+
+_MENTION_NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]*[a-z0-9]|[a-z0-9]")
+
+
+def extract_skill_mentions(text: str, catalog: dict[str, SkillInfo]) -> list[str]:
+    """Extract $skill-name mentions from text that match catalog entries.
+
+    Returns a deduplicated list of skill names in order of first appearance.
+    Only matches names that exist in the catalog.
+    """
+    if not catalog or "$" not in text:
+        return []
+
+    mentioned: list[str] = []
+    seen: set[str] = set()
+
+    i = 0
+    while i < len(text):
+        if text[i] != "$":
+            i += 1
+            continue
+
+        # Check character before $ is a word boundary
+        if i > 0 and text[i - 1].isalnum():
+            i += 1
+            continue
+
+        m = _MENTION_NAME_RE.match(text, i + 1)
+        if not m:
+            i += 1
+            continue
+
+        name = m.group(0)
+        end = m.end()
+
+        # Ensure the character after the name is a boundary (not alphanumeric/hyphen)
+        if end < len(text) and (text[end].isalnum() or text[end] == "-"):
+            i += 1
+            continue
+
+        if name in catalog and name not in seen:
+            seen.add(name)
+            mentioned.append(name)
+
+        i = end
+
+    return mentioned
+
+
+def inject_skill_mentions(
+    text: str,
+    catalog: dict[str, SkillInfo],
+    read_roots: list[Path],
+) -> list[tuple[str, str]]:
+    """Extract $skill mentions from text and activate each skill.
+
+    Returns a list of (skill_name, activation_result) tuples, one per
+    mentioned skill. Returns an empty list if no skills were mentioned.
+    """
+    names = extract_skill_mentions(text, catalog)
+    if not names:
+        return []
+
+    results: list[tuple[str, str]] = []
+    for name in names:
+        result = activate_skill(name, catalog, read_roots)
+        results.append((name, result))
+
+    return results

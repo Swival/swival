@@ -10,6 +10,8 @@ from swival.skills import (
     discover_skills,
     activate_skill,
     format_skill_catalog,
+    extract_skill_mentions,
+    inject_skill_mentions,
     MAX_SKILL_BODY_CHARS,
     MAX_SKILL_NAME_CHARS,
 )
@@ -630,8 +632,10 @@ class TestFormatCatalog:
             ),
         }
         text = format_skill_catalog(catalog)
-        assert "<available-skills>" in text
+        assert "## Skills" in text
         assert "- pdf: Extract text from PDFs." in text
+        assert "SKILL.md" in text
+        assert "$skill-name" in text
         assert "use_skill" in text
 
     def test_sorted_output(self, tmp_path):
@@ -645,6 +649,36 @@ class TestFormatCatalog:
         }
         text = format_skill_catalog(catalog)
         assert text.index("analyze") < text.index("deploy")
+
+    def test_non_local_skill_no_file_path(self, tmp_path):
+        """Non-local skills should NOT show a file path in the catalog."""
+        catalog = {
+            "remote": SkillInfo(
+                name="remote",
+                description="A remote skill.",
+                path=tmp_path,
+                is_local=False,
+            ),
+        }
+        text = format_skill_catalog(catalog)
+        assert "- remote: A remote skill." in text
+        assert str(tmp_path) not in text
+        assert (
+            "SKILL.md" not in text.split("### Available skills")[1].split("### How")[0]
+        )
+
+    def test_local_skill_shows_file_path(self, tmp_path):
+        """Local skills should show a file path in the catalog."""
+        catalog = {
+            "local": SkillInfo(
+                name="local",
+                description="A local skill.",
+                path=tmp_path,
+                is_local=True,
+            ),
+        }
+        text = format_skill_catalog(catalog)
+        assert f"(file: {tmp_path}/SKILL.md)" in text
 
 
 # =========================================================================
@@ -680,3 +714,430 @@ class TestIntegration:
 
         tool_names = [t["function"]["name"] for t in tools]
         assert "use_skill" not in tool_names
+
+
+# =========================================================================
+# $skill-name mention extraction
+# =========================================================================
+
+
+class TestExtractSkillMentions:
+    def _catalog(self, tmp_path, *names):
+        catalog = {}
+        for name in names:
+            catalog[name] = SkillInfo(
+                name=name, description=f"{name} skill.", path=tmp_path, is_local=True
+            )
+        return catalog
+
+    def test_single_mention(self, tmp_path):
+        catalog = self._catalog(tmp_path, "deploy")
+        assert extract_skill_mentions("please run $deploy now", catalog) == ["deploy"]
+
+    def test_multiple_mentions(self, tmp_path):
+        catalog = self._catalog(tmp_path, "deploy", "pdf")
+        result = extract_skill_mentions("use $deploy and $pdf", catalog)
+        assert result == ["deploy", "pdf"]
+
+    def test_deduplication(self, tmp_path):
+        catalog = self._catalog(tmp_path, "deploy")
+        result = extract_skill_mentions("$deploy then $deploy again", catalog)
+        assert result == ["deploy"]
+
+    def test_no_match_without_dollar(self, tmp_path):
+        catalog = self._catalog(tmp_path, "deploy")
+        assert extract_skill_mentions("run deploy now", catalog) == []
+
+    def test_no_match_unknown_skill(self, tmp_path):
+        catalog = self._catalog(tmp_path, "deploy")
+        assert extract_skill_mentions("$unknown-skill", catalog) == []
+
+    def test_boundary_after_name(self, tmp_path):
+        catalog = self._catalog(tmp_path, "deploy")
+        # "deploys" shouldn't match "deploy"
+        assert extract_skill_mentions("$deploys", catalog) == []
+
+    def test_boundary_before_dollar(self, tmp_path):
+        catalog = self._catalog(tmp_path, "deploy")
+        # word character before $ shouldn't match
+        assert extract_skill_mentions("foo$deploy", catalog) == []
+
+    def test_punctuation_after(self, tmp_path):
+        catalog = self._catalog(tmp_path, "deploy")
+        assert extract_skill_mentions("run $deploy.", catalog) == ["deploy"]
+        assert extract_skill_mentions("($deploy)", catalog) == ["deploy"]
+
+    def test_at_end_of_string(self, tmp_path):
+        catalog = self._catalog(tmp_path, "deploy")
+        assert extract_skill_mentions("run $deploy", catalog) == ["deploy"]
+
+    def test_empty_catalog(self, tmp_path):
+        assert extract_skill_mentions("$deploy", {}) == []
+
+    def test_no_dollar_in_text(self, tmp_path):
+        catalog = self._catalog(tmp_path, "deploy")
+        assert extract_skill_mentions("nothing here", catalog) == []
+
+    def test_single_char_skill(self, tmp_path):
+        catalog = self._catalog(tmp_path, "x")
+        assert extract_skill_mentions("use $x now", catalog) == ["x"]
+
+    def test_hyphenated_name(self, tmp_path):
+        catalog = self._catalog(tmp_path, "babysit-pr")
+        assert extract_skill_mentions("run $babysit-pr", catalog) == ["babysit-pr"]
+
+
+# =========================================================================
+# Skill mention injection
+# =========================================================================
+
+
+class TestInjectSkillMentions:
+    def test_injects_matching_skills(self, tmp_path):
+        skills_dir = tmp_path / ".swival" / "skills"
+        _make_skill(skills_dir, "deploy", "Deploy.", "# Deploy steps\n1. do it")
+        catalog = discover_skills(str(tmp_path))
+        roots: list[Path] = []
+
+        results = inject_skill_mentions("run $deploy", catalog, roots)
+        assert len(results) == 1
+        name, body = results[0]
+        assert name == "deploy"
+        assert "[Skill: deploy activated]" in body
+        assert "# Deploy steps" in body
+
+    def test_returns_empty_when_no_mentions(self, tmp_path):
+        skills_dir = tmp_path / ".swival" / "skills"
+        _make_skill(skills_dir, "deploy", "Deploy.", "# Deploy steps")
+        catalog = discover_skills(str(tmp_path))
+        roots: list[Path] = []
+
+        assert inject_skill_mentions("no mentions here", catalog, roots) == []
+
+    def test_multiple_skills_injected(self, tmp_path):
+        skills_dir = tmp_path / ".swival" / "skills"
+        _make_skill(skills_dir, "deploy", "Deploy.", "# Deploy")
+        _make_skill(skills_dir, "test-e2e", "E2E tests.", "# E2E testing")
+        catalog = discover_skills(str(tmp_path))
+        roots: list[Path] = []
+
+        results = inject_skill_mentions("$deploy and $test-e2e", catalog, roots)
+        assert len(results) == 2
+        names = [n for n, _ in results]
+        assert names == ["deploy", "test-e2e"]
+        assert "[Skill: deploy activated]" in results[0][1]
+        assert "[Skill: test-e2e activated]" in results[1][1]
+
+
+# =========================================================================
+# Auto-injection in agent loop
+# =========================================================================
+
+
+class TestAgentLoopSkillInjection:
+    """Test that run_agent_loop auto-injects skills from $mentions."""
+
+    def test_skill_mention_injects_message(self, tmp_path, monkeypatch):
+        """When user message contains $skill-name, an assistant+tool pair is injected."""
+        from swival.skills import discover_skills
+        from swival.agent import run_agent_loop
+        from swival.thinking import ThinkingState
+        from swival.todo import TodoState
+
+        skills_dir = tmp_path / ".swival" / "skills"
+        _make_skill(skills_dir, "deploy", "Deploy app.", "# Deploy procedure")
+        catalog = discover_skills(str(tmp_path))
+
+        messages = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "please $deploy"},
+        ]
+
+        # Mock call_llm to return a final answer immediately
+        class FakeMsg:
+            content = "Done."
+            tool_calls = None
+
+        def fake_call_llm(*args, **kwargs):
+            return FakeMsg(), "stop"
+
+        monkeypatch.setattr("swival.agent.call_llm", fake_call_llm)
+
+        run_agent_loop(
+            messages,
+            [],
+            api_base="http://localhost",
+            model_id="test",
+            max_turns=1,
+            max_output_tokens=1024,
+            temperature=0.0,
+            top_p=1.0,
+            seed=None,
+            context_length=None,
+            base_dir=str(tmp_path),
+            thinking_state=ThinkingState(),
+            todo_state=TodoState(notes_dir=str(tmp_path)),
+            resolved_commands={},
+            skills_catalog=catalog,
+            skill_read_roots=[],
+            extra_write_roots=[],
+            yolo=False,
+            verbose=False,
+            llm_kwargs={},
+        )
+
+        # system, user, assistant(tool_call), tool(result), assistant(answer)
+        assert len(messages) >= 5
+        # Synthetic assistant message with use_skill tool_call
+        assistant_msg = messages[2]
+        assert assistant_msg["role"] == "assistant"
+        assert len(assistant_msg["tool_calls"]) == 1
+        tc = assistant_msg["tool_calls"][0]
+        assert tc["function"]["name"] == "use_skill"
+        import json as _json
+
+        assert _json.loads(tc["function"]["arguments"]) == {"name": "deploy"}
+        # Tool result with skill instructions
+        tool_msg = messages[3]
+        assert tool_msg["role"] == "tool"
+        assert tool_msg["tool_call_id"].startswith("auto_skill_deploy_")
+        assert "[Skill: deploy activated]" in tool_msg["content"]
+        assert "# Deploy procedure" in tool_msg["content"]
+
+    def test_no_injection_without_dollar(self, tmp_path, monkeypatch):
+        """No extra messages when user doesn't use $ mentions."""
+        from swival.skills import discover_skills
+        from swival.agent import run_agent_loop
+        from swival.thinking import ThinkingState
+        from swival.todo import TodoState
+
+        skills_dir = tmp_path / ".swival" / "skills"
+        _make_skill(skills_dir, "deploy", "Deploy app.", "# Deploy procedure")
+        catalog = discover_skills(str(tmp_path))
+
+        messages = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "please deploy the app"},
+        ]
+
+        class FakeMsg:
+            content = "Done."
+            tool_calls = None
+
+        def fake_call_llm(*args, **kwargs):
+            return FakeMsg(), "stop"
+
+        monkeypatch.setattr("swival.agent.call_llm", fake_call_llm)
+
+        run_agent_loop(
+            messages,
+            [],
+            api_base="http://localhost",
+            model_id="test",
+            max_turns=1,
+            max_output_tokens=1024,
+            temperature=0.0,
+            top_p=1.0,
+            seed=None,
+            context_length=None,
+            base_dir=str(tmp_path),
+            thinking_state=ThinkingState(),
+            todo_state=TodoState(notes_dir=str(tmp_path)),
+            resolved_commands={},
+            skills_catalog=catalog,
+            skill_read_roots=[],
+            extra_write_roots=[],
+            yolo=False,
+            verbose=False,
+            llm_kwargs={},
+        )
+
+        # No injection: system, user, assistant (3 messages)
+        assert len(messages) == 3
+        assert messages[1]["content"] == "please deploy the app"
+
+    def test_injection_is_compactable(self, tmp_path, monkeypatch):
+        """Auto-injected skill forms an assistant+tool turn that compaction can drop."""
+        from swival.agent import group_into_turns, is_pinned
+
+        skill_tc_id = "auto_skill_deploy"
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "please $deploy"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": skill_tc_id,
+                        "type": "function",
+                        "function": {
+                            "name": "use_skill",
+                            "arguments": '{"name": "deploy"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": skill_tc_id,
+                "content": "[Skill: deploy activated]\n\n# Long body...",
+            },
+        ]
+
+        turns = group_into_turns(messages)
+        # system, user, assistant+tool
+        assert len(turns) == 3
+        # The assistant+tool turn should NOT be pinned (droppable by compaction)
+        skill_turn = turns[2]
+        assert not is_pinned(skill_turn)
+        # The user turn should be pinned
+        assert is_pinned(turns[1])
+
+    def test_activation_errors_surfaced(self, tmp_path):
+        """inject_skill_mentions includes activation errors instead of silently dropping."""
+        catalog = {
+            "broken": SkillInfo(
+                name="broken",
+                description="Broken skill.",
+                path=tmp_path / "nonexistent",
+                is_local=True,
+            ),
+        }
+        roots: list[Path] = []
+        results = inject_skill_mentions("use $broken", catalog, roots)
+        assert len(results) == 1
+        name, body = results[0]
+        assert name == "broken"
+        assert "error:" in body
+
+    def test_multi_skill_separate_tool_calls(self, tmp_path, monkeypatch):
+        """Multiple $mentions produce one tool_call per skill, not a comma-joined name."""
+        from swival.skills import discover_skills
+        from swival.agent import run_agent_loop
+        from swival.thinking import ThinkingState
+        from swival.todo import TodoState
+
+        skills_dir = tmp_path / ".swival" / "skills"
+        _make_skill(skills_dir, "deploy", "Deploy.", "# Deploy")
+        _make_skill(skills_dir, "test-e2e", "Tests.", "# E2E")
+        catalog = discover_skills(str(tmp_path))
+
+        messages = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "$deploy and $test-e2e"},
+        ]
+
+        class FakeMsg:
+            content = "Done."
+            tool_calls = None
+
+        def fake_call_llm(*args, **kwargs):
+            return FakeMsg(), "stop"
+
+        monkeypatch.setattr("swival.agent.call_llm", fake_call_llm)
+
+        run_agent_loop(
+            messages,
+            [],
+            api_base="http://localhost",
+            model_id="test",
+            max_turns=1,
+            max_output_tokens=1024,
+            temperature=0.0,
+            top_p=1.0,
+            seed=None,
+            context_length=None,
+            base_dir=str(tmp_path),
+            thinking_state=ThinkingState(),
+            todo_state=TodoState(notes_dir=str(tmp_path)),
+            resolved_commands={},
+            skills_catalog=catalog,
+            skill_read_roots=[],
+            extra_write_roots=[],
+            yolo=False,
+            verbose=False,
+            llm_kwargs={},
+        )
+
+        # system, user, assistant(2 tool_calls), tool(deploy), tool(test-e2e), assistant(answer)
+        assert len(messages) >= 6
+        assistant_msg = messages[2]
+        assert assistant_msg["role"] == "assistant"
+        assert len(assistant_msg["tool_calls"]) == 2
+        # Each tool_call has a single skill name (not comma-joined)
+        tc_names = [tc["function"]["name"] for tc in assistant_msg["tool_calls"]]
+        assert tc_names == ["use_skill", "use_skill"]
+        import json
+
+        tc_args = [
+            json.loads(tc["function"]["arguments"])["name"]
+            for tc in assistant_msg["tool_calls"]
+        ]
+        assert tc_args == ["deploy", "test-e2e"]
+        # Two separate tool results
+        assert messages[3]["role"] == "tool"
+        assert messages[4]["role"] == "tool"
+        assert "[Skill: deploy activated]" in messages[3]["content"]
+        assert "[Skill: test-e2e activated]" in messages[4]["content"]
+
+    def test_auto_activation_recorded_in_report(self, tmp_path, monkeypatch):
+        """Auto-activated skills are recorded in the JSON report."""
+        from swival.skills import discover_skills
+        from swival.agent import run_agent_loop
+        from swival.thinking import ThinkingState
+        from swival.todo import TodoState
+        from swival.report import ReportCollector
+
+        skills_dir = tmp_path / ".swival" / "skills"
+        _make_skill(skills_dir, "deploy", "Deploy app.", "# Deploy procedure")
+        catalog = discover_skills(str(tmp_path))
+
+        messages = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "please $deploy"},
+        ]
+
+        class FakeMsg:
+            content = "Done."
+            tool_calls = None
+
+        def fake_call_llm(*args, **kwargs):
+            return FakeMsg(), "stop"
+
+        monkeypatch.setattr("swival.agent.call_llm", fake_call_llm)
+
+        report = ReportCollector()
+        run_agent_loop(
+            messages,
+            [],
+            api_base="http://localhost",
+            model_id="test",
+            max_turns=1,
+            max_output_tokens=1024,
+            temperature=0.0,
+            top_p=1.0,
+            seed=None,
+            context_length=None,
+            base_dir=str(tmp_path),
+            thinking_state=ThinkingState(),
+            todo_state=TodoState(notes_dir=str(tmp_path)),
+            resolved_commands={},
+            skills_catalog=catalog,
+            skill_read_roots=[],
+            extra_write_roots=[],
+            yolo=False,
+            verbose=False,
+            llm_kwargs={},
+            report=report,
+        )
+
+        # Report should have recorded the auto-activated use_skill call
+        assert "use_skill" in report.tool_stats
+        assert report.tool_stats["use_skill"]["succeeded"] == 1
+        assert report.skills_used == ["deploy"]
+        # Should have a tool_call event
+        tool_events = [e for e in report.events if e["type"] == "tool_call"]
+        assert len(tool_events) == 1
+        assert tool_events[0]["name"] == "use_skill"
+        assert tool_events[0]["arguments"] == {"name": "deploy"}

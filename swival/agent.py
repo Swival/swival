@@ -2731,6 +2731,66 @@ def run_agent_loop(
 
     _snapshot_strip_marker = "\n\n" + SNAPSHOT_HISTORY_SENTINEL
 
+    # Auto-inject skills when user mentions $skill-name.
+    # Injected as a synthetic assistant tool_call + tool result pair so that
+    # compaction can trim the skill body like any other tool output.
+    if skills_catalog and messages:
+        last_msg = messages[-1]
+        if _msg_role(last_msg) == "user":
+            user_text = _msg_content(last_msg) or ""
+            if "$" in user_text:
+                from .skills import inject_skill_mentions
+
+                activations = inject_skill_mentions(
+                    user_text, skills_catalog, skill_read_roots
+                )
+                if activations:
+                    import uuid as _uuid
+
+                    tool_calls = []
+                    _uid = _uuid.uuid4().hex[:8]
+                    for name, _result in activations:
+                        tc_id = f"auto_skill_{name}_{_uid}"
+                        tool_calls.append(
+                            {
+                                "id": tc_id,
+                                "type": "function",
+                                "function": {
+                                    "name": "use_skill",
+                                    "arguments": json.dumps({"name": name}),
+                                },
+                            }
+                        )
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": tool_calls,
+                        }
+                    )
+                    for name, result in activations:
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": f"auto_skill_{name}_{_uid}",
+                                "content": result,
+                            }
+                        )
+                        if report:
+                            succeeded = not result.startswith("error:")
+                            report.record_tool_call(
+                                turn=0,
+                                name="use_skill",
+                                arguments={"name": name},
+                                succeeded=succeeded,
+                                duration=0.0,
+                                result_length=len(result),
+                                error=result if not succeeded else None,
+                            )
+                    if verbose:
+                        names = [n for n, _ in activations]
+                        fmt.info(f"Auto-activated skill(s): {', '.join(names)}")
+
     while turns < max_turns:
         turns += 1
 

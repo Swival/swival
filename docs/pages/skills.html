@@ -56,7 +56,7 @@
         </aside>
         <article class="docs-content">
             <h1 id="skills">Skills</h1>
-<p>Skills are reusable instruction packages that let Swival load detailed guidance only when a task needs it. Instead of injecting every instruction into the base prompt, Swival uses progressive disclosure: the model sees a compact catalog first and loads a specific skill body on demand through <code>use_skill</code>.</p>
+<p>Skills are reusable instruction packages that let Swival load detailed guidance only when a task needs it. Instead of injecting every instruction into the base prompt, Swival uses progressive disclosure: the model sees a compact catalog first and loads a specific skill body on demand through <code>use_skill</code> or automatically via <code>$skill-name</code> mentions in user messages.</p>
 <h2 id="creating-a-skill">Creating A Skill</h2>
 <p>A skill lives in its own directory and must include <code>SKILL.md</code>. The file begins with YAML frontmatter containing <code>name</code> and <code>description</code>, followed by the full instruction body.</p>
 <pre><code>skills/
@@ -87,8 +87,14 @@ and `staging` for staging.
 <p>Each <code>--skills-dir</code> path can point directly at one skill directory that contains <code>SKILL.md</code>, or at a parent directory where nested subdirectories contain skill files. If duplicate skill names exist across external directories, first discovery wins. If both local and external skills define the same name, the local definition wins.</p>
 <p>If you do not want skill loading at all, use <code>--no-skills</code>.</p>
 <h2 id="how-progressive-disclosure-works">How Progressive Disclosure Works</h2>
-<p>At startup, Swival builds a compact skill catalog that includes only names and descriptions. That catalog is appended to the system prompt inside <code>&lt;available-skills&gt;</code> tags, and the <code>use_skill</code> tool is exposed.</p>
-<p>When the model decides a skill is relevant, it calls <code>use_skill</code> with the skill name. Swival then reads the full body from <code>SKILL.md</code> and returns it inside <code>&lt;skill-instructions&gt;</code> tags along with the skill directory path. This keeps base prompt size small while still allowing deep instructions when needed.</p>
+<p>At startup, Swival builds a compact skill catalog that includes names, descriptions, and file paths (for local skills). That catalog is appended to the system prompt under a <code>## Skills</code> heading, and the <code>use_skill</code> tool is exposed.</p>
+<h3 id="skill-name-mentions-automatic-activation">$skill-name mentions (automatic activation)</h3>
+<p>When a user message contains <code>$skill-name</code> (e.g. "please $deploy"), Swival automatically activates matching skills before the model's turn. Each mentioned skill produces a synthetic <code>use_skill</code> tool-call/result pair injected into the conversation history. This teaches the model the correct single-skill-per-call API shape while giving it the full instructions without requiring an extra round-trip.</p>
+<p>Because injections use assistant+tool messages (not user messages), compaction can shrink or drop them when context pressure grows.</p>
+<h3 id="manual-activation">Manual activation</h3>
+<p>When the model decides a skill is relevant on its own, it calls <code>use_skill</code> with the skill name. Swival reads the full body from <code>SKILL.md</code> and returns it inside <code>&lt;skill-instructions&gt;</code> tags along with the skill directory path. For local skills, the model can also read the <code>SKILL.md</code> file directly using the path shown in the catalog.</p>
+<h3 id="trigger-rules-in-the-prompt">Trigger rules in the prompt</h3>
+<p>The catalog includes guidance telling the model that if a task clearly matches a skill's description, it should use that skill. This reduces the chance of the model ignoring available skills.</p>
 <h2 id="file-access-for-external-skills">File Access For External Skills</h2>
 <p>Project-local skills are already inside normal sandbox roots, so they use standard file access rules. External skills are added as read-only roots when activated. That means the model can read helper files under those skill directories with absolute paths, but cannot write into those external skill directories.</p>
         </article>
