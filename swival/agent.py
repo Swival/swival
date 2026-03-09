@@ -103,7 +103,10 @@ LEARN_PROMPT = (
     "Review this session for concrete mistakes, confusions, or surprises you "
     "encountered with tools, commands, APIs, or syntax. For each one, persist "
     "a concise note to `.swival/memory/MEMORY.md` so you don't repeat it in "
-    "future sessions. Keep MEMORY.md short (bulleted notes). For detailed "
+    "future sessions. Focus on durable, reusable lessons. "
+    "Do not store transient workspace state that may change soon, such as whether "
+    "a file currently exists, current branch contents, or one-off task status. "
+    "Keep MEMORY.md short (bulleted notes). For detailed "
     "topics, create separate files in `.swival/memory/` and reference them "
     "from MEMORY.md. If there is nothing worth noting, say so."
 )
