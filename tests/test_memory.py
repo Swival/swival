@@ -6,12 +6,15 @@ from unittest.mock import patch
 import pytest
 
 from swival import fmt
-from swival.agent import (
+from swival.agent import build_system_prompt
+from swival.memory import (
     MAX_MEMORY_CHARS,
     MAX_MEMORY_LINES,
-    _safe_memory_path,
-    build_system_prompt,
+    safe_memory_path as _safe_memory_path,
     load_memory,
+    extract_learned_tags,
+    persist_learnings,
+    auto_extract_and_persist,
 )
 
 
@@ -228,3 +231,207 @@ class TestBuildSystemPrompt:
         instr_pos = content.find("</agent-instructions>")
         memory_pos = content.find("<memory>")
         assert instr_pos < memory_pos
+
+
+# ---------------------------------------------------------------------------
+# extract_learned_tags
+# ---------------------------------------------------------------------------
+
+
+class TestExtractLearnedTags:
+    def test_no_tags(self):
+        messages = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "world"},
+        ]
+        assert extract_learned_tags(messages) == []
+
+    def test_single_tag(self):
+        messages = [
+            {
+                "role": "assistant",
+                "content": "I found that <learned>rg is faster than grep</learned> here.",
+            },
+        ]
+        result = extract_learned_tags(messages)
+        assert result == ["rg is faster than grep"]
+
+    def test_multiple_tags_same_message(self):
+        messages = [
+            {
+                "role": "assistant",
+                "content": (
+                    "<learned>fact one</learned> and also <learned>fact two</learned>"
+                ),
+            },
+        ]
+        result = extract_learned_tags(messages)
+        assert result == ["fact one", "fact two"]
+
+    def test_multiple_messages(self):
+        messages = [
+            {"role": "assistant", "content": "<learned>first</learned>"},
+            {"role": "user", "content": "ok"},
+            {"role": "assistant", "content": "<learned>second</learned>"},
+        ]
+        result = extract_learned_tags(messages)
+        assert result == ["first", "second"]
+
+    def test_deduplication(self):
+        messages = [
+            {"role": "assistant", "content": "<learned>same fact</learned>"},
+            {"role": "assistant", "content": "<learned>same fact</learned>"},
+        ]
+        result = extract_learned_tags(messages)
+        assert result == ["same fact"]
+
+    def test_ignores_user_messages(self):
+        messages = [
+            {"role": "user", "content": "<learned>not from assistant</learned>"},
+        ]
+        assert extract_learned_tags(messages) == []
+
+    def test_ignores_tool_messages(self):
+        messages = [
+            {"role": "tool", "content": "<learned>not from assistant</learned>"},
+        ]
+        assert extract_learned_tags(messages) == []
+
+    def test_multiline_tag(self):
+        messages = [
+            {
+                "role": "assistant",
+                "content": "<learned>line one\nline two</learned>",
+            },
+        ]
+        result = extract_learned_tags(messages)
+        assert result == ["line one\nline two"]
+
+    def test_empty_tag_skipped(self):
+        messages = [
+            {"role": "assistant", "content": "<learned>  </learned>"},
+        ]
+        assert extract_learned_tags(messages) == []
+
+    def test_empty_content(self):
+        messages = [
+            {"role": "assistant", "content": ""},
+        ]
+        assert extract_learned_tags(messages) == []
+
+    def test_none_content(self):
+        messages = [
+            {"role": "assistant", "content": None},
+        ]
+        assert extract_learned_tags(messages) == []
+
+
+# ---------------------------------------------------------------------------
+# persist_learnings
+# ---------------------------------------------------------------------------
+
+
+class TestPersistLearnings:
+    def test_creates_file_and_dir(self, tmp_path):
+        count = persist_learnings(str(tmp_path), ["pytest is great"])
+        assert count == 1
+        mem = (tmp_path / ".swival" / "memory" / "MEMORY.md").read_text()
+        assert "- pytest is great\n" in mem
+
+    def test_appends_to_existing(self, tmp_path):
+        _write_memory(tmp_path, "- existing fact\n")
+        count = persist_learnings(str(tmp_path), ["new fact"])
+        assert count == 1
+        mem = (tmp_path / ".swival" / "memory" / "MEMORY.md").read_text()
+        assert "- existing fact\n" in mem
+        assert "- new fact\n" in mem
+
+    def test_dedup_against_existing(self, tmp_path):
+        _write_memory(tmp_path, "- already known\n")
+        count = persist_learnings(str(tmp_path), ["already known"])
+        assert count == 0
+
+    def test_empty_learnings(self, tmp_path):
+        count = persist_learnings(str(tmp_path), [])
+        assert count == 0
+
+    def test_multiple_learnings(self, tmp_path):
+        count = persist_learnings(str(tmp_path), ["fact A", "fact B", "fact C"])
+        assert count == 3
+        mem = (tmp_path / ".swival" / "memory" / "MEMORY.md").read_text()
+        assert "- fact A\n" in mem
+        assert "- fact B\n" in mem
+        assert "- fact C\n" in mem
+
+    def test_multiline_learning(self, tmp_path):
+        count = persist_learnings(str(tmp_path), ["line one\nline two"])
+        assert count == 1
+        mem = (tmp_path / ".swival" / "memory" / "MEMORY.md").read_text()
+        assert "- line one\n  line two\n" in mem
+
+    def test_size_limit_prevents_write(self, tmp_path):
+        _write_memory(tmp_path, "x" * 50_000)
+        count = persist_learnings(str(tmp_path), ["new fact"], verbose=True)
+        assert count == 0
+
+    def test_partial_dedup(self, tmp_path):
+        _write_memory(tmp_path, "- known fact\n")
+        count = persist_learnings(str(tmp_path), ["known fact", "new fact"])
+        assert count == 1
+        mem = (tmp_path / ".swival" / "memory" / "MEMORY.md").read_text()
+        assert "- new fact\n" in mem
+
+    def test_multiline_not_suppressed_by_first_line_match(self, tmp_path):
+        """A multi-line learning should not be suppressed just because its
+        first line appears in an unrelated existing entry."""
+        _write_memory(tmp_path, "- rg is faster than grep\n")
+        count = persist_learnings(
+            str(tmp_path), ["rg is faster than grep\nUse it for content search"]
+        )
+        assert count == 1
+        mem = (tmp_path / ".swival" / "memory" / "MEMORY.md").read_text()
+        assert "Use it for content search" in mem
+
+    def test_ensures_newline_before_append(self, tmp_path):
+        _write_memory(tmp_path, "- no trailing newline")
+        persist_learnings(str(tmp_path), ["new fact"])
+        mem = (tmp_path / ".swival" / "memory" / "MEMORY.md").read_text()
+        # Should not have "newline" and "- new" jammed together
+        assert "\n- new fact\n" in mem
+
+
+# ---------------------------------------------------------------------------
+# auto_extract_and_persist
+# ---------------------------------------------------------------------------
+
+
+class TestAutoExtractAndPersist:
+    def test_end_to_end(self, tmp_path):
+        messages = [
+            {"role": "user", "content": "fix the bug"},
+            {
+                "role": "assistant",
+                "content": "Done. <learned>The config parser needs strip() on keys</learned>",
+            },
+        ]
+        count = auto_extract_and_persist(messages, str(tmp_path))
+        assert count == 1
+        mem = (tmp_path / ".swival" / "memory" / "MEMORY.md").read_text()
+        assert "config parser needs strip()" in mem
+
+    def test_no_learnings(self, tmp_path):
+        messages = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+        ]
+        count = auto_extract_and_persist(messages, str(tmp_path))
+        assert count == 0
+        assert not (tmp_path / ".swival" / "memory" / "MEMORY.md").exists()
+
+    def test_dedup_across_sessions(self, tmp_path):
+        _write_memory(tmp_path, "- old lesson\n")
+        messages = [
+            {"role": "assistant", "content": "<learned>old lesson</learned>"},
+        ]
+        count = auto_extract_and_persist(messages, str(tmp_path))
+        assert count == 0

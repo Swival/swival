@@ -289,6 +289,7 @@ class Session:
             llm_kwargs=self._llm_kwargs,
             file_tracker=state["file_tracker"],
             continue_here=self.continue_here,
+            auto_memory=self.memory,
         )
         if state.get("compaction_state") is not None:
             kwargs["compaction_state"] = state["compaction_state"]
