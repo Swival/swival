@@ -68,14 +68,6 @@ Matching for `done` and `remove` is fuzzy in a controlled way, so exact wording 
 
 Every final answer is appended to `.swival/HISTORY.md` with a timestamp and the originating question. This file is capped at 500 KB. Once full, new entries are skipped instead of rotating older content. Use `--no-history` if you do not want history writes.
 
-## Memory
-
-Swival persists learnings across sessions. When the agent wraps a discovery in `<learned>...</learned>` tags, Swival extracts them at session end and appends them to `.swival/memory/MEMORY.md`. On the next session, this file is loaded into the system prompt so the agent starts with knowledge from previous runs.
-
-Extraction is deterministic — no extra LLM call. Entries are deduplicated against existing content and the file is capped at 50 KB. In the REPL, `/learn` triggers an explicit session review where the agent looks for mistakes and patterns worth remembering.
-
-Use `--no-memory` to disable both loading and auto-persistence.
-
 ## `fetch_url`
 
 `fetch_url` downloads HTTP or HTTPS content and returns it as markdown, plain text, or raw HTML. It is designed for documentation lookup and API reference pulls. Binary content types are rejected.

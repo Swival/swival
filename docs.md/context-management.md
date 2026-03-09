@@ -98,7 +98,7 @@ After any compaction level, the agent retries the LLM call. If all three levels 
 
 ## Knowledge Survival
 
-The most important design principle: critical state must survive compaction. Five mechanisms ensure this.
+The most important design principle: critical state must survive compaction. Three mechanisms ensure this.
 
 ### Thinking State
 
@@ -114,12 +114,6 @@ Swival also injects periodic reminders — if the agent hasn't checked its todo 
 
 As described above, completed snapshot summaries are injected directly into the system prompt. This is the most durable persistence channel — the system prompt survives every compaction level, so investigation conclusions are never lost.
 
-### Cross-Session Memory
-
-When the agent wraps a discovery in `<learned>...</learned>` tags — a tool quirk, a repo pattern, a working command — Swival extracts and appends it to `.swival/memory/MEMORY.md` at session end. On the next session, the file is loaded into the system prompt so the agent starts with knowledge from past runs.
-
-Extraction is deterministic (regex, no LLM call). Entries are deduplicated against existing content and the file is capped at 50 KB to prevent unbounded growth. Use `--no-memory` to disable both loading and auto-persistence. The agent can also write to the memory file directly for bulk notes.
-
 ### Continue-Here Files
 
 When a session ends abnormally — Ctrl+C, max turns exhausted, compaction failure, or REPL exit — Swival writes a structured `.swival/continue.md` file capturing the current task, todo state, recent tool activity, and key reasoning. On the next session start, this file is loaded into the system prompt and deleted, so the agent picks up where it left off without re-explanation.
@@ -128,7 +122,7 @@ The file is always written deterministically first (no network call). On the max
 
 Continue-here files are capped at 4,000 characters. Files older than 24 hours trigger a staleness warning but are still loaded. Use `--no-continue` to disable both writing and reading. The `/continue-status` REPL command previews an existing continue file without consuming it.
 
-Together, these five channels mean that even after nuclear compaction wipes the conversation to nearly nothing, the agent still has its reasoning chain, its task list, a record of what it learned during investigation, cross-session memory from previous runs, and — if the session was interrupted — a structured resume plan for the next run.
+Together, these four channels mean that even after nuclear compaction wipes the conversation to nearly nothing, the agent still has its reasoning chain, its task list, a record of what it learned during investigation, and — if the session was interrupted — a structured resume plan for the next run.
 
 ## Proactive Checkpoint Summaries
 

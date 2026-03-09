@@ -90,10 +90,6 @@
 <p>Matching for <code>done</code> and <code>remove</code> is fuzzy in a controlled way, so exact wording is not required every time. Swival tries exact matching first, then prefix matching, then substring matching. The list allows up to 50 items, and each item can be up to 500 characters.</p>
 <h2 id="history-logging">History Logging</h2>
 <p>Every final answer is appended to <code>.swival/HISTORY.md</code> with a timestamp and the originating question. This file is capped at 500 KB. Once full, new entries are skipped instead of rotating older content. Use <code>--no-history</code> if you do not want history writes.</p>
-<h2 id="memory">Memory</h2>
-<p>Swival persists learnings across sessions. When the agent wraps a discovery in <code>&lt;learned&gt;...&lt;/learned&gt;</code> tags, Swival extracts them at session end and appends them to <code>.swival/memory/MEMORY.md</code>. On the next session, this file is loaded into the system prompt so the agent starts with knowledge from previous runs.</p>
-<p>Extraction is deterministic — no extra LLM call. Entries are deduplicated against existing content and the file is capped at 50 KB. In the REPL, <code>/learn</code> triggers an explicit session review where the agent looks for mistakes and patterns worth remembering.</p>
-<p>Use <code>--no-memory</code> to disable both loading and auto-persistence.</p>
 <h2 id="fetch_url"><code>fetch_url</code></h2>
 <p><code>fetch_url</code> downloads HTTP or HTTPS content and returns it as markdown, plain text, or raw HTML. It is designed for documentation lookup and API reference pulls. Binary content types are rejected.</p>
 <p>Raw response bodies are capped at 5 MB, and inline output is capped at 50 KB. Larger converted outputs are saved under <code>.swival/</code> so the agent can page through them with <code>read_file</code>.</p>
