@@ -267,7 +267,7 @@ def discover_skills(
     base_resolved = Path(base_dir).resolve()
 
     # Scan project-local skills first
-    local_skills = base_resolved / "skills"
+    local_skills = base_resolved / ".swival" / "skills"
     if local_skills.is_dir():
         try:
             entries = sorted(local_skills.iterdir())

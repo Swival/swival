@@ -208,17 +208,17 @@ class TestValidateSkillName:
 
 class TestDiscoverSkills:
     def test_no_skills_dir(self, tmp_path):
-        """No skills/ directory — empty catalog, no error."""
+        """No .swival/skills/ directory — empty catalog, no error."""
         catalog = discover_skills(str(tmp_path))
         assert catalog == {}
 
     def test_empty_skills_dir(self, tmp_path):
-        (tmp_path / "skills").mkdir()
+        (tmp_path / ".swival" / "skills").mkdir(parents=True)
         catalog = discover_skills(str(tmp_path))
         assert catalog == {}
 
     def test_valid_skills_found(self, tmp_path):
-        skills_dir = tmp_path / "skills"
+        skills_dir = tmp_path / ".swival" / "skills"
         _make_skill(skills_dir, "pdf", "Extract text from PDFs.")
         _make_skill(skills_dir, "deploy", "Deploy the application.")
 
@@ -230,7 +230,7 @@ class TestDiscoverSkills:
         assert catalog["pdf"].is_local is True
 
     def test_invalid_skills_skipped(self, tmp_path, capsys):
-        skills_dir = tmp_path / "skills"
+        skills_dir = tmp_path / ".swival" / "skills"
         # Invalid: name mismatch
         skill_dir = skills_dir / "wrong-name"
         skill_dir.mkdir(parents=True)
@@ -256,7 +256,7 @@ class TestDiscoverSkills:
             assert catalog["lint"].is_local is False
 
     def test_project_local_beats_extra(self, tmp_path, capsys):
-        local_skills = tmp_path / "skills"
+        local_skills = tmp_path / ".swival" / "skills"
         _make_skill(local_skills, "pdf", "Local PDF skill.")
 
         extra = tmp_path / "global-skills"
@@ -299,7 +299,7 @@ class TestDiscoverSkills:
 
     def test_non_utf8_skill_md_skipped(self, tmp_path, capsys):
         """A SKILL.md with invalid UTF-8 should be skipped, not crash."""
-        skills_dir = tmp_path / "skills"
+        skills_dir = tmp_path / ".swival" / "skills"
         skill_dir = skills_dir / "bad"
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_bytes(
@@ -394,7 +394,7 @@ class TestDiscoverSkills:
 
 class TestActivateSkill:
     def test_successful_load(self, tmp_path):
-        skills_dir = tmp_path / "skills"
+        skills_dir = tmp_path / ".swival" / "skills"
         _make_skill(skills_dir, "deploy", "Deploy.", "# Deployment\n\nStep 1: Build.")
         catalog = discover_skills(str(tmp_path))
         read_roots: list[Path] = []
@@ -412,7 +412,7 @@ class TestActivateSkill:
         assert "nonexistent" in result
 
     def test_body_truncation(self, tmp_path):
-        skills_dir = tmp_path / "skills"
+        skills_dir = tmp_path / ".swival" / "skills"
         long_body = "x" * (MAX_SKILL_BODY_CHARS + 1000)
         _make_skill(skills_dir, "big", "A big skill.", long_body)
         catalog = discover_skills(str(tmp_path))
@@ -436,7 +436,7 @@ class TestActivateSkill:
             assert read_roots[0] == (extra / "lint").resolve()
 
     def test_local_skill_no_read_root(self, tmp_path):
-        skills_dir = tmp_path / "skills"
+        skills_dir = tmp_path / ".swival" / "skills"
         _make_skill(skills_dir, "pdf", "PDF skill.", "# PDF")
         catalog = discover_skills(str(tmp_path))
         read_roots: list[Path] = []
@@ -586,7 +586,7 @@ class TestReadFileSkillRoots:
 
 class TestUseSkillDispatch:
     def test_dispatch_use_skill(self, tmp_path):
-        skills_dir = tmp_path / "skills"
+        skills_dir = tmp_path / ".swival" / "skills"
         _make_skill(skills_dir, "deploy", "Deploy the app.", "# Deploy\nStep 1.")
         catalog = discover_skills(str(tmp_path))
         read_roots: list[Path] = []
@@ -657,7 +657,7 @@ class TestIntegration:
         """USE_SKILL_TOOL is added to tools list only when catalog is non-empty."""
         from swival.tools import USE_SKILL_TOOL
 
-        skills_dir = tmp_path / "skills"
+        skills_dir = tmp_path / ".swival" / "skills"
         _make_skill(skills_dir, "pdf", "PDF processing.")
         catalog = discover_skills(str(tmp_path))
 

@@ -80,7 +80,7 @@ and `staging` for staging.
 <p>The <code>name</code> field must be lowercase alphanumeric with hyphens, must match the directory name, cannot contain leading or trailing hyphens, cannot contain consecutive hyphens, and cannot exceed 64 characters. The <code>description</code> field is what the model sees in the catalog and cannot exceed 1,024 characters.</p>
 <p>The instruction body after frontmatter can be up to 20,000 characters, and longer bodies are truncated.</p>
 <h2 id="skill-discovery-locations">Skill Discovery Locations</h2>
-<p>Swival checks project-local skills first under <code>skills/</code> inside the base directory. Every immediate subdirectory that contains <code>SKILL.md</code> is treated as a local skill. Local skills take precedence if a name collision happens.</p>
+<p>Swival checks project-local skills first under <code>.swival/skills/</code> inside the base directory. Every immediate subdirectory that contains <code>SKILL.md</code> is treated as a local skill. Local skills take precedence if a name collision happens.</p>
 <p>You can also add external skill locations with <code>--skills-dir</code>.</p>
 <pre><code class="language-sh">swival --skills-dir ~/my-skills &quot;task&quot;
 </code></pre>
