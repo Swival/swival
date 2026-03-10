@@ -1314,6 +1314,7 @@ def call_llm(
     api_key=None,
     extra_body=None,
     reasoning_effort=None,
+    cache=None,
 ):
     """Call LiteLLM with the appropriate provider. Returns (message, finish_reason)."""
     import litellm
@@ -1396,6 +1397,33 @@ def call_llm(
     if reasoning_effort is not None:
         completion_kwargs["reasoning_effort"] = reasoning_effort
 
+    # --- Cache lookup ---
+    cache_kwargs = None
+    if cache is not None:
+        api_base_for_key = kwargs.get("api_base", "")
+        cache_kwargs = {
+            **completion_kwargs,
+            "_provider": provider,
+            "_api_base": api_base_for_key,
+        }
+        hit = cache.get(cache_kwargs)
+        if hit is not None:
+            from .cache import _reconstruct_message
+
+            msg_dict, finish_reason = hit
+            if verbose:
+                fmt.info("Cache hit")
+            return _reconstruct_message(msg_dict), finish_reason
+
+    def _cache_store(choice):
+        if cache is not None:
+            msg_d = (
+                choice.message.model_dump(exclude_none=True)
+                if hasattr(choice.message, "model_dump")
+                else dict(vars(choice.message))
+            )
+            cache.put(cache_kwargs, msg_d, choice.finish_reason)
+
     try:
         response = litellm.completion(**completion_kwargs)
     except litellm.ContextWindowExceededError:
@@ -1418,6 +1446,7 @@ def call_llm(
                         f"LLM call failed after message sanitization: {e2}"
                     )
                 choice = _pick_best_choice(response.choices)
+                _cache_store(choice)
                 return choice.message, choice.finish_reason
         raise AgentError(f"LLM call failed: {e}")
     except Exception as e:
@@ -1427,6 +1456,7 @@ def call_llm(
         raise AgentError(f"LLM call failed: {e}")
 
     choice = _pick_best_choice(response.choices)
+    _cache_store(choice)
     return choice.message, choice.finish_reason
 
 
@@ -1569,6 +1599,19 @@ def build_parser():
         f"One of: {', '.join(_REASONING_LEVELS)}.",
     )
 
+    parser.add_argument(
+        "--cache",
+        action="store_true",
+        default=_UNSET,
+        help="Enable LLM response caching (.swival/cache.db).",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        type=str,
+        default=_UNSET,
+        metavar="PATH",
+        help="Custom cache database directory (default: .swival).",
+    )
     parser.add_argument(
         "--init-config",
         action="store_true",
@@ -2055,6 +2098,10 @@ def main():
             review_rounds=getattr(args, "_review_rounds", 0),
         )
         sys.exit(1)
+    finally:
+        _cache = getattr(args, "_llm_cache", None)
+        if _cache is not None:
+            _cache.close()
 
 
 def resolve_provider(
@@ -2445,6 +2492,17 @@ def _run_main(args, report, _write_report, parser):
             # Capture tool info AFTER pruning so prompt matches reality
             mcp_tool_info = mcp_manager.get_tool_info()
 
+    # --- Cache lifecycle ---
+    llm_cache = None
+    if getattr(args, "cache", False):
+        from .cache import open_cache
+
+        llm_cache = open_cache(base_dir, getattr(args, "cache_dir", None))
+        args._llm_cache = llm_cache  # stash for cleanup in outer handler
+        if args.verbose:
+            stats = llm_cache.stats()
+            fmt.info(f"Cache: {llm_cache.db_path} ({stats['entries']} entries)")
+
     system_content, instructions_loaded = build_system_prompt(
         base_dir=base_dir,
         system_prompt=args.system_prompt,
@@ -2503,6 +2561,7 @@ def _run_main(args, report, _write_report, parser):
         llm_kwargs=llm_kwargs,
         file_tracker=file_tracker,
         mcp_manager=mcp_manager,
+        cache=llm_cache,
     )
 
     if getattr(args, "proactive_summaries", False):
@@ -2705,6 +2764,7 @@ def run_agent_loop(
     compaction_state: "CompactionState | None" = None,
     mcp_manager=None,
     continue_here: bool = True,
+    cache=None,
 ) -> tuple[str | None, bool]:
     """Run the tool-calling loop until a final answer or max turns.
 
@@ -2713,6 +2773,18 @@ def run_agent_loop(
     Returns (final_answer, exhausted). final_answer is the last
     assistant text (may be None). exhausted is True if max_turns hit.
     """
+    # Thread cache into llm_kwargs (for main loop calls via **llm_kwargs)
+    # and create a wrapper for secondary call sites that pass call_llm as a
+    # function reference (compaction summaries, proactive checkpoints,
+    # continue-file enrichment).
+    _call_llm_for_secondary = call_llm
+    if cache is not None:
+        llm_kwargs = {**llm_kwargs, "cache": cache}
+
+        def _call_llm_for_secondary(*args, **kwargs):
+            kwargs.setdefault("cache", cache)
+            return call_llm(*args, **kwargs)
+
     consecutive_errors: dict[str, tuple[str, int]] = {}
     turns = 0
     think_used = False
@@ -2855,7 +2927,7 @@ def run_agent_loop(
             # a compaction step, we break out. If it still overflows, we
             # try the next level. If all levels fail, raise AgentError.
             _llm_summary_kwargs = dict(
-                call_llm_fn=call_llm,
+                call_llm_fn=_call_llm_for_secondary,
                 model_id=model_id,
                 base_url=api_base,
                 api_key=llm_kwargs.get("api_key"),
@@ -3170,7 +3242,7 @@ def run_agent_loop(
         if compaction_state is not None:
             compaction_state.maybe_checkpoint(
                 messages,
-                call_llm,
+                _call_llm_for_secondary,
                 model_id=model_id,
                 base_url=api_base,
                 api_key=llm_kwargs.get("api_key"),
@@ -3202,7 +3274,7 @@ def run_agent_loop(
             todo_state=todo_state,
             snapshot_state=snapshot_state,
             thinking_state=thinking_state,
-            call_llm_fn=call_llm,
+            call_llm_fn=_call_llm_for_secondary,
             model_id=model_id,
             base_url=api_base,
             api_key=llm_kwargs.get("api_key"),
@@ -3458,6 +3530,7 @@ def repl_loop(
     compaction_state: "CompactionState | None" = None,
     mcp_manager=None,
     continue_here: bool = True,
+    cache=None,
 ) -> None:
     """Interactive read-eval-print loop."""
     from prompt_toolkit import PromptSession
@@ -3499,6 +3572,7 @@ def repl_loop(
         file_tracker=file_tracker,
         compaction_state=compaction_state,
         mcp_manager=mcp_manager,
+        cache=cache,
     )
 
     while True:

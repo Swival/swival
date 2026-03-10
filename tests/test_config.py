@@ -62,6 +62,8 @@ def _make_args(**overrides):
         "objective": _UNSET,
         "verify": _UNSET,
         "max_review_rounds": _UNSET,
+        "cache": _UNSET,
+        "cache_dir": _UNSET,
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)

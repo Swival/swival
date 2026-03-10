@@ -64,6 +64,8 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "no_mcp": bool,
     "extra_body": dict,
     "reasoning_effort": str,
+    "cache": bool,
+    "cache_dir": str,
 }
 
 _LIST_OF_STR_KEYS = {
@@ -121,6 +123,8 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "mcp_config": None,
     "extra_body": None,
     "reasoning_effort": None,
+    "cache": False,
+    "cache_dir": None,
 }
 
 
@@ -240,7 +244,7 @@ def _resolve_paths(config: dict, config_dir: Path, source: str = "") -> None:
     if "reviewer" in config:
         _resolve_reviewer_command(config, config_dir, source)
 
-    for key in ("objective", "verify"):
+    for key in ("objective", "verify", "cache_dir"):
         if key in config:
             p = Path(config[key]).expanduser()
             if p.is_absolute():
@@ -580,6 +584,10 @@ def generate_config(project: bool = False) -> str:
         "# no_history = false",
         "# no_memory = false",
         "# no_continue = false",
+        "",
+        "# --- Cache ---",
+        "# cache = false                   # enable LLM response caching (.swival/cache.db)",
+        '# cache_dir = ".swival"           # custom cache database directory',
         "",
         "# --- MCP servers ---",
         "# no_mcp = false",

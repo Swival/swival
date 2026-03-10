@@ -78,6 +78,8 @@ class Session:
         extra_body: dict | None = None,
         reasoning_effort: str | None = None,
         continue_here: bool = True,
+        cache: bool = False,
+        cache_dir: str | None = None,
     ):
         self.base_dir = base_dir
         self.config_dir = config_dir
@@ -113,6 +115,8 @@ class Session:
         self.extra_body = extra_body
         self.reasoning_effort = reasoning_effort
         self.continue_here = continue_here
+        self.cache = cache
+        self.cache_dir = cache_dir
 
         # Setup state (cached after first _setup())
         self._setup_done = False
@@ -128,6 +132,9 @@ class Session:
         self._instructions_loaded: list[str] = []
         self._allowed_dir_paths: list[Path] = []
         self._allowed_dir_ro_paths: list[Path] = []
+
+        # Cache handle (created in _setup if cache is enabled)
+        self._llm_cache = None
 
         # MCP manager (created in _setup if mcp_servers is non-empty)
         self._mcp_manager = None
@@ -216,6 +223,12 @@ class Session:
                 verbose=self.verbose,
             )
 
+        # Open cache
+        if self.cache:
+            from .cache import open_cache
+
+            self._llm_cache = open_cache(self.base_dir, self.cache_dir)
+
         # Build system prompt
         mcp_tool_info = self._mcp_manager.get_tool_info() if self._mcp_manager else None
         self._system_content, self._instructions_loaded = build_system_prompt(
@@ -289,6 +302,7 @@ class Session:
             llm_kwargs=self._llm_kwargs,
             file_tracker=state["file_tracker"],
             continue_here=self.continue_here,
+            cache=self._llm_cache,
         )
         if state.get("compaction_state") is not None:
             kwargs["compaction_state"] = state["compaction_state"]
@@ -377,6 +391,9 @@ class Session:
         return self
 
     def __exit__(self, *exc):
+        if self._llm_cache is not None:
+            self._llm_cache.close()
+            self._llm_cache = None
         if self._mcp_manager is not None:
             self._mcp_manager.close()
 

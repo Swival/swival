@@ -151,6 +151,9 @@
 <p><code>--no-history</code> disables writes to <code>.swival/HISTORY.md</code>.</p>
 <p><code>--no-continue</code> disables continue-here files. When set, Swival will not write <code>.swival/continue.md</code> on interruption and will not load it on startup.</p>
 <p><code>--color</code> forces ANSI color on standard error, and <code>--no-color</code> disables ANSI color even on TTY output.</p>
+<h3 id="caching-flags">Caching Flags</h3>
+<p><code>--cache</code> enables LLM response caching. When an identical request is seen again, the cached response is returned without contacting the LLM. The cache is stored in a SQLite database at <code>.swival/cache.db</code> by default. Off by default.</p>
+<p><code>--cache-dir PATH</code> overrides the default cache database directory. Useful for sharing a cache across projects.</p>
 <h3 id="configuration-flags">Configuration Flags</h3>
 <p><code>--init-config</code> generates a global config file at <code>~/.config/swival/config.toml</code> and exits. The file is a fully commented template showing all available settings.</p>
 <p><code>--init-config --project</code> generates a project-local config file at <code>swival.toml</code> in the current base directory instead.</p>

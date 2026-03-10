@@ -189,6 +189,12 @@ See [MCP](mcp.md) for full configuration details.
 
 `--color` forces ANSI color on standard error, and `--no-color` disables ANSI color even on TTY output.
 
+### Caching Flags
+
+`--cache` enables LLM response caching. When an identical request is seen again, the cached response is returned without contacting the LLM. The cache is stored in a SQLite database at `.swival/cache.db` by default. Off by default.
+
+`--cache-dir PATH` overrides the default cache database directory. Useful for sharing a cache across projects.
+
 ### Configuration Flags
 
 `--init-config` generates a global config file at `~/.config/swival/config.toml` and exits. The file is a fully commented template showing all available settings.
