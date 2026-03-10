@@ -96,6 +96,7 @@ swival --provider huggingface --model zai-org/GLM-5 &quot;task&quot;
 <pre><code>--enable-auto-tool-choice --tool-call-parser qwen3_xml
 </code></pre>
 <p>The <code>--tool-call-parser</code> value depends on the model you deploy. For Qwen models use <code>qwen3_xml</code>, for other model families check the <a href="https://docs.vllm.ai/en/latest/features/tool_calling.html">vLLM tool calling documentation</a> for the correct parser name. Without these arguments, the endpoint will not return structured tool calls and Swival will not be able to use its tools.</p>
+<p>For recently released models, the default vLLM version configured in Inference Endpoints may not support them yet. If you hit errors during model loading, set the <strong>Engine URI</strong> in your endpoint configuration to <code>vllm/vllm-openai:latest</code> to use a more recent build.</p>
 <p>Internally, Swival normalizes the model to <code>huggingface/&lt;model_id&gt;</code> for LiteLLM and strips an existing <code>huggingface/</code> prefix if you already included it. If <code>--base-url</code> is set, it is forwarded as <code>api_base</code>.</p>
 <p>Dedicated endpoints usually let you use the full deployed model context window rather than tighter serverless limits.</p>
 <h2 id="openrouter">OpenRouter</h2>

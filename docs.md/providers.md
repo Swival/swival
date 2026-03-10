@@ -72,6 +72,8 @@ Most inference endpoints use vLLM as the serving backend. For tool calling to wo
 
 The `--tool-call-parser` value depends on the model you deploy. For Qwen models use `qwen3_xml`, for other model families check the [vLLM tool calling documentation](https://docs.vllm.ai/en/latest/features/tool_calling.html) for the correct parser name. Without these arguments, the endpoint will not return structured tool calls and Swival will not be able to use its tools.
 
+For recently released models, the default vLLM version configured in Inference Endpoints may not support them yet. If you hit errors during model loading, set the **Engine URI** in your endpoint configuration to `vllm/vllm-openai:latest` to use a more recent build.
+
 Internally, Swival normalizes the model to `huggingface/<model_id>` for LiteLLM and strips an existing `huggingface/` prefix if you already included it. If `--base-url` is set, it is forwarded as `api_base`.
 
 Dedicated endpoints usually let you use the full deployed model context window rather than tighter serverless limits.
