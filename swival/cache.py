@@ -6,29 +6,9 @@ requests return cached responses without contacting the LLM.
 
 import hashlib
 import json
-import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-
-_TIMESTAMP_RE = re.compile(
-    r"\n\nCurrent date and time: \d{4}-\d{2}-\d{2} \d{2}:\d{2} \S+"
-)
-
-
-def _strip_timestamps(messages: list) -> list:
-    """Return a copy of messages with the dynamic timestamp removed from system messages."""
-    out = []
-    for msg in messages:
-        if (
-            isinstance(msg, dict)
-            and msg.get("role") == "system"
-            and isinstance(msg.get("content"), str)
-        ):
-            out.append({**msg, "content": _TIMESTAMP_RE.sub("", msg["content"])})
-        else:
-            out.append(msg)
-    return out
 
 
 class LLMCache:
@@ -142,10 +122,14 @@ class LLMCache:
         ):
             if k in completion_kwargs:
                 key_fields[k] = completion_kwargs[k]
-        # Strip the dynamic timestamp from system messages so the cache key
-        # remains stable across runs.
+        # Exclude system messages entirely so the cache key is stable across
+        # runs regardless of system prompt changes.
         if "messages" in key_fields:
-            key_fields["messages"] = _strip_timestamps(key_fields["messages"])
+            key_fields["messages"] = [
+                m
+                for m in key_fields["messages"]
+                if not (isinstance(m, dict) and m.get("role") == "system")
+            ]
         canonical = json.dumps(key_fields, sort_keys=True, default=str)
         return hashlib.sha256(canonical.encode()).hexdigest()
 

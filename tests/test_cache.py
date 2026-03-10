@@ -108,53 +108,25 @@ class TestCacheKey:
         assert k1 != k2
         cache.close()
 
-    def test_timestamp_in_system_prompt_ignored(self, tmp_path):
-        """Different timestamps in system prompt should produce the same cache key."""
+    def test_system_prompt_ignored(self, tmp_path):
+        """System messages should be completely excluded from the cache key."""
         cache = LLMCache(tmp_path / "cache.db")
         cache.open()
-        base_prompt = "You are a helpful assistant."
         msgs1 = [
-            {
-                "role": "system",
-                "content": base_prompt
-                + "\n\nCurrent date and time: 2026-03-10 14:00 PDT",
-            },
+            {"role": "system", "content": "Prompt A"},
             {"role": "user", "content": "hello"},
         ]
         msgs2 = [
-            {
-                "role": "system",
-                "content": base_prompt
-                + "\n\nCurrent date and time: 2026-03-10 15:30 PDT",
-            },
+            {"role": "system", "content": "Totally different prompt"},
+            {"role": "user", "content": "hello"},
+        ]
+        msgs3 = [
             {"role": "user", "content": "hello"},
         ]
         k1 = cache._cache_key(_sample_kwargs(messages=msgs1))
         k2 = cache._cache_key(_sample_kwargs(messages=msgs2))
-        assert k1 == k2
-        cache.close()
-
-    def test_different_content_still_different_keys(self, tmp_path):
-        """Non-timestamp differences in system prompt should still differ."""
-        cache = LLMCache(tmp_path / "cache.db")
-        cache.open()
-        msgs1 = [
-            {
-                "role": "system",
-                "content": "Prompt A\n\nCurrent date and time: 2026-03-10 14:00 PDT",
-            },
-            {"role": "user", "content": "hello"},
-        ]
-        msgs2 = [
-            {
-                "role": "system",
-                "content": "Prompt B\n\nCurrent date and time: 2026-03-10 14:00 PDT",
-            },
-            {"role": "user", "content": "hello"},
-        ]
-        k1 = cache._cache_key(_sample_kwargs(messages=msgs1))
-        k2 = cache._cache_key(_sample_kwargs(messages=msgs2))
-        assert k1 != k2
+        k3 = cache._cache_key(_sample_kwargs(messages=msgs3))
+        assert k1 == k2 == k3
         cache.close()
 
     def test_different_max_tokens_different_keys(self, tmp_path):
