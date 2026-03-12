@@ -2658,7 +2658,7 @@ def _run_main(args, report, _write_report, parser):
             review_round += 1
             args._review_rounds = review_round
             if args.verbose:
-                fmt.info(f"Review round {review_round}: sending answer to reviewer")
+                fmt.review_sending(review_round)
 
             reviewer_env["SWIVAL_REVIEW_ROUND"] = str(review_round)
             exit_code, review_text, review_stderr = run_reviewer(

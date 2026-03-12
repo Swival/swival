@@ -294,6 +294,15 @@ def review_feedback(review_round: int, text: str) -> None:
         _console.print(Text(f"    {line}", style="magenta"))
 
 
+def review_sending(review_round: int) -> None:
+    _console.print(
+        Text(
+            f"  ▶ Review round {review_round}: sending answer to reviewer",
+            style="bold cyan",
+        )
+    )
+
+
 def review_accepted(review_round: int) -> None:
     _console.print(
         Text(
