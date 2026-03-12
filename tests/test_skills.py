@@ -755,7 +755,9 @@ class TestIntegration:
 
         # Global should be untouched.
         assert USE_SKILL_TOOL["function"]["description"] == original_desc
-        assert "enum" not in USE_SKILL_TOOL["function"]["parameters"]["properties"]["name"]
+        assert (
+            "enum" not in USE_SKILL_TOOL["function"]["parameters"]["properties"]["name"]
+        )
 
     def test_build_tools_large_catalog_short_description(self, tmp_path):
         """When skill names exceed 200 chars, description uses count instead of listing."""

@@ -188,15 +188,18 @@ def _reconstruct_message(d: dict):
 
     data = dict(d)
     if data.get("tool_calls"):
-        data["tool_calls"] = [
-            ChatCompletionMessageToolCall(
-                id=tc["id"],
-                type=tc.get("type", "function"),
-                function=Function(
-                    name=tc["function"]["name"],
-                    arguments=tc["function"]["arguments"],
-                ),
+        rebuilt = []
+        for tc in data["tool_calls"]:
+            # Preserve all fields (including 'index' and any provider-specific
+            # extras) so that model_dump() round-trips identically — otherwise
+            # the cache key for the *next* turn changes and every subsequent
+            # lookup is a miss.
+            tc_kwargs = dict(tc)
+            tc_kwargs["function"] = Function(
+                name=tc["function"]["name"],
+                arguments=tc["function"]["arguments"],
             )
-            for tc in data["tool_calls"]
-        ]
+            tc_kwargs.setdefault("type", "function")
+            rebuilt.append(ChatCompletionMessageToolCall(**tc_kwargs))
+        data["tool_calls"] = rebuilt
     return Message(**data)

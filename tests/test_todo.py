@@ -686,9 +686,7 @@ class TestInputNormalization:
         """tasks='["hello"]' (unwraps to ["hello"]) with task='hello' should not conflict."""
         state = TodoState()
         result = json.loads(
-            state.process(
-                {"action": "add", "tasks": '["hello"]', "task": "hello"}
-            )
+            state.process({"action": "add", "tasks": '["hello"]', "task": "hello"})
         )
         assert result["total"] == 1
         assert result["items"][0]["task"] == "hello"
