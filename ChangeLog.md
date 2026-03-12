@@ -2,6 +2,13 @@
 
 All notable user-facing changes to Swival.
 
+## 0.1.21
+
+- Added optional SQLite LLM response cache (`--cache`) for faster repeated
+  queries, with system-prompt-independent cache keys.
+- Fixed deadlock when a shell command backgrounds a child process.
+- Fixed `todo` tool accepting JSON-encoded array strings instead of proper lists.
+
 ## 0.1.20
 
 - Moved project-local skills directory from `skills/` to `.swival/skills/`.
