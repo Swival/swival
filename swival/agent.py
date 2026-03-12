@@ -1989,6 +1989,12 @@ def main():
             parser.error("--self-review and --reviewer cannot be used together")
         args.reviewer = _build_self_review_cmd(args)
 
+    # Read question from stdin if not provided and stdin is piped
+    if not args.repl and args.question is None and not sys.stdin.isatty():
+        args.question = sys.stdin.read()
+        if not args.question or not args.question.strip():
+            parser.error("question is required (stdin was empty)")
+
     if not args.repl and args.question is None:
         parser.error("question is required (or use --repl)")
     if args.report and args.repl:
