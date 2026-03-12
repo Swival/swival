@@ -129,9 +129,7 @@ class TestBuildSelfReviewCmd:
         assert parts[idx + 1] == "https://my.server/v1"
 
     def test_no_api_key_on_cmdline(self):
-        args = _make_args(
-            provider="openrouter", model="m", api_key="sk-secret-key"
-        )
+        args = _make_args(provider="openrouter", model="m", api_key="sk-secret-key")
         cmd = agent._build_self_review_cmd(args)
         assert "--api-key" not in cmd
         assert "sk-secret-key" not in cmd
@@ -172,8 +170,17 @@ class TestSelfReviewValidation:
         """--self-review and --reviewer together should error in main()."""
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
         monkeypatch.setattr(
-            sys, "argv",
-            ["swival", "--self-review", "--reviewer", "echo", "--base-dir", str(tmp_path), "question"],
+            sys,
+            "argv",
+            [
+                "swival",
+                "--self-review",
+                "--reviewer",
+                "echo",
+                "--base-dir",
+                str(tmp_path),
+                "question",
+            ],
         )
         with pytest.raises(SystemExit):
             agent.main()
@@ -182,7 +189,8 @@ class TestSelfReviewValidation:
         """--self-review and --repl together should error in main()."""
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
         monkeypatch.setattr(
-            sys, "argv",
+            sys,
+            "argv",
             ["swival", "--self-review", "--repl", "--base-dir", str(tmp_path)],
         )
         with pytest.raises(SystemExit):
@@ -192,7 +200,8 @@ class TestSelfReviewValidation:
         """--reviewer-mode --self-review on CLI should error."""
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
         monkeypatch.setattr(
-            sys, "argv",
+            sys,
+            "argv",
             ["swival", "--reviewer-mode", "--self-review", str(tmp_path)],
         )
         with pytest.raises(SystemExit):
@@ -233,9 +242,7 @@ class TestSelfReviewConfig:
 
         # The reviewer-mode branch should clear self_review and proceed to
         # run_as_reviewer — we mock that to avoid needing a real LLM.
-        monkeypatch.setattr(
-            sys, "argv", ["swival", "--reviewer-mode", str(tmp_path)]
-        )
+        monkeypatch.setattr(sys, "argv", ["swival", "--reviewer-mode", str(tmp_path)])
         with patch("swival.reviewer.run_as_reviewer", return_value=0) as mock_rar:
             with pytest.raises(SystemExit) as exc_info:
                 agent.main()
@@ -354,14 +361,19 @@ class TestSelfReviewHandoff:
                 stderr=b"",
             )
             agent.run_reviewer(
-                cmd, "/tmp/base", "answer text", verbose=False,
+                cmd,
+                "/tmp/base",
+                "answer text",
+                verbose=False,
                 env_extra=reviewer_env,
             )
             mock_run.assert_called_once()
             call_kwargs = mock_run.call_args
             passed_env = call_kwargs.kwargs.get("env") or call_kwargs[1].get("env")
             assert passed_env["OPENROUTER_API_KEY"] == "sk-or-secret"
-            passed_argv = call_kwargs.args[0] if call_kwargs.args else call_kwargs[1]["args"]
+            passed_argv = (
+                call_kwargs.args[0] if call_kwargs.args else call_kwargs[1]["args"]
+            )
             argv_str = " ".join(passed_argv)
             assert "--api-key" not in argv_str
             assert "sk-or-secret" not in argv_str
