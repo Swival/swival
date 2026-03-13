@@ -57,19 +57,13 @@
         </aside>
         <article class="docs-content">
             <h1 id="a2a">A2A</h1>
-<p>Swival can connect to remote agents via the <a href="https://google.github.io/A2A/">Agent-to-Agent (A2A) protocol</a> v1.0. When A2A agents are configured, Swival fetches their Agent Cards at startup, discovers their skills, and exposes each skill as a tool in the agent loop.</p>
+<p>Swival supports the <a href="https://google.github.io/A2A/">Agent-to-Agent (A2A) protocol</a> v1.0 — both as a client that talks to remote agents, and as a server that exposes a Session for other agents to call.</p>
+<h2 id="using-swival-as-an-a2a-client">Using Swival As An A2A Client</h2>
+<p>When A2A agents are configured, Swival fetches their Agent Cards at startup, discovers their skills, and exposes each skill as a tool in the agent loop.</p>
 <p>Unlike MCP tools, which have custom parameter schemas defined by the server, A2A skills always use the same generic shape: a <code>message</code> string (required), plus optional <code>context_id</code> and <code>task_id</code> for multi-turn conversations. The model talks to remote agents in natural language.</p>
 <p>Each A2A tool is namespaced as <code>a2a__&lt;agent_name&gt;__&lt;skill_id&gt;</code> to avoid collisions with built-in tools and across agents. The model calls them like any other tool. Swival routes the call to the correct agent and returns the result.</p>
-<p>If an A2A agent fails to connect at startup, Swival logs a warning and continues without that agent's tools. If an agent fails mid-session, its tools are marked as degraded and return an error message instead of blocking the agent loop.</p>
-<p>Tool name collisions across agents cause the colliding agent's tools to be skipped entirely, with a warning.</p>
-<h2 id="agent-card-discovery">Agent Card Discovery</h2>
-<p>At startup, Swival fetches each agent's Agent Card from <code>&lt;url&gt;/.well-known/agent-card.json</code> (or a custom <code>card_url</code> if configured). The card declares the agent's name, description, skills, and endpoint URL.</p>
-<p>If the card declares skills, each skill becomes a separate tool. If no skills are declared, Swival creates a single generic <code>ask</code> tool for that agent.</p>
-<h2 id="multi-turn-conversations">Multi-Turn Conversations</h2>
-<p>A2A supports multi-turn conversations through <code>contextId</code>. When an agent returns a result, the response includes a <code>contextId</code> that groups related interactions. To continue the conversation, the model passes that <code>contextId</code> back in the next call.</p>
-<p>Some agents may return an <code>input-required</code> state, meaning they need more information before completing the task. In that case, the response includes both a <code>contextId</code> and a <code>taskId</code>. To resume, the model passes both back in the next call.</p>
-<p>During context compaction, Swival preserves these IDs so the model can continue multi-turn interactions even after older messages are dropped.</p>
-<h2 id="toml-configuration">TOML Configuration</h2>
+<p>If an A2A agent fails to connect at startup, Swival logs a warning and continues without that agent's tools. If an agent fails mid-session, its tools are marked as degraded and return an error message instead of blocking the agent loop. Tool name collisions across agents cause the colliding agent's tools to be skipped entirely, with a warning.</p>
+<h3 id="configuration">Configuration</h3>
 <p>Add <code>[a2a_servers.&lt;name&gt;]</code> tables to <code>swival.toml</code>. Each agent needs a <code>url</code> pointing to its A2A endpoint.</p>
 <pre><code class="language-toml">[a2a_servers.research-agent]
 url = &quot;https://research.example.com&quot;
@@ -81,7 +75,6 @@ auth_token = &quot;sk-...&quot;
 timeout = 180
 </code></pre>
 <p>Agent names must match <code>[a-zA-Z0-9_-]+</code> and cannot contain double underscores (since <code>__</code> is used as the namespacing separator in tool names).</p>
-<h3 id="configuration-fields">Configuration Fields</h3>
 <table>
 <thead>
 <tr>
@@ -118,44 +111,36 @@ timeout = 180
 </tr>
 </tbody>
 </table>
-<h3 id="authentication">Authentication</h3>
-<p>Two authentication methods are supported:</p>
-<p>Bearer token -- sends <code>Authorization: Bearer &lt;token&gt;</code> on all requests:</p>
+<p>Two authentication methods are supported. Bearer token sends <code>Authorization: Bearer &lt;token&gt;</code> on all requests:</p>
 <pre><code class="language-toml">[a2a_servers.my-agent]
 url = &quot;https://agent.example.com&quot;
 auth_type = &quot;bearer&quot;
 auth_token = &quot;sk-...&quot;
 </code></pre>
-<p>API key -- sends <code>X-API-Key: &lt;token&gt;</code> on all requests:</p>
+<p>API key sends <code>X-API-Key: &lt;token&gt;</code> on all requests:</p>
 <pre><code class="language-toml">[a2a_servers.my-agent]
 url = &quot;https://agent.example.com&quot;
 auth_type = &quot;api_key&quot;
 auth_token = &quot;key-...&quot;
 </code></pre>
-<h2 id="standalone-config-file">Standalone Config File</h2>
 <p>You can also put A2A configuration in a separate TOML file and pass it with <code>--a2a-config</code>:</p>
 <pre><code class="language-sh">swival --a2a-config agents.toml &quot;task&quot;
 </code></pre>
-<p>The file uses the same <code>[a2a_servers.*]</code> format as <code>swival.toml</code>:</p>
-<pre><code class="language-toml">[a2a_servers.research-agent]
-url = &quot;https://research.example.com&quot;
-
-[a2a_servers.code-review]
-url = &quot;https://review.example.com&quot;
-</code></pre>
-<p>When both <code>--a2a-config</code> and <code>swival.toml</code> define agents, the TOML config takes precedence by agent name.</p>
-<h2 id="config-precedence">Config Precedence</h2>
-<p>When the project and global config both define A2A agents, project-level agents win by name, and global-only agents are merged in.</p>
+<p>The file uses the same <code>[a2a_servers.*]</code> format as <code>swival.toml</code>. When both <code>--a2a-config</code> and <code>swival.toml</code> define agents, the standalone file takes precedence by agent name. When the project and global config both define agents, project-level agents win by name, and global-only agents are merged in.</p>
 <p><code>--no-a2a</code> disables A2A agent connections entirely, even if agents are configured.</p>
-<h2 id="cli-flags">CLI Flags</h2>
-<p><code>--no-a2a</code> disables A2A agent connections entirely.</p>
-<p><code>--a2a-config FILE</code> provides an explicit path to an A2A TOML config file.</p>
-<h2 id="output-handling">Output Handling</h2>
+<h3 id="agent-card-discovery">Agent Card Discovery</h3>
+<p>At startup, Swival fetches each agent's Agent Card from <code>&lt;url&gt;/.well-known/agent-card.json</code> (or a custom <code>card_url</code> if configured). The card declares the agent's name, description, skills, and endpoint URL.</p>
+<p>If the card declares skills, each skill becomes a separate tool. If no skills are declared, Swival creates a single generic <code>ask</code> tool for that agent.</p>
+<h3 id="multi-turn-conversations">Multi-Turn Conversations</h3>
+<p>A2A supports multi-turn conversations through <code>contextId</code>. When an agent returns a result, the response includes a <code>contextId</code> that groups related interactions. To continue the conversation, the model passes that <code>contextId</code> back in the next call.</p>
+<p>Some agents may return an <code>input-required</code> state, meaning they need more information before completing the task. In that case, the response includes both a <code>contextId</code> and a <code>taskId</code>. To resume, the model passes both back in the next call.</p>
+<p>During context compaction, Swival preserves these IDs so the model can continue multi-turn interactions even after older messages are dropped.</p>
+<h3 id="output-handling">Output Handling</h3>
 <p>A2A tool outputs are size-guarded the same way as MCP tools. Results up to 20 KB are returned inline. Larger results are saved to <code>.swival/cmd_output_*.txt</code> and the model receives a pointer message to use <code>read_file</code> for paginated access.</p>
 <p>When saving large A2A output to file, Swival preserves continuation metadata (the <code>[contextId=...]</code> or <code>[input-required]</code> header line) so the model can still continue multi-turn conversations even when the response body is too large for inline display.</p>
 <p>Error outputs are kept inline but truncated at 20 KB.</p>
 <p>During context compaction, A2A tool results receive structured summaries that preserve <code>input-required</code> headers with their <code>contextId</code> and <code>taskId</code>, so multi-turn state survives compaction.</p>
-<h2 id="library-api">Library API</h2>
+<h3 id="client-library-api">Client Library API</h3>
 <p>The <code>Session</code> class accepts <code>a2a_servers</code> as a constructor argument. Pass a dictionary mapping agent names to config dicts:</p>
 <pre><code class="language-python">from swival import Session
 
@@ -174,6 +159,78 @@ result = session.run(&quot;Ask the research agent to summarize recent papers on 
 <pre><code class="language-python">with Session(a2a_servers={&quot;agent&quot;: {&quot;url&quot;: &quot;https://...&quot;}}) as session:
     result = session.run(&quot;task&quot;)
 </code></pre>
+<h3 id="protocol-details">Protocol Details</h3>
+<p>Swival implements the A2A v1.0 JSON-RPC binding. It sends <code>SendMessage</code> requests with <code>returnImmediately=false</code> (blocking mode) as the primary path. If the server returns a non-terminal task instead of blocking, Swival falls back to polling with <code>GetTask</code> using exponential backoff.</p>
+<p>Responses can be either Task-shaped (with <code>id</code>, <code>status</code>, and optional <code>artifacts</code>) or Message-shaped (with <code>role</code> and <code>parts</code>). Swival handles both.</p>
+<p>Task states are categorized as:</p>
+<ul>
+<li>Terminal: <code>completed</code>, <code>failed</code>, <code>canceled</code>, <code>rejected</code></li>
+<li>Interrupted: <code>input-required</code>, <code>auth-required</code></li>
+</ul>
+<p>Terminal tasks return their result immediately. Interrupted tasks return with continuation metadata so the model can resume.</p>
+<h2 id="using-swival-as-an-a2a-server">Using Swival As An A2A Server</h2>
+<p>Swival can run as an A2A server, exposing a Session as an endpoint that other agents can call. This lets you wrap any swival configuration (provider, model, tools, skills, MCP servers) as a remote A2A agent.</p>
+<pre><code class="language-sh">swival --serve --provider openrouter --model z-ai/glm-5
+</code></pre>
+<p>This starts an HTTP server at <code>0.0.0.0:8080</code> that accepts A2A JSON-RPC requests and serves an Agent Card at <code>/.well-known/agent-card.json</code>.</p>
+<h3 id="server-cli-flags">Server CLI Flags</h3>
+<p><code>--serve</code> starts the A2A server instead of running a one-shot task or REPL.</p>
+<p><code>--serve-host HOST</code> sets the bind address (default: <code>0.0.0.0</code>).</p>
+<p><code>--serve-port PORT</code> sets the port (default: <code>8080</code>).</p>
+<p><code>--serve-auth-token TOKEN</code> enables bearer token authentication. When set, all JSON-RPC requests must include an <code>Authorization: Bearer &lt;token&gt;</code> header.</p>
+<p>All other flags (<code>--provider</code>, <code>--model</code>, <code>--allowed-commands</code>, <code>--yolo</code>, <code>--mcp-config</code>, etc.) configure the underlying Session that handles incoming tasks.</p>
+<h3 id="how-it-works">How It Works</h3>
+<p>Each incoming <code>SendMessage</code> request is routed to a Session instance keyed by <code>contextId</code>. If no <code>contextId</code> is provided, the server generates one. The server uses <code>Session.ask()</code> for each message, preserving conversation state across calls within the same context.</p>
+<p>Sessions are cleaned up after a configurable TTL (default: 1 hour). If the session limit is reached (default: 100), the least-recently-used session is evicted. Per-context locks ensure sequential processing of messages within the same context.</p>
+<p>The server supports three JSON-RPC methods:</p>
+<ul>
+<li><strong>SendMessage</strong> — sends a message to a session and returns the task result</li>
+<li><strong>GetTask</strong> — retrieves the current state of a task by ID</li>
+<li><strong>ListTasks</strong> — lists tasks, optionally filtered by <code>contextId</code></li>
+</ul>
+<p>Task outcomes map from Session results: a successful <code>ask()</code> produces a <code>completed</code> task, an exhausted run with no answer produces <code>input-required</code> (needs more information), and an exhausted run with a partial answer or an exception produces <code>failed</code>.</p>
+<h3 id="agent-card">Agent Card</h3>
+<p>The server auto-generates an Agent Card from the session configuration. The card includes the server name (derived from provider and model), capabilities, and endpoint URL. When <code>--serve-auth-token</code> is set, the card declares a bearer security scheme.</p>
+<p>Override the auto-generated name and description with <code>--serve-name</code> and <code>--serve-description</code>:</p>
+<pre><code class="language-sh">swival --serve --serve-name &quot;Code Review Bot&quot; \
+  --serve-description &quot;Reviews Python code for bugs, security issues, and style&quot;
+</code></pre>
+<p>Or in <code>swival.toml</code>:</p>
+<pre><code class="language-toml">serve_name = &quot;Code Review Bot&quot;
+serve_description = &quot;Reviews Python code for bugs, security issues, and style&quot;
+</code></pre>
+<h3 id="defining-skills">Defining Skills</h3>
+<p>Skills tell client agents what your server is good at. Define them in <code>swival.toml</code>:</p>
+<pre><code class="language-toml">[[serve_skills]]
+id = &quot;review&quot;
+name = &quot;Code Review&quot;
+description = &quot;Analyze code for correctness, security, and style&quot;
+examples = [&quot;Review this pull request&quot;, &quot;Check this function for bugs&quot;]
+
+[[serve_skills]]
+id = &quot;explain&quot;
+name = &quot;Code Explanation&quot;
+description = &quot;Explain how a piece of code works&quot;
+examples = [&quot;What does this function do?&quot;]
+</code></pre>
+<p>Each skill requires an <code>id</code> field. The <code>id</code> must be a stable identifier that matches <code>[a-zA-Z0-9_-]+</code> with no double underscores or leading/trailing <code>_-</code> characters. The <code>name</code>, <code>description</code>, and <code>examples</code> fields are optional but recommended for client-side routing.</p>
+<p>Project-level <code>serve_skills</code> in <code>swival.toml</code> replace global-level skills entirely (no per-skill merging).</p>
+<h3 id="server-library-api">Server Library API</h3>
+<p>You can also create and run the server programmatically:</p>
+<pre><code class="language-python">from swival.a2a_server import A2aServer
+
+server = A2aServer(
+    session_kwargs={&quot;provider&quot;: &quot;openrouter&quot;, &quot;model&quot;: &quot;z-ai/glm-5&quot;},
+    host=&quot;0.0.0.0&quot;,
+    port=8080,
+    auth_token=&quot;sk-...&quot;,
+    name=&quot;Code Review Bot&quot;,
+    description=&quot;Reviews Python code for bugs and style&quot;,
+    skills=[{&quot;id&quot;: &quot;review&quot;, &quot;name&quot;: &quot;Code Review&quot;, &quot;description&quot;: &quot;Analyze code&quot;}],
+)
+server.serve()
+</code></pre>
+<p>The <code>A2aServer.app</code> property returns a Starlette ASGI application, which can be mounted in larger applications or used with any ASGI server.</p>
 <h2 id="example-local-documentation-agent">Example: Local Documentation Agent</h2>
 <p>This walkthrough sets up two swival instances — one serving project documentation over A2A, and another querying it. The server agent has access to source code and docs via its base directory, so it can read files and answer questions grounded in the actual codebase.</p>
 <h3 id="the-project">The project</h3>
@@ -226,79 +283,6 @@ url = &quot;http://127.0.0.1:9100&quot;
 <li>The client model incorporates the answer and presents it to the user.</li>
 </ol>
 <p>If the client needs to ask a follow-up, it can pass the <code>contextId</code> back to continue the conversation with the same server session.</p>
-<h2 id="protocol-details">Protocol Details</h2>
-<p>Swival implements the A2A v1.0 JSON-RPC binding. It sends <code>SendMessage</code> requests with <code>returnImmediately=false</code> (blocking mode) as the primary path. If the server returns a non-terminal task instead of blocking, Swival falls back to polling with <code>GetTask</code> using exponential backoff.</p>
-<p>Responses can be either Task-shaped (with <code>id</code>, <code>status</code>, and optional <code>artifacts</code>) or Message-shaped (with <code>role</code> and <code>parts</code>). Swival handles both.</p>
-<p>Task states are categorized as:</p>
-<ul>
-<li>Terminal: <code>completed</code>, <code>failed</code>, <code>canceled</code>, <code>rejected</code></li>
-<li>Interrupted: <code>input-required</code>, <code>auth-required</code></li>
-</ul>
-<p>Terminal tasks return their result immediately. Interrupted tasks return with continuation metadata so the model can resume.</p>
-<h2 id="serving-as-an-a2a-agent">Serving As An A2A Agent</h2>
-<p>Swival can also run as an A2A server, exposing a Session as an endpoint that other agents can call. This lets you wrap any swival configuration (provider, model, tools, skills, MCP servers) as a remote A2A agent.</p>
-<pre><code class="language-sh">swival --serve --provider openrouter --model z-ai/glm-5
-</code></pre>
-<p>This starts an HTTP server at <code>0.0.0.0:8080</code> that accepts A2A JSON-RPC requests and serves an Agent Card at <code>/.well-known/agent-card.json</code>.</p>
-<h3 id="server-cli-flags">Server CLI Flags</h3>
-<p><code>--serve</code> starts the A2A server instead of running a one-shot task or REPL.</p>
-<p><code>--serve-host HOST</code> sets the bind address (default: <code>0.0.0.0</code>).</p>
-<p><code>--serve-port PORT</code> sets the port (default: <code>8080</code>).</p>
-<p><code>--serve-auth-token TOKEN</code> enables bearer token authentication. When set, all JSON-RPC requests must include an <code>Authorization: Bearer &lt;token&gt;</code> header.</p>
-<p>All other flags (<code>--provider</code>, <code>--model</code>, <code>--allowed-commands</code>, <code>--yolo</code>, <code>--mcp-config</code>, etc.) configure the underlying Session that handles incoming tasks.</p>
-<h3 id="how-it-works">How It Works</h3>
-<p>Each incoming <code>SendMessage</code> request is routed to a Session instance keyed by <code>contextId</code>. If no <code>contextId</code> is provided, the server generates one. The server uses <code>Session.ask()</code> for each message, preserving conversation state across calls within the same context.</p>
-<p>Sessions are cleaned up after a configurable TTL (default: 1 hour). If the session limit is reached (default: 100), the least-recently-used session is evicted. Per-context locks ensure sequential processing of messages within the same context.</p>
-<p>The server supports three JSON-RPC methods:</p>
-<ul>
-<li><strong>SendMessage</strong> — sends a message to a session and returns the task result</li>
-<li><strong>GetTask</strong> — retrieves the current state of a task by ID</li>
-<li><strong>ListTasks</strong> — lists tasks, optionally filtered by <code>contextId</code></li>
-</ul>
-<p>Task outcomes map from Session results: a successful <code>ask()</code> produces a <code>completed</code> task, an exhausted run with no answer produces <code>input-required</code> (needs more information), and an exhausted run with a partial answer or an exception produces <code>failed</code>.</p>
-<h3 id="agent-card">Agent Card</h3>
-<p>The server auto-generates an Agent Card from the session configuration. The card includes the server name (derived from provider and model), capabilities, and endpoint URL. When <code>--serve-auth-token</code> is set, the card declares a bearer security scheme.</p>
-<h4 id="custom-name-and-description">Custom Name and Description</h4>
-<p>Override the auto-generated name and description with <code>--serve-name</code> and <code>--serve-description</code>:</p>
-<pre><code class="language-sh">swival --serve --serve-name &quot;Code Review Bot&quot; \
-  --serve-description &quot;Reviews Python code for bugs, security issues, and style&quot;
-</code></pre>
-<p>Or in <code>swival.toml</code>:</p>
-<pre><code class="language-toml">serve_name = &quot;Code Review Bot&quot;
-serve_description = &quot;Reviews Python code for bugs, security issues, and style&quot;
-</code></pre>
-<h4 id="defining-skills">Defining Skills</h4>
-<p>Skills tell client agents what your server is good at. Define them in <code>swival.toml</code>:</p>
-<pre><code class="language-toml">[[serve_skills]]
-id = &quot;review&quot;
-name = &quot;Code Review&quot;
-description = &quot;Analyze code for correctness, security, and style&quot;
-examples = [&quot;Review this pull request&quot;, &quot;Check this function for bugs&quot;]
-
-[[serve_skills]]
-id = &quot;explain&quot;
-name = &quot;Code Explanation&quot;
-description = &quot;Explain how a piece of code works&quot;
-examples = [&quot;What does this function do?&quot;]
-</code></pre>
-<p>Each skill requires an <code>id</code> field. The <code>id</code> must be a stable identifier that matches <code>[a-zA-Z0-9_-]+</code> with no double underscores or leading/trailing <code>_-</code> characters. The <code>name</code>, <code>description</code>, and <code>examples</code> fields are optional but recommended for client-side routing.</p>
-<p>Project-level <code>serve_skills</code> in <code>swival.toml</code> replace global-level skills entirely (no per-skill merging).</p>
-<h3 id="library-api_1">Library API</h3>
-<p>You can also create and run the server programmatically:</p>
-<pre><code class="language-python">from swival.a2a_server import A2aServer
-
-server = A2aServer(
-    session_kwargs={&quot;provider&quot;: &quot;openrouter&quot;, &quot;model&quot;: &quot;z-ai/glm-5&quot;},
-    host=&quot;0.0.0.0&quot;,
-    port=8080,
-    auth_token=&quot;sk-...&quot;,
-    name=&quot;Code Review Bot&quot;,
-    description=&quot;Reviews Python code for bugs and style&quot;,
-    skills=[{&quot;id&quot;: &quot;review&quot;, &quot;name&quot;: &quot;Code Review&quot;, &quot;description&quot;: &quot;Analyze code&quot;}],
-)
-server.serve()
-</code></pre>
-<p>The <code>A2aServer.app</code> property returns a Starlette ASGI application, which can be mounted in larger applications or used with any ASGI server.</p>
         </article>
     </div>
     <footer class="site-footer">
