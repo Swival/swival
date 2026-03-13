@@ -174,6 +174,58 @@ result = session.run(&quot;Ask the research agent to summarize recent papers on 
 <pre><code class="language-python">with Session(a2a_servers={&quot;agent&quot;: {&quot;url&quot;: &quot;https://...&quot;}}) as session:
     result = session.run(&quot;task&quot;)
 </code></pre>
+<h2 id="example-local-documentation-agent">Example: Local Documentation Agent</h2>
+<p>This walkthrough sets up two swival instances — one serving project documentation over A2A, and another querying it. The server agent has access to source code and docs via its base directory, so it can read files and answer questions grounded in the actual codebase.</p>
+<h3 id="the-project">The project</h3>
+<p>Suppose you have a project with an API and some docs:</p>
+<pre><code>acme-api/
+  README.md       # endpoint reference, auth, error codes
+  app.py          # FastAPI source
+  CHANGELOG.md
+  swival.toml     # server config (see below)
+</code></pre>
+<h3 id="server-config">Server config</h3>
+<p>Create a <code>swival.toml</code> in the project directory. This tells swival which model to use when serving, and defines how the agent advertises itself to clients:</p>
+<pre><code class="language-toml">model = &quot;qwen3.5-9b&quot;
+max_turns = 10
+max_output_tokens = 4096
+
+serve_name = &quot;Acme Docs&quot;
+serve_description = &quot;Answers questions about the Acme Widget API using project documentation and source code&quot;
+
+[[serve_skills]]
+id = &quot;lookup&quot;
+name = &quot;Documentation Lookup&quot;
+description = &quot;Look up API endpoints, error codes, authentication, and changelog entries&quot;
+examples = [&quot;How do I create a widget?&quot;, &quot;What error codes can POST /widgets return?&quot;]
+</code></pre>
+<p>The server agent's base directory is the project root, so it can <code>read_file</code> and <code>grep</code> across the docs and source code to answer questions.</p>
+<h3 id="start-the-server">Start the server</h3>
+<p>From the project directory:</p>
+<pre><code class="language-sh">cd acme-api/
+swival --serve --serve-port 9100
+</code></pre>
+<p>You can verify the agent card:</p>
+<pre><code class="language-sh">curl -s http://127.0.0.1:9100/.well-known/agent-card.json | python3 -m json.tool
+</code></pre>
+<h3 id="client-config">Client config</h3>
+<p>From wherever you want to run the client, create an A2A config file (<code>a2a.toml</code>):</p>
+<pre><code class="language-toml">[a2a_servers.acme-docs]
+url = &quot;http://127.0.0.1:9100&quot;
+</code></pre>
+<h3 id="send-a-query">Send a query</h3>
+<pre><code class="language-sh">swival --a2a-config a2a.toml &quot;Ask the Acme Docs agent: how do I create a new widget? Include a curl example.&quot;
+</code></pre>
+<p>The client agent sees <code>a2a__acme-docs__lookup</code> as a tool, calls it with the question, and the server agent reads the project files to build an answer. The response comes back with endpoint details, required fields, and a working curl command — all grounded in the actual README and source code, not hallucinated.</p>
+<h3 id="what-happens-under-the-hood">What happens under the hood</h3>
+<ol>
+<li>The client discovers the server's agent card and registers <code>a2a__acme-docs__lookup</code> as a tool.</li>
+<li>The client model decides to call that tool with a natural-language message.</li>
+<li>The server receives the message, creates a Session with the project directory as its workspace, and runs an agent loop that reads files and builds an answer.</li>
+<li>The server returns the result as a completed A2A task with a <code>contextId</code>.</li>
+<li>The client model incorporates the answer and presents it to the user.</li>
+</ol>
+<p>If the client needs to ask a follow-up, it can pass the <code>contextId</code> back to continue the conversation with the same server session.</p>
 <h2 id="protocol-details">Protocol Details</h2>
 <p>Swival implements the A2A v1.0 JSON-RPC binding. It sends <code>SendMessage</code> requests with <code>returnImmediately=false</code> (blocking mode) as the primary path. If the server returns a non-terminal task instead of blocking, Swival falls back to polling with <code>GetTask</code> using exponential backoff.</p>
 <p>Responses can be either Task-shaped (with <code>id</code>, <code>status</code>, and optional <code>artifacts</code>) or Message-shaped (with <code>role</code> and <code>parts</code>). Swival handles both.</p>

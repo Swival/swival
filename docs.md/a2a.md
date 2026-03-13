@@ -141,6 +141,85 @@ with Session(a2a_servers={"agent": {"url": "https://..."}}) as session:
     result = session.run("task")
 ```
 
+## Example: Local Documentation Agent
+
+This walkthrough sets up two swival instances — one serving project documentation over A2A, and another querying it. The server agent has access to source code and docs via its base directory, so it can read files and answer questions grounded in the actual codebase.
+
+### The project
+
+Suppose you have a project with an API and some docs:
+
+```
+acme-api/
+  README.md       # endpoint reference, auth, error codes
+  app.py          # FastAPI source
+  CHANGELOG.md
+  swival.toml     # server config (see below)
+```
+
+### Server config
+
+Create a `swival.toml` in the project directory. This tells swival which model to use when serving, and defines how the agent advertises itself to clients:
+
+```toml
+model = "qwen3.5-9b"
+max_turns = 10
+max_output_tokens = 4096
+
+serve_name = "Acme Docs"
+serve_description = "Answers questions about the Acme Widget API using project documentation and source code"
+
+[[serve_skills]]
+id = "lookup"
+name = "Documentation Lookup"
+description = "Look up API endpoints, error codes, authentication, and changelog entries"
+examples = ["How do I create a widget?", "What error codes can POST /widgets return?"]
+```
+
+The server agent's base directory is the project root, so it can `read_file` and `grep` across the docs and source code to answer questions.
+
+### Start the server
+
+From the project directory:
+
+```sh
+cd acme-api/
+swival --serve --serve-port 9100
+```
+
+You can verify the agent card:
+
+```sh
+curl -s http://127.0.0.1:9100/.well-known/agent-card.json | python3 -m json.tool
+```
+
+### Client config
+
+From wherever you want to run the client, create an A2A config file (`a2a.toml`):
+
+```toml
+[a2a_servers.acme-docs]
+url = "http://127.0.0.1:9100"
+```
+
+### Send a query
+
+```sh
+swival --a2a-config a2a.toml "Ask the Acme Docs agent: how do I create a new widget? Include a curl example."
+```
+
+The client agent sees `a2a__acme-docs__lookup` as a tool, calls it with the question, and the server agent reads the project files to build an answer. The response comes back with endpoint details, required fields, and a working curl command — all grounded in the actual README and source code, not hallucinated.
+
+### What happens under the hood
+
+1. The client discovers the server's agent card and registers `a2a__acme-docs__lookup` as a tool.
+2. The client model decides to call that tool with a natural-language message.
+3. The server receives the message, creates a Session with the project directory as its workspace, and runs an agent loop that reads files and builds an answer.
+4. The server returns the result as a completed A2A task with a `contextId`.
+5. The client model incorporates the answer and presents it to the user.
+
+If the client needs to ask a follow-up, it can pass the `contextId` back to continue the conversation with the same server session.
+
 ## Protocol Details
 
 Swival implements the A2A v1.0 JSON-RPC binding. It sends `SendMessage` requests with `returnImmediately=false` (blocking mode) as the primary path. If the server returns a non-terminal task instead of blocking, Swival falls back to polling with `GetTask` using exponential backoff.
