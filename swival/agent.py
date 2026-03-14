@@ -1474,12 +1474,6 @@ def call_llm(
     _skip_params: set[str] = set()
     _skip_tool_choice = False
 
-    def _normalize_openai_compatible_base(url: str, *, append_v1: bool) -> str:
-        stripped = url.rstrip("/")
-        if append_v1:
-            return stripped if stripped.endswith("/v1") else f"{stripped}/v1"
-        return stripped
-
     if provider == "lmstudio":
         model_str = f"openai/{model_id}"
         kwargs = {"api_base": f"{base_url}/v1", "api_key": "lm-studio"}
@@ -1504,9 +1498,9 @@ def call_llm(
             kwargs["api_base"] = base_url
     elif provider == "generic":
         model_str = f"openai/{model_id}"
-        api_base = _normalize_openai_compatible_base(
-            base_url, append_v1=append_v1_to_openai_base
-        )
+        api_base = base_url.rstrip("/")
+        if append_v1_to_openai_base and not api_base.endswith("/v1"):
+            api_base = f"{api_base}/v1"
         kwargs = {"api_base": api_base, "api_key": api_key or "none"}
     elif provider == "chatgpt":
         bare_id = model_id.removeprefix("chatgpt/").removeprefix("chatgpt/")
@@ -2451,8 +2445,20 @@ def resolve_provider(
     Returns (model_id, api_base, api_key, context_length, llm_kwargs).
     Raises ConfigError for invalid configuration.
     """
+    provider_name = provider
     llm_provider = provider
     extra_llm_kwargs: dict[str, object] = {}
+    if provider in _GEMINI_PROVIDER_ALIASES:
+        provider = "generic"
+        llm_provider = "generic"
+        base_url = base_url or _GEMINI_OPENAI_API_BASE
+        api_key = (
+            api_key
+            or os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+        )
+        extra_llm_kwargs["append_v1_to_openai_base"] = False
+
     if provider == "lmstudio":
         api_base = base_url or "http://127.0.0.1:1234"
         if model:
@@ -2506,29 +2512,19 @@ def resolve_provider(
             raise ConfigError(
                 "--api-key or OPENROUTER_API_KEY env var required for openrouter provider"
             )
-    elif provider == "generic" or provider in _GEMINI_PROVIDER_ALIASES:
+    elif provider == "generic":
         if not model:
-            raise ConfigError(f"--model is required when --provider is {provider}")
+            raise ConfigError(f"--model is required when --provider is {provider_name}")
+        if not base_url:
+            raise ConfigError("--base-url is required when --provider is generic")
+        api_base = base_url
         model_id = model
         context_length = max_context_tokens
-        if provider == "generic":
-            if not base_url:
-                raise ConfigError("--base-url is required when --provider is generic")
-            api_base = base_url
-            resolved_key = api_key or os.environ.get("OPENAI_API_KEY")
-        else:
-            api_base = base_url or _GEMINI_OPENAI_API_BASE
-            resolved_key = (
-                api_key
-                or os.environ.get("GEMINI_API_KEY")
-                or os.environ.get("OPENAI_API_KEY")
+        resolved_key = api_key or os.environ.get("OPENAI_API_KEY")
+        if provider_name in _GEMINI_PROVIDER_ALIASES and not resolved_key:
+            raise ConfigError(
+                f"--api-key, GEMINI_API_KEY, or OPENAI_API_KEY env var required for {provider_name} provider"
             )
-            if not resolved_key:
-                raise ConfigError(
-                    f"--api-key, GEMINI_API_KEY, or OPENAI_API_KEY env var required for {provider} provider"
-                )
-            extra_llm_kwargs = {"append_v1_to_openai_base": False}
-        llm_provider = "generic"
 
     elif provider == "chatgpt":
         if not model:
