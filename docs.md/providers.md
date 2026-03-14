@@ -175,7 +175,7 @@ swival --provider google \
 
 Authentication comes from `GEMINI_API_KEY`, `OPENAI_API_KEY`, or `--api-key`.
 
-Internally, Gemini is routed through LiteLLM as `openai/<model_id>` with `api_base` pointing directly at Google's OpenAI-compatible endpoint, without appending `/v1`.
+Internally, Gemini is normalized onto the same generic OpenAI-compatible path as other `openai/<model_id>` backends, but with Google's endpoint as the default `api_base` and without appending `/v1`.
 
 ## ChatGPT Plus/Pro
 

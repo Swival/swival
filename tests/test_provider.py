@@ -934,7 +934,7 @@ class TestGenericProviderValidation:
 
 
 class TestGeminiProviderRouting:
-    """Verify call_llm routing for the Gemini OpenAI-compatible provider aliases."""
+    """Verify Gemini aliases normalize to the generic OpenAI-compatible path."""
 
     def _mock_response(self):
         choice = MagicMock()
@@ -944,11 +944,14 @@ class TestGeminiProviderRouting:
         resp.choices = [choice]
         return resp
 
-    def test_google_routing_uses_openai_compatible_base(self):
+    def test_google_alias_routes_through_generic_provider(self):
         with patch("litellm.completion") as mock_comp:
             mock_comp.return_value = self._mock_response()
+            _, api_base, api_key, _, llm_kwargs = resolve_provider(
+                "google", "gemini-2.5-flash", "gemini-key", None, None, False
+            )
             call_llm(
-                "https://generativelanguage.googleapis.com/v1beta/openai/",
+                api_base,
                 "gemini-2.5-flash",
                 [],
                 100,
@@ -957,8 +960,9 @@ class TestGeminiProviderRouting:
                 None,
                 None,
                 False,
-                provider="google",
-                api_key="gemini-key",
+                provider=llm_kwargs["provider"],
+                api_key=api_key,
+                append_v1_to_openai_base=llm_kwargs["append_v1_to_openai_base"],
             )
             kwargs = mock_comp.call_args[1]
             assert kwargs["model"] == "openai/gemini-2.5-flash"
@@ -968,28 +972,14 @@ class TestGeminiProviderRouting:
             )
             assert kwargs["api_key"] == "gemini-key"
 
-    def test_gemini_alias_uses_same_routing(self):
-        with patch("litellm.completion") as mock_comp:
-            mock_comp.return_value = self._mock_response()
-            call_llm(
-                "https://generativelanguage.googleapis.com/v1beta/openai",
-                "gemini-2.5-pro",
-                [],
-                100,
-                0.5,
-                1.0,
-                None,
-                None,
-                False,
-                provider="gemini",
-                api_key="gemini-key",
-            )
-            kwargs = mock_comp.call_args[1]
-            assert kwargs["model"] == "openai/gemini-2.5-pro"
-            assert (
-                kwargs["api_base"]
-                == "https://generativelanguage.googleapis.com/v1beta/openai"
-            )
+    def test_gemini_alias_sets_generic_llm_kwargs(self):
+        _, api_base, api_key, _, llm_kwargs = resolve_provider(
+            "gemini", "gemini-2.5-pro", "gemini-key", None, None, False
+        )
+        assert api_base == "https://generativelanguage.googleapis.com/v1beta/openai"
+        assert api_key == "gemini-key"
+        assert llm_kwargs["provider"] == "generic"
+        assert llm_kwargs["append_v1_to_openai_base"] is False
 
 
 class TestGeminiProviderValidation:
@@ -1039,6 +1029,8 @@ class TestGeminiProviderValidation:
         def fake_call_llm(*args, **kwargs):
             captured["base_url"] = args[0]
             captured["api_key"] = kwargs.get("api_key")
+            captured["provider"] = kwargs.get("provider")
+            captured["append_v1"] = kwargs.get("append_v1_to_openai_base")
             msg = types.SimpleNamespace(
                 content="done", tool_calls=None, role="assistant"
             )
@@ -1052,6 +1044,8 @@ class TestGeminiProviderValidation:
             == "https://generativelanguage.googleapis.com/v1beta/openai"
         )
         assert captured["api_key"] == "gemini-env"
+        assert captured["provider"] == "generic"
+        assert captured["append_v1"] is False
 
     def test_gemini_uses_gemini_api_key_env(self):
         monkeypatch = pytest.MonkeyPatch()
@@ -1065,7 +1059,8 @@ class TestGeminiProviderValidation:
             monkeypatch.undo()
         assert api_base == "https://generativelanguage.googleapis.com/v1beta/openai"
         assert api_key == "gemini-env"
-        assert llm_kwargs["provider"] == "gemini"
+        assert llm_kwargs["provider"] == "generic"
+        assert llm_kwargs["append_v1_to_openai_base"] is False
 
     def test_google_never_calls_discover_or_configure(self, monkeypatch, tmp_path):
         from swival import agent
