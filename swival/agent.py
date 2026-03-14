@@ -2345,7 +2345,6 @@ def main():
                 args, "_resolved_context_length", args.max_context_tokens
             ),
             "yolo": args.yolo,
-            "sandbox": args.sandbox,
             "allowed_commands": (
                 sorted(args.allowed_commands)
                 if isinstance(args.allowed_commands, list)

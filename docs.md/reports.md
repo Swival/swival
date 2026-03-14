@@ -92,11 +92,11 @@ A `success` outcome means the model produced a final non-tool response. An `exha
 
 `compactions` counts `compact_messages` and `aggressive_drop` events. `turn_drops` counts `drop_middle_turns` events. `guardrail_interventions` counts injected correction prompts for repeated tool failures. `truncated_responses` counts model outputs that hit output-token limits.
 
-`skills_used` records skill names successfully activated through `use_skill`. `review_rounds` records how many reviewer passes occurred when `--reviewer` is active. `todo` appears only when the `todo` tool was used and includes `added`, `completed`, and `remaining` counts. `memory` appears when auto-memory was loaded and includes `total_entries`, `bootstrap_entries`, `retrievable_entries`, `bootstrap_tokens`, `retrieval_tokens`, `retrieved_ids`, and `mode` (either `budgeted` or `full`).
+`skills_used` records skill names successfully activated through `use_skill`. `review_rounds` records how many reviewer passes occurred when `--reviewer` is active. `todo` appears only when the `todo` tool was used and includes `added`, `completed`, and `remaining` counts. `snapshot` appears only when the `snapshot` tool was used and includes `saves`, `restores`, `cancels`, `blocked`, `force_restores`, and `tokens_saved` counts. `memory` appears when auto-memory was loaded and includes `total_entries`, `bootstrap_entries`, `retrievable_entries`, `bootstrap_tokens`, `retrieval_tokens`, `retrieved_ids`, and `mode` (either `budgeted` or `full`).
 
 ### `timeline`
 
-`timeline` is an ordered array of event objects. Each event includes `turn` and `type`, with type-specific fields.
+`timeline` is an ordered array of event objects. Each event includes `type`, and most include `turn` (the turn number when the event occurred). Review events are an exception — they include `round` instead of `turn` since they occur between agent loop iterations.
 
 For `llm_call`, fields include `duration_s`, `prompt_tokens_est`, `finish_reason`, and `is_retry`. Retry calls include `retry_reason`, which is one of `compact_messages`, `drop_middle_turns`, or `aggressive_drop`.
 

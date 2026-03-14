@@ -13,6 +13,7 @@ apart.
 It connects to [LM Studio](https://lmstudio.ai/),
 [HuggingFace Inference API](https://huggingface.co/inference-api),
 [OpenRouter](https://openrouter.ai/),
+[Google Gemini](https://ai.google.dev/),
 [ChatGPT Plus/Pro](https://chatgpt.com/), or any OpenAI-compatible server (ollama,
 llama.cpp, mlx_lm.server, vLLM, etc.), sends your task, and runs an autonomous
 tool loop until it produces an answer. With LM Studio it auto-discovers your
@@ -116,12 +117,14 @@ persistent thinking notes, and a todo checklist all survive context resets, so
 the agent doesn't lose track of multi-step plans even under pressure.
 
 **Your models, your way.** Works with LM Studio, HuggingFace Inference API,
-OpenRouter, ChatGPT Plus/Pro, and any OpenAI-compatible server. With LM Studio,
-it auto-discovers whatever model you have loaded. With HuggingFace or
-OpenRouter, point it at any supported model. With ChatGPT Plus/Pro, authenticate
-through your browser and use OpenAI's models through your existing subscription. With the generic provider, connect to ollama,
-llama.cpp, mlx_lm.server, vLLM, or any other compatible server. You pick the
-model and the infrastructure.
+OpenRouter, Google Gemini, ChatGPT Plus/Pro, and any OpenAI-compatible server.
+With LM Studio, it auto-discovers whatever model you have loaded. With
+HuggingFace or OpenRouter, point it at any supported model. With Google Gemini,
+use Gemini models through Google's native API. With ChatGPT Plus/Pro,
+authenticate through your browser and use OpenAI's models through your existing
+subscription. With the generic provider, connect to ollama, llama.cpp,
+mlx_lm.server, vLLM, or any other compatible server. You pick the model and the
+infrastructure.
 
 **Review loop and LLM-as-a-judge.** Swival has a configurable review loop that
 can run external reviewer scripts or use a built-in LLM-as-judge to
@@ -163,7 +166,8 @@ Full documentation is available at [swival.dev](https://swival.dev/).
 - [Context Management](docs.md/context-management.md) -- compaction, snapshots,
   knowledge survival, and how Swival handles tight context windows
 - [Providers](docs.md/providers.md) -- LM Studio, HuggingFace, OpenRouter,
-  ChatGPT Plus/Pro, and generic OpenAI-compatible server configuration
+  Google Gemini, ChatGPT Plus/Pro, and generic OpenAI-compatible server
+  configuration
 - [MCP](docs.md/mcp.md) -- connecting external tool servers via the Model Context
   Protocol
 - [A2A](docs.md/a2a.md) -- connecting to remote agents via the Agent-to-Agent

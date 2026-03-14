@@ -116,8 +116,7 @@ swival --provider openrouter --model z-ai/glm-5 &quot;task&quot;
 <pre><code class="language-sh">swival --provider openrouter --model z-ai/glm-5 \
     --max-context-tokens 131072 &quot;task&quot;
 </code></pre>
-<p>Internally, Swival normalizes OpenRouter models to LiteLLM's <code>openrouter/...</code> format. If the model identifier starts with the literal double prefix <code>openrouter/openrouter/</code>, Swival strips the redundant prefix so LiteLLM does not see a stutter.</p>
-<p>Any other <code>openrouter/</code> prefix (e.g. <code>openrouter/z-ai/glm-5</code>) is treated as part of the model path and gets prefixed normally, so you should pass bare identifiers like <code>z-ai/glm-5</code>.</p>
+<p>Internally, Swival normalizes OpenRouter models to LiteLLM's <code>openrouter/...</code> format. If the model identifier already starts with <code>openrouter/</code>, Swival treats the rest as the model path and prepends <code>openrouter/</code> again, so you should always pass bare identifiers like <code>z-ai/glm-5</code> rather than <code>openrouter/z-ai/glm-5</code>.</p>
 <h2 id="generic-openai-compatible">Generic (OpenAI-compatible)</h2>
 <p>The generic provider works with any server that exposes an OpenAI-compatible chat completions endpoint. This covers mlx_lm.server, ollama, llama.cpp, vLLM, LocalAI, text-generation-webui, and similar tools.</p>
 <p>Both <code>--model</code> and <code>--base-url</code> are required. Pass the server's root URL without <code>/v1</code> — Swival appends it automatically. If your URL already ends in <code>/v1</code>, that's fine too.</p>
