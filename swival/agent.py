@@ -55,6 +55,8 @@ _encoder = tiktoken.get_encoding("cl100k_base")
 
 MAX_HISTORY_SIZE = 500 * 1024  # 500KB
 TODO_REMINDER_INTERVAL = 3  # remind after N turns of no todo usage
+_GEMINI_OPENAI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
+_GEMINI_PROVIDER_ALIASES = frozenset({"google", "gemini"})
 
 # Canonical prefixes for synthetic user messages injected by the agent loop.
 # Used by continue_here._find_last_user_task to skip interventions.
@@ -1471,6 +1473,12 @@ def call_llm(
     _skip_params: set[str] = set()
     _skip_tool_choice = False
 
+    def _normalize_openai_compatible_base(url: str, *, append_v1: bool) -> str:
+        stripped = url.rstrip("/")
+        if append_v1:
+            return stripped if stripped.endswith("/v1") else f"{stripped}/v1"
+        return stripped
+
     if provider == "lmstudio":
         model_str = f"openai/{model_id}"
         kwargs = {"api_base": f"{base_url}/v1", "api_key": "lm-studio"}
@@ -1495,8 +1503,11 @@ def call_llm(
             kwargs["api_base"] = base_url
     elif provider == "generic":
         model_str = f"openai/{model_id}"
-        stripped = base_url.rstrip("/")
-        api_base = stripped if stripped.endswith("/v1") else f"{stripped}/v1"
+        api_base = _normalize_openai_compatible_base(base_url, append_v1=True)
+        kwargs = {"api_base": api_base, "api_key": api_key or "none"}
+    elif provider in _GEMINI_PROVIDER_ALIASES:
+        model_str = f"openai/{model_id}"
+        api_base = _normalize_openai_compatible_base(base_url, append_v1=False)
         kwargs = {"api_base": api_base, "api_key": api_key or "none"}
     elif provider == "chatgpt":
         bare_id = model_id.removeprefix("chatgpt/").removeprefix("chatgpt/")
@@ -1612,6 +1623,8 @@ _PROVIDER_KEY_ENV: dict[str, str] = {
     "huggingface": "HF_TOKEN",
     "openrouter": "OPENROUTER_API_KEY",
     "generic": "OPENAI_API_KEY",
+    "google": "OPENAI_API_KEY",
+    "gemini": "OPENAI_API_KEY",
     "chatgpt": "CHATGPT_API_KEY",
 }
 
@@ -1729,7 +1742,7 @@ def build_parser():
         type=str,
         default=_UNSET,
         help="API key for the provider (overrides env var: HF_TOKEN, "
-        "OPENROUTER_API_KEY, OPENAI_API_KEY, or CHATGPT_API_KEY).",
+        "OPENROUTER_API_KEY, OPENAI_API_KEY/GEMINI_API_KEY, or CHATGPT_API_KEY).",
     )
     parser.add_argument(
         "--base-dir",
@@ -1943,9 +1956,17 @@ def build_parser():
     )
     parser.add_argument(
         "--provider",
-        choices=["lmstudio", "huggingface", "openrouter", "generic", "chatgpt"],
+        choices=[
+            "lmstudio",
+            "huggingface",
+            "openrouter",
+            "generic",
+            "google",
+            "gemini",
+            "chatgpt",
+        ],
         default=_UNSET,
-        help="LLM provider: lmstudio (local), huggingface (HF API), openrouter (multi-provider API), generic (any OpenAI-compatible server), chatgpt (ChatGPT Plus/Pro subscription via OAuth).",
+        help="LLM provider: lmstudio (local), huggingface (HF API), openrouter (multi-provider API), generic (any OpenAI-compatible server), google/gemini (Gemini's OpenAI-compatible API), chatgpt (ChatGPT Plus/Pro subscription via OAuth).",
     )
     parser.add_argument(
         "-q",
@@ -2493,6 +2514,22 @@ def resolve_provider(
         model_id = model
         context_length = max_context_tokens
         resolved_key = api_key or os.environ.get("OPENAI_API_KEY")
+
+    elif provider in _GEMINI_PROVIDER_ALIASES:
+        if not model:
+            raise ConfigError(f"--model is required when --provider is {provider}")
+        api_base = base_url or _GEMINI_OPENAI_API_BASE
+        model_id = model
+        context_length = max_context_tokens
+        resolved_key = (
+            api_key
+            or os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+        )
+        if not resolved_key:
+            raise ConfigError(
+                f"--api-key, GEMINI_API_KEY, or OPENAI_API_KEY env var required for {provider} provider"
+            )
 
     elif provider == "chatgpt":
         if not model:

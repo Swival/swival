@@ -81,13 +81,13 @@ The REPL is built on `prompt-toolkit`, so it supports input history, history sea
 
 ### Model And Provider Flags
 
-`--provider` chooses the backend provider and defaults to `lmstudio`. Valid values are `lmstudio`, `huggingface`, `openrouter`, `chatgpt` (for ChatGPT Plus/Pro subscriptions), and `generic`.
+`--provider` chooses the backend provider and defaults to `lmstudio`. Valid values are `lmstudio`, `huggingface`, `openrouter`, `generic`, `google`, `gemini`, and `chatgpt` (for ChatGPT Plus/Pro subscriptions).
 
 `--model` overrides auto-discovery with a fixed model identifier.
 
 `--base-url` sets a custom API base URL. For LM Studio, the default base URL is `http://127.0.0.1:1234` when `--base-url` is not set.
 
-`--api-key` provides a key directly on the command line and takes precedence over provider environment variables (`HF_TOKEN` for huggingface, `OPENROUTER_API_KEY` for openrouter, `OPENAI_API_KEY` for generic, or `CHATGPT_API_KEY` for chatgpt).
+`--api-key` provides a key directly on the command line and takes precedence over provider environment variables (`HF_TOKEN` for huggingface, `OPENROUTER_API_KEY` for openrouter, `OPENAI_API_KEY` for generic, `OPENAI_API_KEY` or `GEMINI_API_KEY` for google/gemini, or `CHATGPT_API_KEY` for chatgpt).
 
 ### Behavior Tuning Flags
 

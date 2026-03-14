@@ -91,6 +91,21 @@ Works with ollama, llama.cpp, mlx_lm.server, vLLM, and anything else that
 speaks the OpenAI chat completions protocol. No API key required for local
 servers.
 
+### Google Gemini
+
+Gemini's OpenAI-compatible endpoint is available as a first-class provider alias.
+
+```sh
+export GEMINI_API_KEY=...
+swival "Refactor the error handling in src/api.py" \
+    --provider gemini \
+    --model gemini-2.5-flash
+```
+
+`--provider google` works the same way. Swival defaults to Google's
+`https://generativelanguage.googleapis.com/v1beta/openai` endpoint, so
+`--base-url` is optional unless you need a proxy.
+
 ### Interactive sessions
 
 ```sh

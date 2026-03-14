@@ -929,6 +929,183 @@ class TestGenericProviderValidation:
 
 
 # ---------------------------------------------------------------------------
+# Gemini provider
+# ---------------------------------------------------------------------------
+
+
+class TestGeminiProviderRouting:
+    """Verify call_llm routing for the Gemini OpenAI-compatible provider aliases."""
+
+    def _mock_response(self):
+        choice = MagicMock()
+        choice.message = MagicMock(content="ok", tool_calls=None)
+        choice.finish_reason = "stop"
+        resp = MagicMock()
+        resp.choices = [choice]
+        return resp
+
+    def test_google_routing_uses_openai_compatible_base(self):
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                "https://generativelanguage.googleapis.com/v1beta/openai/",
+                "gemini-2.5-flash",
+                [],
+                100,
+                0.5,
+                1.0,
+                None,
+                None,
+                False,
+                provider="google",
+                api_key="gemini-key",
+            )
+            kwargs = mock_comp.call_args[1]
+            assert kwargs["model"] == "openai/gemini-2.5-flash"
+            assert (
+                kwargs["api_base"]
+                == "https://generativelanguage.googleapis.com/v1beta/openai"
+            )
+            assert kwargs["api_key"] == "gemini-key"
+
+    def test_gemini_alias_uses_same_routing(self):
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                "https://generativelanguage.googleapis.com/v1beta/openai",
+                "gemini-2.5-pro",
+                [],
+                100,
+                0.5,
+                1.0,
+                None,
+                None,
+                False,
+                provider="gemini",
+                api_key="gemini-key",
+            )
+            kwargs = mock_comp.call_args[1]
+            assert kwargs["model"] == "openai/gemini-2.5-pro"
+            assert (
+                kwargs["api_base"]
+                == "https://generativelanguage.googleapis.com/v1beta/openai"
+            )
+
+
+class TestGeminiProviderValidation:
+    """CLI-level validation for Gemini provider aliases."""
+
+    def test_google_requires_model(self, monkeypatch):
+        from swival import agent, config
+
+        monkeypatch.setattr(config, "load_config", lambda _: {})
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "agent",
+                "hello",
+                "--provider",
+                "google",
+            ],
+        )
+        monkeypatch.setenv("OPENAI_API_KEY", "gemini-env")
+        with pytest.raises(SystemExit) as exc_info:
+            agent.main()
+        assert exc_info.value.code == 2
+
+    def test_google_uses_default_base_url(self, monkeypatch, tmp_path):
+        from swival import agent
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "agent",
+                "hello",
+                "--provider",
+                "google",
+                "--model",
+                "gemini-2.5-flash",
+                "--no-system-prompt",
+                "--base-dir",
+                str(tmp_path),
+            ],
+        )
+        monkeypatch.setenv("OPENAI_API_KEY", "gemini-env")
+
+        captured = {}
+
+        def fake_call_llm(*args, **kwargs):
+            captured["base_url"] = args[0]
+            captured["api_key"] = kwargs.get("api_key")
+            msg = types.SimpleNamespace(
+                content="done", tool_calls=None, role="assistant"
+            )
+            msg.get = lambda key, default=None: getattr(msg, key, default)
+            return msg, "stop"
+
+        monkeypatch.setattr(agent, "call_llm", fake_call_llm)
+        agent.main()
+        assert (
+            captured["base_url"]
+            == "https://generativelanguage.googleapis.com/v1beta/openai"
+        )
+        assert captured["api_key"] == "gemini-env"
+
+    def test_gemini_uses_gemini_api_key_env(self):
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setenv("GEMINI_API_KEY", "gemini-env")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        try:
+            _, api_base, api_key, _, llm_kwargs = resolve_provider(
+                "gemini", "gemini-2.5-flash", None, None, None, False
+            )
+        finally:
+            monkeypatch.undo()
+        assert api_base == "https://generativelanguage.googleapis.com/v1beta/openai"
+        assert api_key == "gemini-env"
+        assert llm_kwargs["provider"] == "gemini"
+
+    def test_google_never_calls_discover_or_configure(self, monkeypatch, tmp_path):
+        from swival import agent
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "agent",
+                "hello",
+                "--provider",
+                "google",
+                "--model",
+                "gemini-2.5-flash",
+                "--api-key",
+                "gemini-cli",
+                "--no-system-prompt",
+                "--base-dir",
+                str(tmp_path),
+            ],
+        )
+
+        def boom(*args, **kwargs):
+            raise AssertionError("Should not be called for google provider")
+
+        monkeypatch.setattr(agent, "discover_model", boom)
+        monkeypatch.setattr(agent, "configure_context", boom)
+
+        def fake_call_llm(*args, **kwargs):
+            msg = types.SimpleNamespace(
+                content="done", tool_calls=None, role="assistant"
+            )
+            msg.get = lambda key, default=None: getattr(msg, key, default)
+            return msg, "stop"
+
+        monkeypatch.setattr(agent, "call_llm", fake_call_llm)
+        agent.main()
+
+
+# ---------------------------------------------------------------------------
 # ChatGPT provider — call_llm routing
 # ---------------------------------------------------------------------------
 

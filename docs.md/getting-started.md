@@ -116,6 +116,17 @@ Both `--model` and `--base-url` are required. No API key is needed for most loca
 
 For a deeper look at generic provider options and server-specific examples, see [Providers](providers.md).
 
+## Running with Google Gemini
+
+Gemini's OpenAI-compatible endpoint is available via the `google` and `gemini` provider aliases.
+
+```sh
+export GEMINI_API_KEY=your_gemini_api_key_here
+swival "Hello world" --provider gemini --model gemini-2.5-flash
+```
+
+Swival defaults to `https://generativelanguage.googleapis.com/v1beta/openai`, so `--base-url` is optional. `OPENAI_API_KEY` also works if you prefer to reuse OpenAI-compatible tooling conventions.
+
 ## Running with ChatGPT Plus/Pro
 
 If you have a ChatGPT Plus or ChatGPT Pro subscription and want to use OpenAI's models without a separate API key, the `chatgpt` provider authenticates through an OAuth device-code flow using your existing subscription.
