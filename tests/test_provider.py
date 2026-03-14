@@ -629,7 +629,7 @@ class TestGenericProviderRouting:
         with patch("litellm.completion") as mock_comp:
             mock_comp.return_value = self._mock_response()
             call_llm(
-                "http://localhost:8080",
+                "http://localhost:8080/v1",
                 "my-model",
                 [],
                 100,
@@ -647,25 +647,8 @@ class TestGenericProviderRouting:
             assert kwargs["api_base"] == "http://localhost:8080/v1"
             assert kwargs["api_key"] == "sk-test"
 
-    def test_generic_appends_v1_when_missing(self):
-        with patch("litellm.completion") as mock_comp:
-            mock_comp.return_value = self._mock_response()
-            call_llm(
-                "http://host:9000",
-                "m",
-                [],
-                100,
-                None,
-                None,
-                None,
-                None,
-                False,
-                provider="generic",
-                api_key=None,
-            )
-            assert mock_comp.call_args[1]["api_base"] == "http://host:9000/v1"
-
-    def test_generic_no_double_v1(self):
+    def test_generic_passes_base_url_unchanged(self):
+        """call_llm passes the base URL as-is; normalization is in resolve_provider."""
         with patch("litellm.completion") as mock_comp:
             mock_comp.return_value = self._mock_response()
             call_llm(
@@ -683,41 +666,30 @@ class TestGenericProviderRouting:
             )
             assert mock_comp.call_args[1]["api_base"] == "http://host:9000/v1"
 
-    def test_generic_trailing_slash_stripped(self):
-        with patch("litellm.completion") as mock_comp:
-            mock_comp.return_value = self._mock_response()
-            call_llm(
-                "http://host:9000/",
-                "m",
-                [],
-                100,
-                None,
-                None,
-                None,
-                None,
-                False,
-                provider="generic",
-                api_key=None,
-            )
-            assert mock_comp.call_args[1]["api_base"] == "http://host:9000/v1"
+    def test_resolve_provider_appends_v1_when_missing(self):
+        """resolve_provider normalizes generic URLs by appending /v1."""
+        _, api_base, _, _, _ = resolve_provider(
+            "generic", "m", None, "http://host:9000", None, False
+        )
+        assert api_base == "http://host:9000/v1"
 
-    def test_generic_trailing_slash_with_v1(self):
-        with patch("litellm.completion") as mock_comp:
-            mock_comp.return_value = self._mock_response()
-            call_llm(
-                "http://host:9000/v1/",
-                "m",
-                [],
-                100,
-                None,
-                None,
-                None,
-                None,
-                False,
-                provider="generic",
-                api_key=None,
-            )
-            assert mock_comp.call_args[1]["api_base"] == "http://host:9000/v1"
+    def test_resolve_provider_no_double_v1(self):
+        _, api_base, _, _, _ = resolve_provider(
+            "generic", "m", None, "http://host:9000/v1", None, False
+        )
+        assert api_base == "http://host:9000/v1"
+
+    def test_resolve_provider_trailing_slash_stripped(self):
+        _, api_base, _, _, _ = resolve_provider(
+            "generic", "m", None, "http://host:9000/", None, False
+        )
+        assert api_base == "http://host:9000/v1"
+
+    def test_resolve_provider_trailing_slash_with_v1(self):
+        _, api_base, _, _, _ = resolve_provider(
+            "generic", "m", None, "http://host:9000/v1/", None, False
+        )
+        assert api_base == "http://host:9000/v1"
 
     def test_generic_no_key_uses_none_placeholder(self):
         with patch("litellm.completion") as mock_comp:
@@ -962,7 +934,6 @@ class TestGeminiProviderRouting:
                 False,
                 provider=llm_kwargs["provider"],
                 api_key=api_key,
-                append_v1_to_openai_base=llm_kwargs["append_v1_to_openai_base"],
             )
             kwargs = mock_comp.call_args[1]
             assert kwargs["model"] == "openai/gemini-2.5-flash"
@@ -979,7 +950,6 @@ class TestGeminiProviderRouting:
         assert api_base == "https://generativelanguage.googleapis.com/v1beta/openai"
         assert api_key == "gemini-key"
         assert llm_kwargs["provider"] == "generic"
-        assert llm_kwargs["append_v1_to_openai_base"] is False
 
 
 class TestGeminiProviderValidation:
@@ -1030,7 +1000,6 @@ class TestGeminiProviderValidation:
             captured["base_url"] = args[0]
             captured["api_key"] = kwargs.get("api_key")
             captured["provider"] = kwargs.get("provider")
-            captured["append_v1"] = kwargs.get("append_v1_to_openai_base")
             msg = types.SimpleNamespace(
                 content="done", tool_calls=None, role="assistant"
             )
@@ -1045,7 +1014,6 @@ class TestGeminiProviderValidation:
         )
         assert captured["api_key"] == "gemini-env"
         assert captured["provider"] == "generic"
-        assert captured["append_v1"] is False
 
     def test_gemini_uses_gemini_api_key_env(self):
         monkeypatch = pytest.MonkeyPatch()
@@ -1060,7 +1028,6 @@ class TestGeminiProviderValidation:
         assert api_base == "https://generativelanguage.googleapis.com/v1beta/openai"
         assert api_key == "gemini-env"
         assert llm_kwargs["provider"] == "generic"
-        assert llm_kwargs["append_v1_to_openai_base"] is False
 
     def test_google_never_calls_discover_or_configure(self, monkeypatch, tmp_path):
         from swival import agent

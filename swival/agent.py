@@ -1464,7 +1464,6 @@ def call_llm(
     extra_body=None,
     reasoning_effort=None,
     cache=None,
-    append_v1_to_openai_base=True,
 ):
     """Call LiteLLM with the appropriate provider. Returns (message, finish_reason)."""
     import litellm
@@ -1498,10 +1497,7 @@ def call_llm(
             kwargs["api_base"] = base_url
     elif provider == "generic":
         model_str = f"openai/{model_id}"
-        api_base = base_url.rstrip("/")
-        if append_v1_to_openai_base and not api_base.endswith("/v1"):
-            api_base = f"{api_base}/v1"
-        kwargs = {"api_base": api_base, "api_key": api_key or "none"}
+        kwargs = {"api_base": base_url, "api_key": api_key or "none"}
     elif provider == "chatgpt":
         bare_id = model_id.removeprefix("chatgpt/").removeprefix("chatgpt/")
         model_str = f"chatgpt/{bare_id}"
@@ -1616,8 +1612,8 @@ _PROVIDER_KEY_ENV: dict[str, str] = {
     "huggingface": "HF_TOKEN",
     "openrouter": "OPENROUTER_API_KEY",
     "generic": "OPENAI_API_KEY",
-    "google": "OPENAI_API_KEY",
-    "gemini": "OPENAI_API_KEY",
+    "google": "GEMINI_API_KEY",
+    "gemini": "GEMINI_API_KEY",
     "chatgpt": "CHATGPT_API_KEY",
 }
 
@@ -2447,7 +2443,6 @@ def resolve_provider(
     """
     provider_name = provider
     llm_provider = provider
-    extra_llm_kwargs: dict[str, object] = {}
     if provider in _GEMINI_PROVIDER_ALIASES:
         provider = "generic"
         llm_provider = "generic"
@@ -2457,7 +2452,6 @@ def resolve_provider(
             or os.environ.get("GEMINI_API_KEY")
             or os.environ.get("OPENAI_API_KEY")
         )
-        extra_llm_kwargs["append_v1_to_openai_base"] = False
 
     if provider == "lmstudio":
         api_base = base_url or "http://127.0.0.1:1234"
@@ -2516,8 +2510,14 @@ def resolve_provider(
         if not model:
             raise ConfigError(f"--model is required when --provider is {provider_name}")
         if not base_url:
-            raise ConfigError("--base-url is required when --provider is generic")
-        api_base = base_url
+            raise ConfigError(
+                f"--base-url is required when --provider is {provider_name}"
+            )
+        stripped = base_url.rstrip("/")
+        if provider_name not in _GEMINI_PROVIDER_ALIASES:
+            api_base = stripped if stripped.endswith("/v1") else f"{stripped}/v1"
+        else:
+            api_base = stripped
         model_id = model
         context_length = max_context_tokens
         resolved_key = api_key or os.environ.get("OPENAI_API_KEY")
@@ -2555,8 +2555,6 @@ def resolve_provider(
         "provider": llm_provider,
         "api_key": resolved_key,
     }
-    if extra_llm_kwargs:
-        llm_kwargs.update(extra_llm_kwargs)
     return model_id, api_base, resolved_key, context_length, llm_kwargs
 
 

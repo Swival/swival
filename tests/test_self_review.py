@@ -272,8 +272,8 @@ class TestSelfReviewApiKeyEnv:
             ("huggingface", "HF_TOKEN"),
             ("openrouter", "OPENROUTER_API_KEY"),
             ("generic", "OPENAI_API_KEY"),
-            ("google", "OPENAI_API_KEY"),
-            ("gemini", "OPENAI_API_KEY"),
+            ("google", "GEMINI_API_KEY"),
+            ("gemini", "GEMINI_API_KEY"),
             ("chatgpt", "CHATGPT_API_KEY"),
         ],
     )
