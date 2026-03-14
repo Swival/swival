@@ -149,15 +149,15 @@ swival --provider generic \
 <p>There is no model auto-discovery and no context window reload. Set <code>--max-context-tokens</code> manually if you need Swival to know the window size.</p>
 <p>Internally, generic calls are routed through LiteLLM as <code>openai/&lt;model_id&gt;</code> with <code>api_base</code> pointing at your server's <code>/v1</code> path.</p>
 <h2 id="google-gemini-api">Google Gemini API</h2>
-<p>The <code>google</code> provider connects to Google Gemini API via its OpenAI-compatible API endpoint.</p>
-<p><code>--model</code> is required. <code>--base-url</code> is optional and defaults to <code>https://generativelanguage.googleapis.com/v1beta/openai</code>.</p>
+<p>The <code>google</code> provider connects to Google Gemini API through LiteLLM's native Gemini support.</p>
+<p><code>--model</code> is required. Authentication comes from <code>GEMINI_API_KEY</code>, <code>OPENAI_API_KEY</code>, or <code>--api-key</code>.</p>
 <pre><code class="language-sh">export GEMINI_API_KEY=...
 swival --provider google \
     --model gemini-2.5-flash \
     &quot;task&quot;
 </code></pre>
-<p>Authentication comes from <code>GEMINI_API_KEY</code>, <code>OPENAI_API_KEY</code>, or <code>--api-key</code>.</p>
-<p>Internally, the google provider is normalized onto the same generic OpenAI-compatible path as other <code>openai/&lt;model_id&gt;</code> backends, but with Google's endpoint as the default <code>api_base</code> and without appending <code>/v1</code>.</p>
+<p>When <code>--max-context-tokens</code> is not set, Swival auto-detects the context window via <code>litellm.get_model_info()</code>. If detection fails, context length is unknown and compaction may not trigger at the right time — set <code>--max-context-tokens</code> explicitly if you hit issues.</p>
+<p>Internally, the model is normalized to <code>gemini/&lt;model_id&gt;</code> and routed through LiteLLM's native Gemini provider. <code>--base-url</code> is optional and only needed if you are targeting a custom endpoint.</p>
 <h2 id="chatgpt-pluspro">ChatGPT Plus/Pro</h2>
 <p>The <code>chatgpt</code> provider lets you use OpenAI models through your existing ChatGPT Plus or ChatGPT Pro subscription, without needing a separate API key.</p>
 <p>Authentication uses an OAuth device-code flow handled by LiteLLM -- on first use, LiteLLM prints a device code and a verification URL to your terminal. Open the URL, enter the code, and authorize with your ChatGPT account. The resulting tokens are cached locally and refreshed automatically on subsequent runs.</p>

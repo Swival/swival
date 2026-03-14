@@ -55,7 +55,6 @@ _encoder = tiktoken.get_encoding("cl100k_base")
 
 MAX_HISTORY_SIZE = 500 * 1024  # 500KB
 TODO_REMINDER_INTERVAL = 3  # remind after N turns of no todo usage
-_GOOGLE_OPENAI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
 _GOOGLE_PROVIDER = "google"
 
 # Canonical prefixes for synthetic user messages injected by the agent loop.
@@ -1498,6 +1497,12 @@ def call_llm(
     elif provider == "generic":
         model_str = f"openai/{model_id}"
         kwargs = {"api_base": base_url, "api_key": api_key or "none"}
+    elif provider == "gemini":
+        bare_id = model_id.removeprefix("gemini/")
+        model_str = f"gemini/{bare_id}"
+        kwargs = {"api_key": api_key}
+        if base_url:
+            kwargs["api_base"] = base_url
     elif provider == "chatgpt":
         bare_id = model_id.removeprefix("chatgpt/").removeprefix("chatgpt/")
         model_str = f"chatgpt/{bare_id}"
@@ -1817,7 +1822,7 @@ def build_parser():
         "--max-review-rounds",
         type=int,
         default=_UNSET,
-        help="Maximum number of reviewer retry rounds (default: 5). 0 disables retries.",
+        help="Maximum number of reviewer retry rounds (default: 15). 0 disables retries.",
     )
     parser.add_argument(
         "--max-turns",
@@ -1953,7 +1958,7 @@ def build_parser():
             "chatgpt",
         ],
         default=_UNSET,
-        help="LLM provider: lmstudio (local), huggingface (HF API), openrouter (multi-provider API), generic (any OpenAI-compatible server), google (Google's OpenAI-compatible API), chatgpt (ChatGPT Plus/Pro subscription via OAuth).",
+        help="LLM provider: lmstudio (local), huggingface (HF API), openrouter (multi-provider API), generic (any OpenAI-compatible server), google (Gemini via LiteLLM native support), chatgpt (ChatGPT Plus/Pro subscription via OAuth).",
     )
     parser.add_argument(
         "-q",
@@ -2441,16 +2446,6 @@ def resolve_provider(
     """
     provider_name = provider
     llm_provider = provider
-    if provider == _GOOGLE_PROVIDER:
-        provider = "generic"
-        llm_provider = "generic"
-        base_url = base_url or _GOOGLE_OPENAI_API_BASE
-        api_key = (
-            api_key
-            or os.environ.get("GEMINI_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
-        )
-
     if provider == "lmstudio":
         api_base = base_url or "http://127.0.0.1:1234"
         if model:
@@ -2512,17 +2507,37 @@ def resolve_provider(
                 f"--base-url is required when --provider is {provider_name}"
             )
         stripped = base_url.rstrip("/")
-        if provider_name != _GOOGLE_PROVIDER:
-            api_base = stripped if stripped.endswith("/v1") else f"{stripped}/v1"
-        else:
-            api_base = stripped
+        api_base = stripped if stripped.endswith("/v1") else f"{stripped}/v1"
         model_id = model
         context_length = max_context_tokens
         resolved_key = api_key or os.environ.get("OPENAI_API_KEY")
-        if provider_name == _GOOGLE_PROVIDER and not resolved_key:
+
+    elif provider == _GOOGLE_PROVIDER:
+        if not model:
+            raise ConfigError("--model is required when --provider is google")
+        llm_provider = "gemini"
+        api_base = base_url
+        model_id = model
+        resolved_key = (
+            api_key
+            or os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+        )
+        if not resolved_key:
             raise ConfigError(
-                f"--api-key, GEMINI_API_KEY, or OPENAI_API_KEY env var required for {provider_name} provider"
+                "--api-key, GEMINI_API_KEY, or OPENAI_API_KEY env var required for google provider"
             )
+        context_length = max_context_tokens
+        if context_length is None:
+            try:
+                import litellm
+
+                _bare = model_id.removeprefix("gemini/")
+                _model_str = f"gemini/{_bare}"
+                info = litellm.get_model_info(_model_str)
+                context_length = info.get("max_input_tokens")
+            except Exception:
+                pass
 
     elif provider == "chatgpt":
         if not model:
