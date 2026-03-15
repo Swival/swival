@@ -38,6 +38,14 @@ args = ["server.js"]
 env = { API_KEY = "secret" }
 ```
 
+For example, the [Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp) server lets Swival control a web browser — navigating pages, clicking elements, reading console messages, and taking screenshots:
+
+```toml
+[mcp_servers.chrome]
+command = "npx"
+args = ["-y", "chrome-devtools-mcp@latest"]
+```
+
 For SSE servers, `url` is the endpoint and `headers` is an optional dictionary of HTTP headers.
 
 ## JSON Configuration
