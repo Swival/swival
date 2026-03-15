@@ -159,7 +159,7 @@ The `google` provider connects to Google's Gemini API through its OpenAI-compati
 ```sh
 export GEMINI_API_KEY=...
 swival --provider google \
-    --model gemini-2.5-flash \
+    --model gemini-2.5-pro \
     "task"
 ```
 

@@ -15,7 +15,7 @@ If you omit the positional task and pipe stdin, Swival reads the task from stdin
 ```sh
 swival -q < objective.md
 
-cat prompts/review.md | swival --provider google --model gemini-2.5-flash
+cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5
 ```
 
 The final answer is written to standard output. Diagnostics such as turn logs, timing, and tool traces are written to standard error.
@@ -43,12 +43,6 @@ REPL mode keeps a shared conversation state, so each new question can build on e
 
 ```sh
 swival --repl
-```
-
-You can also launch the REPL and send an initial question immediately.
-
-```sh
-swival --repl "Look at the project structure and tell me what this does"
 ```
 
 The REPL is built on `prompt-toolkit`, so it supports input history, history search, and normal terminal line editing.

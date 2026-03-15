@@ -65,7 +65,7 @@
 <p>If you omit the positional task and pipe stdin, Swival reads the task from stdin instead.</p>
 <pre><code class="language-sh">swival -q &lt; objective.md
 
-cat prompts/review.md | swival --provider google --model gemini-2.5-flash
+cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5
 </code></pre>
 <p>The final answer is written to standard output. Diagnostics such as turn logs, timing, and tool traces are written to standard error.</p>
 <p>If you want a clean output stream for scripting, use <code>--quiet</code> or <code>-q</code>.</p>
@@ -80,9 +80,6 @@ cat prompts/review.md | swival --provider google --model gemini-2.5-flash
 <h2 id="interactive-mode">Interactive Mode</h2>
 <p>REPL mode keeps a shared conversation state, so each new question can build on earlier turns.</p>
 <pre><code class="language-sh">swival --repl
-</code></pre>
-<p>You can also launch the REPL and send an initial question immediately.</p>
-<pre><code class="language-sh">swival --repl &quot;Look at the project structure and tell me what this does&quot;
 </code></pre>
 <p>The REPL is built on <code>prompt-toolkit</code>, so it supports input history, history search, and normal terminal line editing.</p>
 <h2 id="repl-commands">REPL Commands</h2>

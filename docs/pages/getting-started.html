@@ -128,7 +128,7 @@
 <p>If you omit the positional task and pipe stdin, Swival reads the task from stdin.</p>
 <pre><code class="language-sh">swival -q &lt; objective.md
 
-cat prompts/review.md | swival --provider google --model gemini-2.5-flash
+cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5
 </code></pre>
 <p>This is useful for longer prompts, reusable task files, and avoiding shell quoting.</p>
 <h2 id="running-with-huggingface">Running with HuggingFace</h2>
@@ -164,7 +164,7 @@ cat prompts/review.md | swival --provider google --model gemini-2.5-flash
 <h2 id="running-with-google-gemini">Running with Google Gemini</h2>
 <p>If you want to use Gemini through Google's API, use the <code>google</code> provider. Authentication comes from <code>GEMINI_API_KEY</code>, <code>OPENAI_API_KEY</code>, or <code>--api-key</code>.</p>
 <pre><code class="language-sh">export GEMINI_API_KEY=...
-swival &quot;Hello world&quot; --provider google --model gemini-2.5-flash
+swival &quot;Hello world&quot; --provider google --model gemini-2.5-pro
 </code></pre>
 <p>Swival routes this through Google's OpenAI-compatible endpoint and will try to auto-detect the context window when <code>--max-context-tokens</code> is not set.</p>
 <p>For a deeper look at Google-specific options, see <a href="providers.html">Providers</a>.</p>

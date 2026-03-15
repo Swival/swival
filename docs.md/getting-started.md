@@ -68,7 +68,7 @@ If you omit the positional task and pipe stdin, Swival reads the task from stdin
 ```sh
 swival -q < objective.md
 
-cat prompts/review.md | swival --provider google --model gemini-2.5-flash
+cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5
 ```
 
 This is useful for longer prompts, reusable task files, and avoiding shell quoting.
@@ -132,7 +132,7 @@ If you want to use Gemini through Google's API, use the `google` provider. Authe
 
 ```sh
 export GEMINI_API_KEY=...
-swival "Hello world" --provider google --model gemini-2.5-flash
+swival "Hello world" --provider google --model gemini-2.5-pro
 ```
 
 Swival routes this through Google's OpenAI-compatible endpoint and will try to auto-detect the context window when `--max-context-tokens` is not set.

@@ -29,7 +29,7 @@ Pick the provider that matches how you want to run models:
 | LM Studio        | none                                               | none                                              | `swival "Refactor src/api.py"`                                                       |
 | HuggingFace      | `HF_TOKEN` or `--api-key`                          | `--provider huggingface --model ORG/MODEL`        | `swival --provider huggingface --model zai-org/GLM-5 "task"`                         |
 | OpenRouter       | `OPENROUTER_API_KEY` or `--api-key`                | `--provider openrouter --model MODEL`             | `swival --provider openrouter --model z-ai/glm-5 "task"`                             |
-| Google Gemini    | `GEMINI_API_KEY`, `OPENAI_API_KEY`, or `--api-key` | `--provider google --model MODEL`                 | `swival --provider google --model gemini-2.5-flash "task"`                           |
+| Google Gemini    | `GEMINI_API_KEY`, `OPENAI_API_KEY`, or `--api-key` | `--provider google --model MODEL`                 | `swival --provider google --model gemini-2.5-pro "task"`                             |
 | ChatGPT Plus/Pro | browser auth on first run or `CHATGPT_API_KEY`     | `--provider chatgpt --model MODEL`                | `swival --provider chatgpt --model gpt-5.4 "task"`                                   |
 | Generic          | optional `OPENAI_API_KEY`                          | `--provider generic --base-url URL --model MODEL` | `swival --provider generic --base-url http://127.0.0.1:8080 --model my-model "task"` |
 
@@ -83,7 +83,7 @@ swival "Refactor the error handling in src/api.py" \
 export GEMINI_API_KEY=...
 uv tool install swival
 swival "Refactor the error handling in src/api.py" \
-    --provider google --model gemini-2.5-flash
+    --provider google --model gemini-2.5-pro
 ```
 
 ### ChatGPT Plus/Pro
@@ -131,7 +131,7 @@ stdin.
 ```sh
 swival -q < objective.md
 
-cat prompts/review.md | swival --provider google --model gemini-2.5-flash
+cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5
 ```
 
 Useful for long prompts, shell-quoting avoidance, and scripted workflows.

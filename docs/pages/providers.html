@@ -152,7 +152,7 @@ swival --provider generic \
 <p><code>--model</code> is required. Authentication comes from <code>GEMINI_API_KEY</code>, <code>OPENAI_API_KEY</code>, or <code>--api-key</code>.</p>
 <pre><code class="language-sh">export GEMINI_API_KEY=...
 swival --provider google \
-    --model gemini-2.5-flash \
+    --model gemini-2.5-pro \
     &quot;task&quot;
 </code></pre>
 <p>When <code>--max-context-tokens</code> is not set, Swival auto-detects the context window via <code>litellm.get_model_info()</code>. If detection fails, context length is unknown and compaction may not trigger at the right time — set <code>--max-context-tokens</code> explicitly if you hit issues.</p>
