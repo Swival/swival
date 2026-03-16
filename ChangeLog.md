@@ -2,6 +2,13 @@
 
 All notable user-facing changes to Swival.
 
+## 0.1.27
+
+- Skills can now be loaded from `.agents/skills/` and `~/.agents/skills/` directories.
+- Global agent instructions via `~/.agents/AGENTS.md` have been added.
+- Documentation has been improved with web browsing options, lightpanda MCP server
+  usage, and chrome-devtools-mcp examples.
+
 ## 0.1.26
 
 - Google Gemini provider has been switched to use the OpenAI-compatible endpoint.
