@@ -58,7 +58,7 @@
         </aside>
         <article class="docs-content">
             <h1 id="web-browsing">Web Browsing</h1>
-<p>Swival can browse the web, interact with pages, fill forms, take screenshots, and extract content. There are three ways to set this up, each with different tradeoffs.</p>
+<p>Swival can browse the web, interact with pages, fill forms, take screenshots, and extract content. There are four ways to set this up, each with different tradeoffs.</p>
 <table>
 <thead>
 <tr>
@@ -70,18 +70,23 @@
 <tbody>
 <tr>
 <td><a href="#chrome-devtools-mcp">Chrome DevTools MCP</a></td>
-<td>MCP server controlling Chrome via Puppeteer</td>
-<td>Full browser fidelity, debugging, performance profiling</td>
+<td>MCP server controlling Chrome</td>
+<td>Full browser fidelity, debugging, screenshots</td>
+</tr>
+<tr>
+<td><a href="#lightpanda-mcp">Lightpanda MCP</a></td>
+<td>MCP server with a lightweight headless browser</td>
+<td>Fast content extraction, scraping, CI/CD</td>
 </tr>
 <tr>
 <td><a href="#agent-browser">agent-browser</a></td>
 <td>CLI tool called via <code>run_command</code></td>
-<td>Fast snapshots, low token usage, headless automation</td>
+<td>Token-efficient interactive browsing</td>
 </tr>
 <tr>
-<td><a href="#lightpanda">agent-browser + Lightpanda</a></td>
-<td>Same CLI, different engine</td>
-<td>Speed, low memory, CI/CD pipelines</td>
+<td><a href="#using-lightpanda-as-the-engine">agent-browser + Lightpanda</a></td>
+<td>Same CLI, Lightpanda engine</td>
+<td>Low-resource interactive browsing</td>
 </tr>
 </tbody>
 </table>
@@ -100,7 +105,7 @@ args = [&quot;-y&quot;, &quot;chrome-devtools-mcp@latest&quot;, &quot;--headless
 </code></pre>
 <p>Requires Node.js v20.19+ and Chrome (stable channel).</p>
 <h3 id="what-it-gives-swival">What it gives Swival</h3>
-<p>Once configured, Swival gets MCP tools like <code>mcp__chrome__navigate_page</code>, <code>mcp__chrome__click</code>, <code>mcp__chrome__fill</code>, <code>mcp__chrome__take_screenshot</code>, <code>mcp__chrome__list_console_messages</code>, and more. The model calls them like any other tool.</p>
+<p>Once configured, Swival gets MCP tools like <code>mcp__chrome__navigate_page</code>, <code>mcp__chrome__click</code>, <code>mcp__chrome__fill</code>, <code>mcp__chrome__take_screenshot</code>, and <code>mcp__chrome__list_console_messages</code>. The model calls them like any other tool.</p>
 <h3 id="example">Example</h3>
 <pre><code class="language-sh">swival --repl
 &gt; Navigate to https://news.ycombinator.com, find the top story, and summarize it
@@ -120,6 +125,46 @@ command = &quot;npx&quot;
 args = [&quot;-y&quot;, &quot;chrome-devtools-mcp@latest&quot;, &quot;--headless&quot;, &quot;--slim&quot;]
 </code></pre>
 <p>This reduces the number of tools exposed to the model, which saves context window space.</p>
+<h2 id="lightpanda-mcp">Lightpanda MCP</h2>
+<p><a href="https://lightpanda.io/">Lightpanda</a> is a headless browser built from scratch for AI agents. It skips pixel rendering entirely and focuses on DOM processing and JavaScript execution via V8. The result is roughly 10x faster page loads and 10x less memory than headless Chrome.</p>
+<p>Lightpanda has a built-in MCP server that you can connect to Swival directly. It exposes seven tools focused on content extraction: <code>goto</code> for navigation, <code>markdown</code> for page content as markdown, <code>links</code> for extracting all links, <code>semantic_tree</code> for an AI-friendly DOM representation, <code>interactiveElements</code> for listing buttons and inputs, <code>structuredData</code> for JSON-LD and OpenGraph metadata, and <code>evaluate</code> for running JavaScript.</p>
+<p>These are read-oriented tools. Lightpanda MCP can navigate pages, read content, and run JavaScript, but it can't click buttons or fill forms. If you need interaction, use <a href="#chrome-devtools-mcp">Chrome DevTools MCP</a> or <a href="#agent-browser">agent-browser</a> instead.</p>
+<h3 id="install-lightpanda">Install Lightpanda</h3>
+<p>Download the binary for your platform.</p>
+<p><strong>macOS (Apple Silicon):</strong></p>
+<pre><code class="language-sh">curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-aarch64-macos
+chmod a+x ./lightpanda
+sudo mv ./lightpanda /usr/local/bin/
+</code></pre>
+<p><strong>Linux (x86_64):</strong></p>
+<pre><code class="language-sh">curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux
+chmod a+x ./lightpanda
+sudo mv ./lightpanda /usr/local/bin/
+</code></pre>
+<p>Verify it works:</p>
+<pre><code class="language-sh">lightpanda fetch --dump html https://example.com
+</code></pre>
+<h3 id="setup_1">Setup</h3>
+<p>Add it to your <code>swival.toml</code>:</p>
+<pre><code class="language-toml">[mcp_servers.lightpanda]
+command = &quot;lightpanda&quot;
+args = [&quot;mcp&quot;]
+</code></pre>
+<p>That's the entire setup. No Node.js, no Chrome download, no browser process lingering in the background. Lightpanda starts in milliseconds and uses about 24 MB of memory per instance compared to Chrome's 207 MB.</p>
+<h3 id="what-it-gives-swival_1">What it gives Swival</h3>
+<p>Once configured, Swival gets tools like <code>mcp__lightpanda__markdown</code>, <code>mcp__lightpanda__links</code>, <code>mcp__lightpanda__semantic_tree</code>, and <code>mcp__lightpanda__evaluate</code>. The <code>markdown</code> tool is particularly useful since it returns page content in a format that's already compact and easy for the model to reason about.</p>
+<h3 id="example_1">Example</h3>
+<pre><code class="language-sh">swival --repl
+&gt; Fetch https://news.ycombinator.com and summarize the top 5 stories
+</code></pre>
+<p>Swival will call <code>mcp__lightpanda__markdown</code> with the URL and get back clean markdown content it can work with directly.</p>
+<h3 id="when-to-use-lightpanda-mcp">When to use Lightpanda MCP</h3>
+<p>Lightpanda MCP is the best choice when you just need to read web content. It starts faster, uses less memory, and produces fewer tokens than Chrome DevTools MCP. It works well for documentation lookup, research, scraping, and CI/CD pipelines where you want to keep resource usage low.</p>
+<p>The tradeoff is that Lightpanda is still in beta. Most websites work, but you may hit gaps in Web API coverage. It also can't take screenshots or interact with page elements beyond running JavaScript. Use Chrome DevTools MCP when you need full browser fidelity.</p>
+<h3 id="disabling-telemetry">Disabling telemetry</h3>
+<p>Lightpanda collects usage telemetry by default. To disable it, set this in your environment:</p>
+<pre><code class="language-sh">export LIGHTPANDA_DISABLE_TELEMETRY=true
+</code></pre>
 <h2 id="agent-browser">agent-browser</h2>
 <p><a href="https://github.com/vercel-labs/agent-browser">agent-browser</a> is a CLI by Vercel Labs that controls a browser from the command line. It produces compact text output optimized for AI agents and uses reference-based element selection that burns fewer tokens than DOM selectors.</p>
 <p>Instead of connecting via MCP, agent-browser works through Swival's <code>run_command</code> tool. You whitelist the <code>agent-browser</code> command and the model calls it directly.</p>
@@ -148,7 +193,7 @@ agent-browser screenshot page.png
 agent-browser close
 </code></pre>
 <p>The snapshot output looks like this:</p>
-<pre><code>- none
+<pre><code class="language-text">- none
   - heading &quot;Example Domain&quot; [ref=e1]
     - StaticText &quot;Example Domain&quot;
   - paragraph
@@ -157,7 +202,7 @@ agent-browser close
     - link &quot;Learn more&quot; [ref=e2]
       - StaticText &quot;Learn more&quot;
 </code></pre>
-<p>This is 200-400 tokens compared to 3,000-5,000 for a full DOM dump, which matters when you're browsing multiple pages in a single session.</p>
+<p>A typical snapshot is 200-400 tokens compared to 3,000-5,000 for a full DOM dump. This matters when you're browsing multiple pages in a single session.</p>
 <h3 id="example-session">Example session</h3>
 <pre><code class="language-sh">swival --allowed-commands agent-browser --repl
 &gt; Go to https://news.ycombinator.com, click on the top story, and summarize the article
@@ -174,68 +219,29 @@ agent-browser scroll down 500       # scroll the page
 agent-browser eval &quot;document.title&quot; # run JavaScript
 agent-browser pdf report.pdf        # save page as PDF
 </code></pre>
-<h2 id="lightpanda">Lightpanda</h2>
-<p><a href="https://lightpanda.io/">Lightpanda</a> is a headless browser written from scratch in Zig. It skips pixel rendering entirely and focuses on DOM processing and JavaScript execution via V8. The result is roughly 10x faster execution and 10x less memory than headless Chrome.</p>
-<p>Lightpanda works with agent-browser as a drop-in engine replacement. Same commands, same output format, different browser underneath.</p>
-<h3 id="why-use-lightpanda-instead-of-chrome">Why use Lightpanda instead of Chrome</h3>
-<p>Lightpanda starts instantly and loads pages faster because there's no rendering pipeline. Each instance uses about 24 MB of memory compared to Chrome's 207 MB, which makes it lightweight enough to run in constrained CI/CD environments or to spin up many instances in parallel for concurrent scraping.</p>
-<p>The tradeoff is that Lightpanda is still in beta. Most websites work, but you may hit gaps in Web API coverage. It doesn't support screenshots, extensions, or persistent browser profiles either. Use Chrome when you need full fidelity.</p>
-<h3 id="install-lightpanda">Install Lightpanda</h3>
-<p>Download the binary for your platform:</p>
-<p><strong>macOS (Apple Silicon):</strong></p>
-<pre><code class="language-sh">curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-aarch64-macos
-chmod a+x ./lightpanda
-sudo mv ./lightpanda /usr/local/bin/
-</code></pre>
-<p><strong>Linux (x86_64):</strong></p>
-<pre><code class="language-sh">curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux
-chmod a+x ./lightpanda
-sudo mv ./lightpanda /usr/local/bin/
-</code></pre>
-<p>Verify it works:</p>
-<pre><code class="language-sh">lightpanda fetch --dump html https://example.com
-</code></pre>
-<h3 id="use-with-agent-browser">Use with agent-browser</h3>
-<p>Set the <code>AGENT_BROWSER_ENGINE</code> environment variable so agent-browser uses Lightpanda instead of Chrome:</p>
+<h3 id="using-lightpanda-as-the-engine">Using Lightpanda as the engine</h3>
+<p>agent-browser uses Chrome by default, but you can swap in Lightpanda for faster, lighter execution. Set the <code>AGENT_BROWSER_ENGINE</code> environment variable and all commands work the same way:</p>
 <pre><code class="language-sh">export AGENT_BROWSER_ENGINE=lightpanda
 </code></pre>
-<p>That's it. All agent-browser commands work the same way and the engine swap is transparent:</p>
+<p>This requires Lightpanda to be installed on your system. See <a href="#install-lightpanda">Install Lightpanda</a> above for instructions.</p>
+<p>Once the environment variable is set, agent-browser will use Lightpanda transparently:</p>
 <pre><code class="language-sh">agent-browser open https://example.com
 agent-browser snapshot -i
 agent-browser close
 </code></pre>
-<p>You can also pass the engine per-command if you don't want to set it globally:</p>
+<p>You can also pass the engine per-command instead of setting it globally:</p>
 <pre><code class="language-sh">agent-browser --engine lightpanda open https://example.com
 </code></pre>
-<p>Or put it in an <code>agent-browser.json</code> config file in your project directory:</p>
-<pre><code class="language-json">{
-  &quot;engine&quot;: &quot;lightpanda&quot;
-}
-</code></pre>
-<h3 id="configure-swival-with-lightpanda">Configure Swival with Lightpanda</h3>
-<p>Add the environment variable to your shell profile (<code>.zshrc</code>, <code>.bashrc</code>, etc.) and configure Swival the same way as regular agent-browser:</p>
-<pre><code class="language-toml">allowed_commands = [&quot;agent-browser&quot;]
-</code></pre>
-<p>Then run:</p>
+<p>To use it with Swival, add the environment variable to your shell profile (<code>.zshrc</code>, <code>.bashrc</code>, etc.) and configure Swival as usual:</p>
 <pre><code class="language-sh">export AGENT_BROWSER_ENGINE=lightpanda
 swival --allowed-commands agent-browser &quot;Open example.com and describe the page&quot;
 </code></pre>
-<h3 id="lightpanda-as-an-mcp-server">Lightpanda as an MCP server</h3>
-<p>Lightpanda also has a built-in MCP server mode that you can connect to Swival directly, without agent-browser:</p>
-<pre><code class="language-toml">[mcp_servers.lightpanda]
-command = &quot;lightpanda&quot;
-args = [&quot;mcp&quot;]
-</code></pre>
-<p>This exposes Lightpanda's browsing tools through MCP. It has fewer tools than Chrome DevTools MCP, but starts faster and uses far less resources.</p>
-<h3 id="disabling-telemetry">Disabling telemetry</h3>
-<p>Lightpanda collects usage telemetry by default. To disable it:</p>
-<pre><code class="language-sh">export LIGHTPANDA_DISABLE_TELEMETRY=true
-</code></pre>
+<p>Note that Lightpanda doesn't support screenshots, so commands like <code>agent-browser screenshot</code> won't work with this engine. Everything else, including snapshots, clicking, form filling, and JavaScript evaluation, works the same as with Chrome.</p>
 <h2 id="which-approach-should-i-use">Which approach should I use?</h2>
-<p>Pick <strong>Chrome DevTools MCP</strong> if you need the full browser, including screenshots, network inspection, performance profiling, extensions, or sites that require complete rendering fidelity.</p>
-<p>Pick <strong>agent-browser with Chrome</strong> if you want a simpler setup with lower token usage and don't need MCP-level tool integration. It works well for straightforward browsing, form filling, and content extraction.</p>
-<p>Pick <strong>agent-browser with Lightpanda</strong> if speed and resource efficiency matter more than full browser compatibility. It's the best option for scraping, CI pipelines, and tasks where you're hitting many pages in sequence.</p>
-<p>You can also combine approaches. For example, use Chrome DevTools MCP for debugging your web app and agent-browser with Lightpanda for bulk research tasks.</p>
+<p>Pick <strong>Chrome DevTools MCP</strong> when you need the full browser: screenshots, network inspection, performance profiling, or sites that require complete rendering fidelity. It has the most tools and the best compatibility, but it's also the heaviest.</p>
+<p>Pick <strong>Lightpanda MCP</strong> when you just need to read web pages. It's the simplest to set up (one binary, two lines of config), the fastest to start, and the lightest on resources. It can't click or fill forms, but for research, scraping, and documentation lookup it's hard to beat.</p>
+<p>Pick <strong>agent-browser</strong> when you need interactive browsing with low token overhead. The ref-based snapshot system keeps context usage down, which helps when you need to visit many pages or do complex multi-step interactions. You can run it with Chrome for full fidelity or with Lightpanda for speed.</p>
+<p>You can also combine approaches. For example, use Lightpanda MCP for quick content lookups and Chrome DevTools MCP for tasks that need screenshots or form filling.</p>
         </article>
     </div>
     <footer class="site-footer">
