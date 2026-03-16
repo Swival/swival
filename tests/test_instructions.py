@@ -486,3 +486,175 @@ class TestUserLevelAgentsMd:
         # Wrapped in a single agent-instructions tag
         assert result.count("<agent-instructions>") == 1
         assert result.count("</agent-instructions>") == 1
+
+
+# ---------------------------------------------------------------------------
+# Global cross-agent AGENTS.md (~/.agents/AGENTS.md)
+# ---------------------------------------------------------------------------
+
+
+class TestGlobalAgentsMd:
+    """Tests for loading ~/.agents/AGENTS.md."""
+
+    def _set_global_path(self, monkeypatch, path):
+        monkeypatch.setattr("swival.agent._global_agents_md_path", lambda: path)
+
+    def test_global_only(self, tmp_path, monkeypatch):
+        global_dir = tmp_path / ".agents"
+        global_dir.mkdir()
+        (global_dir / "AGENTS.md").write_text("Global rules.", encoding="utf-8")
+        self._set_global_path(monkeypatch, global_dir / "AGENTS.md")
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        result, loaded = load_instructions(str(project_dir), verbose=False)
+        assert "<agent-instructions>" in result
+        assert "Global rules." in result
+        assert f"<!-- global: {global_dir / 'AGENTS.md'} -->" in result
+        assert loaded == [str(global_dir / "AGENTS.md")]
+
+    def test_all_three_levels(self, tmp_path, monkeypatch):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (config_dir / "AGENTS.md").write_text("User rules.", encoding="utf-8")
+
+        global_dir = tmp_path / ".agents"
+        global_dir.mkdir()
+        (global_dir / "AGENTS.md").write_text("Global rules.", encoding="utf-8")
+        self._set_global_path(monkeypatch, global_dir / "AGENTS.md")
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        (project_dir / "AGENTS.md").write_text("Project rules.", encoding="utf-8")
+
+        result, loaded = load_instructions(str(project_dir), config_dir, verbose=False)
+        assert "User rules." in result
+        assert "Global rules." in result
+        assert "Project rules." in result
+        # Order: user → global → project
+        assert result.index("User rules.") < result.index("Global rules.")
+        assert result.index("Global rules.") < result.index("Project rules.")
+        assert loaded == [
+            str(config_dir / "AGENTS.md"),
+            str(global_dir / "AGENTS.md"),
+            str(project_dir / "AGENTS.md"),
+        ]
+
+    def test_global_and_project_no_user(self, tmp_path, monkeypatch):
+        global_dir = tmp_path / ".agents"
+        global_dir.mkdir()
+        (global_dir / "AGENTS.md").write_text("Global stuff.", encoding="utf-8")
+        self._set_global_path(monkeypatch, global_dir / "AGENTS.md")
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        (project_dir / "AGENTS.md").write_text("Project stuff.", encoding="utf-8")
+
+        result, loaded = load_instructions(str(project_dir), verbose=False)
+        assert "Global stuff." in result
+        assert "Project stuff." in result
+        assert result.index("Global stuff.") < result.index("Project stuff.")
+        assert "<!-- user:" not in result
+
+    def test_user_exhausts_budget_starves_global(self, tmp_path, monkeypatch):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (config_dir / "AGENTS.md").write_text(
+            "U" * (MAX_INSTRUCTIONS_CHARS + 100), encoding="utf-8"
+        )
+
+        global_dir = tmp_path / ".agents"
+        global_dir.mkdir()
+        (global_dir / "AGENTS.md").write_text("Global content.", encoding="utf-8")
+        self._set_global_path(monkeypatch, global_dir / "AGENTS.md")
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        (project_dir / "AGENTS.md").write_text("Project content.", encoding="utf-8")
+
+        result, loaded = load_instructions(str(project_dir), config_dir, verbose=False)
+        assert "truncated" in result
+        assert "Global content." not in result
+        assert "Project content." not in result
+        assert loaded == [str(config_dir / "AGENTS.md")]
+
+    def test_user_and_global_exhaust_budget(self, tmp_path, monkeypatch):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (config_dir / "AGENTS.md").write_text(
+            "U" * (MAX_INSTRUCTIONS_CHARS - 100), encoding="utf-8"
+        )
+
+        global_dir = tmp_path / ".agents"
+        global_dir.mkdir()
+        (global_dir / "AGENTS.md").write_text("G" * 500, encoding="utf-8")
+        self._set_global_path(monkeypatch, global_dir / "AGENTS.md")
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        (project_dir / "AGENTS.md").write_text("Project content.", encoding="utf-8")
+
+        result, loaded = load_instructions(str(project_dir), config_dir, verbose=False)
+        # User and global loaded, project starved
+        assert len(loaded) == 2
+        assert "Project content." not in result
+
+    def test_global_unreadable_skipped(self, tmp_path, monkeypatch):
+        global_dir = tmp_path / ".agents"
+        global_dir.mkdir()
+        (global_dir / "AGENTS.md").write_text("unreachable", encoding="utf-8")
+        self._set_global_path(monkeypatch, global_dir / "AGENTS.md")
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        (project_dir / "AGENTS.md").write_text("Project ok.", encoding="utf-8")
+
+        original_open = open
+
+        def bad_open(self, *args, **kwargs):
+            if str(self) == str(global_dir / "AGENTS.md"):
+                raise PermissionError("Permission denied")
+            return original_open(self, *args, **kwargs)
+
+        monkeypatch.setattr("pathlib.Path.open", bad_open)
+        result, loaded = load_instructions(str(project_dir), verbose=False)
+        assert "Project ok." in result
+        assert loaded == [str(project_dir / "AGENTS.md")]
+
+    def test_global_empty(self, tmp_path, monkeypatch):
+        global_dir = tmp_path / ".agents"
+        global_dir.mkdir()
+        (global_dir / "AGENTS.md").write_text("", encoding="utf-8")
+        self._set_global_path(monkeypatch, global_dir / "AGENTS.md")
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        (project_dir / "AGENTS.md").write_text("Project only.", encoding="utf-8")
+
+        result, loaded = load_instructions(str(project_dir), verbose=False)
+        assert "Project only." in result
+        assert len(loaded) == 2
+
+    def test_no_instructions_skips_global(self, tmp_path, monkeypatch):
+        from swival.agent import build_system_prompt
+
+        global_dir = tmp_path / ".agents"
+        global_dir.mkdir()
+        (global_dir / "AGENTS.md").write_text("Global rules.", encoding="utf-8")
+        self._set_global_path(monkeypatch, global_dir / "AGENTS.md")
+
+        content, loaded = build_system_prompt(
+            base_dir=str(tmp_path),
+            system_prompt=None,
+            no_system_prompt=False,
+            no_instructions=True,
+            no_memory=True,
+            skills_catalog={},
+            yolo=False,
+            resolved_commands={},
+            verbose=False,
+            config_dir=None,
+        )
+        assert "agent-instructions" not in content
+        assert loaded == []

@@ -151,7 +151,7 @@ Useful for long-running sessions.
 
 `--no-system-prompt` omits the system message entirely.
 
-`--no-instructions` prevents loading `CLAUDE.md` and `AGENTS.md` from both the base directory and the user config directory.
+`--no-instructions` prevents loading `CLAUDE.md` and `AGENTS.md` from the base directory, user config directory, and `~/.agents/`.
 
 `--no-memory` prevents loading auto-memory from `.swival/memory/`.
 

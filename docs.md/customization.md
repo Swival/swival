@@ -76,16 +76,15 @@ Loaded from the project base directory only. Capped at 10,000 characters.
 
 ### AGENTS.md
 
-Loaded from two locations, in this order:
+Loaded from up to three locations, in this order:
 
 1. **User-level**: `~/.config/swival/AGENTS.md` (or `$XDG_CONFIG_HOME/swival/AGENTS.md`)
-2. **Project-level**: `<base-dir>/AGENTS.md`
+2. **Global cross-agent**: `~/.agents/AGENTS.md`
+3. **Project-level**: `<base-dir>/AGENTS.md`
 
-Both are optional. When both exist, user-level content is prepended to project-level content inside a single `<agent-instructions>` block. The two levels share a combined 10,000 character budget.
+All are optional. Content is concatenated inside a single `<agent-instructions>` block sharing a combined 10,000 character budget. Files are read in the order shown; earlier files get budget priority.
 
-User-level content is read first and gets priority — a large user-level file will truncate or entirely displace the project-level file. Size your user-level file accordingly if you rely on project-level instructions.
-
-The user-level file is a good place for personal conventions that apply across all projects (preferred language style, test habits, tool preferences). The project-level file is for project-specific rules.
+The user-level file is for swival-specific personal conventions. The global file (`~/.agents/AGENTS.md`) follows the cross-agent standard shared with OpenCode, OpenHands, and similar tools — put conventions here that should apply regardless of which agent you're using. The project-level file is for project-specific rules.
 
 ```markdown
 This is a Go project using Chi for routing. Tests use testify.
@@ -95,7 +94,7 @@ Don't add dependencies without asking.
 
 ### Disabling instructions
 
-Use `--no-instructions` to skip all instruction files (both CLAUDE.md and AGENTS.md at all levels).
+Use `--no-instructions` to skip all instruction files (CLAUDE.md and AGENTS.md at all levels, including `~/.agents/AGENTS.md`).
 
 ```sh
 swival --no-instructions "task"

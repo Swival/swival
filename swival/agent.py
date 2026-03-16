@@ -937,6 +937,11 @@ def clamp_output_tokens(
     return min(requested_max_output, available)
 
 
+def _global_agents_md_path() -> Path:
+    """Return the cross-agent global AGENTS.md path (testable seam)."""
+    return Path.home() / ".agents" / "AGENTS.md"
+
+
 def load_instructions(
     base_dir: str,
     config_dir: "Path | None" = None,
@@ -945,10 +950,10 @@ def load_instructions(
 ) -> tuple[str, list[str]]:
     """Load CLAUDE.md and/or AGENTS.md, if present.
 
-    User-level AGENTS.md (from *config_dir*) is prepended to the
-    project-level AGENTS.md (from *base_dir*) inside a single
-    ``<agent-instructions>`` block.  Both share a combined budget of
-    ``MAX_INSTRUCTIONS_CHARS``.
+    AGENTS.md is loaded from up to three locations (user-level from
+    *config_dir*, global cross-agent from ``~/.agents/``, and project-level
+    from *base_dir*) inside a single ``<agent-instructions>`` block.  All
+    three share a combined budget of ``MAX_INSTRUCTIONS_CHARS``.
 
     Returns (combined_text, filenames_loaded) where combined_text is
     XML-tagged sections (or "" if none found) and filenames_loaded lists
@@ -1009,6 +1014,32 @@ def load_instructions(
                     )
                 agent_parts.append(f"<!-- user: {user_agents_path} -->\n{user_content}")
                 loaded.append(str(user_agents_path))
+
+    # Global cross-agent AGENTS.md (~/.agents/AGENTS.md)
+    global_agents_path = _global_agents_md_path()
+    if global_agents_path.is_file() and budget > 0:
+        try:
+            file_size = global_agents_path.stat().st_size
+            with global_agents_path.open(encoding="utf-8", errors="replace") as f:
+                global_content = f.read(budget + 1)
+        except OSError:
+            if verbose:
+                fmt.info(f"Skipped unreadable {global_agents_path}")
+        else:
+            if len(global_content) > budget:
+                global_content = (
+                    global_content[:budget]
+                    + f"\n[truncated — global AGENTS.md exceeds {budget} character limit]"
+                )
+            budget -= len(global_content)
+            if verbose:
+                fmt.info(
+                    f"Loaded AGENTS.md ({file_size} bytes) from {global_agents_path.parent}"
+                )
+            agent_parts.append(
+                f"<!-- global: {global_agents_path} -->\n{global_content}"
+            )
+            loaded.append(str(global_agents_path))
 
     # Project-level AGENTS.md
     proj_agents_path = Path(base_dir).resolve() / "AGENTS.md"
@@ -1899,7 +1930,7 @@ def build_parser():
         "--no-instructions",
         action="store_true",
         default=_UNSET,
-        help="Don't load CLAUDE.md or AGENTS.md from the base directory or user config directory.",
+        help="Don't load CLAUDE.md or AGENTS.md from the base directory, user config directory, or ~/.agents/.",
     )
     integrations_group.add_argument(
         "--no-mcp",

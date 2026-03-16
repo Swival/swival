@@ -110,20 +110,20 @@ model = &quot;gpt-5.4&quot;
 <h3 id="claudemd">CLAUDE.md</h3>
 <p>Loaded from the project base directory only. Capped at 10,000 characters.</p>
 <h3 id="agentsmd">AGENTS.md</h3>
-<p>Loaded from two locations, in this order:</p>
+<p>Loaded from up to three locations, in this order:</p>
 <ol>
 <li><strong>User-level</strong>: <code>~/.config/swival/AGENTS.md</code> (or <code>$XDG_CONFIG_HOME/swival/AGENTS.md</code>)</li>
+<li><strong>Global cross-agent</strong>: <code>~/.agents/AGENTS.md</code></li>
 <li><strong>Project-level</strong>: <code>&lt;base-dir&gt;/AGENTS.md</code></li>
 </ol>
-<p>Both are optional. When both exist, user-level content is prepended to project-level content inside a single <code>&lt;agent-instructions&gt;</code> block. The two levels share a combined 10,000 character budget.</p>
-<p>User-level content is read first and gets priority — a large user-level file will truncate or entirely displace the project-level file. Size your user-level file accordingly if you rely on project-level instructions.</p>
-<p>The user-level file is a good place for personal conventions that apply across all projects (preferred language style, test habits, tool preferences). The project-level file is for project-specific rules.</p>
+<p>All are optional. Content is concatenated inside a single <code>&lt;agent-instructions&gt;</code> block sharing a combined 10,000 character budget. Files are read in the order shown; earlier files get budget priority.</p>
+<p>The user-level file is for swival-specific personal conventions. The global file (<code>~/.agents/AGENTS.md</code>) follows the cross-agent standard shared with OpenCode, OpenHands, and similar tools — put conventions here that should apply regardless of which agent you're using. The project-level file is for project-specific rules.</p>
 <pre><code class="language-markdown">This is a Go project using Chi for routing. Tests use testify.
 Always run `go test ./...` after making changes.
 Don't add dependencies without asking.
 </code></pre>
 <h3 id="disabling-instructions">Disabling instructions</h3>
-<p>Use <code>--no-instructions</code> to skip all instruction files (both CLAUDE.md and AGENTS.md at all levels).</p>
+<p>Use <code>--no-instructions</code> to skip all instruction files (CLAUDE.md and AGENTS.md at all levels, including <code>~/.agents/AGENTS.md</code>).</p>
 <pre><code class="language-sh">swival --no-instructions &quot;task&quot;
 </code></pre>
 <p>Use <code>--no-memory</code> to skip loading auto-memory from <code>.swival/memory/</code>.</p>
