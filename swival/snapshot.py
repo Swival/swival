@@ -3,7 +3,14 @@
 import json
 
 from . import fmt
-from ._msg import _msg_get, _msg_content, _msg_role, _msg_tool_call_id, _msg_tool_calls
+from ._msg import (
+    IMAGE_TOKEN_ESTIMATE,
+    _msg_get,
+    _msg_content,
+    _msg_role,
+    _msg_tool_call_id,
+    _msg_tool_calls,
+)
 
 MAX_LABEL_LENGTH = 100
 MAX_SUMMARY_LENGTH = 4000
@@ -208,10 +215,19 @@ class SnapshotState:
 
         # Calculate stats before collapsing
         turns_collapsed = end_idx - start_idx
-        tokens_before = sum(
-            _estimate_tokens(_msg_content(messages[i]))
-            for i in range(start_idx, end_idx)
-        )
+
+        def _msg_tokens(msg):
+            """Estimate tokens including image_url parts."""
+            content_raw = _msg_get(msg, "content", "")
+            if isinstance(content_raw, list):
+                total = _estimate_tokens(_msg_content(msg))
+                for part in content_raw:
+                    if isinstance(part, dict) and part.get("type") == "image_url":
+                        total += IMAGE_TOKEN_ESTIMATE
+                return total
+            return _estimate_tokens(_msg_content(msg))
+
+        tokens_before = sum(_msg_tokens(messages[i]) for i in range(start_idx, end_idx))
         tokens_after = _estimate_tokens(summary)
         tokens_saved = max(0, tokens_before - tokens_after)
 

@@ -1,5 +1,6 @@
 """Tool definitions and implementations for an LLM agent."""
 
+import base64
 import fnmatch
 import json
 import os
@@ -372,6 +373,36 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "view_image",
+            "description": (
+                "Load an image file so you can see and analyze it. "
+                "Supports PNG, JPEG, GIF, and WebP. "
+                "BMP is accepted but may not work with all providers. "
+                "After calling this tool, the image will be visible "
+                "in your next response."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "image_path": {
+                        "type": "string",
+                        "description": "Path to the image file.",
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": (
+                            "Optional question about the image. "
+                            "If omitted, describe what you see."
+                        ),
+                    },
+                },
+                "required": ["image_path"],
+            },
+        },
+    },
 ]
 
 _TOOL_ALIASES = {
@@ -552,6 +583,17 @@ _TOOL_NAMES = [t["function"]["name"] for t in TOOLS] + [
 MAX_OUTPUT_BYTES = 50 * 1024  # 50 KB
 MAX_LINE_LENGTH = 2000
 BINARY_CHECK_BYTES = 8 * 1024  # 8 KB
+
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+IMAGE_MIME = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+}
+MAX_IMAGE_BYTES = 20 * 1024 * 1024  # 20 MB
 
 
 def safe_resolve(
@@ -1030,6 +1072,9 @@ def _read_file(
         return f"error: {exc}"
 
     if b"\x00" in chunk:
+        ext = resolved.suffix.lower()
+        if ext in IMAGE_EXTENSIONS:
+            return f"error: {file_path} is an image file. Use view_image to analyze it."
         return f"error: binary file detected: {file_path}"
 
     # Read as UTF-8 text
@@ -1133,6 +1178,73 @@ def _build_read_multiple_files_section(
     else:
         parts.append(body)
     return "\n".join(parts)
+
+
+def _view_image(
+    image_path: str,
+    base_dir: str,
+    image_stash: list,
+    question: str | None = None,
+    extra_read_roots: list[Path] = (),
+    extra_write_roots: list[Path] = (),
+    unrestricted: bool = False,
+) -> str:
+    """Load an image file and stash it for injection into the message stream."""
+    try:
+        resolved = safe_resolve(
+            image_path,
+            base_dir,
+            extra_read_roots=extra_read_roots,
+            extra_write_roots=extra_write_roots,
+            unrestricted=unrestricted,
+        )
+    except ValueError as exc:
+        return f"error: {exc}"
+
+    if not resolved.exists():
+        return f"error: file not found: {image_path}"
+    if resolved.is_dir():
+        return f"error: {image_path} is a directory, not an image file"
+
+    ext = resolved.suffix.lower()
+    if ext not in IMAGE_EXTENSIONS:
+        return (
+            f"error: unsupported image format ({ext}). "
+            "Supported: PNG, JPEG, GIF, WebP (and BMP on some providers)."
+        )
+
+    try:
+        size = resolved.stat().st_size
+    except OSError as exc:
+        return f"error: {exc}"
+    if size == 0:
+        return "error: image file is empty"
+    if size > MAX_IMAGE_BYTES:
+        return f"error: image too large ({size:,} bytes, max {MAX_IMAGE_BYTES:,})"
+
+    try:
+        data = resolved.read_bytes()
+    except OSError as exc:
+        return f"error: {exc}"
+
+    b64 = base64.b64encode(data).decode("ascii")
+    mime = IMAGE_MIME[ext]
+    data_url = f"data:{mime};base64,{b64}"
+
+    image_stash.append(
+        {
+            "data_url": data_url,
+            "question": question or "",
+            "path": str(image_path),
+        }
+    )
+
+    size_kb = len(data) / 1024
+    return (
+        f"Image loaded: {resolved.name} ({size_kb:.0f} KB). "
+        "The image has been attached and will be visible on your next turn. "
+        "Proceed to analyze it."
+    )
 
 
 def _read_files(
@@ -2231,6 +2343,19 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             base_dir=base_dir,
             resolved_commands=resolved,
             timeout=args.get("timeout", 30),
+            unrestricted=yolo,
+        )
+    elif name == "view_image":
+        image_stash = kwargs.get("image_stash")
+        if image_stash is None:
+            return "error: view_image tool is not available"
+        return _view_image(
+            image_path=args["image_path"],
+            base_dir=base_dir,
+            image_stash=image_stash,
+            question=args.get("question"),
+            extra_read_roots=skill_read_roots,
+            extra_write_roots=extra_write_roots,
             unrestricted=yolo,
         )
     else:

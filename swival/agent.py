@@ -19,6 +19,9 @@ import tiktoken
 
 from . import fmt
 from ._msg import (
+    IMAGE_TOKEN_ESTIMATE as _IMAGE_TOKEN_ESTIMATE,
+    _has_image_content,
+    _msg_get,
     _msg_role,
     _msg_content,
     _msg_tool_calls,
@@ -65,6 +68,16 @@ TODO_REMINDER_INTERVAL = 3  # remind after N turns of no todo usage
 _GOOGLE_PROVIDER = "google"
 CHATGPT_PROVIDER_DOCS_URL = "https://docs.litellm.ai/docs/providers/chatgpt"
 
+_IMAGE_SYNTHETIC_PREFIX = "[image]"
+
+_VISION_REJECTION_PATTERNS = (
+    "image_url",
+    "image input",
+    "image content",
+    "vision",
+    "multimodal",
+)
+
 # Canonical prefixes for synthetic user messages injected by the agent loop.
 # Used by continue_here._find_last_user_task to skip interventions.
 SYNTHETIC_USER_PREFIXES: tuple[str, ...] = (
@@ -75,6 +88,7 @@ SYNTHETIC_USER_PREFIXES: tuple[str, ...] = (
     "Tip:",
     "Reminder:",
     "[REVIEWER FEEDBACK",
+    _IMAGE_SYNTHETIC_PREFIX,
 )
 
 _SUMMARIZE_SYSTEM_PROMPT = (
@@ -227,7 +241,19 @@ def estimate_tokens(messages: list, tools: list | None = None) -> int:
     """Count tokens across all messages using tiktoken."""
     total = 0
     for m in messages:
-        content = _msg_content(m)
+        content_raw = _msg_get(m, "content", "")
+        if isinstance(content_raw, list):
+            # Multimodal content array — estimate text and image parts separately
+            text_parts = []
+            for part in content_raw:
+                if isinstance(part, dict):
+                    if part.get("type") == "text":
+                        text_parts.append(part.get("text", ""))
+                    elif part.get("type") == "image_url":
+                        total += _IMAGE_TOKEN_ESTIMATE
+            content = " ".join(text_parts)
+        else:
+            content = _msg_content(m)
         tool_calls = _msg_tool_calls(m)
         if tool_calls:
             for tc in tool_calls:
@@ -473,12 +499,41 @@ def _tool_call_index(turn: list) -> dict[str, tuple[str, dict | None]]:
     return index
 
 
+def _replace_last_image_message(messages: list, fallback_text: str) -> bool:
+    """Find the last message with image_url content and replace it in place.
+
+    Returns True if a replacement was made, False otherwise.
+    """
+    for i in range(len(messages) - 1, -1, -1):
+        if (
+            isinstance(messages[i], dict)
+            and isinstance(messages[i].get("content"), list)
+            and any(
+                p.get("type") == "image_url"
+                for p in messages[i]["content"]
+                if isinstance(p, dict)
+            )
+        ):
+            messages[i] = {"role": "user", "content": fallback_text}
+            return True
+    return False
+
+
+def _strip_image_content(messages: list) -> None:
+    """Replace list-valued content (multimodal image messages) with text-only."""
+    for msg in messages:
+        if isinstance(msg, dict) and isinstance(msg.get("content"), list):
+            text = _msg_content(msg)  # extracts text parts
+            msg["content"] = text + " [image data removed during compaction]"
+
+
 def compact_messages(messages: list) -> list:
     """Compact large tool results in older turns, preserving turn atomicity.
 
     Uses per-tool structured summaries (via ``compact_tool_result``) instead of
     a blanket character-count truncation.
     """
+    _strip_image_content(messages)
     turns = group_into_turns(messages)
     # Skip the most recent 2 turns
     cutoff = max(0, len(turns) - 2)
@@ -497,8 +552,14 @@ def compact_messages(messages: list) -> list:
 
 
 def is_pinned(turn: list) -> bool:
-    """User turns are always preserved — they must never be silently dropped."""
-    return any(_msg_role(msg) == "user" for msg in turn)
+    """User turns are always preserved — except synthetic image injections."""
+    for msg in turn:
+        if _msg_role(msg) == "user":
+            content = _msg_content(msg)
+            if content.startswith(_IMAGE_SYNTHETIC_PREFIX):
+                return False
+            return True
+    return False
 
 
 def score_turn(turn: list) -> int:
@@ -1299,6 +1360,7 @@ def handle_tool_call(
     mcp_manager=None,
     a2a_manager=None,
     messages=None,
+    image_stash=None,
 ):
     """Execute a single tool call and return (tool_msg, metadata).
 
@@ -1352,6 +1414,7 @@ def handle_tool_call(
             a2a_manager=a2a_manager,
             messages=messages,
             verbose=verbose,
+            image_stash=image_stash,
         )
     except McpShutdownError:
         result = "error: MCP server is shutting down"
@@ -1488,6 +1551,47 @@ def _pick_best_choice(choices):
     return choices[0]
 
 
+def _resolve_model_str(provider: str, model_id: str) -> str:
+    """Map (provider, model_id) to the litellm model string."""
+    if provider == "lmstudio":
+        return f"openai/{model_id}"
+    elif provider == "huggingface":
+        return f"huggingface/{model_id.removeprefix('huggingface/')}"
+    elif provider == "openrouter":
+        bare = (
+            model_id[len("openrouter/") :]
+            if model_id.startswith("openrouter/openrouter/")
+            else model_id
+        )
+        return f"openrouter/{bare}"
+    elif provider == "generic":
+        return f"openai/{model_id}"
+    elif provider == "chatgpt":
+        bare = model_id.removeprefix("chatgpt/").removeprefix("chatgpt/")
+        return f"chatgpt/{bare}"
+    else:
+        return model_id
+
+
+def _model_supports_vision(model_str: str) -> bool | None:
+    """Check if the resolved model supports vision via litellm.
+
+    Returns True, False, or None (unknown / not in registry).
+    """
+    try:
+        import litellm
+
+        return litellm.supports_vision(model=model_str)
+    except Exception:
+        return None
+
+
+def _is_vision_rejection(error: "AgentError") -> bool:
+    """Heuristic: does this error look like a vision/multimodal rejection?"""
+    msg = str(error).lower()
+    return any(pattern in msg for pattern in _VISION_REJECTION_PATTERNS)
+
+
 def call_llm(
     base_url,
     model_id,
@@ -1513,34 +1617,21 @@ def call_llm(
     _skip_params: set[str] = set()
     _skip_tool_choice = False
 
+    model_str = _resolve_model_str(provider, model_id)
+
     if provider == "lmstudio":
-        model_str = f"openai/{model_id}"
         kwargs = {"api_base": f"{base_url}/v1", "api_key": "lm-studio"}
     elif provider == "huggingface":
-        bare_id = model_id.removeprefix("huggingface/")
-        model_str = f"huggingface/{bare_id}"
         kwargs = {"api_key": api_key}
         if base_url:
             kwargs["api_base"] = base_url
     elif provider == "openrouter":
-        # Only strip the prefix if the user already included the LiteLLM
-        # "openrouter/" prefix (i.e. "openrouter/openrouter/free"). Don't strip
-        # org names like "openrouter" in "openrouter/free".
-        bare_id = (
-            model_id[len("openrouter/") :]
-            if model_id.startswith("openrouter/openrouter/")
-            else model_id
-        )
-        model_str = f"openrouter/{bare_id}"
         kwargs = {"api_key": api_key}
         if base_url:
             kwargs["api_base"] = base_url
     elif provider == "generic":
-        model_str = f"openai/{model_id}"
         kwargs = {"api_base": base_url, "api_key": api_key or "none"}
     elif provider == "chatgpt":
-        bare_id = model_id.removeprefix("chatgpt/").removeprefix("chatgpt/")
-        model_str = f"chatgpt/{bare_id}"
         kwargs = {}
         _skip_params = {"top_p", "seed"}
         _skip_tool_choice = True
@@ -1585,6 +1676,9 @@ def call_llm(
         completion_kwargs["reasoning_effort"] = reasoning_effort
 
     # --- Cache lookup ---
+    # Skip cache for vision requests — base64 payloads would bloat the DB
+    if cache is not None and _has_image_content(messages):
+        cache = None
     cache_kwargs = None
     if cache is not None:
         api_base_for_key = kwargs.get("api_base", "")
@@ -3324,6 +3418,7 @@ def run_agent_loop(
     todo_last_used = 0
     snapshot_read_streak = 0
     snapshot_nudge_fired = False
+    _vision_pending = False
     loop_start = time.monotonic()
 
     def _emit(kind: str, data: dict) -> None:
@@ -3513,6 +3608,18 @@ def run_agent_loop(
             for level_name, level_desc, compact_fn in compaction_levels:
                 if verbose:
                     fmt.warning(f"context window exceeded, {level_desc}")
+                # If an image was just injected, replace it with an
+                # explanatory fallback before compaction strips the data
+                # silently.  This way the model knows analysis was dropped.
+                if _vision_pending:
+                    _replace_last_image_message(
+                        messages,
+                        _IMAGE_SYNTHETIC_PREFIX
+                        + " The image was dropped during context compaction "
+                        "and could not be analyzed. Inform the user that the "
+                        "image could not be processed due to context limits.",
+                    )
+                    _vision_pending = False
                 tokens_before = estimate_tokens(messages, tools)
                 messages[:] = compact_fn()
                 if snapshot_state is not None:
@@ -3601,12 +3708,26 @@ def run_agent_loop(
                     )
                 raise AgentError("context window exceeded even after compaction")
 
-        except AgentError:
+        except AgentError as e:
+            if _vision_pending and _is_vision_rejection(e):
+                _vision_pending = False
+                _replace_last_image_message(
+                    messages,
+                    _IMAGE_SYNTHETIC_PREFIX + " The image could not be sent "
+                    "to the model — it does not support image analysis. "
+                    "Please inform the user and suggest a vision-capable model.",
+                )
+                if verbose:
+                    fmt.warning(
+                        "Model rejected image content, retrying without image..."
+                    )
+                continue  # retry the LLM call with text-only
             elapsed = time.monotonic() - t0
             if report:
                 report.record_llm_call(turns + turn_offset, elapsed, token_est, "error")
             raise
         else:
+            _vision_pending = False  # success — clear the flag
             elapsed = time.monotonic() - t0
             if verbose:
                 fmt.llm_timing(elapsed, finish_reason)
@@ -3687,6 +3808,7 @@ def run_agent_loop(
 
         interventions: list[str] = []
         all_tools_readonly = True
+        image_stash: list[dict] = []
         for tool_call in msg.tool_calls:
             # Check cancellation before each tool call
             if cancel_flag is not None and cancel_flag.is_set():
@@ -3714,6 +3836,7 @@ def run_agent_loop(
                 mcp_manager=mcp_manager,
                 a2a_manager=a2a_manager,
                 messages=messages,
+                image_stash=image_stash,
             )
             messages.append(tool_msg)
 
@@ -3830,6 +3953,48 @@ def run_agent_loop(
             else:
                 snapshot_read_streak = 0
                 snapshot_nudge_fired = False
+
+        # Inject image data into conversation after all tool calls are processed
+        if image_stash:
+            provider = llm_kwargs.get("provider", "lmstudio")
+            model_str = _resolve_model_str(provider, model_id)
+            vision_support = _model_supports_vision(model_str)
+
+            if vision_support is False:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            _IMAGE_SYNTHETIC_PREFIX
+                            + " The current model does not support "
+                            "vision/image analysis. The image could not be displayed. "
+                            "Please inform the user and suggest they use a vision-capable model."
+                        ),
+                    }
+                )
+            else:
+                parts = []
+                questions = [img["question"] for img in image_stash if img["question"]]
+                text = (
+                    _IMAGE_SYNTHETIC_PREFIX
+                    + " "
+                    + (
+                        " ".join(questions)
+                        if questions
+                        else "Describe and analyze the attached image(s)."
+                    )
+                )
+                parts.append({"type": "text", "text": text})
+                for img in image_stash:
+                    parts.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": img["data_url"]},
+                        }
+                    )
+                messages.append({"role": "user", "content": parts})
+                _vision_pending = True
+            image_stash.clear()
 
         if interventions:
             messages.append({"role": "user", "content": "\n\n".join(interventions)})
