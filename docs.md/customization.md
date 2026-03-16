@@ -17,7 +17,7 @@ swival --init-config            # global config
 swival --init-config --project  # project config in current directory
 ```
 
-Settings use the same names as CLI flags. Lists use TOML arrays instead of comma-separated strings.
+Settings mostly use the same names as CLI flags, with a few exceptions: the config keys `allowed_dirs` and `allowed_dirs_ro` correspond to the CLI flags `--add-dir` and `--add-dir-ro`. Lists use TOML arrays instead of comma-separated strings.
 
 ```toml
 provider = "openrouter"

@@ -67,7 +67,7 @@
 <pre><code class="language-sh">swival --init-config            # global config
 swival --init-config --project  # project config in current directory
 </code></pre>
-<p>Settings use the same names as CLI flags. Lists use TOML arrays instead of comma-separated strings.</p>
+<p>Settings mostly use the same names as CLI flags, with a few exceptions: the config keys <code>allowed_dirs</code> and <code>allowed_dirs_ro</code> correspond to the CLI flags <code>--add-dir</code> and <code>--add-dir-ro</code>. Lists use TOML arrays instead of comma-separated strings.</p>
 <pre><code class="language-toml">provider = &quot;openrouter&quot;
 model = &quot;qwen/qwen3-coder-next&quot;
 max_turns = 250
