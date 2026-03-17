@@ -280,6 +280,7 @@ class Session:
             mcp_tool_info=mcp_tool_info,
             a2a_tool_info=a2a_tool_info,
             no_continue=not self.continue_here,
+            provider=self.provider,
         )
 
         # Clean up stale cmd_output files

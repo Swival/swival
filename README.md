@@ -14,9 +14,10 @@ It connects to [LM Studio](https://lmstudio.ai/),
 [HuggingFace Inference API](https://huggingface.co/inference-api),
 [OpenRouter](https://openrouter.ai/),
 [Google Gemini](https://ai.google.dev/),
-[ChatGPT Plus/Pro](https://chatgpt.com/), or any OpenAI-compatible server (ollama,
-llama.cpp, mlx_lm.server, vLLM, etc.), sends your task, and runs an autonomous
-tool loop until it produces an answer. With LM Studio it auto-discovers your
+[ChatGPT Plus/Pro](https://chatgpt.com/), any OpenAI-compatible server (ollama,
+llama.cpp, mlx_lm.server, vLLM, etc.), or any external command (`claude -p`,
+custom wrappers, etc.), sends your task, and runs an autonomous tool loop until
+it produces an answer. With LM Studio it auto-discovers your
 loaded model, so there's nothing to configure. A few thousand lines of Python,
 no framework.
 
@@ -29,9 +30,10 @@ Pick the provider that matches how you want to run models:
 | LM Studio        | none                                               | none                                              | `swival "Refactor src/api.py"`                                                       |
 | HuggingFace      | `HF_TOKEN` or `--api-key`                          | `--provider huggingface --model ORG/MODEL`        | `swival --provider huggingface --model zai-org/GLM-5 "task"`                         |
 | OpenRouter       | `OPENROUTER_API_KEY` or `--api-key`                | `--provider openrouter --model MODEL`             | `swival --provider openrouter --model z-ai/glm-5 "task"`                             |
-| Google Gemini    | `GEMINI_API_KEY`, `OPENAI_API_KEY`, or `--api-key` | `--provider google --model MODEL`                 | `swival --provider google --model gemini-2.5-flash "task"`                             |
+| Google Gemini    | `GEMINI_API_KEY`, `OPENAI_API_KEY`, or `--api-key` | `--provider google --model MODEL`                 | `swival --provider google --model gemini-2.5-flash "task"`                           |
 | ChatGPT Plus/Pro | browser auth on first run or `CHATGPT_API_KEY`     | `--provider chatgpt --model MODEL`                | `swival --provider chatgpt --model gpt-5.4 "task"`                                   |
 | Generic          | optional `OPENAI_API_KEY`                          | `--provider generic --base-url URL --model MODEL` | `swival --provider generic --base-url http://127.0.0.1:8080 --model my-model "task"` |
+| Command          | none                                               | `--provider command --model "COMMAND"`            | `swival --provider command --model "claude -p" "task"`                               |
 
 Run `swival --help` for the grouped CLI reference and copy-paste examples.
 
@@ -152,14 +154,15 @@ persistent thinking notes, and a todo checklist all survive context resets, so
 the agent doesn't lose track of multi-step plans even under pressure.
 
 **Your models, your way.** Works with LM Studio, HuggingFace Inference API,
-OpenRouter, Google Gemini, ChatGPT Plus/Pro, and any OpenAI-compatible server.
-With LM Studio, it auto-discovers whatever model you have loaded. With
-HuggingFace or OpenRouter, point it at any supported model. With Google Gemini,
-use Gemini models through Google's native API. With ChatGPT Plus/Pro,
-authenticate through your browser and use OpenAI's models through your existing
-subscription. With the generic provider, connect to ollama, llama.cpp,
-mlx_lm.server, vLLM, or any other compatible server. You pick the model and the
-infrastructure.
+OpenRouter, Google Gemini, ChatGPT Plus/Pro, any OpenAI-compatible server, and
+any external command. With LM Studio, it auto-discovers whatever model you have
+loaded. With HuggingFace or OpenRouter, point it at any supported model. With
+Google Gemini, use Gemini models through Google's native API. With ChatGPT
+Plus/Pro, authenticate through your browser and use OpenAI's models through your
+existing subscription. With the generic provider, connect to ollama, llama.cpp,
+mlx_lm.server, vLLM, or any other compatible server. With the command provider,
+shell out to any program that reads a prompt on stdin and writes a response on
+stdout. You pick the model and the infrastructure.
 
 **Review loop and LLM-as-a-judge.** Swival has a configurable review loop that
 can run external reviewer scripts or use a built-in LLM-as-judge to
@@ -201,8 +204,8 @@ Full documentation is available at [swival.dev](https://swival.dev/).
 - [Context Management](docs.md/context-management.md) -- compaction, snapshots,
   knowledge survival, and how Swival handles tight context windows
 - [Providers](docs.md/providers.md) -- LM Studio, HuggingFace, OpenRouter,
-  Google Gemini, ChatGPT Plus/Pro, and generic OpenAI-compatible server
-  configuration
+  Google Gemini, ChatGPT Plus/Pro, generic OpenAI-compatible server, and
+  command (external program) configuration
 - [MCP](docs.md/mcp.md) -- connecting external tool servers via the Model Context
   Protocol
 - [A2A](docs.md/a2a.md) -- connecting to remote agents via the Agent-to-Agent

@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import shlex
 import sys
 import time
 import urllib.request
@@ -1629,8 +1630,125 @@ def _resolve_model_str(provider: str, model_id: str) -> str:
     elif provider == "chatgpt":
         bare = model_id.removeprefix("chatgpt/").removeprefix("chatgpt/")
         return f"chatgpt/{bare}"
+    elif provider == "command":
+        return model_id
     else:
         return model_id
+
+
+def _render_transcript(messages):
+    """Render a messages list as a plain-text transcript for command provider."""
+    from ._msg import _msg_get, _msg_role, _msg_tool_calls, _msg_tool_call_id
+
+    # First pass: index tool_call_id → function name from assistant messages
+    tc_names = {}
+    for m in messages:
+        tool_calls = _msg_tool_calls(m)
+        if tool_calls:
+            for tc in tool_calls:
+                tc_id = _msg_get(tc, "id", "")
+                fn = _msg_get(tc, "function")
+                name = _msg_get(fn, "name", "tool") if fn else "tool"
+                tc_names[tc_id] = name
+
+    # Second pass: render
+    lines = []
+    for m in messages:
+        role = _msg_role(m) or "unknown"
+        content = _msg_get(m, "content", "")
+
+        # Image-aware content extraction (differs from _msg_content which
+        # silently drops images — here we insert placeholders)
+        if isinstance(content, list):
+            parts = []
+            for p in content:
+                if isinstance(p, dict):
+                    if p.get("type") == "text":
+                        parts.append(p.get("text", ""))
+                    elif p.get("type") in ("image_url", "image"):
+                        parts.append("[image omitted]")
+            content = "\n".join(parts)
+
+        if not content:
+            continue
+
+        if role == "tool":
+            tool_name = tc_names.get(_msg_tool_call_id(m), "tool")
+            lines.append(f"[tool:{tool_name}]\n{content}")
+        else:
+            lines.append(f"[{role}]\n{content}")
+
+    return "\n\n".join(lines)
+
+
+class _SyntheticMessage:
+    """Lightweight message object compatible with the agent loop.
+
+    Supports: msg.content, msg.tool_calls, msg.role,
+    getattr(msg, ...), msg.model_dump(exclude_none=True).
+    """
+
+    __slots__ = ("role", "content", "tool_calls")
+
+    def __init__(self, content):
+        self.role = "assistant"
+        self.content = content
+        self.tool_calls = None
+
+    def model_dump(self, **kwargs):
+        d = {"role": self.role, "content": self.content}
+        if kwargs.get("exclude_none"):
+            return {k: v for k, v in d.items() if v is not None}
+        d["tool_calls"] = self.tool_calls
+        return d
+
+
+def _make_synthetic_message(text):
+    """Build a synthetic message object compatible with the agent loop."""
+    return _SyntheticMessage(text)
+
+
+def _call_command(command_str, messages, verbose, max_output_tokens=None):
+    """Run an external command as the LLM, passing the conversation on stdin."""
+    parts = shlex.split(command_str)
+    transcript = _render_transcript(messages)
+
+    if verbose:
+        fmt.model_info(f"Running command: {command_str}")
+
+    try:
+        proc = subprocess.run(
+            parts,
+            input=transcript,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise AgentError(f"command timed out after 300s: {command_str}") from e
+    except OSError as e:
+        raise AgentError(f"command failed to start: {e}") from e
+
+    if proc.returncode != 0:
+        error_text = (
+            proc.stderr.strip() or proc.stdout.strip() or f"exit code {proc.returncode}"
+        )
+        raise AgentError(f"command provider failed: {error_text}")
+
+    if proc.stderr.strip() and verbose:
+        print(proc.stderr, end="", file=sys.stderr)
+
+    response_text = proc.stdout.strip()
+    if not response_text:
+        raise AgentError("command provider returned empty output")
+
+    if max_output_tokens and max_output_tokens > 0:
+        from .tokens import truncate_to_tokens
+
+        response_text = truncate_to_tokens(response_text, max_output_tokens)
+
+    msg = _make_synthetic_message(response_text)
+    return msg, "stop"
 
 
 def _model_supports_vision(model_str: str) -> bool | None:
@@ -1677,6 +1795,9 @@ def call_llm(
     cache=None,
 ):
     """Call LiteLLM with the appropriate provider. Returns (message, finish_reason)."""
+    if provider == "command":
+        return _call_command(model_id, messages, verbose, max_output_tokens)
+
     import litellm
 
     litellm.suppress_debug_info = True
@@ -2187,9 +2308,10 @@ def build_parser():
             "generic",
             "google",
             "chatgpt",
+            "command",
         ],
         default=_UNSET,
-        help="LLM provider: lmstudio (local), huggingface (HF API), openrouter (multi-provider API), generic (any OpenAI-compatible server), google (Gemini via OpenAI-compatible endpoint), chatgpt (ChatGPT Plus/Pro subscription via OAuth).",
+        help="LLM provider: lmstudio (local), huggingface (HF API), openrouter (multi-provider API), generic (any OpenAI-compatible server), google (Gemini via OpenAI-compatible endpoint), chatgpt (ChatGPT Plus/Pro subscription via OAuth), command (external command as LLM, --model is the command to run).",
     )
     output_group.add_argument(
         "-q",
@@ -2793,6 +2915,22 @@ def resolve_provider(
             except Exception:
                 pass
 
+    elif provider == "command":
+        if not model or not model.strip():
+            raise ConfigError(
+                "--model is required for 'command' provider (the command to run)"
+            )
+        parts = shlex.split(model)
+        if not parts:
+            raise ConfigError("--model is empty for 'command' provider")
+        if not shutil.which(parts[0]):
+            raise ConfigError(f"command not found: {parts[0]}")
+        model_id = model
+        api_base = None
+        resolved_key = None
+        context_length = max_context_tokens
+        llm_provider = "command"
+
     else:
         raise ConfigError(f"unknown provider: {provider!r}")
 
@@ -2894,6 +3032,11 @@ def build_tools(
     return tools
 
 
+_COMMAND_PROVIDER_SYSTEM_PROMPT = (
+    "You are a helpful assistant. Answer the user's question directly and concisely."
+)
+
+
 def build_system_prompt(
     base_dir: str,
     system_prompt: str | None,
@@ -2911,6 +3054,7 @@ def build_system_prompt(
     memory_full: bool = False,
     user_query: str | None = None,
     report: "ReportCollector | None" = None,
+    provider: str | None = None,
 ) -> tuple[str | None, list[str]]:
     """Assemble full system prompt with instructions, date, skills, memory.
 
@@ -2923,6 +3067,8 @@ def build_system_prompt(
     instructions_loaded: list[str] = []
     if system_prompt:
         system_content = system_prompt
+    elif provider == "command":
+        system_content = _COMMAND_PROVIDER_SYSTEM_PROMPT
     else:
         system_content = DEFAULT_SYSTEM_PROMPT_FILE.read_text(encoding="utf-8")
         if not no_instructions:
@@ -2948,35 +3094,38 @@ def build_system_prompt(
     now = datetime.now().astimezone()
     system_content += f"\n\nCurrent date and time: {now.strftime('%Y-%m-%d %H:%M %Z')}"
 
-    if skills_catalog and not system_prompt:
-        from .skills import format_skill_catalog
+    # Tool-related prompt sections are skipped for the command provider,
+    # which disables tool calling entirely.
+    if provider != "command":
+        if skills_catalog and not system_prompt:
+            from .skills import format_skill_catalog
 
-        catalog_text = format_skill_catalog(skills_catalog)
-        if catalog_text:
-            system_content += "\n\n" + catalog_text
-    if yolo:
-        system_content += (
-            "\n\n**Command execution tool:**\n"
-            "- `run_command`: Run any command and return its output. "
-            'Pass a shell string (e.g. `"ls -la | grep foo"`) or an array (e.g. `["ls", "-la"]`). '
-            "Shell strings support pipes, redirects, `&&`, etc. "
-            "Optional `timeout` (1-120s, default 30)."
-        )
-    elif resolved_commands:
-        cmd_list = ", ".join(sorted(resolved_commands))
-        system_content += (
-            "\n\n**Command execution tool:**\n"
-            f"- `run_command`: Run a whitelisted command and return its output. "
-            f'Pass the command and arguments as a list (e.g. `["ls", "-la"]`). '
-            f"Optional `timeout` (1-120s, default 30). "
-            f"Allowed commands: {cmd_list}."
-        )
+            catalog_text = format_skill_catalog(skills_catalog)
+            if catalog_text:
+                system_content += "\n\n" + catalog_text
+        if yolo:
+            system_content += (
+                "\n\n**Command execution tool:**\n"
+                "- `run_command`: Run any command and return its output. "
+                'Pass a shell string (e.g. `"ls -la | grep foo"`) or an array (e.g. `["ls", "-la"]`). '
+                "Shell strings support pipes, redirects, `&&`, etc. "
+                "Optional `timeout` (1-120s, default 30)."
+            )
+        elif resolved_commands:
+            cmd_list = ", ".join(sorted(resolved_commands))
+            system_content += (
+                "\n\n**Command execution tool:**\n"
+                f"- `run_command`: Run a whitelisted command and return its output. "
+                f'Pass the command and arguments as a list (e.g. `["ls", "-la"]`). '
+                f"Optional `timeout` (1-120s, default 30). "
+                f"Allowed commands: {cmd_list}."
+            )
 
-    if mcp_tool_info and not system_prompt:
-        system_content += "\n\n" + _format_mcp_tool_info(mcp_tool_info)
+        if mcp_tool_info and not system_prompt:
+            system_content += "\n\n" + _format_mcp_tool_info(mcp_tool_info)
 
-    if a2a_tool_info and not system_prompt:
-        system_content += "\n\n" + _format_a2a_tool_info(a2a_tool_info)
+        if a2a_tool_info and not system_prompt:
+            system_content += "\n\n" + _format_a2a_tool_info(a2a_tool_info)
 
     # Load continue-here file from a previous interrupted session
     if not no_continue:
@@ -3202,6 +3351,7 @@ def _run_main(args, report, _write_report, parser):
         no_continue=getattr(args, "no_continue", False),
         user_query=getattr(args, "question", None),
         report=report,
+        provider=llm_kwargs.get("provider"),
     )
     messages = []
     if system_content is not None:
@@ -3519,9 +3669,13 @@ def run_agent_loop(
 
     # Strip view_image from tools if the model is known to lack vision support
     provider = llm_kwargs.get("provider", "lmstudio")
-    model_str = _resolve_model_str(provider, model_id)
-    if _model_supports_vision(model_str) is False:
-        tools = [t for t in tools if t.get("function", {}).get("name") != "view_image"]
+    if provider != "command":
+        model_str = _resolve_model_str(provider, model_id)
+        if _model_supports_vision(model_str) is False:
+            tools = [
+                t for t in tools if t.get("function", {}).get("name") != "view_image"
+            ]
+    effective_tools = None if provider == "command" else tools
 
     # Auto-inject skills when user mentions $skill-name.
     # Injected as a synthetic assistant tool_call + tool result pair so that
@@ -3619,14 +3773,14 @@ def run_agent_loop(
                 else:
                     sys_msg["content"] = base
 
-        token_est = estimate_tokens(messages, tools)
+        token_est = estimate_tokens(messages, effective_tools)
         if verbose:
             fmt.turn_header(turns, max_turns, token_est)
 
         t0 = time.monotonic()
         try:
             effective_max_output = clamp_output_tokens(
-                messages, tools, context_length, max_output_tokens
+                messages, effective_tools, context_length, max_output_tokens
             )
             if effective_max_output != max_output_tokens and verbose:
                 fmt.info(
@@ -3641,7 +3795,7 @@ def run_agent_loop(
                 temperature,
                 top_p,
                 seed,
-                tools,
+                effective_tools,
                 verbose,
             )
 
@@ -3705,14 +3859,14 @@ def run_agent_loop(
                         "image could not be processed due to context limits.",
                     )
                     _vision_pending = False
-                tokens_before = estimate_tokens(messages, tools)
+                tokens_before = estimate_tokens(messages, effective_tools)
                 messages[:] = compact_fn()
                 if snapshot_state is not None:
                     snapshot_state.invalidate_index_checkpoint()
                 effective_max_output = clamp_output_tokens(
-                    messages, tools, context_length, max_output_tokens
+                    messages, effective_tools, context_length, max_output_tokens
                 )
-                tokens_after = estimate_tokens(messages, tools)
+                tokens_after = estimate_tokens(messages, effective_tools)
                 if report:
                     report.record_compaction(
                         turns + turn_offset, level_name, tokens_before, tokens_after
@@ -3728,7 +3882,7 @@ def run_agent_loop(
                     temperature,
                     top_p,
                     seed,
-                    tools,
+                    effective_tools,
                     verbose,
                 )
                 t0 = time.monotonic()
@@ -4043,8 +4197,11 @@ def run_agent_loop(
         # Inject image data into conversation after all tool calls are processed
         if image_stash:
             provider = llm_kwargs.get("provider", "lmstudio")
-            model_str = _resolve_model_str(provider, model_id)
-            vision_support = _model_supports_vision(model_str)
+            if provider == "command":
+                vision_support = None
+            else:
+                model_str = _resolve_model_str(provider, model_id)
+                vision_support = _model_supports_vision(model_str)
 
             if vision_support is False:
                 messages.append(
@@ -4086,7 +4243,8 @@ def run_agent_loop(
             messages.append({"role": "user", "content": "\n\n".join(interventions)})
         if verbose:
             fmt.context_stats(
-                f"Context after turn {turns}", estimate_tokens(messages, tools)
+                f"Context after turn {turns}",
+                estimate_tokens(messages, effective_tools),
             )
 
         # Proactive checkpoint (if enabled)

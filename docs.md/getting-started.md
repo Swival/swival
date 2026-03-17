@@ -32,14 +32,15 @@ uv tool uninstall swival
 
 ## Provider Quick Reference
 
-| Provider | Auth | Required flags |
-| --- | --- | --- |
-| `lmstudio` | none | none |
-| `huggingface` | `HF_TOKEN` or `--api-key` | `--provider huggingface --model ORG/MODEL` |
-| `openrouter` | `OPENROUTER_API_KEY` or `--api-key` | `--provider openrouter --model MODEL` |
-| `google` | `GEMINI_API_KEY`, `OPENAI_API_KEY`, or `--api-key` | `--provider google --model MODEL` |
-| `chatgpt` | browser auth on first run or `CHATGPT_API_KEY` | `--provider chatgpt --model MODEL` |
-| `generic` | optional `OPENAI_API_KEY` | `--provider generic --base-url URL --model MODEL` |
+| Provider      | Auth                                               | Required flags                                    |
+| ------------- | -------------------------------------------------- | ------------------------------------------------- |
+| `lmstudio`    | none                                               | none                                              |
+| `huggingface` | `HF_TOKEN` or `--api-key`                          | `--provider huggingface --model ORG/MODEL`        |
+| `openrouter`  | `OPENROUTER_API_KEY` or `--api-key`                | `--provider openrouter --model MODEL`             |
+| `google`      | `GEMINI_API_KEY`, `OPENAI_API_KEY`, or `--api-key` | `--provider google --model MODEL`                 |
+| `chatgpt`     | browser auth on first run or `CHATGPT_API_KEY`     | `--provider chatgpt --model MODEL`                |
+| `generic`     | optional `OPENAI_API_KEY`                          | `--provider generic --base-url URL --model MODEL` |
+| `command`     | none                                               | `--provider command --model "COMMAND"`            |
 
 The sections below expand each provider with copy-paste commands.
 

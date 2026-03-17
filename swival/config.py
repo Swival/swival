@@ -218,22 +218,40 @@ def _validate_config(config: dict, source: str) -> None:
 _PATH_LIKE = re.compile(r"^(?:[/~]|\.\.?/)")
 
 
-def _resolve_reviewer_command(config: dict, config_dir: Path, source: str) -> None:
-    """Shell-split the reviewer value, resolve only path-like first tokens."""
+def _resolve_command_string(
+    value: str, config_dir: Path, source: str, label: str
+) -> str:
+    """Shell-split *value*, resolve path-like first tokens against *config_dir*."""
     try:
-        parts = shlex.split(config["reviewer"])
+        parts = shlex.split(value)
     except ValueError as e:
-        raise ConfigError(f"{source}: malformed reviewer command: {e}")
+        raise ConfigError(f"{source}: malformed {label}: {e}")
     if not parts:
-        raise ConfigError(f"{source}: reviewer command is empty")
+        raise ConfigError(f"{source}: {label} is empty")
     exe = parts[0]
     if _PATH_LIKE.match(exe):
         expanded = Path(exe).expanduser()
         if expanded.is_absolute():
             parts[0] = str(expanded)
         else:
-            parts[0] = str(config_dir / exe)
-    config["reviewer"] = shlex.join(parts)
+            parts[0] = str((config_dir / expanded).resolve())
+    return shlex.join(parts)
+
+
+def _resolve_reviewer_command(config: dict, config_dir: Path, source: str) -> None:
+    """Shell-split the reviewer value, resolve only path-like first tokens."""
+    config["reviewer"] = _resolve_command_string(
+        config["reviewer"], config_dir, source, "reviewer command"
+    )
+
+
+def _resolve_command_model(config: dict, config_dir: Path, source: str) -> None:
+    """Shell-split the model value when provider=command, resolve path-like first tokens."""
+    if config.get("provider") != "command" or "model" not in config:
+        return
+    config["model"] = _resolve_command_string(
+        config["model"], config_dir, source, "command model"
+    )
 
 
 def _resolve_paths(config: dict, config_dir: Path, source: str = "") -> None:
@@ -255,6 +273,8 @@ def _resolve_paths(config: dict, config_dir: Path, source: str = "") -> None:
 
     if "reviewer" in config:
         _resolve_reviewer_command(config, config_dir, source)
+
+    _resolve_command_model(config, config_dir, source)
 
     for key in ("objective", "verify", "cache_dir"):
         if key in config:
@@ -809,7 +829,7 @@ def generate_config(project: bool = False) -> str:
         "# CLI flags override these values. Only uncomment what you need.",
         "",
         "# --- Provider / model ---",
-        '# provider = "lmstudio"          # "lmstudio" | "huggingface" | "openrouter" | "google" | "generic" | "chatgpt"',
+        '# provider = "lmstudio"          # "lmstudio" | "huggingface" | "openrouter" | "google" | "generic" | "chatgpt" | "command"',
         '# model = "qwen/qwen3-coder-next"',
         '# api_key = "sk-or-..."            # prefer env vars; this is a fallback',
         '# base_url = "https://..."',

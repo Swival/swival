@@ -229,6 +229,27 @@ The dictionary is forwarded as `extra_body` to LiteLLM, which passes it through 
 
 For reasoning effort specifically, Swival provides a dedicated `--reasoning-effort` flag instead of requiring `extra_body`. See [Customization](customization.md) for details.
 
+## Command (External Program)
+
+The `command` provider shells out to an external program instead of calling an API. This is useful when you want to wrap an existing CLI tool — such as `claude -p`, `ollama run`, or a custom script — as Swival's backend.
+
+The conversation transcript is written to the program's stdin, and the program's stdout is read back as the model response. This is text-only: tool calling is not available, so Swival runs without tools.
+
+`--model` holds the command string, which is split with `shlex`. `--base-url` and `--api-key` are ignored.
+
+```sh
+swival --provider command --model "claude -p" "task"
+```
+
+Or in config:
+
+```toml
+provider = "command"
+model = "claude -p"
+```
+
+Because the external program handles all model routing, there is no auto-discovery and no LiteLLM involvement. If you set `--max-context-tokens`, Swival will apply output clamping and graduated compaction as usual; otherwise context management is left to the command itself.
+
 ## Adding More Providers Later
 
 Because API calls are already abstracted behind LiteLLM, adding a provider is mostly a matter of argument validation, model normalization, and credential wiring. The provider-specific branch in `call_llm()` is intentionally compact so new providers can be added without changing the rest of the agent loop.
