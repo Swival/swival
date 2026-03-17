@@ -1272,6 +1272,19 @@ def _read_files(
     skipped_files = 0
 
     for i, spec in enumerate(files):
+        if isinstance(spec, str):
+            spec = {"file_path": spec}
+        if not isinstance(spec, dict):
+            sections.append(
+                _build_read_multiple_files_section(
+                    f"file {i + 1}",
+                    "error",
+                    _format_read_request(1, 2000, None),
+                    f"error: expected object or string, got {type(spec).__name__}",
+                )
+            )
+            files_with_errors += 1
+            continue
         file_path = spec.get("file_path")
         title = file_path or f"file {i + 1}"
         if not file_path:
@@ -2325,6 +2338,8 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
         )
     elif name == "read_multiple_files":
         files = args.get("files")
+        if isinstance(files, str):
+            files = [files]
         if not isinstance(files, list):
             return "error: 'files' must be an array"
         return _read_files(

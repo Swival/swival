@@ -153,6 +153,21 @@ class TestReadMultipleFilesErrors:
         assert "status: error" in result
         assert "error: tail must be an integer" in result
 
+    def test_string_elements_coerced_to_dicts(self, tmp_path):
+        (tmp_path / "a.txt").write_text("hello\n")
+        (tmp_path / "b.txt").write_text("world\n")
+        result = _read_files(["a.txt", "b.txt"], str(tmp_path))
+        assert "files_succeeded: 2" in result
+        assert "=== FILE: a.txt ===" in result
+        assert "1: hello" in result
+        assert "=== FILE: b.txt ===" in result
+        assert "1: world" in result
+
+    def test_non_dict_non_string_element_rejected(self, tmp_path):
+        result = _read_files([123], str(tmp_path))
+        assert "files_with_errors: 1" in result
+        assert "error: expected object or string, got int" in result
+
     def test_binary_file_inline_error(self, tmp_path):
         (tmp_path / "good.txt").write_text("ok\n")
         (tmp_path / "bin.dat").write_bytes(b"\x00\x01\x02\x03")
