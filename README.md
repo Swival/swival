@@ -15,8 +15,8 @@ It connects to [LM Studio](https://lmstudio.ai/),
 [OpenRouter](https://openrouter.ai/),
 [Google Gemini](https://ai.google.dev/),
 [ChatGPT Plus/Pro](https://chatgpt.com/), any OpenAI-compatible server (ollama,
-llama.cpp, mlx_lm.server, vLLM, etc.), or any external command (`claude -p`,
-custom wrappers, etc.), sends your task, and runs an autonomous tool loop until
+llama.cpp, mlx_lm.server, vLLM, etc.), or any external command
+(`codex exec`, custom wrappers, etc.), sends your task, and runs an autonomous tool loop until
 it produces an answer. With LM Studio it auto-discovers your
 loaded model, so there's nothing to configure. A few thousand lines of Python,
 no framework.
@@ -33,7 +33,7 @@ Pick the provider that matches how you want to run models:
 | Google Gemini    | `GEMINI_API_KEY`, `OPENAI_API_KEY`, or `--api-key` | `--provider google --model MODEL`                 | `swival --provider google --model gemini-2.5-flash "task"`                           |
 | ChatGPT Plus/Pro | browser auth on first run or `CHATGPT_API_KEY`     | `--provider chatgpt --model MODEL`                | `swival --provider chatgpt --model gpt-5.4 "task"`                                   |
 | Generic          | optional `OPENAI_API_KEY`                          | `--provider generic --base-url URL --model MODEL` | `swival --provider generic --base-url http://127.0.0.1:8080 --model my-model "task"` |
-| Command          | none                                               | `--provider command --model "COMMAND"`            | `swival --provider command --model "claude -p" "task"`                               |
+| Command          | none                                               | `--provider command --model "COMMAND"`            | `swival --provider command --model "codex exec --full-auto" "task"`                  |
 
 Run `swival --help` for the grouped CLI reference and copy-paste examples.
 

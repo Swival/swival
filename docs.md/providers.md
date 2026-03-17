@@ -231,21 +231,21 @@ For reasoning effort specifically, Swival provides a dedicated `--reasoning-effo
 
 ## Command (External Program)
 
-The `command` provider shells out to an external program instead of calling an API. This is useful when you want to wrap an existing CLI tool — such as `claude -p`, `ollama run`, or a custom script — as Swival's backend.
+The `command` provider shells out to an external program instead of calling an API. This is useful when you want to wrap an existing CLI tool — such as `codex exec --skip-git-repo-check --full-auto --ephemeral`, `ollama run`, or a custom script — as Swival's backend.
 
 The conversation transcript is written to the program's stdin, and the program's stdout is read back as the model response. This is text-only: tool calling is not available, so Swival runs without tools.
 
 `--model` holds the command string, which is split with `shlex`. `--base-url` and `--api-key` are ignored.
 
 ```sh
-swival --provider command --model "claude -p" "task"
+swival --provider command --model "codex exec --skip-git-repo-check --full-auto --ephemeral" "task"
 ```
 
 Or in config:
 
 ```toml
 provider = "command"
-model = "claude -p"
+model = "codex exec --skip-git-repo-check --full-auto --ephemeral"
 ```
 
 Because the external program handles all model routing, there is no auto-discovery and no LiteLLM involvement. If you set `--max-context-tokens`, Swival will apply output clamping and graduated compaction as usual; otherwise context management is left to the command itself.

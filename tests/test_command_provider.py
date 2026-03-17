@@ -368,9 +368,9 @@ class TestConfigResolution:
         assert config["model"] == str(script)
 
     def test_bare_command_unchanged(self, tmp_path):
-        config = {"provider": "command", "model": "claude -p"}
+        config = {"provider": "command", "model": "codex exec --full-auto"}
         _resolve_command_model(config, tmp_path, "test")
-        assert config["model"] == "claude -p"
+        assert config["model"] == "codex exec --full-auto"
 
     def test_noop_for_other_providers(self, tmp_path):
         config = {"provider": "lmstudio", "model": "./script.sh"}
