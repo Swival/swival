@@ -121,7 +121,7 @@ swival --provider openrouter --model z-ai/glm-5 &quot;task&quot;
 </code></pre>
 <p>Internally, Swival normalizes OpenRouter models to LiteLLM's <code>openrouter/...</code> format. Pass bare model identifiers like <code>z-ai/glm-5</code>. If you pass a model ID that already includes the full LiteLLM prefix (e.g. <code>openrouter/z-ai/glm-5</code>), Swival detects and corrects the double prefix.</p>
 <h2 id="generic-openai-compatible">Generic (OpenAI-compatible)</h2>
-<p>The generic provider works with any server that exposes an OpenAI-compatible chat completions endpoint. This covers mlx_lm.server, ollama, llama.cpp, vLLM, LocalAI, text-generation-webui, and similar tools.</p>
+<p>The generic provider works with any server that exposes an OpenAI-compatible chat completions endpoint. This covers mlx_lm.server, ollama, llama.cpp, vLLM, LocalAI, text-generation-webui, DeepSeek API, and similar tools.</p>
 <p>Both <code>--model</code> and <code>--base-url</code> are required. Pass the server's root URL without <code>/v1</code> — Swival appends it automatically. If your URL already ends in <code>/v1</code>, that's fine too.</p>
 <pre><code class="language-sh"># mlx_lm.server
 swival --provider generic \
@@ -139,6 +139,15 @@ swival --provider generic \
 swival --provider generic \
     --base-url http://127.0.0.1:8080 \
     --model default \
+    &quot;task&quot;
+</code></pre>
+<pre><code class="language-sh"># DeepSeek API
+export DEEPSEEK_API_KEY=sk-...
+swival --provider generic \
+    --base-url https://api.deepseek.com \
+    --model deepseek-chat \
+    --api-key &quot;$DEEPSEEK_API_KEY&quot; \
+    --max-output-tokens 8192 \
     &quot;task&quot;
 </code></pre>
 <p>No API key is required for most local servers. If your server needs one, pass <code>--api-key</code> or set <code>OPENAI_API_KEY</code>.</p>

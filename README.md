@@ -112,9 +112,9 @@ swival "Refactor the error handling in src/api.py" \
     --model my-model
 ```
 
-Works with ollama, llama.cpp, mlx_lm.server, vLLM, and anything else that
-speaks the OpenAI chat completions protocol. No API key required for local
-servers.
+Works with ollama, llama.cpp, mlx_lm.server, vLLM, DeepSeek API, and anything
+else that speaks the OpenAI chat completions protocol. No API key required for
+local servers.
 
 ### Interactive sessions
 

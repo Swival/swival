@@ -176,7 +176,7 @@ swival &quot;Hello world&quot; --provider google --model gemini-2.5-flash
 <p>Swival routes this through Google's OpenAI-compatible endpoint and will try to auto-detect the context window when <code>--max-context-tokens</code> is not set.</p>
 <p>For a deeper look at Google-specific options, see <a href="providers.html">Providers</a>.</p>
 <h2 id="running-with-any-openai-compatible-server">Running with Any OpenAI-Compatible Server</h2>
-<p>If you're running ollama, llama.cpp, mlx_lm.server, vLLM, or any other server that exposes an OpenAI-compatible API, use the generic provider.</p>
+<p>If you're running ollama, llama.cpp, mlx_lm.server, vLLM, DeepSeek API, or any other server that exposes an OpenAI-compatible API, use the generic provider.</p>
 <pre><code class="language-sh">swival &quot;Hello world&quot; \
     --provider generic \
     --base-url http://127.0.0.1:8080 \

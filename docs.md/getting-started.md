@@ -142,7 +142,7 @@ For a deeper look at Google-specific options, see [Providers](providers.md).
 
 ## Running with Any OpenAI-Compatible Server
 
-If you're running ollama, llama.cpp, mlx_lm.server, vLLM, or any other server that exposes an OpenAI-compatible API, use the generic provider.
+If you're running ollama, llama.cpp, mlx_lm.server, vLLM, DeepSeek API, or any other server that exposes an OpenAI-compatible API, use the generic provider.
 
 ```sh
 swival "Hello world" \
