@@ -58,6 +58,11 @@ NAV = [
                 "Safety & Sandboxing",
                 "Path resolution, symlink protection, command whitelisting",
             ),
+            (
+                "secrets",
+                "Secret Encryption",
+                "Format-preserving encryption of credentials before they reach the LLM provider",
+            ),
             ("skills", "Skills", "Creating and using SKILL.md-based agent skills"),
             (
                 "web-browsing",

@@ -44,6 +44,7 @@
 <h4>Configuration & Deployment</h4>
 <ul>
 <li><a href="safety-and-sandboxing.html">Safety & Sandboxing</a></li>
+<li><a href="secrets.html">Secret Encryption</a></li>
 <li><a href="skills.html">Skills</a></li>
 <li><a href="web-browsing.html">Web Browsing</a></li>
 <li><a href="mcp.html">MCP</a></li>
@@ -189,28 +190,7 @@ Don't add dependencies without asking.
 </code></pre>
 <p>The sanitizer strips <code>&lt;think&gt;...&lt;/think&gt;</code> blocks, standalone <code>&lt;think&gt;</code> / <code>&lt;/think&gt;</code> lines, and special tokens like <code>&lt;|start_header_id|&gt;</code>. Inline mentions of these tags in code examples or backtick-quoted text are preserved.</p>
 <h2 id="secret-encryption">Secret Encryption</h2>
-<p>When sending messages to remote LLM providers, secrets like API keys and tokens may appear in user messages, tool results, or system prompts. The <code>--encrypt-secrets</code> flag enables transparent format-preserving encryption that replaces recognized credential tokens with realistic-looking fakes before they leave your machine. The LLM can still reason about them (it sees a plausible <code>ghp_...</code> token, not garbled ciphertext), and Swival decrypts them back to real values before tool dispatch or final output.</p>
-<p>Enable it on the command line:</p>
-<pre><code class="language-sh">swival --encrypt-secrets &quot;deploy using the token in .env&quot;
-</code></pre>
-<p>Or in config:</p>
-<pre><code class="language-toml">encrypt_secrets = true
-</code></pre>
-<p>By default, a random 256-bit key is generated each session and discarded on exit. To use a persistent key (e.g., for stable ciphertext across sessions):</p>
-<pre><code class="language-sh">swival --encrypt-secrets --encrypt-secrets-key &quot;$(openssl rand -hex 32)&quot; &quot;task&quot;
-</code></pre>
-<p>Or in config:</p>
-<pre><code class="language-toml">encrypt_secrets = true
-encrypt_secrets_key = &quot;aabbccdd...&quot;   # 64 hex chars = 32 bytes
-</code></pre>
-<p>Built-in token types include GitHub PATs (<code>ghp_</code>, <code>gho_</code>, etc.), OpenAI keys (<code>sk-proj-</code>, <code>sk-</code>), AWS access keys (<code>AKIA</code>), Anthropic keys (<code>sk-ant-api03-</code>), Slack tokens, Stripe keys, and more. Custom patterns can be added in config:</p>
-<pre><code class="language-toml">[[encrypt_secrets_patterns]]
-name = &quot;myapp-key&quot;
-prefix = &quot;myapp_&quot;
-body_regex = &quot;[A-Za-z0-9]{32}&quot;
-</code></pre>
-<p>Encryption is disabled by default. The <code>command</code> provider (local subprocess) bypasses encryption since it runs locally. Response caching is also disabled when encryption is active to avoid cross-session cache key conflicts.</p>
-<p>The threat model: this protects against the LLM provider logging or storing real credentials. It does not protect against unrecognized credential formats, contextual inference by the model, or Python memory safety. For unrecognized formats, add custom patterns via <code>encrypt_secrets_patterns</code>.</p>
+<p>Swival can transparently encrypt recognized credential tokens before they leave your machine. See <a href="secrets.html">Secret Encryption</a> for the full documentation, including built-in token patterns, custom patterns, key management, and threat model.</p>
 <h2 id="turn-and-token-limits">Turn And Token Limits</h2>
 <p><code>--max-turns</code> limits how many agent-loop iterations are allowed.</p>
 <pre><code class="language-sh">swival --max-turns 10 &quot;quick task&quot;

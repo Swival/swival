@@ -223,45 +223,7 @@ The sanitizer strips `<think>...</think>` blocks, standalone `<think>` / `</thin
 
 ## Secret Encryption
 
-When sending messages to remote LLM providers, secrets like API keys and tokens may appear in user messages, tool results, or system prompts. The `--encrypt-secrets` flag enables transparent format-preserving encryption that replaces recognized credential tokens with realistic-looking fakes before they leave your machine. The LLM can still reason about them (it sees a plausible `ghp_...` token, not garbled ciphertext), and Swival decrypts them back to real values before tool dispatch or final output.
-
-Enable it on the command line:
-
-```sh
-swival --encrypt-secrets "deploy using the token in .env"
-```
-
-Or in config:
-
-```toml
-encrypt_secrets = true
-```
-
-By default, a random 256-bit key is generated each session and discarded on exit. To use a persistent key (e.g., for stable ciphertext across sessions):
-
-```sh
-swival --encrypt-secrets --encrypt-secrets-key "$(openssl rand -hex 32)" "task"
-```
-
-Or in config:
-
-```toml
-encrypt_secrets = true
-encrypt_secrets_key = "aabbccdd..."   # 64 hex chars = 32 bytes
-```
-
-Built-in token types include GitHub PATs (`ghp_`, `gho_`, etc.), OpenAI keys (`sk-proj-`, `sk-`), AWS access keys (`AKIA`), Anthropic keys (`sk-ant-api03-`), Slack tokens, Stripe keys, and more. Custom patterns can be added in config:
-
-```toml
-[[encrypt_secrets_patterns]]
-name = "myapp-key"
-prefix = "myapp_"
-body_regex = "[A-Za-z0-9]{32}"
-```
-
-Encryption is disabled by default. The `command` provider (local subprocess) bypasses encryption since it runs locally. Response caching is also disabled when encryption is active to avoid cross-session cache key conflicts.
-
-The threat model: this protects against the LLM provider logging or storing real credentials. It does not protect against unrecognized credential formats, contextual inference by the model, or Python memory safety. For unrecognized formats, add custom patterns via `encrypt_secrets_patterns`.
+Swival can transparently encrypt recognized credential tokens before they leave your machine. See [Secret Encryption](secrets.md) for the full documentation, including built-in token patterns, custom patterns, key management, and threat model.
 
 ## Turn And Token Limits
 

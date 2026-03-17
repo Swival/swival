@@ -239,7 +239,7 @@ Neither flag requires a question argument. Both refuse to overwrite an existing 
 
 ### Encryption And Sanitization Flags
 
-`--encrypt-secrets` enables transparent format-preserving encryption of recognized credential tokens before sending messages to the LLM provider. The LLM sees realistic-looking fakes, and Swival decrypts them back before tool dispatch or final output. Off by default. See [Secret Encryption](customization.md#secret-encryption) for details.
+`--encrypt-secrets` enables transparent format-preserving encryption of recognized credential tokens before sending messages to the LLM provider. The LLM sees realistic-looking fakes, and Swival decrypts them back before tool dispatch or final output. Off by default. See [Secret Encryption](secrets.md) for details.
 
 `--no-encrypt-secrets` explicitly disables secret encryption (the default).
 
