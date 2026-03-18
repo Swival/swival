@@ -4,7 +4,7 @@ version = "0.1.30"
 description = "A small, powerful CLI coding agent for open AI models"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 authors = [
     { name = "Frank Denis", email = "github@pureftpd.org" },
 ]

@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-Swival requires Python 3.11 or newer and [uv](https://docs.astral.sh/uv/). If `uv` is not installed yet, you can install it with the command below.
+Swival requires Python 3.13 or newer and [uv](https://docs.astral.sh/uv/). If `uv` is not installed yet, you can install it with the command below.
 
 ```sh
 curl -LsSf https://astral.sh/uv/install.sh | sh
