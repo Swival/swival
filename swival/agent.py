@@ -487,7 +487,9 @@ def compact_tool_result(name: str, args: dict | None, content: str) -> str:
     if name == "grep":
         pattern = args.get("pattern", "?")
         path = args.get("path", ".")
-        matches = content.count("\n")
+        # Extract match count from the "Found N match(es)" header
+        m = re.match(r"Found (\d+) match", content)
+        matches = int(m.group(1)) if m else content.count("\n")
         return f"[grep: '{pattern}' in {path}, ~{matches} matches — compacted]"
 
     if name == "list_files":

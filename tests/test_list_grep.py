@@ -408,3 +408,103 @@ class TestGrep:
         (sandbox / "cs.txt").write_text("Hello World\nhello world\nHELLO WORLD\n")
         result = _grep("hello", ".", str(sandbox), include="cs.txt")
         assert "Found 1 match" in result
+
+    def test_grep_context_lines_zero(self, sandbox):
+        """context_lines=0 produces identical output to default (no markers)."""
+        result_default = _grep("import", "src/main.py", str(sandbox))
+        result_zero = _grep("import", "src/main.py", str(sandbox), context_lines=0)
+        assert result_default == result_zero
+        assert "<<<" not in result_zero
+
+    def test_grep_context_lines_one(self, sandbox):
+        """context_lines=1 shows ±1 lines with <<< marker on matches."""
+        (sandbox / "ctx.txt").write_text("aaa\nbbb\nccc\nddd\neee\n")
+        result = _grep("ccc", "ctx.txt", str(sandbox), context_lines=1)
+        assert "Found 1 match" in result
+        assert "Line 2: bbb" in result
+        assert "Line 3: ccc  <<<" in result
+        assert "Line 4: ddd" in result
+        # Lines outside the window should not appear
+        assert "Line 1" not in result
+        assert "Line 5" not in result
+
+    def test_grep_context_lines_overlapping(self, sandbox):
+        """Overlapping context windows are merged, no duplicate lines."""
+        (sandbox / "overlap.txt").write_text("1\n2\n3\n4\n5\n6\n7\n")
+        # Match lines 3 and 5, context_lines=1 → windows [2-4] and [4-6] overlap at 4
+        result = _grep(r"^[35]$", "overlap.txt", str(sandbox), context_lines=1)
+        assert "Found 2 match" in result
+        lines = result.split("\n")
+        line_nums = [
+            x.strip().split(":")[0] for x in lines if x.strip().startswith("Line")
+        ]
+        # No duplicate line numbers
+        assert len(line_nums) == len(set(line_nums))
+        # No separator between merged blocks
+        assert "--" not in result
+        # Lines 2-6 should be present
+        assert "Line 2: 2" in result
+        assert "Line 3: 3  <<<" in result
+        assert "Line 4: 4" in result
+        assert "Line 5: 5  <<<" in result
+        assert "Line 6: 6" in result
+
+    def test_grep_context_lines_at_file_edges(self, sandbox):
+        """Context at file start/end is truncated gracefully."""
+        (sandbox / "edge.txt").write_text("first\nsecond\nthird\n")
+        # Match first line with context_lines=2
+        result = _grep("first", "edge.txt", str(sandbox), context_lines=2)
+        assert "Line 1: first  <<<" in result
+        assert "Line 2: second" in result
+        assert "Line 3: third" in result
+        # Match last line
+        result2 = _grep("third", "edge.txt", str(sandbox), context_lines=2)
+        assert "Line 1: first" in result2
+        assert "Line 2: second" in result2
+        assert "Line 3: third  <<<" in result2
+
+    def test_grep_context_lines_marker(self, sandbox):
+        """Only matching lines have <<< marker, context lines don't."""
+        (sandbox / "mark.txt").write_text("aaa\nTARGET\nccc\n")
+        result = _grep("TARGET", "mark.txt", str(sandbox), context_lines=1)
+        for line in result.split("\n"):
+            if "TARGET" in line and line.strip().startswith("Line"):
+                assert line.endswith("<<<")
+            elif line.strip().startswith("Line"):
+                assert not line.endswith("<<<")
+
+    def test_grep_context_lines_multi_file(self, sandbox):
+        """Context works across multiple files."""
+        (sandbox / "m1.txt").write_text("aaa\nMATCH\nccc\n")
+        (sandbox / "m2.txt").write_text("xxx\nyyy\nMATCH\nzzz\n")
+        result = _grep("MATCH", ".", str(sandbox), include="m*.txt", context_lines=1)
+        assert "m1.txt" in result
+        assert "m2.txt" in result
+        assert "<<<" in result
+
+    def test_grep_context_lines_byte_cap(self, sandbox):
+        """Context lines count toward MAX_OUTPUT_BYTES but not MAX_GREP_MATCHES."""
+        many_dir = sandbox / "ctx_cap"
+        many_dir.mkdir()
+        # Create files with matches — context adds lines but shouldn't affect match cap
+        for i in range(5):
+            content = "\n".join(f"line{j}" for j in range(10))
+            (many_dir / f"f{i}.txt").write_text(content)
+        result = _grep("line5", str(many_dir), str(sandbox), context_lines=2)
+        assert "Found 5 match" in result
+        # Context lines should be present
+        assert "line3" in result or "line4" in result
+
+    def test_grep_context_lines_negative(self, sandbox):
+        """Negative context_lines is treated as 0."""
+        result_neg = _grep("import", "src/main.py", str(sandbox), context_lines=-1)
+        result_zero = _grep("import", "src/main.py", str(sandbox), context_lines=0)
+        assert result_neg == result_zero
+        assert "<<<" not in result_neg
+
+    def test_grep_context_lines_separator(self, sandbox):
+        """Non-contiguous blocks within a file are separated by --."""
+        (sandbox / "sep.txt").write_text("1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n")
+        # Match lines 2 and 9, context_lines=1 → blocks [1-3] and [8-10], non-contiguous
+        result = _grep(r"^[29]$", "sep.txt", str(sandbox), context_lines=1)
+        assert "  --" in result

@@ -46,7 +46,7 @@ Trash retention is enforced automatically. Entries older than seven days are rem
 
 ## `grep`
 
-`grep` searches file contents with Python regular expressions. Matches are grouped by file, include line numbers, and are sorted by file recency so the newest files are surfaced first. You can narrow by directory with `path` and by filename glob with `include` (supports `**/*.ext` patterns).
+`grep` searches file contents with Python regular expressions. Matches are grouped by file, include line numbers, and are sorted by file recency so the newest files are surfaced first. You can narrow by directory with `path` and by filename glob with `include` (supports `**/*.ext` patterns). Set `context_lines` to show surrounding lines around each match; when active, matching lines are marked with ` <<<` to distinguish them from context.
 
 Set `case_insensitive` to `true` for case-insensitive matching. Results are capped at 100 matches and long lines are truncated to 2,000 characters.
 

@@ -328,6 +328,21 @@ class TestCompactToolResult:
         assert "'error'" in tool_msgs[0]["content"]
         assert "logs/" in tool_msgs[0]["content"]
 
+    def test_grep_compaction_with_context(self):
+        """Compaction uses the header count, not newline count, with context."""
+        # Simulate grep output with context_lines — many newlines, but only 2 matches
+        # Pad with enough context lines to exceed the 1000-char compaction threshold
+        ctx_lines = "\n".join(f"  Line {i}: {'x' * 80}" for i in range(50))
+        content = (
+            f"Found 2 matches\n\nfile.py:\n{ctx_lines}\n"
+            "  Line 100: match1  <<<\n"
+            "  --\n"
+            "  Line 200: match2  <<<\n"
+        )
+        assert len(content) > 1000  # ensure compaction triggers
+        result = compact_tool_result("grep", {"pattern": "match", "path": "."}, content)
+        assert "~2 matches" in result
+
 
 # ---------------------------------------------------------------------------
 # is_pinned / score_turn

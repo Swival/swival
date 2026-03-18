@@ -249,6 +249,15 @@ TOOLS = [
                         "description": ("If true, search case-insensitively."),
                         "default": False,
                     },
+                    "context_lines": {
+                        "type": "integer",
+                        "description": (
+                            "Number of surrounding lines to show before "
+                            "and after each match."
+                        ),
+                        "minimum": 0,
+                        "default": 0,
+                    },
                 },
                 "required": ["pattern"],
             },
@@ -840,11 +849,14 @@ def _grep(
     base_dir: str,
     include: str | None = None,
     case_insensitive: bool = False,
+    context_lines: int = 0,
     extra_read_roots: list[Path] = (),
     extra_write_roots: list[Path] = (),
     unrestricted: bool = False,
 ) -> str:
     """Search file contents for a regex pattern."""
+    context_lines = max(0, context_lines)  # defensive clamp
+
     # Validate include pattern — only enforce in sandboxed mode
     if include is not None and not unrestricted:
         err = _check_pattern(include)
@@ -877,6 +889,16 @@ def _grep(
     # Collect ALL matches as (file_path, line_no, line_text, mtime),
     # then sort and cap — so the cap always picks the newest files.
     matches: list[tuple[Path, int, str, float]] = []
+    # Cache file lines for context expansion (avoids re-reading files)
+    file_lines: dict[Path, list[str]] = {}
+
+    def _search_file(fp: Path, mtime: float, text: str) -> None:
+        lines = text.splitlines()
+        if context_lines > 0:
+            file_lines[fp] = lines
+        for line_no, line in enumerate(lines, start=1):
+            if regex.search(line):
+                matches.append((fp, line_no, line, mtime))
 
     if root.is_file():
         # Single file — ignore include, grep it directly.
@@ -899,10 +921,7 @@ def _grep(
                 text = root.read_text(encoding="utf-8")
             except (UnicodeDecodeError, PermissionError, OSError):
                 text = ""
-            mtime = root.stat().st_mtime
-            for line_no, line in enumerate(text.splitlines(), start=1):
-                if regex.search(line):
-                    matches.append((root, line_no, line, mtime))
+            _search_file(root, root.stat().st_mtime, text)
 
     elif not root.is_dir():
         return f"error: path is not a directory: {path}"
@@ -952,10 +971,7 @@ def _grep(
                 except (UnicodeDecodeError, PermissionError, OSError):
                     continue
 
-                mtime = filepath.stat().st_mtime
-                for line_no, line in enumerate(text.splitlines(), start=1):
-                    if regex.search(line):
-                        matches.append((filepath, line_no, line, mtime))
+                _search_file(filepath, filepath.stat().st_mtime, text)
 
     if not matches:
         return "No matches found."
@@ -968,21 +984,48 @@ def _grep(
     truncated = total_found > MAX_GREP_MATCHES
     matches = matches[:MAX_GREP_MATCHES]
 
-    from collections import OrderedDict
-
-    grouped: OrderedDict[Path, list[tuple[int, str]]] = OrderedDict()
+    # Group capped matches by file, preserving mtime-based order.
+    # Build context blocks: list of (line_no, line_text, is_match) triples.
+    # When context_lines == 0, each match is its own single-entry block.
+    file_match_map: dict[Path, list[tuple[int, str]]] = {}
     for filepath, line_no, line_text, _ in matches:
-        grouped.setdefault(filepath, []).append((line_no, line_text))
+        file_match_map.setdefault(filepath, []).append((line_no, line_text))
+
+    grouped: dict[Path, list[list[tuple[int, str, bool]]]] = {}
+    for filepath, file_match_tuples in file_match_map.items():
+        if context_lines > 0:
+            all_lines = file_lines.get(filepath, [])
+            match_line_nos = {ln for ln, _ in file_match_tuples}
+            blocks: list[list[tuple[int, str, bool]]] = []
+            for line_no, _ in file_match_tuples:
+                start = max(0, line_no - 1 - context_lines)
+                end = min(len(all_lines), line_no + context_lines)
+                window = [
+                    (i + 1, all_lines[i], (i + 1) in match_line_nos)
+                    for i in range(start, end)
+                ]
+                # Merge with previous block if overlapping/adjacent
+                if blocks and window[0][0] <= blocks[-1][-1][0] + 1:
+                    prev = blocks[-1]
+                    prev_end = prev[-1][0]
+                    for entry in window:
+                        if entry[0] > prev_end:
+                            prev.append(entry)
+                else:
+                    blocks.append(window)
+            grouped[filepath] = blocks
+        else:
+            grouped[filepath] = [[(ln, lt, True)] for ln, lt in file_match_tuples]
 
     output_parts: list[str] = []
     total_bytes = 0
     byte_truncated = False
 
-    header = f"Found {total_found} matches"
+    header = f"Found {total_found} match{'es' if total_found != 1 else ''}"
     output_parts.append(header)
     total_bytes += len(header.encode("utf-8")) + 1
 
-    for filepath, file_matches in grouped.items():
+    for filepath, blocks in grouped.items():
         try:
             rel = str(filepath.relative_to(base))
         except ValueError:
@@ -995,16 +1038,28 @@ def _grep(
         output_parts.append(file_header)
         total_bytes += encoded_len
 
-        for line_no, line_text in file_matches:
-            if len(line_text) > MAX_LINE_LENGTH:
-                line_text = line_text[:MAX_LINE_LENGTH]
-            entry = f"  Line {line_no}: {line_text}"
-            encoded_len = len(entry.encode("utf-8")) + 1
-            if total_bytes + encoded_len > MAX_OUTPUT_BYTES:
-                byte_truncated = True
+        for block_idx, block in enumerate(blocks):
+            if block_idx > 0 and context_lines > 0:
+                sep = "  --"
+                encoded_len = len(sep.encode("utf-8")) + 1
+                if total_bytes + encoded_len > MAX_OUTPUT_BYTES:
+                    byte_truncated = True
+                    break
+                output_parts.append(sep)
+                total_bytes += encoded_len
+            for line_no, line_text, is_match in block:
+                if len(line_text) > MAX_LINE_LENGTH:
+                    line_text = line_text[:MAX_LINE_LENGTH]
+                marker = "  <<<" if context_lines > 0 and is_match else ""
+                entry = f"  Line {line_no}: {line_text}{marker}"
+                encoded_len = len(entry.encode("utf-8")) + 1
+                if total_bytes + encoded_len > MAX_OUTPUT_BYTES:
+                    byte_truncated = True
+                    break
+                output_parts.append(entry)
+                total_bytes += encoded_len
+            if byte_truncated:
                 break
-            output_parts.append(entry)
-            total_bytes += encoded_len
         if byte_truncated:
             break
 
@@ -2397,6 +2452,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             base_dir=base_dir,
             include=args.get("include"),
             case_insensitive=args.get("case_insensitive", False),
+            context_lines=args.get("context_lines", 0),
             extra_read_roots=skill_read_roots,
             extra_write_roots=extra_write_roots,
             unrestricted=yolo,
