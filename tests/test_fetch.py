@@ -224,6 +224,47 @@ class TestFetchUrlFormats:
         assert "Title" in result
         assert "Paragraph" in result
 
+    @patch("swival.fetch.socket.getaddrinfo")
+    @patch("swival.fetch.urllib.request.build_opener")
+    def test_markdown_strips_data_uri_images(self, mock_opener_factory, mock_dns):
+        mock_dns.return_value = [(2, 1, 0, "", ("93.184.216.34", 0))]
+        html_body = (
+            b"<html><body>"
+            b'<img src="data:image/png;base64,iVBORw0KGgoAAAANS=" alt="logo">'
+            b'<img src="https://example.com/img.png" alt="normal">'
+            b"</body></html>"
+        )
+        resp = _make_response(html_body)
+        opener = MagicMock()
+        opener.open.return_value = resp
+        mock_opener_factory.return_value = opener
+
+        result = fetch_url("http://example.com", format="markdown")
+        # data URI should be stripped
+        assert "base64" not in result
+        assert "iVBORw0" not in result
+        # alt text preserved
+        assert "logo" in result
+        # normal image preserved
+        assert "https://example.com/img.png" in result
+        assert "normal" in result
+
+    @patch("swival.fetch.socket.getaddrinfo")
+    @patch("swival.fetch.urllib.request.build_opener")
+    def test_markdown_strips_data_uri_no_alt(self, mock_opener_factory, mock_dns):
+        mock_dns.return_value = [(2, 1, 0, "", ("93.184.216.34", 0))]
+        html_body = (
+            b'<html><body><img src="data:image/svg+xml;base64,PHN2Zz4="></body></html>'
+        )
+        resp = _make_response(html_body)
+        opener = MagicMock()
+        opener.open.return_value = resp
+        mock_opener_factory.return_value = opener
+
+        result = fetch_url("http://example.com", format="markdown")
+        assert "base64" not in result
+        assert "PHN2Zz4" not in result
+
     def test_invalid_format(self):
         result = fetch_url("http://example.com", format="pdf")
         assert result.startswith("error:")
