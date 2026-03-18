@@ -1872,7 +1872,7 @@ def call_llm(
             completion_kwargs[key] = val
     if extra_body is not None:
         completion_kwargs["extra_body"] = extra_body
-    if reasoning_effort is not None:
+    if reasoning_effort is not None and reasoning_effort != "default":
         completion_kwargs["reasoning_effort"] = reasoning_effort
 
     # --- Cache lookup ---
@@ -4391,7 +4391,7 @@ def _repl_help() -> None:
     fmt.info(
         "Available commands:\n"
         "  /help              Show this help message\n"
-        "  /clear             Reset conversation to initial state\n"
+        "  /clear, /new       Reset conversation to initial state\n"
         "  /compact [--drop]  Compress context (--drop removes middle turns)\n"
         "  /save [label]      Set a context checkpoint\n"
         "  /restore           Summarize & collapse since checkpoint\n"
@@ -4773,7 +4773,7 @@ def repl_loop(
         elif cmd == "/tools":
             _repl_tools(tools, mcp_manager, a2a_manager)
             continue
-        elif cmd == "/clear":
+        elif cmd in ("/clear", "/new"):
             _repl_clear(
                 messages,
                 thinking_state,
