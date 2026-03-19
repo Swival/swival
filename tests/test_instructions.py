@@ -658,3 +658,58 @@ class TestGlobalAgentsMd:
         )
         assert "agent-instructions" not in content
         assert loaded == []
+
+
+# ---------------------------------------------------------------------------
+# Comment stripping
+# ---------------------------------------------------------------------------
+
+
+class TestCommentStripping:
+    def test_comments_stripped_from_claude_md(self, tmp_path):
+        (tmp_path / "CLAUDE.md").write_text(
+            "<!-- hidden -->visible content", encoding="utf-8"
+        )
+        result, loaded = load_instructions(str(tmp_path), verbose=False)
+        assert "visible content" in result
+        assert "hidden" not in result
+
+    def test_comments_stripped_from_agents_md(self, tmp_path):
+        (tmp_path / "AGENTS.md").write_text(
+            "<!-- hidden -->visible rules", encoding="utf-8"
+        )
+        result, loaded = load_instructions(str(tmp_path), verbose=False)
+        assert "visible rules" in result
+        assert "hidden" not in result
+
+    def test_multiline_comments_stripped(self, tmp_path):
+        (tmp_path / "CLAUDE.md").write_text(
+            "before\n<!-- line1\nline2\nline3 -->\nafter", encoding="utf-8"
+        )
+        result, loaded = load_instructions(str(tmp_path), verbose=False)
+        assert "before" in result
+        assert "after" in result
+        assert "line1" not in result
+        assert "line2" not in result
+
+    def test_large_leading_comment_stripped(self, tmp_path):
+        """Regression: a >10k comment followed by visible text must not lose the text."""
+        big_comment = "<!-- " + "x" * 15_000 + " -->"
+        (tmp_path / "CLAUDE.md").write_text(
+            big_comment + "\nvisible after big comment", encoding="utf-8"
+        )
+        result, loaded = load_instructions(str(tmp_path), verbose=False)
+        assert "visible after big comment" in result
+        assert "x" * 100 not in result
+
+    def test_provenance_comments_survive(self, tmp_path):
+        """Injected provenance annotations survive even when file content has comments."""
+        (tmp_path / "AGENTS.md").write_text(
+            "<!-- user comment -->\nReal rules.", encoding="utf-8"
+        )
+        result, loaded = load_instructions(str(tmp_path), verbose=False)
+        # File comment is stripped
+        assert "user comment" not in result
+        assert "Real rules." in result
+        # Provenance comment injected by load_instructions survives
+        assert f"<!-- project: {tmp_path.resolve() / 'AGENTS.md'} -->" in result

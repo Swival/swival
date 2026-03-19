@@ -12,6 +12,12 @@ MAX_SKILL_DESCRIPTION_CHARS = 1024
 MAX_SKILL_NAME_CHARS = 64
 
 _NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
+_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def strip_markdown_comments(text: str) -> str:
+    """Remove HTML/markdown comments (<!-- ... -->) from text."""
+    return _COMMENT_RE.sub("", text)
 
 
 @dataclass
@@ -189,13 +195,20 @@ def _try_load_skill(
         return
 
     name = parsed["name"]
-    description = parsed["description"]
+    description = strip_markdown_comments(parsed["description"]).strip()
 
     # Validate name
     name_err = validate_skill_name(name, dir_name)
     if name_err:
         if verbose:
             fmt.warning(f"invalid skill in {entry}: {name_err}")
+        return
+
+    if not description:
+        if verbose:
+            fmt.warning(
+                f"skill {name!r} description is empty after stripping comments, skipping"
+            )
         return
 
     # Validate description length
@@ -384,7 +397,7 @@ def activate_skill(
     if isinstance(parsed, str):
         return f"error: failed to parse SKILL.md: {parsed}"
 
-    body = parsed["body"]
+    body = strip_markdown_comments(parsed["body"])
 
     # Cap body size
     truncated = False

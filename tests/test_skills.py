@@ -12,6 +12,7 @@ from swival.skills import (
     format_skill_catalog,
     extract_skill_mentions,
     inject_skill_mentions,
+    strip_markdown_comments,
     MAX_SKILL_BODY_CHARS,
     MAX_SKILL_NAME_CHARS,
 )
@@ -1469,3 +1470,75 @@ class TestAgentLoopSkillInjection:
         assert len(tool_events) == 1
         assert tool_events[0]["name"] == "use_skill"
         assert tool_events[0]["arguments"] == {"name": "deploy"}
+
+
+# =========================================================================
+# strip_markdown_comments
+# =========================================================================
+
+
+class TestStripMarkdownComments:
+    def test_basic(self):
+        assert strip_markdown_comments("hello <!-- gone --> world") == "hello  world"
+
+    def test_multiline(self):
+        text = "before\n<!-- line1\nline2\nline3 -->\nafter"
+        assert strip_markdown_comments(text) == "before\n\nafter"
+
+    def test_empty_comment(self):
+        assert strip_markdown_comments("a<!---->b") == "ab"
+
+    def test_no_comments(self):
+        text = "plain text with no comments"
+        assert strip_markdown_comments(text) == text
+
+    def test_multiple_comments(self):
+        text = "a <!-- x --> b <!-- y --> c"
+        assert strip_markdown_comments(text) == "a  b  c"
+
+    def test_in_fenced_code_block(self):
+        text = "```\n<!-- comment -->\n```"
+        assert strip_markdown_comments(text) == "```\n\n```"
+
+    def test_unclosed_comment_preserved(self):
+        text = "hello <!-- unclosed"
+        assert strip_markdown_comments(text) == text
+
+
+# =========================================================================
+# Comment stripping in skill body and description
+# =========================================================================
+
+
+class TestSkillCommentStripping:
+    def test_skill_body_comments_stripped(self, tmp_path):
+        skills_dir = tmp_path / ".swival" / "skills"
+        body = "# Visible\n<!-- hidden comment -->\nAlso visible."
+        _make_skill(skills_dir, "strip-test", "A skill.", body)
+        catalog = discover_skills(str(tmp_path))
+
+        result = activate_skill("strip-test", catalog, [])
+        assert "Visible" in result
+        assert "Also visible." in result
+        assert "hidden comment" not in result
+
+    def test_skill_description_comments_stripped(self, tmp_path):
+        skills_dir = tmp_path / ".swival" / "skills"
+        _make_skill(skills_dir, "desc-test", "<!-- hidden -->visible desc")
+        catalog = discover_skills(str(tmp_path))
+
+        assert catalog["desc-test"].description == "visible desc"
+        catalog_text = format_skill_catalog(catalog)
+        assert "hidden" not in catalog_text
+        assert "visible desc" in catalog_text
+
+    def test_skill_description_comment_only_skipped(self, tmp_path):
+        skills_dir = tmp_path / ".swival" / "skills"
+        skill_dir = skills_dir / "empty-desc"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: empty-desc\ndescription: <!-- only a comment -->\n---\n\nBody",
+            encoding="utf-8",
+        )
+        catalog = discover_skills(str(tmp_path))
+        assert "empty-desc" not in catalog

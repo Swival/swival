@@ -1081,6 +1081,12 @@ def load_instructions(
     XML-tagged sections (or "" if none found) and filenames_loaded lists
     the absolute paths of files that were actually loaded.
     """
+    from .skills import strip_markdown_comments
+
+    # Read up to 10x the output budget so comment stripping has room to work,
+    # while still bounding memory for pathologically large files.
+    read_cap = MAX_INSTRUCTIONS_CHARS * 10
+
     sections: list[str] = []
     loaded: list[str] = []
 
@@ -1090,7 +1096,7 @@ def load_instructions(
         try:
             file_size = claude_path.stat().st_size
             with claude_path.open(encoding="utf-8", errors="replace") as f:
-                content = f.read(MAX_INSTRUCTIONS_CHARS + 1)
+                content = strip_markdown_comments(f.read(read_cap))
         except OSError:
             content = None
         else:
@@ -1119,7 +1125,7 @@ def load_instructions(
             try:
                 file_size = user_agents_path.stat().st_size
                 with user_agents_path.open(encoding="utf-8", errors="replace") as f:
-                    user_content = f.read(budget + 1)
+                    user_content = strip_markdown_comments(f.read(read_cap))
             except OSError:
                 if verbose:
                     fmt.info(f"Skipped unreadable {user_agents_path}")
@@ -1143,7 +1149,7 @@ def load_instructions(
         try:
             file_size = global_agents_path.stat().st_size
             with global_agents_path.open(encoding="utf-8", errors="replace") as f:
-                global_content = f.read(budget + 1)
+                global_content = strip_markdown_comments(f.read(read_cap))
         except OSError:
             if verbose:
                 fmt.info(f"Skipped unreadable {global_agents_path}")
@@ -1169,7 +1175,7 @@ def load_instructions(
         try:
             file_size = proj_agents_path.stat().st_size
             with proj_agents_path.open(encoding="utf-8", errors="replace") as f:
-                proj_content = f.read(budget + 1)
+                proj_content = strip_markdown_comments(f.read(read_cap))
         except OSError:
             pass
         else:
