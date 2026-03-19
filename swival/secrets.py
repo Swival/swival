@@ -9,7 +9,7 @@ see real values.
 import copy
 import os
 
-from fast_cipher.tokens import BUILTIN_PATTERNS, TokenEncryptor, scan as scan_tokens
+from fast_cipher.tokens import TokenEncryptor
 from fast_cipher.tokens.alphabets import ALPHANUMERIC
 from fast_cipher.tokens.types import SimpleTokenPattern
 
@@ -31,20 +31,16 @@ class SecretShield:
         if key is None:
             key = os.urandom(32)
 
-        self._encryptor = TokenEncryptor(key)
-        self._tweak = tweak
+        self._encryptor = TokenEncryptor(key, tweak=tweak)
         self._registry: dict[str, str] = {}  # ciphertext -> plaintext
         self._destroyed = False
-        self._patterns = list(BUILTIN_PATTERNS)
 
         if extra_patterns:
             for pat in extra_patterns:
                 pat = dict(pat)
                 pat.setdefault("body_alphabet", ALPHANUMERIC)
                 pat.setdefault("min_body_length", len(pat.get("prefix", "")) + 8)
-                p = SimpleTokenPattern(**pat)
-                self._encryptor.register(p)
-                self._patterns.append(p)
+                self._encryptor.register(SimpleTokenPattern(**pat))
 
     @classmethod
     def from_config(
@@ -81,7 +77,6 @@ class SecretShield:
         return encrypted
 
     def _encrypt_content(self, msg: dict) -> None:
-        """Encrypt the ``content`` field of a message dict in place."""
         content = msg.get("content")
         if content is None:
             return
@@ -96,7 +91,6 @@ class SecretShield:
                         part["text"] = self._encrypt_and_record(text)
 
     def _encrypt_tool_calls(self, msg: dict) -> None:
-        """Encrypt tool_call arguments in an assistant message dict in place."""
         tool_calls = msg.get("tool_calls")
         if not tool_calls:
             return
@@ -110,84 +104,12 @@ class SecretShield:
                 func["arguments"] = self._encrypt_and_record(args_str)
 
     def _encrypt_and_record(self, text: str) -> str:
-        """Encrypt *text*, recording new ciphertext->plaintext pairs."""
         if not text:
             return text
-
-        enc_kwargs = {}
-        if self._tweak is not None:
-            enc_kwargs["tweak"] = self._tweak
-
-        encrypted = self._encryptor.encrypt(text, **enc_kwargs)
-
-        if encrypted != text:
-            self._diff_and_record(text, encrypted)
-
+        encrypted, mappings = self._encryptor.encrypt(text)
+        for m in mappings:
+            self._registry[m.ciphertext] = m.plaintext
         return encrypted
-
-    def _diff_and_record(self, original: str, encrypted: str) -> None:
-        """Find tokens that changed and record ciphertext->plaintext pairs.
-
-        Encrypts each recognized token individually to get stable
-        plaintext->ciphertext mappings regardless of length changes
-        (heuristic tokens may expand due to [ENCRYPTED:...] markers).
-        """
-        enc_kwargs = {}
-        if self._tweak is not None:
-            enc_kwargs["tweak"] = self._tweak
-
-        spans = scan_tokens(original, self._patterns)
-
-        if spans:
-            # Encrypt each token individually to get its exact ciphertext,
-            # avoiding positional-alignment issues with heuristic tokens
-            # that change length.
-            for span in spans:
-                plain_token = original[span.start : span.end]
-                enc_token = self._encryptor.encrypt(plain_token, **enc_kwargs)
-                if enc_token != plain_token:
-                    self._registry[enc_token] = plain_token
-        else:
-            # No tokens found by scan — fall back to decrypt-based diffing.
-            self._record_via_roundtrip(original, encrypted, enc_kwargs)
-
-    def _record_via_roundtrip(
-        self, original: str, encrypted: str, enc_kwargs: dict
-    ) -> None:
-        """Record registry entries when scan finds no tokens.
-
-        Decrypts the encrypted text and aligns changed regions to extract
-        individual token mappings. This works for length-preserving (prefixed)
-        tokens. For heuristic tokens that change length, we fall back to
-        recording the whole encrypted text paired with the original so that
-        reverse_known can at least do a full-string replacement.
-        """
-        if len(original) == len(encrypted):
-            # Same length — find contiguous changed regions
-            i = 0
-            n = len(original)
-            while i < n:
-                if original[i] != encrypted[i]:
-                    j = i
-                    while j < n and original[j] != encrypted[j]:
-                        j += 1
-                    ct = encrypted[i:j]
-                    pt = original[i:j]
-                    self._registry[ct] = pt
-                    i = j
-                else:
-                    i += 1
-        else:
-            # Length changed (heuristic tokens expanded).
-            # Try to decrypt to verify round-trip, then record whole text.
-            try:
-                decrypted = self._encryptor.decrypt(encrypted, **enc_kwargs)
-            except Exception:
-                decrypted = None
-            if decrypted == original:
-                # Valid round-trip — record entire encrypted as mapping.
-                # reverse_known will do full-string match.
-                self._registry[encrypted] = original
 
     # --- Inbound (after LLM) ---
 
