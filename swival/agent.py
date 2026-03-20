@@ -4336,9 +4336,17 @@ def run_agent_loop(
                 messages[:] = compact_fn()
                 if snapshot_state is not None:
                     snapshot_state.invalidate_index_checkpoint()
-                effective_max_output = clamp_output_tokens(
-                    messages, effective_tools, context_length, max_output_tokens
-                )
+                try:
+                    effective_max_output = clamp_output_tokens(
+                        messages, effective_tools, context_length, max_output_tokens
+                    )
+                except ContextOverflowError:
+                    tokens_after = estimate_tokens(messages, effective_tools)
+                    if report:
+                        report.record_compaction(
+                            turns + turn_offset, level_name, tokens_before, tokens_after
+                        )
+                    continue  # try next compaction level
                 tokens_after = estimate_tokens(messages, effective_tools)
                 if report:
                     report.record_compaction(
@@ -4411,18 +4419,96 @@ def run_agent_loop(
                         )
                     break  # success
             else:
-                # All compaction levels exhausted — save state before dying
-                if continue_here:
-                    from .continue_here import write_continue_file
-
-                    write_continue_file(
-                        base_dir,
-                        messages,
-                        todo_state=todo_state,
-                        snapshot_state=snapshot_state,
-                        thinking_state=thinking_state,
+                # All compaction levels exhausted.  Last resort: if we still
+                # have tools attached, drop them entirely and retry as a plain
+                # chat completion.  The model loses all tool-calling ability
+                # but can at least produce a text answer.
+                _drop_tools_ok = False
+                if effective_tools is not None:
+                    fmt.warning(
+                        "context window exceeded even after compaction — "
+                        "dropping all tools and retrying as plain chat"
                     )
-                raise AgentError("context window exceeded even after compaction")
+                    effective_tools = None
+                    # Truncate a bloated system prompt so the user's
+                    # actual question can fit in the remaining context.
+                    if (
+                        context_length
+                        and messages
+                        and _msg_role(messages[0]) == "system"
+                    ):
+                        sys_content = _msg_content(messages[0]) or ""
+                        max_sys_chars = context_length  # ~1 token/char, generous
+                        if len(sys_content) > max_sys_chars:
+                            _set_msg_content(
+                                messages[0],
+                                sys_content[:max_sys_chars]
+                                + "\n\n[system prompt truncated to fit context window]",
+                            )
+                    try:
+                        effective_max_output = clamp_output_tokens(
+                            messages, None, context_length, max_output_tokens
+                        )
+                    except ContextOverflowError:
+                        pass
+                    else:
+                        _llm_args = (
+                            api_base,
+                            model_id,
+                            messages,
+                            effective_max_output,
+                            temperature,
+                            top_p,
+                            seed,
+                            None,
+                            verbose,
+                        )
+                        t0 = time.monotonic()
+                        try:
+                            with (
+                                fmt.llm_spinner(
+                                    f"Waiting for LLM (turn {turns}/{max_turns}, no tools)"
+                                )
+                                if verbose
+                                else nullcontext()
+                            ):
+                                _llm_result = call_llm(*_llm_args, **llm_kwargs)
+                                msg, finish_reason = (
+                                    _llm_result[0],
+                                    _llm_result[1],
+                                )
+                                cmd_activity = (
+                                    _llm_result[2] if len(_llm_result) > 2 else []
+                                )
+                        except ContextOverflowError:
+                            pass
+                        else:
+                            elapsed = time.monotonic() - t0
+                            if verbose:
+                                fmt.llm_timing(elapsed, finish_reason)
+                            if report:
+                                report.record_llm_call(
+                                    turns + turn_offset,
+                                    elapsed,
+                                    estimate_tokens(messages, None),
+                                    finish_reason,
+                                    is_retry=True,
+                                    retry_reason="drop_tools",
+                                )
+                            _drop_tools_ok = True
+
+                if not _drop_tools_ok:
+                    if continue_here:
+                        from .continue_here import write_continue_file
+
+                        write_continue_file(
+                            base_dir,
+                            messages,
+                            todo_state=todo_state,
+                            snapshot_state=snapshot_state,
+                            thinking_state=thinking_state,
+                        )
+                    raise AgentError("context window exceeded even after compaction")
 
         except AgentError as e:
             if _vision_pending and _is_vision_rejection(e):
