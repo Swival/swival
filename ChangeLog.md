@@ -2,6 +2,19 @@
 
 All notable user-facing changes to Swival.
 
+## 0.1.32
+
+- Last-resort compaction has been added: when the context window is too small for
+  tool schemas, all tool definitions are dropped and the system prompt is truncated
+  so the conversation can continue as plain chat.
+- Command provider now supports tool calling via a `<swival:call>` XML convention,
+  allowing external command-based backends to invoke tools.
+- Data-URI inlined images are now stripped after HTML-to-markdown conversion to
+  avoid bloating context with base64 blobs.
+- Markdown comments (`<!-- ... -->`) are now trimmed from skill and agent
+  instruction files.
+- OpenRouter requests now include `referer` and `title` headers.
+
 ## 0.1.31
 
 - The `grep` tool now supports a `context_lines` parameter to show surrounding
