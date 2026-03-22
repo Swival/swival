@@ -5,6 +5,7 @@ from datetime import datetime
 import json
 from typing import Literal
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -155,6 +156,57 @@ _EMPTY_ASSISTANT_RE = re.compile(
     r"|must have non-null content or tool_calls",
     re.IGNORECASE,
 )
+
+_TRANSIENT_PATTERNS = re.compile(
+    r"Connection reset by peer|Connection refused|timed out"
+    r"|RemoteDisconnected|Temporary failure in name resolution"
+    r"|SSLError|EOF occurred|BrokenPipeError",
+    re.IGNORECASE,
+)
+
+
+def _is_transient(exc):
+    """Return True if the exception looks like a transient network/server error."""
+    import litellm as _lt
+
+    if isinstance(
+        exc,
+        (
+            _lt.BadRequestError,
+            _lt.AuthenticationError,
+            _lt.NotFoundError,
+            _lt.ContextWindowExceededError,
+        ),
+    ):
+        return False
+    if isinstance(
+        exc,
+        (
+            _lt.InternalServerError,
+            _lt.APIConnectionError,
+            _lt.Timeout,
+            _lt.RateLimitError,
+        ),
+    ):
+        return True
+    if isinstance(exc, _lt.APIError):
+        status = getattr(exc, "status_code", None)
+        if status is not None and 500 <= status < 600:
+            return True
+    return bool(_TRANSIENT_PATTERNS.search(str(exc)))
+
+
+def _retries_from_exc(exc):
+    """Extract provider retry count from an exception, if attached."""
+    return getattr(exc, "_provider_retries", 0)
+
+
+def _raise_with_retries(exc):
+    """Attach _provider_retries default to an exception before raising."""
+    if not hasattr(exc, "_provider_retries"):
+        exc._provider_retries = 0
+    raise exc
+
 
 # Heuristics for open-weight backends that leak hidden-reasoning or tokenizer
 # control markers into assistant content. These patterns intentionally prefer
@@ -2077,6 +2129,51 @@ def _is_vision_rejection(error: "AgentError") -> bool:
     return any(pattern in msg for pattern in _VISION_REJECTION_PATTERNS)
 
 
+def _completion_with_retry(completion_kwargs, *, max_retries, verbose):
+    """Call litellm.completion() with retry on transient errors.
+
+    Returns (response, provider_retries) where provider_retries is the number
+    of retries performed (0 = first attempt succeeded).
+
+    On failure, attaches ``_provider_retries`` to the raised exception so
+    callers can record how many attempts were made before the error.
+
+    Raises ContextOverflowError, litellm.BadRequestError, or the original
+    exception for non-transient errors.
+    """
+    import litellm
+
+    if max_retries < 1:
+        max_retries = 1
+
+    for attempt in range(max_retries):
+        try:
+            return litellm.completion(**completion_kwargs), attempt
+        except litellm.ContextWindowExceededError:
+            coe = ContextOverflowError("context window exceeded (typed)")
+            coe._provider_retries = attempt
+            raise coe
+        except litellm.BadRequestError as e:
+            e._provider_retries = attempt
+            raise
+        except Exception as e:
+            if _CONTEXT_OVERFLOW_RE.search(str(e)):
+                coe = ContextOverflowError(f"context window exceeded (inferred): {e}")
+                coe._provider_retries = attempt
+                raise coe
+            if not _is_transient(e) or attempt == max_retries - 1:
+                e._provider_retries = attempt
+                raise
+            delay = min(2 * (2**attempt), 30)
+            delay *= 0.75 + 0.5 * random.random()
+            if verbose:
+                fmt.warning(
+                    f"Network error: {e} — retrying in {delay:.0f}s "
+                    f"(attempt {attempt + 2}/{max_retries})"
+                )
+            time.sleep(delay)
+
+
 def call_llm(
     base_url,
     model_id,
@@ -2096,24 +2193,29 @@ def call_llm(
     cache=None,
     secret_shield=None,
     command_tool_kwargs=None,
+    max_retries=5,
 ):
     """Call LiteLLM with the appropriate provider.
 
-    Returns (message, finish_reason, cmd_activity).
+    Returns (message, finish_reason, cmd_activity, provider_retries).
     cmd_activity is a list of {"name": str, "succeeded": bool} dicts
     (non-empty only for command provider with tool calls).
+    provider_retries is the number of transient-error retries (0 = first attempt ok).
     """
     if provider == "command":
         if command_tool_kwargs is not None:
-            return _call_command_with_tools(
-                model_id,
-                messages,
-                verbose=verbose,
-                max_output_tokens=max_output_tokens,
-                **command_tool_kwargs,
+            return (
+                *_call_command_with_tools(
+                    model_id,
+                    messages,
+                    verbose=verbose,
+                    max_output_tokens=max_output_tokens,
+                    **command_tool_kwargs,
+                ),
+                0,
             )
         msg, stop = _call_command(model_id, messages, verbose, max_output_tokens)
-        return msg, stop, []
+        return msg, stop, [], 0
 
     # --- Outbound: encrypt secrets ---
     if secret_shield is not None:
@@ -2222,7 +2324,7 @@ def call_llm(
             # Note: cache is disabled when secret_shield is active, so no
             # decrypt needed here.  But guard defensively in case the logic
             # changes.
-            return msg, finish_reason, []
+            return msg, finish_reason, [], 0
 
     def _cache_store(choice):
         if cache is not None:
@@ -2245,44 +2347,73 @@ def call_llm(
                 tc.function.arguments = secret_shield.reverse_known(args_str)
         return msg
 
+    retries = 0
     try:
-        response = litellm.completion(**completion_kwargs)
-    except litellm.ContextWindowExceededError:
-        raise ContextOverflowError("context window exceeded (typed)")
+        response, retries = _completion_with_retry(
+            completion_kwargs, max_retries=max_retries, verbose=verbose
+        )
+    except ContextOverflowError:
+        raise  # already has _provider_retries from _completion_with_retry
     except litellm.BadRequestError as e:
         msg_text = str(e)
         if _CONTEXT_OVERFLOW_RE.search(msg_text):
-            raise ContextOverflowError(f"context window exceeded (inferred): {e}")
+            coe = ContextOverflowError(f"context window exceeded (inferred): {e}")
+            coe._provider_retries = _retries_from_exc(e)
+            raise coe
         if _EMPTY_ASSISTANT_RE.search(msg_text):
             # Provider rejected an assistant message with no content and no
             # tool_calls (common with Mistral via OpenRouter).  Fix the
             # messages in place and retry once.
+            first_retries = _retries_from_exc(e)
             if _sanitize_assistant_messages(messages):
                 if verbose:
                     fmt.warning("Fixed empty assistant message in history, retrying...")
                 try:
-                    response = litellm.completion(**completion_kwargs)
-                except Exception as e2:
-                    raise AgentError(
-                        f"LLM call failed after message sanitization: {e2}"
+                    response, retries = _completion_with_retry(
+                        completion_kwargs,
+                        max_retries=max_retries,
+                        verbose=verbose,
                     )
+                except ContextOverflowError as coe2:
+                    coe2._provider_retries = first_retries + getattr(
+                        coe2, "_provider_retries", 0
+                    )
+                    raise
+                except Exception as e2:
+                    combined = first_retries + _retries_from_exc(e2)
+                    if _CONTEXT_OVERFLOW_RE.search(str(e2)):
+                        coe = ContextOverflowError(
+                            f"context window exceeded (inferred, post-sanitization): {e2}"
+                        )
+                        coe._provider_retries = combined
+                        raise coe
+                    ae = AgentError(f"LLM call failed after message sanitization: {e2}")
+                    ae._provider_retries = combined
+                    _raise_with_retries(ae)
+                retries += first_retries
                 choice = _pick_best_choice(response.choices)
                 if sanitize_thinking:
                     _sanitize_assistant_message(choice.message)
                 _cache_store(choice)
-                return _decrypt_msg(choice.message), choice.finish_reason, []
-        raise AgentError(f"LLM call failed: {e}")
+                return (
+                    _decrypt_msg(choice.message),
+                    choice.finish_reason,
+                    [],
+                    retries,
+                )
+        ae = AgentError(f"LLM call failed: {e}")
+        ae._provider_retries = _retries_from_exc(e)
+        _raise_with_retries(ae)
     except Exception as e:
-        msg_text = str(e)
-        if _CONTEXT_OVERFLOW_RE.search(msg_text):
-            raise ContextOverflowError(f"context window exceeded (inferred): {e}")
-        raise AgentError(f"LLM call failed: {e}")
+        ae = AgentError(f"LLM call failed: {e}")
+        ae._provider_retries = _retries_from_exc(e)
+        _raise_with_retries(ae)
 
     choice = _pick_best_choice(response.choices)
     if sanitize_thinking:
         _sanitize_assistant_message(choice.message)
     _cache_store(choice)
-    return _decrypt_msg(choice.message), choice.finish_reason, []
+    return _decrypt_msg(choice.message), choice.finish_reason, [], retries
 
 
 # Provider → env var that resolve_provider() checks for that provider
@@ -2318,6 +2449,8 @@ def _build_self_review_cmd(args: argparse.Namespace) -> str:
         parts.extend(["--max-output-tokens", str(args.max_output_tokens)])
     if getattr(args, "encrypt_secrets", False):
         parts.append("--encrypt-secrets")
+    if getattr(args, "retries", 5) != 5:
+        parts.extend(["--retries", str(args.retries)])
 
     return shlex.join(parts)
 
@@ -2556,6 +2689,12 @@ def build_parser():
         type=int,
         default=_UNSET,
         help="Maximum agent loop iterations (default: 100).",
+    )
+    behavior_group.add_argument(
+        "--retries",
+        type=int,
+        default=_UNSET,
+        help="Max provider retries on transient network errors (default: 5, 1 = no retry).",
     )
     integrations_group.add_argument(
         "--mcp-config",
@@ -2972,6 +3111,10 @@ def main():
     # Validation: max_review_rounds >= 0
     if args.max_review_rounds < 0:
         parser.error("--max-review-rounds must be >= 0")
+
+    # Validation: retries >= 1
+    if args.retries < 1:
+        parser.error("--retries must be >= 1")
 
     # Validation: max_output_tokens <= max_context_tokens
     if (
@@ -3690,6 +3833,7 @@ def _run_main(args, report, _write_report, parser):
         llm_kwargs["reasoning_effort"] = args.reasoning_effort
     if getattr(args, "sanitize_thinking", False):
         llm_kwargs["sanitize_thinking"] = True
+    llm_kwargs["max_retries"] = args.retries
 
     # Stash resolved model_id for error reporting
     args._resolved_model_id = model_id
@@ -4138,6 +4282,7 @@ def run_agent_loop(
     snapshot_read_streak = 0
     snapshot_nudge_fired = False
     _vision_pending = False
+    _provider_retries = 0
     loop_start = time.monotonic()
 
     def _emit(kind: str, data: dict) -> None:
@@ -4334,11 +4479,16 @@ def run_agent_loop(
                 _llm_result = call_llm(*_llm_args, **llm_kwargs)
                 msg, finish_reason = _llm_result[0], _llm_result[1]
                 cmd_activity = _llm_result[2] if len(_llm_result) > 2 else []
-        except ContextOverflowError:
+                _provider_retries = _llm_result[3] if len(_llm_result) > 3 else 0
+        except ContextOverflowError as _coe:
             elapsed = time.monotonic() - t0
             if report:
                 report.record_llm_call(
-                    turns + turn_offset, elapsed, token_est, "context_overflow"
+                    turns + turn_offset,
+                    elapsed,
+                    token_est,
+                    "context_overflow",
+                    provider_retries=getattr(_coe, "_provider_retries", 0),
                 )
 
             # --- Graduated compaction levels ---
@@ -4436,7 +4586,10 @@ def run_agent_loop(
                         _llm_result = call_llm(*_llm_args, **llm_kwargs)
                         msg, finish_reason = _llm_result[0], _llm_result[1]
                         cmd_activity = _llm_result[2] if len(_llm_result) > 2 else []
-                except ContextOverflowError:
+                        _provider_retries = (
+                            _llm_result[3] if len(_llm_result) > 3 else 0
+                        )
+                except ContextOverflowError as _coe:
                     elapsed = time.monotonic() - t0
                     if report:
                         report.record_llm_call(
@@ -4446,9 +4599,10 @@ def run_agent_loop(
                             "context_overflow",
                             is_retry=True,
                             retry_reason=level_name,
+                            provider_retries=getattr(_coe, "_provider_retries", 0),
                         )
                     continue  # try next level
-                except AgentError:
+                except AgentError as _ae:
                     elapsed = time.monotonic() - t0
                     if report:
                         report.record_llm_call(
@@ -4458,6 +4612,7 @@ def run_agent_loop(
                             "error",
                             is_retry=True,
                             retry_reason=level_name,
+                            provider_retries=getattr(_ae, "_provider_retries", 0),
                         )
                     raise
                 else:
@@ -4472,6 +4627,7 @@ def run_agent_loop(
                             finish_reason,
                             is_retry=True,
                             retry_reason=level_name,
+                            provider_retries=_provider_retries,
                         )
                     break  # success
             else:
@@ -4529,12 +4685,12 @@ def run_agent_loop(
                                 else nullcontext()
                             ):
                                 _llm_result = call_llm(*_llm_args, **llm_kwargs)
-                                msg, finish_reason = (
-                                    _llm_result[0],
-                                    _llm_result[1],
-                                )
+                                msg, finish_reason = _llm_result[0], _llm_result[1]
                                 cmd_activity = (
                                     _llm_result[2] if len(_llm_result) > 2 else []
+                                )
+                                _provider_retries = (
+                                    _llm_result[3] if len(_llm_result) > 3 else 0
                                 )
                         except ContextOverflowError:
                             pass
@@ -4550,6 +4706,7 @@ def run_agent_loop(
                                     finish_reason,
                                     is_retry=True,
                                     retry_reason="drop_tools",
+                                    provider_retries=_provider_retries,
                                 )
                             _drop_tools_ok = True
 
@@ -4582,7 +4739,13 @@ def run_agent_loop(
                 continue  # retry the LLM call with text-only
             elapsed = time.monotonic() - t0
             if report:
-                report.record_llm_call(turns + turn_offset, elapsed, token_est, "error")
+                report.record_llm_call(
+                    turns + turn_offset,
+                    elapsed,
+                    token_est,
+                    "error",
+                    provider_retries=getattr(e, "_provider_retries", 0),
+                )
             raise
         else:
             _vision_pending = False  # success — clear the flag
@@ -4591,7 +4754,11 @@ def run_agent_loop(
                 fmt.llm_timing(elapsed, finish_reason)
             if report:
                 report.record_llm_call(
-                    turns + turn_offset, elapsed, token_est, finish_reason
+                    turns + turn_offset,
+                    elapsed,
+                    token_est,
+                    finish_reason,
+                    provider_retries=_provider_retries,
                 )
         # Handle empty assistant response (no content, no tool_calls).
         # Some providers return these occasionally; appending them as-is

@@ -174,6 +174,7 @@ def run_as_reviewer(args, base_dir: str) -> int:
             args.verbose,
             provider=llm_kwargs.get("provider", args.provider),
             api_key=api_key,
+            max_retries=getattr(args, "retries", 5),
             **extra_kwargs,
         )
         msg = _llm_result[0]

@@ -67,7 +67,7 @@ class TestCallLlmEncryption:
             {"role": "user", "content": f"Use {GHP_TOKEN} to clone."},
         ]
 
-        msg, finish, _ = agent.call_llm(
+        msg, finish, _, _ = agent.call_llm(
             "http://fake",
             "test-model",
             messages,
@@ -114,7 +114,7 @@ class TestCallLlmEncryption:
 
         monkeypatch.setattr(litellm, "completion", fake_completion)
 
-        msg, finish, _ = agent.call_llm(
+        msg, finish, _, _ = agent.call_llm(
             "http://fake",
             "test-model",
             [{"role": "user", "content": "test"}],
@@ -155,7 +155,7 @@ class TestCallLlmEncryption:
 
         monkeypatch.setattr(litellm, "completion", fake_completion)
 
-        msg, finish, _ = agent.call_llm(
+        msg, finish, _, _ = agent.call_llm(
             "http://fake",
             "test-model",
             [{"role": "user", "content": "test"}],
@@ -226,7 +226,7 @@ class TestCallLlmEncryption:
 
         messages = [{"role": "user", "content": f"Use {GHP_TOKEN}"}]
 
-        msg, finish, _ = agent.call_llm(
+        msg, finish, _, _ = agent.call_llm(
             "http://fake",
             "cmd",
             messages,

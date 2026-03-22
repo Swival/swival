@@ -86,7 +86,7 @@ A `success` outcome means the model produced a final non-tool response. An `exha
 
 ### `stats`
 
-`turns` is the highest completed turn number for the run. `llm_calls` is total model API calls, including retries after compaction. `total_llm_time_s` and `total_tool_time_s` are wall-clock totals in seconds.
+`turns` is the highest completed turn number for the run. `llm_calls` is total logical LLM calls (each `call_llm()` invocation counts as one, regardless of internal provider retries), including retries after compaction. `total_llm_time_s` and `total_tool_time_s` are wall-clock totals in seconds.
 
 `tool_calls_total`, `tool_calls_succeeded`, and `tool_calls_failed` are aggregate tool counters. `tool_calls_by_name` is a per-tool breakdown using `{succeeded, failed}` counts.
 
@@ -98,7 +98,7 @@ A `success` outcome means the model produced a final non-tool response. An `exha
 
 `timeline` is an ordered array of event objects. Each event includes `type`, and most include `turn` (the turn number when the event occurred). Review events are an exception — they include `round` instead of `turn` since they occur between agent loop iterations.
 
-For `llm_call`, fields include `duration_s`, `prompt_tokens_est`, `finish_reason`, and `is_retry`. Retry calls include `retry_reason`, which is one of `compact_messages`, `drop_middle_turns`, or `aggressive_drop`.
+For `llm_call`, fields include `duration_s`, `prompt_tokens_est`, `finish_reason`, `is_retry`, and optionally `provider_retries` (number of transient-error retries within this call; omitted when 0). Retry calls include `retry_reason`, which is one of `compact_messages`, `drop_middle_turns`, or `aggressive_drop`.
 
 For `tool_call`, fields include `name`, `arguments`, `succeeded`, `duration_s`, and `result_length`. If arguments were invalid JSON, `arguments` is `null`. Failed tool calls include `error`.
 

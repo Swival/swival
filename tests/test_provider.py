@@ -166,7 +166,7 @@ class TestAssistantContentSanitization:
         )
 
         with patch("litellm.completion", return_value=response):
-            msg, finish_reason, _ = call_llm(
+            msg, finish_reason, _, _ = call_llm(
                 "http://localhost:8080/v1",
                 "my-model",
                 [{"role": "user", "content": "hi"}],
@@ -199,7 +199,7 @@ class TestAssistantContentSanitization:
         )
 
         with patch("litellm.completion", return_value=response):
-            msg, finish_reason, _ = call_llm(
+            msg, finish_reason, _, _ = call_llm(
                 "http://localhost:8080/v1",
                 "my-model",
                 [{"role": "user", "content": "What time is it in UTC?"}],
@@ -231,7 +231,7 @@ class TestAssistantContentSanitization:
             )
 
             with patch("litellm.completion", return_value=response):
-                msg, _, _ = call_llm(
+                msg, _, _, _ = call_llm(
                     "http://localhost:8080/v1",
                     "my-model",
                     [{"role": "user", "content": "hi"}],
@@ -260,7 +260,7 @@ class TestAssistantContentSanitization:
         )
 
         with patch("litellm.completion", return_value=response):
-            msg, _, _ = call_llm(
+            msg, _, _, _ = call_llm(
                 "https://openrouter.ai/api/v1",
                 "my-model",
                 [{"role": "user", "content": "hi"}],
@@ -288,7 +288,7 @@ class TestAssistantContentSanitization:
         )
 
         with patch("litellm.completion", return_value=response):
-            msg, _, _ = call_llm(
+            msg, _, _, _ = call_llm(
                 "http://localhost:8080/v1",
                 "my-model",
                 [{"role": "user", "content": "Show the literal tag"}],

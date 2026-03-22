@@ -69,7 +69,7 @@ class TestResolveCommand:
 
 class TestCallCommand:
     def test_simple_echo(self):
-        msg, reason, _ = call_llm(
+        msg, reason, _, _ = call_llm(
             None,
             "echo 'hello world'",
             [{"role": "user", "content": "hi"}],
@@ -86,7 +86,7 @@ class TestCallCommand:
         assert reason == "stop"
 
     def test_receives_full_transcript_on_stdin(self):
-        msg, _, _ = call_llm(
+        msg, _, _, _ = call_llm(
             None,
             "cat",
             [
@@ -107,7 +107,7 @@ class TestCallCommand:
         assert "test input" in msg.content
 
     def test_model_dump_exclude_none(self):
-        msg, _, _ = call_llm(
+        msg, _, _, _ = call_llm(
             None,
             "echo ok",
             [{"role": "user", "content": "hi"}],
@@ -124,7 +124,7 @@ class TestCallCommand:
         assert "tool_calls" not in dumped
 
     def test_model_dump_full(self):
-        msg, _, _ = call_llm(
+        msg, _, _, _ = call_llm(
             None,
             "echo ok",
             [{"role": "user", "content": "hi"}],
@@ -190,7 +190,7 @@ class TestCallCommand:
 
     def test_max_output_tokens_truncates(self):
         # "echo" produces a short output; use a script that generates many tokens
-        msg, _, _ = call_llm(
+        msg, _, _, _ = call_llm(
             None,
             "echo 'word ' 'word ' 'word ' 'word ' 'word ' 'word ' 'word ' 'word ' 'word ' 'word '",
             [{"role": "user", "content": "hi"}],
@@ -212,7 +212,7 @@ class TestCallCommand:
         script = tmp_path / "warn.sh"
         script.write_text("#!/bin/sh\necho 'result'\necho 'warning' >&2")
         script.chmod(0o755)
-        msg, _, _ = call_llm(
+        msg, _, _, _ = call_llm(
             None,
             str(script),
             [{"role": "user", "content": "hi"}],

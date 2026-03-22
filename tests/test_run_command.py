@@ -398,8 +398,10 @@ def test_path_shadowing_blocked(tmp_base, tmp_path):
 # ---------- Test 18: Startup resolution failure ----------
 
 
-def test_startup_resolution_failure():
+def test_startup_resolution_failure(tmp_path):
     """If --allowed-commands=nonexistent_xyz, agent.py should exit with error."""
+    env = os.environ.copy()
+    env["XDG_CONFIG_HOME"] = str(tmp_path)  # isolate from global config
     result = subprocess.run(
         [
             sys.executable,
@@ -413,6 +415,7 @@ def test_startup_resolution_failure():
         capture_output=True,
         text=True,
         timeout=10,
+        env=env,
     )
     assert result.returncode != 0
     assert "not found on PATH" in result.stderr
@@ -456,6 +459,7 @@ def test_startup_rejects_commands_inside_base_dir(tmp_path):
     # Run agent with base_dir=tmp_path and the fake command on PATH
     env = os.environ.copy()
     env["PATH"] = str(tmp_path) + os.pathsep + env.get("PATH", "")
+    env["XDG_CONFIG_HOME"] = str(tmp_path / "xdg")  # isolate from global config
 
     result = subprocess.run(
         [

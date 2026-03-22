@@ -240,7 +240,7 @@ def test_call_llm_retries_after_sanitizing_empty_assistant(monkeypatch):
         {"role": "user", "content": "hello"},
     ]
 
-    msg, finish, _ = agent.call_llm(
+    msg, finish, _, _ = agent.call_llm(
         "http://fake",
         "test-model",
         messages,

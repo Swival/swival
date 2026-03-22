@@ -85,6 +85,7 @@ class Session:
         cache: bool = False,
         cache_dir: str | None = None,
         scratch_dir: str | None = None,
+        retries: int = 5,
         encrypt_secrets: bool = False,
         encrypt_secrets_key: str | None = None,
         encrypt_secrets_tweak: str | None = None,
@@ -104,6 +105,9 @@ class Session:
         self.temperature = temperature
         self.top_p = top_p
         self.seed = seed
+        if retries < 1:
+            raise ValueError("retries must be >= 1")
+        self.retries = retries
         self.allowed_commands = allowed_commands
         self.yolo = yolo
         self.verbose = verbose
@@ -210,6 +214,7 @@ class Session:
             self._llm_kwargs["reasoning_effort"] = self.reasoning_effort
         if self.sanitize_thinking is not None:
             self._llm_kwargs["sanitize_thinking"] = self.sanitize_thinking
+        self._llm_kwargs["max_retries"] = self.retries
 
         # Resolve --add-dir and --add-dir-ro paths
         self._allowed_dir_paths = _resolve_dir_list(self.allowed_dirs, "allowed_dirs")

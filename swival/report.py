@@ -39,6 +39,7 @@ class ReportCollector:
         *,
         is_retry: bool = False,
         retry_reason: str | None = None,
+        provider_retries: int = 0,
     ):
         self.llm_calls += 1
         self.total_llm_time += duration
@@ -54,6 +55,8 @@ class ReportCollector:
         }
         if retry_reason is not None:
             event["retry_reason"] = retry_reason
+        if provider_retries:
+            event["provider_retries"] = provider_retries
         self.events.append(event)
 
     def record_tool_call(
