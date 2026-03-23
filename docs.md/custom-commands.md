@@ -12,7 +12,9 @@ mkdir -p ~/.config/swival/commands
 
 If you set `XDG_CONFIG_HOME`, the directory is `$XDG_CONFIG_HOME/swival/commands` instead.
 
-Each file in this directory is a command. The file must be executable and its name must contain only letters, digits, hyphens, and underscores.
+Each file in this directory is a command. The file must be executable and its name (or stem, ignoring extension) must contain only letters, digits, hyphens, and underscores.
+
+On Unix, extensionless files work fine. On Windows, name the file with an extension (`greet.bat`, `greet.cmd`, `greet.exe`). Swival first tries an exact match on the bare name; if that fails, it scans for executable files whose stem matches. The stem comparison is case-insensitive on Windows. If multiple executable files share the same stem (e.g. `greet.sh` and `greet.bat`), Swival reports an ambiguity error. Non-executable files with the same stem are ignored.
 
 ```sh
 cat > ~/.config/swival/commands/context <<'EOF'
@@ -65,7 +67,7 @@ Commands inherit the parent environment. Swival also sets:
 
 ## Output Handling
 
-The command's stdout is stripped and injected as a user message. If the output is too large for the remaining context window, it is truncated to fit. When the context window size is unknown, a hard cap of 100KB applies.
+The command's stdout is stripped, printed to the terminal for review, and then injected as a user message. If the output is too large for the remaining context window, it is truncated to fit. When the context window size is unknown, a hard cap of 100KB applies.
 
 The command's stderr is printed to the terminal on success. On failure (non-zero exit), Swival prints a single error message using stderr, stdout, or the exit code (in that priority order) and does not inject anything into the conversation.
 

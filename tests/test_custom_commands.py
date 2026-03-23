@@ -80,6 +80,44 @@ class TestReplRunCustomCommand:
         _, stdout = result
         assert stdout == str(tmp_path)
 
+    def test_extension_fallback(self, tmp_path, monkeypatch):
+        cmd_dir = _commands_dir(tmp_path)
+        _make_script(cmd_dir / "greet.sh", '#!/bin/sh\necho "hi from sh"')
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+
+        result = _repl_run_custom_command("!greet", str(tmp_path))
+        assert result is not None
+        assert result[1] == "hi from sh"
+
+    def test_extension_ambiguous(self, tmp_path, monkeypatch):
+        cmd_dir = _commands_dir(tmp_path)
+        _make_script(cmd_dir / "dup.sh", "#!/bin/sh\necho a")
+        _make_script(cmd_dir / "dup.py", '#!/usr/bin/env python3\nprint("b")')
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+
+        result = _repl_run_custom_command("!dup", str(tmp_path))
+        assert result is None
+
+    def test_nonexecutable_sidecar_ignored(self, tmp_path, monkeypatch):
+        cmd_dir = _commands_dir(tmp_path)
+        _make_script(cmd_dir / "tool.sh", '#!/bin/sh\necho "ok"')
+        _make_script(cmd_dir / "tool.txt", "just a note", executable=False)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+
+        result = _repl_run_custom_command("!tool", str(tmp_path))
+        assert result is not None
+        assert result[1] == "ok"
+
+    def test_exact_name_preferred_over_extension(self, tmp_path, monkeypatch):
+        cmd_dir = _commands_dir(tmp_path)
+        _make_script(cmd_dir / "tool", '#!/bin/sh\necho "exact"')
+        _make_script(cmd_dir / "tool.sh", '#!/bin/sh\necho "extension"')
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+
+        result = _repl_run_custom_command("!tool", str(tmp_path))
+        assert result is not None
+        assert result[1] == "exact"
+
     def test_cwd_is_base_dir(self, tmp_path, monkeypatch):
         cmd_dir = _commands_dir(tmp_path)
         _make_script(cmd_dir / "show-cwd", "#!/bin/sh\npwd")

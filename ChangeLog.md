@@ -2,6 +2,12 @@
 
 All notable user-facing changes to Swival.
 
+## 0.1.36
+
+- Custom commands have been added: executable scripts placed in
+  `~/.config/swival/commands/` can be invoked from the REPL with `!name`,
+  and their output is injected into the conversation as the next user message.
+
 ## 0.1.35
 
 - `/init` workflow discovery is now platform-aware: it detects the current OS

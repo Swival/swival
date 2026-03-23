@@ -5190,8 +5190,24 @@ def _repl_run_custom_command(
 
     cmd_path = commands_dir / cmd_name
     if not cmd_path.is_file():
-        fmt.error(f"command not found: {cmd_name}")
-        return None
+        _ci = sys.platform == "win32"
+        _key = cmd_name.lower() if _ci else cmd_name
+        candidates = [
+            f
+            for f in commands_dir.iterdir()
+            if (f.stem.lower() if _ci else f.stem) == _key
+            and f.is_file()
+            and os.access(f, os.X_OK)
+        ]
+        if len(candidates) == 1:
+            cmd_path = candidates[0]
+        elif len(candidates) > 1:
+            names = ", ".join(f.name for f in sorted(candidates))
+            fmt.error(f"ambiguous command {cmd_name}: {names}")
+            return None
+        else:
+            fmt.error(f"command not found: {cmd_name}")
+            return None
     if not os.access(cmd_path, os.X_OK):
         fmt.error(f"command not executable: {cmd_name}")
         return None
