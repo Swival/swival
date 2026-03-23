@@ -2,6 +2,11 @@
 
 All notable user-facing changes to Swival.
 
+## 0.1.35
+
+- `/init` workflow discovery is now platform-aware: it detects the current OS
+  and architecture and only extracts commands that apply to the host platform.
+
 ## 0.1.34
 
 - `/init` now discovers workflow files and validates the generated instructions
