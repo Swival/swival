@@ -2,7 +2,7 @@
 
 All notable user-facing changes to Swival.
 
-## 0.1.37
+## 0.9.0
 
 - Outbound LLM filter: a new `--llm-filter` flag (and `llm_filter` config key)
   runs a user-defined script before every provider call. The script receives
