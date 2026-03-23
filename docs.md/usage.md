@@ -75,7 +75,7 @@ The REPL is built on `prompt-toolkit`, so it supports input history, history sea
 
 `/tools` lists all tools available in the current session — built-in, MCP, and A2A — grouped by source with full descriptions.
 
-`/init` runs a three-pass workflow that scans your project and generates an `AGENTS.md` file.
+`/init` scans your project for build/test/lint/format commands and cross-cutting conventions, then generates a structured `AGENTS.md` file with a `## Workflow` section (exact commands including an after-every-edit reflex) followed by a `## Conventions` section. Validates the output and retries once if the structure is wrong.
 
 `/exit` and `/quit` leave the REPL. Pressing `Ctrl-D` exits as well.
 

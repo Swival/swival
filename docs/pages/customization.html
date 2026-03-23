@@ -110,7 +110,7 @@ model = &quot;gpt-5.4&quot;
 <p>The <code>--system-prompt</code> and <code>no_system_prompt</code> settings are mutually exclusive in config files, just as they are on the command line.</p>
 <p>The library API (<code>Session</code> class) does not auto-load config files. If you want config file support in library code, call <code>load_config()</code> and <code>config_to_session_kwargs()</code> explicitly.</p>
 <h2 id="instruction-files">Instruction Files</h2>
-<p>Swival loads instruction files during startup and appends them to the system prompt. <code>CLAUDE.md</code> provides project rules (<code>&lt;project-instructions&gt;</code>), while <code>AGENTS.md</code> provides agent conventions (<code>&lt;agent-instructions&gt;</code>).</p>
+<p>Swival loads instruction files during startup and appends them to the system prompt. <code>CLAUDE.md</code> provides project rules (<code>&lt;project-instructions&gt;</code>), while <code>AGENTS.md</code> provides agent workflow commands and conventions (<code>&lt;agent-instructions&gt;</code>). Use <code>/init</code> in the REPL to auto-generate a project-level <code>AGENTS.md</code>.</p>
 <h3 id="claudemd">CLAUDE.md</h3>
 <p>Loaded from the project base directory only. Capped at 10,000 characters.</p>
 <h3 id="agentsmd">AGENTS.md</h3>

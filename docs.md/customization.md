@@ -71,7 +71,7 @@ The library API (`Session` class) does not auto-load config files. If you want c
 
 ## Instruction Files
 
-Swival loads instruction files during startup and appends them to the system prompt. `CLAUDE.md` provides project rules (`<project-instructions>`), while `AGENTS.md` provides agent conventions (`<agent-instructions>`).
+Swival loads instruction files during startup and appends them to the system prompt. `CLAUDE.md` provides project rules (`<project-instructions>`), while `AGENTS.md` provides agent workflow commands and conventions (`<agent-instructions>`). Use `/init` in the REPL to auto-generate a project-level `AGENTS.md`.
 
 ### CLAUDE.md
 

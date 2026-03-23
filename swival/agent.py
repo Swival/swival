@@ -5149,7 +5149,7 @@ def _repl_help() -> None:
         "  /continue-status   Show if a continue file exists from a prior session\n"
         "  /learn             Review session for mistakes and persist to memory\n"
         "  /tools             List all available tools\n"
-        "  /init              Generate AGENTS.md for the current project\n"
+        "  /init              Scan project for build/test/lint workflow and conventions, write AGENTS.md\n"
         "  /exit, /quit       Exit the REPL"
     )
 
