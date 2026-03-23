@@ -5652,6 +5652,7 @@ def repl_loop(
             if prompt_content is None:
                 continue
 
+            fmt.info(f"[!{cmd_name}] output:\n{prompt_content}")
             messages.append({"role": "user", "content": prompt_content})
             try:
                 answer, exhausted = run_agent_loop(
