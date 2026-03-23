@@ -2,6 +2,15 @@
 
 All notable user-facing changes to Swival.
 
+## 0.1.37
+
+- Outbound LLM filter: a new `--llm-filter` flag (and `llm_filter` config key)
+  runs a user-defined script before every provider call. The script receives
+  messages as JSON on stdin and can redact content or block the request entirely.
+  Fails closed — script errors or rejections prevent the request from being sent.
+  Runs before secret encryption so filters see human-readable text. Configurable
+  from CLI, `swival.toml`, or `~/.config/swival/config.toml`.
+
 ## 0.1.36
 
 - Custom commands have been added: executable scripts placed in

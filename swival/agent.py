@@ -2328,7 +2328,7 @@ def call_llm(
         except FilterError as e:
             raise AgentError(f"LLM filter blocked request: {e}") from e
         _sanitize_assistant_messages(messages)
-        cache = None
+        cache = None  # filter script is an external mutable dependency; cached responses may be stale
 
     if provider == "command":
         if command_tool_kwargs is not None:
@@ -3952,6 +3952,23 @@ def _resolve_a2a_servers(args) -> dict | None:
     return a2a_servers or None
 
 
+def _validate_external_command(cmd_string: str, label: str) -> None:
+    """Validate that a shell command string is well-formed and the executable exists."""
+    import shlex
+
+    try:
+        parts = shlex.split(cmd_string)
+    except ValueError as e:
+        raise AgentError(f"malformed {label} command: {e}")
+    if not parts:
+        raise AgentError(f"{label} command is empty")
+    exe = parts[0]
+    if not shutil.which(exe):
+        p = Path(exe).resolve()
+        if not (p.is_file() and os.access(p, os.X_OK)):
+            raise AgentError(f"{label} executable not found or not executable: {exe}")
+
+
 def _run_main(args, report, _write_report, parser):
     # Provider-specific model discovery and context configuration
     try:
@@ -4159,25 +4176,10 @@ def _run_main(args, report, _write_report, parser):
     )
 
     # Validate and thread llm_filter
-    _llm_filter_cmd = getattr(args, "llm_filter", None)
-    if _llm_filter_cmd:
-        import shlex as _shlex_f
-
-        try:
-            _fparts = _shlex_f.split(_llm_filter_cmd)
-        except ValueError as e:
-            raise AgentError(f"malformed llm_filter command: {e}")
-        if not _fparts:
-            raise AgentError("llm_filter command is empty")
-        _fexe = _fparts[0]
-        _fresolved = shutil.which(_fexe)
-        if not _fresolved:
-            _fp = Path(_fexe).resolve()
-            if not (_fp.is_file() and os.access(_fp, os.X_OK)):
-                raise AgentError(
-                    f"llm_filter executable not found or not executable: {_fexe}"
-                )
-        loop_kwargs["llm_filter"] = _llm_filter_cmd
+    llm_filter_cmd = getattr(args, "llm_filter", None)
+    if llm_filter_cmd:
+        _validate_external_command(llm_filter_cmd, "llm_filter")
+        loop_kwargs["llm_filter"] = llm_filter_cmd
 
     if getattr(args, "proactive_summaries", False):
         loop_kwargs["compaction_state"] = CompactionState()
@@ -4190,26 +4192,8 @@ def _run_main(args, report, _write_report, parser):
     # Validate reviewer executable at startup
     reviewer_cmd = None
     if args.reviewer:
-        import shlex
-
-        try:
-            parts = shlex.split(args.reviewer)
-        except ValueError as e:
-            raise AgentError(f"malformed reviewer command: {e}")
-        if not parts:
-            raise AgentError("reviewer command is empty")
-        exe = parts[0]
-        resolved = shutil.which(exe)
-        if resolved:
-            reviewer_cmd = args.reviewer
-        else:
-            p = Path(exe).resolve()
-            if p.is_file() and os.access(p, os.X_OK):
-                reviewer_cmd = args.reviewer
-            else:
-                raise AgentError(
-                    f"reviewer executable not found or not executable: {exe}"
-                )
+        _validate_external_command(args.reviewer, "reviewer")
+        reviewer_cmd = args.reviewer
 
     if not args.repl:
         # Single-shot path

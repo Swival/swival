@@ -250,17 +250,12 @@ def _resolve_command_string(
     return shlex.join(parts)
 
 
-def _resolve_llm_filter_command(config: dict, config_dir: Path, source: str) -> None:
-    """Shell-split the llm_filter value, resolve only path-like first tokens."""
-    config["llm_filter"] = _resolve_command_string(
-        config["llm_filter"], config_dir, source, "llm_filter command"
-    )
-
-
-def _resolve_reviewer_command(config: dict, config_dir: Path, source: str) -> None:
-    """Shell-split the reviewer value, resolve only path-like first tokens."""
-    config["reviewer"] = _resolve_command_string(
-        config["reviewer"], config_dir, source, "reviewer command"
+def _resolve_config_command(
+    config: dict, key: str, config_dir: Path, source: str
+) -> None:
+    """Shell-split a command config value, resolve only path-like first tokens."""
+    config[key] = _resolve_command_string(
+        config[key], config_dir, source, f"{key} command"
     )
 
 
@@ -290,11 +285,9 @@ def _resolve_paths(config: dict, config_dir: Path, source: str = "") -> None:
                     resolved.append(str(config_dir / p))
             config[key] = resolved
 
-    if "llm_filter" in config:
-        _resolve_llm_filter_command(config, config_dir, source)
-
-    if "reviewer" in config:
-        _resolve_reviewer_command(config, config_dir, source)
+    for cmd_key in ("llm_filter", "reviewer"):
+        if cmd_key in config:
+            _resolve_config_command(config, cmd_key, config_dir, source)
 
     _resolve_command_model(config, config_dir, source)
 
