@@ -203,6 +203,11 @@ class Session:
         if self._setup_done:
             return
 
+        if self.verbose:
+            from . import fmt
+
+            fmt.init()
+
         if self.sandbox == "agentfs":
             from .sandbox_agentfs import check_sandbox_available
 
@@ -365,11 +370,6 @@ class Session:
 
         # Clean up stale cmd_output files
         cleanup_old_cmd_outputs(self.base_dir)
-
-        if self.verbose:
-            from . import fmt
-
-            fmt.init()
 
         self._setup_done = True
 

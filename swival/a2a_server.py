@@ -51,6 +51,9 @@ from .a2a_types import (
 )
 from .session import Session
 
+# Serve mode is the one place where stdlib logging is the primary diagnostics
+# channel. A2A server lifecycle/errors should integrate with uvicorn/ASGI host
+# logging rather than the interactive Rich CLI formatter.
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------

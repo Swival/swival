@@ -8,15 +8,12 @@ import asyncio
 import atexit
 import copy
 import json
-import logging
 import os
 import re
 import threading
 from typing import Any
 
 from .report import ConfigError
-
-logger = logging.getLogger(__name__)
 
 _SERVER_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 _SANITIZE_RE = re.compile(r"[^a-zA-Z0-9_-]")
@@ -79,6 +76,30 @@ class McpManager:
         self._closing = False
         self._closed = False
 
+    def _server_start_notice(self, name: str, tool_count: int) -> None:
+        """Emit a user-facing startup notice for interactive sessions."""
+        if not self._verbose:
+            return
+        from . import fmt
+
+        fmt.mcp_server_start(name, tool_count)
+
+    def _server_error_notice(self, name: str, error: str) -> None:
+        """Emit a user-facing error for interactive sessions."""
+        if not self._verbose:
+            return
+        from . import fmt
+
+        fmt.mcp_server_error(name, error)
+
+    def _warning_notice(self, message: str) -> None:
+        """Emit a user-facing warning for interactive sessions."""
+        if not self._verbose:
+            return
+        from . import fmt
+
+        fmt.warning(message)
+
     def start(self) -> None:
         """Start background event loop, connect to all servers."""
         if self._closed:
@@ -102,14 +123,12 @@ class McpManager:
         if not loop_ready.wait(timeout=10):
             raise McpShutdownError("MCP event loop failed to start")
 
-        from . import fmt as _fmt
-
         # Connect to each server via a long-lived lifecycle task
         for name, config in self._server_configs.items():
             try:
                 self._start_server_task(name, config, timeout=30)
             except Exception as e:
-                _fmt.mcp_server_error(name, str(e))
+                self._server_error_notice(name, str(e))
 
         # Build routing table with collision detection
         self._build_tool_map()
@@ -191,7 +210,7 @@ class McpManager:
             self._thread.join(timeout=10)
             if self._thread.is_alive():
                 residual_servers = list(self._sessions.keys())
-                logger.warning(
+                self._warning_notice(
                     "MCP event loop thread did not stop cleanly. "
                     f"Residual thread: {self._thread.name}, "
                     f"servers: {residual_servers}"
@@ -311,9 +330,7 @@ class McpManager:
                 _mcp_tool_to_openai(name, tool) for tool in tools_result.tools
             ]
 
-            from . import fmt
-
-            fmt.mcp_server_start(name, len(tools_result.tools))
+            self._server_start_notice(name, len(tools_result.tools))
 
             ready.set()
 
@@ -326,12 +343,12 @@ class McpManager:
             try:
                 await asyncio.wait_for(stack.aclose(), timeout=5)
             except TimeoutError:
-                logger.warning(
+                self._warning_notice(
                     f"MCP server {name!r}: graceful close timed out "
-                    f"(SDK handles SIGTERM→SIGKILL internally)"
+                    "(SDK handles SIGTERM→SIGKILL internally)"
                 )
             except Exception as e:
-                logger.warning(f"Error closing MCP server {name!r}: {e}")
+                self._warning_notice(f"Error closing MCP server {name!r}: {e}")
             self._sessions.pop(name, None)
 
     async def _close_all_sessions(self) -> None:
@@ -350,7 +367,7 @@ class McpManager:
                 if isinstance(r, Exception) and not isinstance(
                     r, asyncio.CancelledError
                 ):
-                    logger.warning(f"MCP server task error during shutdown: {r}")
+                    self._warning_notice(f"MCP server task error during shutdown: {r}")
 
         self._server_tasks.clear()
         self._shutdown_events.clear()
@@ -379,8 +396,6 @@ class McpManager:
                     tool_map[namespaced] = (server_name, original)
 
             if server_collisions:
-                from . import fmt
-
                 # Skip this server — remove all its tools from the map
                 for schema in schemas:
                     n = schema["function"]["name"]
@@ -388,7 +403,7 @@ class McpManager:
                         del tool_map[n]
                 self._tool_schemas[server_name] = []
                 detail = "\n".join(server_collisions)
-                fmt.mcp_server_error(
+                self._server_error_notice(
                     server_name,
                     f"tool name collision after sanitization, "
                     f"skipping all its tools:\n{detail}",

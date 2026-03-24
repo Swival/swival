@@ -215,7 +215,44 @@ class TestA2aManagerStartup:
         manager.close()
 
     def test_start_card_fetch_failure(self, monkeypatch):
-        """Card fetch failure logs error and skips agent."""
+        """Card fetch failure is shown in verbose mode and skips the agent."""
+        import httpx
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url):
+                raise httpx.ConnectError("fail")
+
+        monkeypatch.setattr(httpx, "Client", FakeClient)
+
+        import swival.fmt
+
+        errors = []
+        monkeypatch.setattr(
+            swival.fmt, "a2a_server_error", lambda n, e: errors.append(e)
+        )
+
+        manager = A2aManager(
+            {"bad-agent": {"url": "https://bad.example.com"}},
+            verbose=True,
+        )
+        manager.start()
+
+        assert len(errors) == 1
+        assert manager.list_tools() == []
+
+        manager.close()
+
+    def test_start_card_fetch_failure_quiet_suppresses_output(self, monkeypatch):
+        """Card fetch failure stays quiet when verbose mode is off."""
         import httpx
 
         class FakeClient:
@@ -246,7 +283,7 @@ class TestA2aManagerStartup:
         )
         manager.start()
 
-        assert len(errors) == 1
+        assert errors == []
         assert manager.list_tools() == []
 
         manager.close()
@@ -1049,6 +1086,7 @@ class TestToolCollision:
         manager._tool_schemas = {}
         manager._tool_map = {}
         manager._degraded = set()
+        manager._verbose = True
 
         # Both agents use the same config key prefix "shared" with skill "search"
         # Simulate this by giving agent-b a schema whose namespaced name collides
@@ -1126,7 +1164,7 @@ class TestToolCollision:
 
         manager = A2aManager(
             {"test-agent": {"url": "https://example.com"}},
-            verbose=False,
+            verbose=True,
         )
         manager.start()
 

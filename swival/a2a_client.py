@@ -7,7 +7,6 @@ pattern as McpManager.
 
 import asyncio
 import atexit
-import logging
 import threading
 import time
 from typing import Any
@@ -28,8 +27,6 @@ from .a2a_types import (
     sanitize_skill_id,
 )
 from .report import ConfigError
-
-logger = logging.getLogger(__name__)
 
 # Polling defaults for non-compliant servers
 _POLL_INITIAL_DELAY = 0.5
@@ -81,6 +78,22 @@ class A2aManager:
         self._closing = False
         self._closed = False
 
+    def _server_start_notice(self, name: str, tool_count: int) -> None:
+        """Emit a user-facing startup notice for interactive sessions."""
+        if not self._verbose:
+            return
+        from . import fmt
+
+        fmt.a2a_server_start(name, tool_count)
+
+    def _server_error_notice(self, name: str, error: str) -> None:
+        """Emit a user-facing error for interactive sessions."""
+        if not self._verbose:
+            return
+        from . import fmt
+
+        fmt.a2a_server_error(name, error)
+
     def start(self) -> None:
         """Start background event loop, fetch Agent Cards from all configured agents."""
         if self._closed:
@@ -102,13 +115,11 @@ class A2aManager:
         if not loop_ready.wait(timeout=10):
             raise A2aShutdownError("A2A event loop failed to start")
 
-        from . import fmt as _fmt
-
         for name, config in self._server_configs.items():
             try:
                 self._fetch_agent_card(name, config)
             except Exception as e:
-                _fmt.a2a_server_error(name, str(e))
+                self._server_error_notice(name, str(e))
 
         self._build_tool_map()
         atexit.register(self.close)
@@ -236,9 +247,7 @@ class A2aManager:
 
         self._tool_schemas[name] = schemas
 
-        from . import fmt
-
-        fmt.a2a_server_start(name, len(schemas))
+        self._server_start_notice(name, len(schemas))
 
     async def _send_message(
         self, agent_name: str, arguments: dict, config: dict
@@ -419,8 +428,6 @@ class A2aManager:
                     tool_map[namespaced] = (agent_name, skill_id)
 
             if agent_collisions:
-                from . import fmt
-
                 # Remove all this agent's tools from the map
                 for schema in schemas:
                     n = schema["function"]["name"]
@@ -428,7 +435,7 @@ class A2aManager:
                         del tool_map[n]
                 self._tool_schemas[agent_name] = []
                 detail = "\n".join(agent_collisions)
-                fmt.a2a_server_error(
+                self._server_error_notice(
                     agent_name,
                     f"tool name collision after sanitization, "
                     f"skipping all its tools:\n{detail}",

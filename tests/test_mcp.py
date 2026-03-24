@@ -792,8 +792,8 @@ class TestMcpManagerLifecycle:
 
 
 class TestCollisionDetection:
-    def test_collision_skips_server_and_warns(self, capsys):
-        mgr = McpManager({}, verbose=False)
+    def test_collision_skips_server_and_warns_when_verbose(self, capsys):
+        mgr = McpManager({}, verbose=True)
         # Simulate two tools with the same namespaced name from one server
         mgr._tool_schemas = {
             "server1": [
@@ -820,6 +820,32 @@ class TestCollisionDetection:
         # Warning printed to stderr
         captured = capsys.readouterr()
         assert "collision" in captured.err
+
+    def test_collision_skips_server_and_stays_quiet_when_not_verbose(self, capsys):
+        mgr = McpManager({}, verbose=False)
+        mgr._tool_schemas = {
+            "server1": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "mcp__server1__tool",
+                        "_mcp_original_name": "tool.v1",
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "mcp__server1__tool",
+                        "_mcp_original_name": "tool.v2",
+                    },
+                },
+            ],
+        }
+        mgr._build_tool_map()
+        assert mgr._tool_schemas["server1"] == []
+        assert "mcp__server1__tool" not in mgr._tool_map
+        captured = capsys.readouterr()
+        assert captured.err == ""
 
     def test_collision_does_not_affect_other_servers(self, capsys):
         mgr = McpManager({}, verbose=False)
