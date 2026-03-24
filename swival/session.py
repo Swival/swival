@@ -532,7 +532,23 @@ class Session:
         )
 
     def ask(self, question: str) -> Result:
-        """Conversational: share context across questions (like the REPL)."""
+        """Conversational: share context across questions (like the REPL).
+
+        On success, the assistant's reply is appended to the shared message
+        history so subsequent calls build on prior context.
+
+        On failure (any exception from the agent loop), the message list is
+        rolled back to its exact state before this call — including reverting
+        any in-place mutations from compaction or system-prompt truncation —
+        so the session remains usable.  State objects (thinking, todo,
+        snapshots, file tracker) are **not** rolled back — partial progress
+        from the failed turn (e.g. files already read, thinking notes) is
+        intentionally preserved.
+
+        Raises:
+            AgentError: on LLM, tool, or infrastructure failures, including
+                context-window exhaustion after compaction.
+        """
         self._setup()
 
         from .agent import run_agent_loop, append_history
@@ -543,11 +559,16 @@ class Session:
 
         state = self._conv_state
         messages = state["messages"]
+        snapshot = [copy.copy(m) for m in messages]
         messages.append({"role": "user", "content": question})
 
         loop_kwargs = self._build_loop_kwargs(state)
 
-        answer, exhausted = run_agent_loop(messages, self._tools, **loop_kwargs)
+        try:
+            answer, exhausted = run_agent_loop(messages, self._tools, **loop_kwargs)
+        except BaseException:
+            messages[:] = snapshot
+            raise
 
         if self.history and answer:
             append_history(self.base_dir, question, answer, diagnostics=self.verbose)

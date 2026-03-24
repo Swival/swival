@@ -175,6 +175,141 @@ class TestSessionAsk:
         assert len(r_after.messages) < len(r_before.messages)
 
 
+class TestAskFailureRollback:
+    """ask() must roll back messages on failure so the session stays usable."""
+
+    def test_agent_error_rolls_back_messages(self, tmp_path, monkeypatch):
+        call_count = 0
+
+        def failing_after_first(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _make_message(content="answer 1"), "stop"
+            raise AgentError("boom")
+
+        monkeypatch.setattr(agent, "call_llm", failing_after_first)
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+        s = Session(base_dir=str(tmp_path), history=False)
+        r1 = s.ask("first question")
+        msg_count_after_first = len(r1.messages)
+
+        with pytest.raises(AgentError, match="boom"):
+            s.ask("second question")
+
+        # Messages should be rolled back to state after first successful ask
+        assert len(s._conv_state["messages"]) == msg_count_after_first
+
+    def test_session_usable_after_failed_ask(self, tmp_path, monkeypatch):
+        call_count = 0
+
+        def fail_then_succeed(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise AgentError("transient failure")
+            return _make_message(content=f"answer {call_count}"), "stop"
+
+        monkeypatch.setattr(agent, "call_llm", fail_then_succeed)
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+        s = Session(base_dir=str(tmp_path), history=False)
+        r1 = s.ask("first")
+        assert r1.answer == "answer 1"
+
+        with pytest.raises(AgentError):
+            s.ask("second")
+
+        r3 = s.ask("third")
+        assert r3.answer == "answer 3"
+        # Third ask should build on first (shared context), not include failed second
+        assert len(r3.messages) > len(r1.messages)
+
+    def test_context_overflow_rolls_back(self, tmp_path, monkeypatch):
+        """ContextOverflowError is caught internally and becomes AgentError,
+        but messages should still be rolled back."""
+        call_count = 0
+
+        def overflow_on_second(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _make_message(content="ok"), "stop"
+            from swival.agent import ContextOverflowError
+
+            raise ContextOverflowError("context window exceeded")
+
+        monkeypatch.setattr(agent, "call_llm", overflow_on_second)
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+        s = Session(base_dir=str(tmp_path), history=False)
+        r1 = s.ask("first")
+        msg_count = len(r1.messages)
+
+        with pytest.raises(AgentError, match="context window exceeded"):
+            s.ask("second")
+
+        assert len(s._conv_state["messages"]) == msg_count
+
+    def test_history_not_written_on_failure(self, tmp_path, monkeypatch):
+        call_count = 0
+
+        def fail_on_second(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _make_message(content="ok"), "stop"
+            raise AgentError("fail")
+
+        monkeypatch.setattr(agent, "call_llm", fail_on_second)
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+        s = Session(base_dir=str(tmp_path), history=True)
+        s.ask("first")
+
+        history_dir = tmp_path / ".swival"
+        files_before = set(history_dir.iterdir()) if history_dir.exists() else set()
+
+        with pytest.raises(AgentError):
+            s.ask("should not be in history")
+
+        files_after = set(history_dir.iterdir()) if history_dir.exists() else set()
+        # No new history files should have been created for the failed ask
+        assert files_before == files_after
+
+    def test_inplace_mutation_rolled_back(self, tmp_path, monkeypatch):
+        """If the agent loop mutates messages in place (e.g. compaction),
+        the rollback must restore the original content, not just trim length."""
+        call_count = 0
+
+        def mutate_and_fail(messages, tools, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return "answer 1", False
+            # Simulate compaction mutating the system prompt in place
+            messages[0]["content"] = "CORRUPTED SYSTEM PROMPT"
+            # Simulate compaction inserting a summary
+            messages.insert(1, {"role": "user", "content": "COMPACTION SUMMARY"})
+            raise AgentError("overflow after mutation")
+
+        monkeypatch.setattr(agent, "run_agent_loop", mutate_and_fail)
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+        s = Session(base_dir=str(tmp_path), history=False)
+        s.ask("first question")
+        original_system = s._conv_state["messages"][0]["content"]
+        original_len = len(s._conv_state["messages"])
+
+        with pytest.raises(AgentError, match="overflow after mutation"):
+            s.ask("second question")
+
+        # Both content and length must be fully restored
+        assert s._conv_state["messages"][0]["content"] == original_system
+        assert len(s._conv_state["messages"]) == original_len
+
+
 class TestSessionAllowedDirsRo:
     def test_ro_paths_in_skill_read_roots(self, tmp_path, monkeypatch):
         """allowed_dirs_ro paths appear in skill_read_roots for each run."""
