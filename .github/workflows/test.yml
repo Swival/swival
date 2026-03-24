@@ -26,7 +26,7 @@ jobs:
         run: uv sync
 
       - name: Audit dependencies for known vulnerabilities
-        run: uvx pip-audit --requirement <(uv export --format requirements-txt --no-dev)
+        run: uvx pip-audit --requirement <(uv export --format requirements-txt --no-dev --no-emit-project)
 
       - name: Run tests
         run: uv run python -m pytest tests/ -v
