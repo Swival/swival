@@ -50,6 +50,7 @@
 <li><a href="web-browsing.html">Web Browsing</a></li>
 <li><a href="mcp.html">MCP</a></li>
 <li><a href="a2a.html">A2A</a></li>
+<li><a href="lifecycle-hooks.html">Lifecycle Hooks</a></li>
 <li><a href="custom-commands.html">Custom Commands</a></li>
 <li><a href="customization.html">Customization</a></li>
 <li><a href="providers.html">Providers</a></li>
@@ -138,6 +139,7 @@
 <p>For <code>guardrail</code>, fields include <code>tool</code> and <code>level</code>, where <code>level</code> is <code>nudge</code> for repeated failures and <code>stop</code> for stronger intervention.</p>
 <p>For <code>review</code>, fields include <code>round</code>, <code>exit_code</code>, and <code>feedback</code> (reviewer standard output). When the reviewer produces standard error output, <code>stderr</code> is also included.</p>
 <p>For <code>truncated_response</code>, the event marks that an LLM response ended because of output token limits.</p>
+<p>For <code>lifecycle</code>, fields include <code>event</code> (<code>startup</code> or <code>exit</code>), <code>exit_code</code>, <code>duration_s</code>, and optionally <code>error</code>. Lifecycle events appear when <code>--lifecycle-command</code> is configured. See <a href="lifecycle-hooks.html">Lifecycle Hooks</a> for details.</p>
 <h2 id="benchmarking-workflow">Benchmarking Workflow</h2>
 <p>A standard pattern is to run the same task set against multiple models or settings and then compare their report files. Passing <code>--seed</code> can reduce run-to-run variance for providers that support seeded sampling.</p>
 <pre><code class="language-sh">swival &quot;task&quot; --seed 42 --report run1.json

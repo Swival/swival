@@ -110,6 +110,8 @@ For `review`, fields include `round`, `exit_code`, and `feedback` (reviewer stan
 
 For `truncated_response`, the event marks that an LLM response ended because of output token limits.
 
+For `lifecycle`, fields include `event` (`startup` or `exit`), `exit_code`, `duration_s`, and optionally `error`. Lifecycle events appear when `--lifecycle-command` is configured. See [Lifecycle Hooks](lifecycle-hooks.md) for details.
+
 ## Benchmarking Workflow
 
 A standard pattern is to run the same task set against multiple models or settings and then compare their report files. Passing `--seed` can reduce run-to-run variance for providers that support seeded sampling.

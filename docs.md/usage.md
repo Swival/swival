@@ -253,6 +253,16 @@ Neither flag requires a question argument. Both refuse to overwrite an existing 
 
 `--sanitize-thinking` strips leaked `<think>` tags from assistant responses. Some open-weight models served through vLLM emit these markers even when thinking mode is disabled. See [Thinking Tag Sanitization](customization.md#thinking-tag-sanitization) for details.
 
+### Lifecycle Hook Flags
+
+`--lifecycle-command COMMAND` runs a user-defined command at startup and exit as `<command> startup|exit <base_dir>`. The hook receives `SWIVAL_*` environment variables with Git and project metadata, enabling remote sync of `.swival/` state. See [Lifecycle Hooks](lifecycle-hooks.md) for the environment variable contract, execution ordering, and examples.
+
+`--lifecycle-timeout SECONDS` sets the timeout for lifecycle hook execution (default: 300).
+
+`--lifecycle-fail-closed` makes hook failures abort the run instead of logging a warning.
+
+`--no-lifecycle` disables lifecycle hooks entirely, useful for nested or automated invocations.
+
 ### Other Flags
 
 `--version` prints the version and exits.

@@ -28,6 +28,7 @@ class ReportCollector:
         self.max_turn_seen = 0
         self.skills_used: list[str] = []
         self.memory_stats: dict | None = None
+        self.lifecycle_events: list[dict] = []
         self._last_report: dict | None = None
 
     def record_llm_call(
@@ -140,6 +141,18 @@ class ReportCollector:
             "mode": mode,
         }
 
+    def record_lifecycle(self, hook_result: dict):
+        event = {
+            "type": "lifecycle",
+            "event": hook_result.get("event"),
+            "exit_code": hook_result.get("exit_code"),
+            "duration_s": round(hook_result.get("duration", 0), 3),
+        }
+        if hook_result.get("error"):
+            event["error"] = hook_result["error"]
+        self.lifecycle_events.append(event)
+        self.events.append(event)
+
     def record_review(
         self,
         review_round: int,
@@ -227,6 +240,11 @@ class ReportCollector:
                 **({"todo": todo_stats} if todo_stats else {}),
                 **({"snapshot": snapshot_stats} if snapshot_stats else {}),
                 **({"memory": self.memory_stats} if self.memory_stats else {}),
+                **(
+                    {"lifecycle": self.lifecycle_events}
+                    if self.lifecycle_events
+                    else {}
+                ),
             },
             "timeline": self.events,
         }

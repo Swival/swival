@@ -85,6 +85,11 @@ NAV = [
                 "Connecting to remote agents via the Agent-to-Agent protocol",
             ),
             (
+                "lifecycle-hooks",
+                "Lifecycle Hooks",
+                "Run commands at startup and exit to sync .swival/ state with remote storage",
+            ),
+            (
                 "custom-commands",
                 "Custom Commands",
                 "Run external scripts from the REPL and inject their output into the conversation",

@@ -229,6 +229,10 @@ Swival can run a user-defined script before every outbound LLM request to redact
 
 Swival can transparently encrypt recognized credential tokens before they leave your machine. See [Secret Encryption](secrets.md) for the full documentation, including built-in token patterns, custom patterns, key management, and threat model.
 
+## Lifecycle Hooks
+
+Swival can run a user-defined command at startup and exit, useful for syncing `.swival/` state to and from remote storage. See [Lifecycle Hooks](lifecycle-hooks.md) for the full documentation, including environment variables, execution ordering, failure semantics, and a complete Hugging Face Buckets example.
+
 ## Turn And Token Limits
 
 `--max-turns` limits how many agent-loop iterations are allowed.

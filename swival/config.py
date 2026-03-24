@@ -77,6 +77,10 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "encrypt_secrets": bool,
     "encrypt_secrets_key": str,
     "encrypt_secrets_tweak": str,
+    "lifecycle_command": str,
+    "lifecycle_timeout": int,
+    "lifecycle_fail_closed": bool,
+    "no_lifecycle": bool,
 }
 
 _LIST_OF_STR_KEYS = {
@@ -149,6 +153,10 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "no_encrypt_secrets": False,
     "encrypt_secrets_key": None,
     "encrypt_secrets_tweak": None,
+    "lifecycle_command": None,
+    "lifecycle_timeout": 300,
+    "lifecycle_fail_closed": False,
+    "no_lifecycle": False,
 }
 
 
@@ -285,7 +293,7 @@ def _resolve_paths(config: dict, config_dir: Path, source: str = "") -> None:
                     resolved.append(str(config_dir / p))
             config[key] = resolved
 
-    for cmd_key in ("llm_filter", "reviewer"):
+    for cmd_key in ("llm_filter", "reviewer", "lifecycle_command"):
         if cmd_key in config:
             _resolve_config_command(config, cmd_key, config_dir, source)
 
@@ -763,6 +771,7 @@ def args_to_session_kwargs(args, base_dir: str) -> dict:
         "no_memory": "memory",
         "no_continue": "continue_here",
         "no_sandbox_auto_session": "sandbox_auto_session",
+        "no_lifecycle": "lifecycle_enabled",
         "quiet": "verbose",
     }
     # Argparse dests that map directly to Session kwargs
@@ -799,6 +808,9 @@ def args_to_session_kwargs(args, base_dir: str) -> dict:
         "encrypt_secrets_key",
         "encrypt_secrets_tweak",
         "encrypt_secrets_patterns",
+        "lifecycle_command",
+        "lifecycle_timeout",
+        "lifecycle_fail_closed",
     ]
 
     kwargs: dict = {"base_dir": base_dir}
@@ -874,6 +886,7 @@ def config_to_session_kwargs(config: dict) -> dict:
         "no_memory": "memory",
         "no_continue": "continue_here",
         "no_sandbox_auto_session": "sandbox_auto_session",
+        "no_lifecycle": "lifecycle_enabled",
         "quiet": "verbose",
     }
 
@@ -974,6 +987,12 @@ def generate_config(project: bool = False) -> str:
         "# --- Secret encryption ---",
         "# encrypt_secrets = false         # encrypt credential tokens before sending to LLM provider",
         '# encrypt_secrets_key = "hex..."  # optional persistent 32-byte key (hex-encoded)',
+        "",
+        "# --- Lifecycle hooks ---",
+        '# lifecycle_command = "./scripts/swival-sync"  # command invoked as: <command> startup|exit <base_dir>',
+        "# lifecycle_timeout = 300          # seconds before hook is killed",
+        "# lifecycle_fail_closed = false     # true = abort run on hook failure",
+        "# no_lifecycle = false              # disable hooks entirely",
         "",
         "# --- A2A serve ---",
         '# serve_name = "My Agent"',

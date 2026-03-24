@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Lifecycle Hooks — Swival</title>
+    <meta name="description" content="Lifecycle Hooks — Swival documentation">
+    <meta property="og:type" content="article">
+    <meta property="og:title" content="Lifecycle Hooks — Swival">
+    <meta property="og:description" content="Lifecycle Hooks — Swival documentation">
+    <meta property="og:image" content="https://swival.dev/img/logo.png">
+    <meta property="og:url" content="https://swival.dev/pages/lifecycle-hooks.html">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="Lifecycle Hooks — Swival">
+    <meta name="twitter:description" content="Lifecycle Hooks — Swival documentation">
+    <meta name="twitter:image" content="https://swival.dev/img/logo.png">
+    <link rel="icon" href="../favicon.ico">
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../" class="header-logo">
+                <img src="../img/logo.png" alt="Swival">
+            </a>
+            <nav class="header-nav">
+                <a href="./">Docs</a>
+                <a href="https://github.com/swival/swival">GitHub</a>
+            </nav>
+        </div>
+    </header>
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <div class="sidebar-section">
+<h4>Basics</h4>
+<ul>
+<li><a href="getting-started.html">Getting Started</a></li>
+<li><a href="usage.html">Usage</a></li>
+<li><a href="tools.html">Tools</a></li>
+<li><a href="context-management.html">Context Management</a></li>
+</ul>
+</div>
+<div class="sidebar-section">
+<h4>Configuration & Deployment</h4>
+<ul>
+<li><a href="safety-and-sandboxing.html">Safety & Sandboxing</a></li>
+<li><a href="secrets.html">Secret Encryption</a></li>
+<li><a href="llm-filter.html">Outbound LLM Filter</a></li>
+<li><a href="skills.html">Skills</a></li>
+<li><a href="web-browsing.html">Web Browsing</a></li>
+<li><a href="mcp.html">MCP</a></li>
+<li><a href="a2a.html">A2A</a></li>
+<li><a href="lifecycle-hooks.html" class="active">Lifecycle Hooks</a></li>
+<li><a href="custom-commands.html">Custom Commands</a></li>
+<li><a href="customization.html">Customization</a></li>
+<li><a href="providers.html">Providers</a></li>
+<li><a href="reports.html">Reports</a></li>
+<li><a href="reviews.html">Reviews</a></li>
+<li><a href="agentfs.html">AgentFS</a></li>
+</ul>
+</div>
+        </aside>
+        <article class="docs-content">
+            <h1 id="lifecycle-hooks">Lifecycle Hooks</h1>
+<p>Swival can run a user-configured command at two points in every session: once at startup (before memory and continue state are loaded) and once at exit (after history, reports, and continue files are written). This lets you sync <code>.swival/</code> state to and from remote storage without any provider-specific code in Swival itself.</p>
+<p>The feature is generic. Swival does not know or care what the hook does. The canonical use case is syncing <code>.swival/</code> to Hugging Face Buckets so that memory, continue files, and reports survive across machines and commits — but any storage backend works.</p>
+<h2 id="enabling-hooks">Enabling Hooks</h2>
+<p>On the command line:</p>
+<pre><code class="language-sh">swival --lifecycle-command &quot;./scripts/sync.sh&quot; &quot;task&quot;
+</code></pre>
+<p>In a config file:</p>
+<pre><code class="language-toml">lifecycle_command = &quot;./scripts/sync.sh&quot;
+lifecycle_timeout = 300
+lifecycle_fail_closed = false
+</code></pre>
+<p>In the library API:</p>
+<pre><code class="language-python">from swival import Session
+
+with Session(
+    lifecycle_command=&quot;./scripts/sync.sh&quot;,
+    lifecycle_timeout=300,
+    lifecycle_fail_closed=False,
+    lifecycle_enabled=True,
+) as s:
+    result = s.run(&quot;task&quot;)
+</code></pre>
+<p>The value is a shell command string. It is split with <code>shlex.split</code>, and path-like first tokens (<code>./</code>, <code>../</code>, <code>~</code>) resolve against the config file's parent directory, consistent with <code>reviewer</code>, <code>llm_filter</code>, and other command-valued config keys.</p>
+<h2 id="command-invocation">Command Invocation</h2>
+<p>Swival calls the configured command as:</p>
+<pre><code class="language-text">&lt;command&gt; startup &lt;base_dir&gt;
+&lt;command&gt; exit &lt;base_dir&gt;
+</code></pre>
+<p>The first positional argument is the event name (<code>startup</code> or <code>exit</code>). The second is the absolute path to the project base directory. The working directory is set to <code>base_dir</code>.</p>
+<p>The command is validated at startup using the same logic as <code>reviewer</code> and <code>llm_filter</code>: <code>shlex.split</code> parses the string, and the first token must be an executable on PATH or a path to an executable file. No <code>shell=True</code> — the command runs as a direct subprocess.</p>
+<h2 id="execution-ordering">Execution Ordering</h2>
+<h3 id="startup">Startup</h3>
+<p>The startup hook runs after:</p>
+<ul>
+<li>Config file loading and CLI flag merging</li>
+<li>Provider and model resolution</li>
+<li>Git metadata discovery</li>
+<li><code>.swival/</code> directory creation</li>
+</ul>
+<p>It runs before:</p>
+<ul>
+<li>Memory loading into the system prompt</li>
+<li>Continue-file resume checks</li>
+<li>REPL startup that depends on <code>.swival/</code> content</li>
+</ul>
+<p>This ordering is the whole point: a startup hook can download files into <code>.swival/memory/</code> or <code>.swival/continue.md</code> and Swival will pick them up as if they were already there.</p>
+<h3 id="exit">Exit</h3>
+<p>The exit hook runs after:</p>
+<ul>
+<li>The final answer is produced (or the run outcome is known)</li>
+<li><code>.swival/HISTORY.md</code> is appended</li>
+<li>The report file is written (if <code>--report</code> is set)</li>
+<li>The continue file is written (on interruption paths)</li>
+</ul>
+<p>In the CLI, the exit hook runs in the outer <code>finally</code> block, so it fires on success, exhaustion, error, and interruption.</p>
+<h3 id="repl">REPL</h3>
+<p>Hooks run once on process start and once on process exit. They do not run per prompt, on <code>/clear</code>, or on <code>/continue</code>.</p>
+<h3 id="reviewer-and-serve-modes">Reviewer and Serve Modes</h3>
+<p>Hooks are not run in <code>--reviewer-mode</code> or <code>--serve</code>. Reviewer mode is a subprocess of the main Swival invocation — running hooks there would cause nested syncs. Serve mode manages per-request sessions with different lifecycle semantics that will be addressed separately.</p>
+<h2 id="environment-variables">Environment Variables</h2>
+<p>The hook receives all of the parent environment plus these <code>SWIVAL_*</code> variables:</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Description</th>
+<th>Events</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SWIVAL_HOOK_EVENT</code></td>
+<td><code>startup</code> or <code>exit</code></td>
+<td>both</td>
+</tr>
+<tr>
+<td><code>SWIVAL_BASE_DIR</code></td>
+<td>Absolute path to the project base directory</td>
+<td>both</td>
+</tr>
+<tr>
+<td><code>SWIVAL_SWIVAL_DIR</code></td>
+<td>Path to the <code>.swival/</code> directory</td>
+<td>both</td>
+</tr>
+<tr>
+<td><code>SWIVAL_PROVIDER</code></td>
+<td>Provider name (e.g. <code>lmstudio</code>, <code>openrouter</code>)</td>
+<td>both</td>
+</tr>
+<tr>
+<td><code>SWIVAL_MODEL</code></td>
+<td>Resolved model ID</td>
+<td>both</td>
+</tr>
+<tr>
+<td><code>SWIVAL_GIT_PRESENT</code></td>
+<td><code>1</code> if inside a Git repo, <code>0</code> otherwise</td>
+<td>both</td>
+</tr>
+<tr>
+<td><code>SWIVAL_REPO_ROOT</code></td>
+<td>Git repo root (absolute path)</td>
+<td>both</td>
+</tr>
+<tr>
+<td><code>SWIVAL_PROJECT_REL</code></td>
+<td>Relative path from repo root to base_dir (empty at repo root)</td>
+<td>both</td>
+</tr>
+<tr>
+<td><code>SWIVAL_GIT_HEAD</code></td>
+<td>HEAD commit SHA</td>
+<td>both</td>
+</tr>
+<tr>
+<td><code>SWIVAL_GIT_DIRTY</code></td>
+<td><code>1</code> if working tree has staged, unstaged, or untracked changes</td>
+<td>both</td>
+</tr>
+<tr>
+<td><code>SWIVAL_GIT_REMOTE</code></td>
+<td><code>remote.origin.url</code> value</td>
+<td>both</td>
+</tr>
+<tr>
+<td><code>SWIVAL_REPO_HASH</code></td>
+<td>48-character hash of normalized repo identity</td>
+<td>both</td>
+</tr>
+<tr>
+<td><code>SWIVAL_PROJECT_HASH</code></td>
+<td>48-character hash of repo identity + project_rel</td>
+<td>both</td>
+</tr>
+<tr>
+<td><code>SWIVAL_REPORT</code></td>
+<td>Path to the report file</td>
+<td>exit only</td>
+</tr>
+<tr>
+<td><code>SWIVAL_OUTCOME</code></td>
+<td>Run outcome: <code>success</code>, <code>exhausted</code>, <code>error</code>, <code>interrupted</code></td>
+<td>exit only</td>
+</tr>
+<tr>
+<td><code>SWIVAL_EXIT_CODE</code></td>
+<td>Process exit code as a string</td>
+<td>exit only</td>
+</tr>
+</tbody>
+</table>
+<p>Git-specific variables are omitted when <code>SWIVAL_GIT_PRESENT=0</code>.</p>
+<p><code>SWIVAL_REPO_HASH</code> and <code>SWIVAL_PROJECT_HASH</code> are derived from the normalized remote URL (SSH and HTTPS forms collapse to the same value). When there is no remote, the local repo root path is used instead. Two repos cloned from the same remote get the same repo hash regardless of where they live on disk.</p>
+<p><code>SWIVAL_PROJECT_HASH</code> further incorporates <code>SWIVAL_PROJECT_REL</code>, so different subprojects in a monorepo get distinct hashes.</p>
+<h2 id="failure-semantics">Failure Semantics</h2>
+<p>By default, hooks fail open. A nonzero exit code, a timeout, or a spawn failure is silently ignored and the run continues normally. In verbose mode (<code>--quiet</code> not set), a warning is printed to stderr. This means a broken sync script will not prevent you from using Swival.</p>
+<h3 id="fail-closed-mode">Fail-Closed Mode</h3>
+<p>Pass <code>--lifecycle-fail-closed</code> (or <code>lifecycle_fail_closed = true</code> in config) to make hook failures fatal:</p>
+<ul>
+<li>A startup failure raises an error before the agent loop starts.</li>
+<li>An exit failure forces a nonzero process exit after cleanup completes (CLI) or raises <code>LifecycleError</code> (library API).</li>
+</ul>
+<p>In the library API, <code>LifecycleError</code> propagates from <code>Session.run()</code>, <code>Session.close()</code>, and <code>Session.__exit__()</code> (when no other exception is active).</p>
+<h3 id="kill-switch">Kill Switch</h3>
+<p>Pass <code>--no-lifecycle</code> to disable hooks entirely. This is useful for nested invocations, CI jobs, or debugging.</p>
+<h2 id="library-api">Library API</h2>
+<p><code>Session</code> supports the same lifecycle semantics as the CLI:</p>
+<pre><code class="language-python">from swival import Session
+
+# Single-shot: exit hook runs automatically after run()
+result = Session(lifecycle_command=&quot;./sync.sh&quot;).run(&quot;task&quot;)
+
+# Multi-turn: exit hook runs on close() or __exit__
+with Session(lifecycle_command=&quot;./sync.sh&quot;) as s:
+    s.ask(&quot;first question&quot;)
+    s.ask(&quot;follow-up&quot;)
+# exit hook fires here
+
+# Explicit close without context manager
+s = Session(lifecycle_command=&quot;./sync.sh&quot;)
+s.ask(&quot;question&quot;)
+s.close(outcome=&quot;success&quot;, exit_code=0)
+</code></pre>
+<p>For single-shot <code>run()</code>, the exit hook fires after local artifacts are written, even if the agent loop raises an exception. The <code>outcome</code> and <code>exit_code</code> passed to the hook reflect what actually happened.</p>
+<p>For multi-turn <code>ask()</code>, the exit hook fires when the session is closed — either via <code>close()</code> or <code>__exit__</code>. It does not fire after each <code>ask()</code> call. This matches REPL semantics: one startup, one exit.</p>
+<h2 id="hugging-face-buckets">Hugging Face Buckets</h2>
+<p>HF Buckets provide S3-like object storage on the Hugging Face Hub. Combined with lifecycle hooks, they give Swival commit-scoped remote state with no HF-specific code in Swival itself.</p>
+<h3 id="bucket-layout">Bucket Layout</h3>
+<p>The recommended layout uses one stable bucket per repo identity and commit-specific prefixes inside it:</p>
+<pre><code class="language-text">hf://buckets/&lt;namespace&gt;/swival-&lt;repo_hash&gt;/
+    &lt;project_rel&gt;/heads/&lt;head_sha&gt;/
+        memory/
+            MEMORY.md
+            ...
+        continue.md
+        reports/
+            ...
+</code></pre>
+<p>This keeps bucket count bounded (one per repo, not one per commit), isolates monorepo subprojects via <code>project_rel</code>, and still gives commit-scoped remote state through the <code>heads/&lt;sha&gt;</code> prefix.</p>
+<h3 id="example-sync-script">Example Sync Script</h3>
+<pre><code class="language-sh">#!/bin/sh
+# scripts/swival-hf-sync.sh
+set -e
+
+EVENT=&quot;$1&quot;
+BASE_DIR=&quot;$2&quot;
+SWIVAL_DIR=&quot;$BASE_DIR/.swival&quot;
+
+# Skip if not in a Git repo
+[ &quot;$SWIVAL_GIT_PRESENT&quot; = &quot;0&quot; ] &amp;&amp; exit 0
+
+# Resolve HF namespace (cache in env to avoid repeated calls)
+HF_NS=&quot;${HF_NS:-$(hf auth whoami --format json 2&gt;/dev/null | grep '&quot;name&quot;' | head -1 | sed 's/.*&quot;name&quot;: *&quot;//;s/&quot;.*//')}&quot;
+[ -z &quot;$HF_NS&quot; ] &amp;&amp; exit 0
+
+BUCKET=&quot;swival-$SWIVAL_REPO_HASH&quot;
+
+# Build prefix: project_rel/heads/&lt;sha&gt; or just heads/&lt;sha&gt; at repo root
+if [ -n &quot;$SWIVAL_PROJECT_REL&quot; ]; then
+    PREFIX=&quot;$SWIVAL_PROJECT_REL/heads/$SWIVAL_GIT_HEAD&quot;
+else
+    PREFIX=&quot;heads/$SWIVAL_GIT_HEAD&quot;
+fi
+
+REMOTE=&quot;hf://buckets/$HF_NS/$BUCKET/$PREFIX&quot;
+
+if [ &quot;$EVENT&quot; = &quot;startup&quot; ]; then
+    mkdir -p &quot;$SWIVAL_DIR&quot;
+    hf buckets sync &quot;$REMOTE&quot; &quot;$SWIVAL_DIR&quot; \
+        --include &quot;memory/**&quot; \
+        --include &quot;continue.md&quot; \
+        --include &quot;reports/**&quot; \
+        2&gt;/dev/null || true
+elif [ &quot;$EVENT&quot; = &quot;exit&quot; ]; then
+    hf buckets sync &quot;$SWIVAL_DIR/&quot; &quot;$REMOTE&quot; \
+        --include &quot;memory/**&quot; \
+        --include &quot;continue.md&quot; \
+        --include &quot;reports/**&quot; \
+        --exclude &quot;cache.db&quot; \
+        --exclude &quot;trash/**&quot; \
+        --exclude &quot;cmd_output_*&quot; \
+        2&gt;/dev/null || true
+fi
+</code></pre>
+<p>Make the script executable and configure it:</p>
+<pre><code class="language-toml">lifecycle_command = &quot;./scripts/swival-hf-sync.sh&quot;
+</code></pre>
+<h3 id="what-gets-synced">What Gets Synced</h3>
+<p>The example script syncs:</p>
+<ul>
+<li><code>memory/**</code> — auto-memory entries that accumulate across sessions</li>
+<li><code>continue.md</code> — interrupted session resume state</li>
+<li><code>reports/**</code> — evaluation reports</li>
+</ul>
+<p>It excludes:</p>
+<ul>
+<li><code>cache.db</code> — LLM response cache (machine-local, large)</li>
+<li><code>trash/**</code> — soft-deleted files (local safety net only)</li>
+<li><code>cmd_output_*</code> — temporary large command outputs (auto-deleted after 600 seconds)</li>
+</ul>
+<h3 id="why-repo-hash-instead-of-repo-name">Why Repo Hash Instead of Repo Name</h3>
+<p>Git remotes come in multiple forms:</p>
+<ul>
+<li><code>git@github.com:org/repo.git</code></li>
+<li><code>https://github.com/org/repo.git</code></li>
+<li><code>ssh://git@github.com/org/repo.git</code></li>
+</ul>
+<p>Swival normalizes all of these to <code>github.com/org/repo</code> before hashing, so the same repo gets the same bucket regardless of how it was cloned. The 48-character (192-bit) SHA-256 prefix is collision-resistant.</p>
+<h3 id="commit-scoping">Commit Scoping</h3>
+<p>Each <code>heads/&lt;sha&gt;</code> prefix represents the state of <code>.swival/</code> at a particular commit. When you switch branches or rebase, the HEAD changes and Swival naturally starts syncing to a different prefix. Previous prefixes remain in the bucket as historical snapshots.</p>
+<p>This is intentional: if you switch back to a commit you worked on before, the hook pulls the memory and continue state from that exact point.</p>
+<h3 id="purging-state">Purging State</h3>
+<p>Because the layout uses one stable bucket per repo, cleanup is straightforward.</p>
+<p>Delete all Swival state for a repo (replace <code>&lt;namespace&gt;</code> with your HF username):</p>
+<pre><code class="language-sh">hf buckets delete &quot;&lt;namespace&gt;/swival-$(echo -n 'github.com/org/repo' | shasum -a 256 | cut -c1-48)&quot;
+</code></pre>
+<p>To derive the full bucket path for a local repo:</p>
+<pre><code class="language-sh">cd /path/to/repo
+HF_NS=$(hf auth whoami --format json 2&gt;/dev/null | grep '&quot;name&quot;' | head -1 | sed 's/.*&quot;name&quot;: *&quot;//;s/&quot;.*//')
+REMOTE=$(git config --get remote.origin.url)
+# Normalize: strip .git suffix, convert SSH to path form
+NORM=$(echo &quot;$REMOTE&quot; | sed 's/\.git$//' | sed 's|^git@|ssh://git@|' | sed 's|ssh://[^@]*@||' | sed 's|https\?://||' | sed 's|:|/|')
+HASH=$(echo -n &quot;$NORM&quot; | shasum -a 256 | cut -c1-48)
+echo &quot;$HF_NS/swival-$HASH&quot;
+</code></pre>
+<p>For a single subproject in a monorepo, remove only its prefix path from the bucket rather than the entire bucket.</p>
+<h3 id="dirty-worktrees">Dirty Worktrees</h3>
+<p><code>SWIVAL_GIT_DIRTY</code> reports <code>1</code> when the working tree has staged changes, unstaged modifications, or untracked files. A sync script could use this to branch its behavior — for example, syncing to a <code>dirty/</code> prefix instead of <code>heads/&lt;sha&gt;/</code> when the tree is dirty, so that uncommitted work does not pollute the clean commit prefix.</p>
+<p>The example script above does not do this. It always syncs to <code>heads/&lt;sha&gt;</code>, which means dirty-tree sessions overwrite the same prefix as clean-tree sessions for that commit. For most workflows this is fine. Add the dirty prefix if you need strict isolation.</p>
+<h2 id="interaction-with-other-features">Interaction with Other Features</h2>
+<p><strong>Reviewer and self-review:</strong> Hooks do not run in <code>--reviewer-mode</code>. Self-review spawns a reviewer subprocess, but that subprocess gets <code>--reviewer-mode</code>, so it also skips hooks. No nested sync.</p>
+<p><strong>A2A serve:</strong> Hooks are excluded from <code>--serve</code> in this release. Per-session hooks for long-lived A2A servers need different lifecycle semantics and will be addressed separately.</p>
+<p><strong>AgentFS sandbox:</strong> Hooks run in the same process context as Swival. If you are running inside an AgentFS sandbox, the hook script needs network access to reach the remote storage backend.</p>
+<p><strong>Reports:</strong> Lifecycle events (startup and exit) are recorded in the report timeline when <code>--report</code> is set. Each event includes its exit code, duration, and any error message. A fail-closed exit hook failure rewrites the report with <code>outcome: "error"</code>.</p>
+        </article>
+    </div>
+    <footer class="site-footer">
+        MIT License &middot;
+        <a href="https://github.com/swival/swival">GitHub</a>
+    </footer>
+</body>
+</html>

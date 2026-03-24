@@ -91,6 +91,10 @@ class Session:
         encrypt_secrets_tweak: str | None = None,
         encrypt_secrets_patterns: list | None = None,
         llm_filter: str | None = None,
+        lifecycle_command: str | None = None,
+        lifecycle_timeout: int = 300,
+        lifecycle_fail_closed: bool = False,
+        lifecycle_enabled: bool = True,
     ):
         self.base_dir = base_dir
         self.scratch_dir = scratch_dir
@@ -140,6 +144,10 @@ class Session:
         self.encrypt_secrets_tweak = encrypt_secrets_tweak
         self.encrypt_secrets_patterns = encrypt_secrets_patterns
         self.llm_filter = llm_filter
+        self.lifecycle_command = lifecycle_command
+        self.lifecycle_timeout = lifecycle_timeout
+        self.lifecycle_fail_closed = lifecycle_fail_closed
+        self.lifecycle_enabled = lifecycle_enabled
 
         # Streaming hooks (set externally, e.g. by A2A server)
         self.event_callback = None
@@ -171,6 +179,11 @@ class Session:
 
         # Secret shield (created in _setup if encrypt_secrets is enabled)
         self._secret_shield = None
+
+        # Lifecycle hook state
+        self._lifecycle_git_meta: dict | None = None
+        self._lifecycle_startup_result: dict | None = None
+        self._lifecycle_exit_ran: bool = False
 
         # Per-conversation state (for ask() mode)
         self._conv_state: dict | None = None
@@ -291,6 +304,30 @@ class Session:
             from .cache import open_cache
 
             self._llm_cache = open_cache(self.base_dir, self.cache_dir)
+
+        # --- Lifecycle startup hook ---
+        if self.lifecycle_command and self.lifecycle_enabled:
+            from .agent import _validate_external_command
+            from .lifecycle import run_lifecycle_hook, _git_metadata, LifecycleError
+
+            _validate_external_command(self.lifecycle_command, "lifecycle_command")
+            self._lifecycle_git_meta = _git_metadata(self.base_dir)
+            try:
+                self._lifecycle_startup_result = run_lifecycle_hook(
+                    self.lifecycle_command,
+                    "startup",
+                    self.base_dir,
+                    timeout=self.lifecycle_timeout,
+                    fail_closed=self.lifecycle_fail_closed,
+                    provider=self.provider,
+                    model=self._model_id,
+                    git_meta=self._lifecycle_git_meta,
+                    verbose=self.verbose,
+                )
+            except LifecycleError as e:
+                from .report import AgentError
+
+                raise AgentError(f"lifecycle startup hook failed (fail-closed): {e}")
 
         # Build system prompt (without memory — memory is injected per-call
         # in run()/ask() so it can be keyed from the user's question).
@@ -446,12 +483,23 @@ class Session:
         messages.append({"role": "user", "content": question})
         loop_kwargs = self._build_loop_kwargs(state)
 
-        answer, exhausted = run_agent_loop(
-            messages, self._tools, **loop_kwargs, report=collector
-        )
+        answer = None
+        exhausted = False
+        outcome = "error"
+        exit_code = 1
+        try:
+            answer, exhausted = run_agent_loop(
+                messages, self._tools, **loop_kwargs, report=collector
+            )
+            outcome = "exhausted" if exhausted else "success"
+            exit_code = 2 if exhausted else 0
 
-        if self.history and answer:
-            append_history(self.base_dir, question, answer, diagnostics=self.verbose)
+            if self.history and answer:
+                append_history(
+                    self.base_dir, question, answer, diagnostics=self.verbose
+                )
+        finally:
+            self._run_lifecycle_exit(outcome=outcome, exit_code=exit_code)
 
         report_dict = None
         if collector:
@@ -467,9 +515,9 @@ class Session:
                     "seed": self.seed,
                     "yolo": self.yolo,
                 },
-                outcome="exhausted" if exhausted else "success",
+                outcome=outcome,
                 answer=answer,
-                exit_code=2 if exhausted else 0,
+                exit_code=exit_code,
                 turns=collector.max_turn_seen,
                 sandbox_mode=self.sandbox,
                 sandbox_session=self.sandbox_session,
@@ -511,10 +559,54 @@ class Session:
             report=None,
         )
 
-    def __enter__(self):
-        return self
+    def _run_lifecycle_exit(
+        self,
+        *,
+        outcome: str | None = None,
+        exit_code: int | None = None,
+    ) -> None:
+        """Run the lifecycle exit hook if configured and not already run."""
+        if self._lifecycle_exit_ran:
+            return
+        if not (self.lifecycle_command and self.lifecycle_enabled and self._setup_done):
+            return
 
-    def __exit__(self, *exc):
+        self._lifecycle_exit_ran = True
+
+        from .lifecycle import run_lifecycle_hook
+
+        run_lifecycle_hook(
+            self.lifecycle_command,
+            "exit",
+            self.base_dir,
+            timeout=self.lifecycle_timeout,
+            fail_closed=self.lifecycle_fail_closed,
+            provider=self.provider,
+            model=self._model_id,
+            git_meta=self._lifecycle_git_meta,
+            outcome=outcome,
+            exit_code=exit_code,
+            verbose=self.verbose,
+        )
+
+    def close(self, *, outcome: str | None = None, exit_code: int | None = None):
+        """Explicitly close the session and run the exit hook.
+
+        Call this after the last ask() call when not using a context manager.
+        Passing *outcome* and *exit_code* makes them available to the hook via
+        SWIVAL_OUTCOME and SWIVAL_EXIT_CODE. Idempotent — safe to call after
+        run() already ran the exit hook.
+
+        Raises LifecycleError if the exit hook fails and lifecycle_fail_closed
+        is True. Resources are always cleaned up regardless.
+        """
+        try:
+            self._run_lifecycle_exit(outcome=outcome, exit_code=exit_code)
+        finally:
+            self._cleanup()
+
+    def _cleanup(self):
+        """Release resources (cache, MCP, A2A, secrets)."""
         if self._llm_cache is not None:
             self._llm_cache.close()
             self._llm_cache = None
@@ -525,6 +617,22 @@ class Session:
         if self._secret_shield is not None:
             self._secret_shield.destroy()
             self._secret_shield = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # Always clean up resources first
+        _hook_err = None
+        try:
+            self._run_lifecycle_exit()
+        except Exception as e:
+            _hook_err = e
+        self._cleanup()
+
+        # Propagate fail-closed exit hook errors when no other exception is active
+        if _hook_err is not None and self.lifecycle_fail_closed and exc_type is None:
+            raise _hook_err
 
     def reset(self) -> None:
         """Clear conversation state without invalidating setup. Next ask() starts fresh."""

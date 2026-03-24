@@ -2896,6 +2896,32 @@ def build_parser():
         default=_UNSET,
         help="Disable A2A agent connections entirely.",
     )
+    integrations_group.add_argument(
+        "--lifecycle-command",
+        metavar="COMMAND",
+        default=_UNSET,
+        help="Command invoked at startup and exit as: <command> startup|exit <base_dir>. "
+        "Receives SWIVAL_* env vars with Git and project metadata.",
+    )
+    integrations_group.add_argument(
+        "--lifecycle-timeout",
+        type=int,
+        default=_UNSET,
+        metavar="SECONDS",
+        help="Timeout for lifecycle hook execution (default: 300).",
+    )
+    integrations_group.add_argument(
+        "--lifecycle-fail-closed",
+        action="store_true",
+        default=_UNSET,
+        help="Abort the run if a lifecycle hook fails (default: fail-open, log warning).",
+    )
+    integrations_group.add_argument(
+        "--no-lifecycle",
+        action="store_true",
+        default=_UNSET,
+        help="Disable lifecycle hooks entirely (useful for nested or automated invocations).",
+    )
     access_group.add_argument(
         "--no-read-guard",
         action="store_true",
@@ -3418,9 +3444,13 @@ def main():
         if args.verbose:
             fmt.info(f"Report written to {args.report}")
 
+    _run_outcome = "success"
+    _run_exit_code = 0
     try:
         _run_main(args, report, _write_report, parser)
     except AgentError as e:
+        _run_outcome = "error"
+        _run_exit_code = 1
         fmt.error(str(e))
         _write_report(
             "error",
@@ -3432,13 +3462,91 @@ def main():
             review_rounds=getattr(args, "_review_rounds", 0),
         )
         sys.exit(1)
+    except SystemExit as e:
+        _run_exit_code = e.code if isinstance(e.code, int) else 1
+        _run_outcome = {0: "success", 2: "exhausted", 130: "interrupted"}.get(
+            _run_exit_code, "error"
+        )
+        raise
     finally:
+        # --- Lifecycle exit hook ---
+        _lc_cmd = getattr(args, "_lifecycle_cmd", None)
+        _lc_no = getattr(args, "_no_lifecycle", False)
+        _lc_error = None
+        if _lc_cmd and not _lc_no:
+            from .lifecycle import run_lifecycle_hook, LifecycleError
+
+            _lc_report_path = getattr(args, "report", None)
+            try:
+                _lc_result = run_lifecycle_hook(
+                    _lc_cmd,
+                    "exit",
+                    str(Path(args.base_dir).resolve()),
+                    timeout=getattr(args, "_lifecycle_timeout", 300),
+                    fail_closed=getattr(args, "_lifecycle_fail_closed", False),
+                    provider=args.provider,
+                    model=getattr(args, "_resolved_model_id", None),
+                    git_meta=getattr(args, "_lifecycle_git_meta", None),
+                    report_path=_lc_report_path
+                    if isinstance(_lc_report_path, str)
+                    else None,
+                    outcome=_run_outcome,
+                    exit_code=_run_exit_code,
+                    verbose=args.verbose,
+                )
+                if args.verbose and _lc_result:
+                    fmt.info(
+                        f"Lifecycle exit hook completed in "
+                        f"{_lc_result['duration']:.1f}s"
+                    )
+                # Record exit hook in report and re-persist the file
+                if report and _lc_result:
+                    report.record_lifecycle(_lc_result)
+                    if _lc_report_path and report._last_report is not None:
+                        report._last_report["timeline"] = report.events
+                        report._last_report["stats"]["lifecycle"] = (
+                            report.lifecycle_events
+                        )
+                        try:
+                            report.write(_lc_report_path)
+                        except OSError:
+                            pass
+            except LifecycleError as e:
+                _lc_error = e
+                fmt.error(f"lifecycle exit hook failed (fail-closed): {e}")
+                if report:
+                    report.record_lifecycle(
+                        {
+                            "event": "exit",
+                            "exit_code": None,
+                            "duration": 0,
+                            "error": str(e),
+                        }
+                    )
+
+            # If fail-closed exit hook failed, amend the report to reflect it
+            if _lc_error is not None and report and _lc_report_path:
+                _write_report(
+                    "error",
+                    exit_code=1,
+                    error_message=f"lifecycle exit hook failed: {_lc_error}",
+                    model_id=getattr(
+                        args, "_resolved_model_id", args.model or "unknown"
+                    ),
+                    skills_catalog=getattr(args, "_resolved_skills", None),
+                    instructions_loaded=getattr(args, "_resolved_instructions", None),
+                    review_rounds=getattr(args, "_review_rounds", 0),
+                )
+
         _cache = getattr(args, "_llm_cache", None)
         if _cache is not None:
             _cache.close()
         _shield = getattr(args, "_secret_shield", None)
         if _shield is not None:
             _shield.destroy()
+
+        if _lc_error is not None:
+            sys.exit(1)
 
 
 def resolve_provider(
@@ -4095,6 +4203,49 @@ def _run_main(args, report, _write_report, parser):
         if args.verbose:
             stats = llm_cache.stats()
             fmt.info(f"Cache: {llm_cache.db_path} ({stats['entries']} entries)")
+
+    # --- Lifecycle startup hook ---
+    lifecycle_cmd = getattr(args, "lifecycle_command", None)
+    lifecycle_timeout = getattr(args, "lifecycle_timeout", 300)
+    lifecycle_fail_closed = getattr(args, "lifecycle_fail_closed", False)
+    no_lifecycle = getattr(args, "no_lifecycle", False)
+    lifecycle_startup_result = None
+    lifecycle_git_meta = None
+
+    if lifecycle_cmd and not no_lifecycle:
+        _validate_external_command(lifecycle_cmd, "lifecycle_command")
+        from .lifecycle import run_lifecycle_hook, _git_metadata, LifecycleError
+
+        lifecycle_git_meta = _git_metadata(base_dir)
+        try:
+            lifecycle_startup_result = run_lifecycle_hook(
+                lifecycle_cmd,
+                "startup",
+                base_dir,
+                timeout=lifecycle_timeout,
+                fail_closed=lifecycle_fail_closed,
+                provider=args.provider,
+                model=model_id,
+                git_meta=lifecycle_git_meta,
+                verbose=args.verbose,
+            )
+        except LifecycleError as e:
+            raise AgentError(f"lifecycle startup hook failed (fail-closed): {e}")
+        if args.verbose and lifecycle_startup_result:
+            fmt.info(
+                f"Lifecycle startup hook completed in "
+                f"{lifecycle_startup_result['duration']:.1f}s"
+            )
+        if report and lifecycle_startup_result:
+            report.record_lifecycle(lifecycle_startup_result)
+
+    # Stash lifecycle state on args for exit hook
+    args._lifecycle_cmd = lifecycle_cmd
+    args._lifecycle_timeout = lifecycle_timeout
+    args._lifecycle_fail_closed = lifecycle_fail_closed
+    args._no_lifecycle = no_lifecycle
+    args._lifecycle_git_meta = lifecycle_git_meta
+    args._lifecycle_startup_result = lifecycle_startup_result
 
     # Build list of tool schemas exposable to command provider (MCP/A2A/skills).
     _command_tool_schemas = (
