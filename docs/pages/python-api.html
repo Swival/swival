@@ -257,7 +257,7 @@ session.close(outcome=&quot;success&quot;, exit_code=0)
 </code></pre>
 <p>On success, the assistant's reply is appended to the shared history so subsequent calls build on prior context.</p>
 <p>On failure, the message list is rolled back to its state before the call — including any in-place mutations from compaction — so the session stays usable. State objects (thinking notes, todo items, file tracker) are not rolled back; partial progress from the failed turn is preserved.</p>
-<p>Raises <code>AgentError</code> (or one of its subclasses) on LLM, tool, or infrastructure failures. In particular, <code>ContextOverflowError</code> is raised when the context window is exhausted even after all compaction strategies have been tried.</p>
+<p>Raises <code>AgentError</code> (or one of its subclasses) on LLM, tool, or infrastructure failures. In particular, <code>ContextOverflowError</code> is raised when the context window is exhausted even after all compaction strategies have been tried. The first <code>ask()</code> call triggers setup, so <code>LifecycleError</code> can also be raised if a fail-closed startup hook fails.</p>
 <h3 id="sessionreset"><code>Session.reset()</code></h3>
 <p>Clear the conversation state. The next <code>ask()</code> starts with a fresh message history. Setup (provider validation, MCP connections, etc.) is preserved.</p>
 <h3 id="sessionclose-outcomenone-exit_codenone"><code>Session.close(*, outcome=None, exit_code=None)</code></h3>
@@ -308,7 +308,8 @@ class Result:
 </tbody>
 </table>
 <h2 id="exceptions">Exceptions</h2>
-<p>All exceptions raised through the public API are subclasses of <code>AgentError</code>. Code that catches <code>AgentError</code> handles every failure mode. Catch a subclass when you need finer control.</p>
+<p>Exceptions from the agent loop and configuration layer are subclasses of <code>AgentError</code>. Code that catches <code>AgentError</code> handles the common failure modes. Catch a subclass when you need finer control.</p>
+<p>The constructor itself may raise standard Python exceptions for argument validation errors (e.g. <code>ValueError</code> for <code>retries &lt; 1</code>). Unexpected runtime failures from underlying libraries can also escape as their original types — <code>AgentError</code> covers swival's own error paths, not every possible exception.</p>
 <pre><code>AgentError
 ├── ConfigError
 ├── ContextOverflowError
