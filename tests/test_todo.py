@@ -237,13 +237,20 @@ class TestPersistence:
         assert content == ""
 
     def test_session_isolation(self, tmp_path):
-        """New TodoState deletes stale todo file from a prior session."""
+        """Stale items are preserved on disk (for concurrent sessions) but
+        not absorbed into self.items (session isolation)."""
         todo_path = tmp_path / ".swival" / "todo.md"
         todo_path.parent.mkdir(parents=True, exist_ok=True)
         todo_path.write_text("- [ ] Old stale task\n")
-        # Constructing a new TodoState should delete the old file
-        TodoState(notes_dir=str(tmp_path))
-        assert not todo_path.exists()
+        state = TodoState(notes_dir=str(tmp_path))
+        assert todo_path.exists()
+        state.process({"action": "add", "tasks": "fresh"})
+        from swival.todo import _parse_todo_file
+
+        on_disk = {i.text for i in _parse_todo_file(todo_path)}
+        assert "fresh" in on_disk
+        assert "Old stale task" in on_disk  # preserved on disk for concurrent sessions
+        assert not any(i.text == "Old stale task" for i in state.items)  # not absorbed
 
     def test_init_cleanup_ignores_missing_file(self, tmp_path):
         # No .swival/ directory at all — should not raise
@@ -371,7 +378,7 @@ class TestUsageCounters:
         assert state._total_actions == 0
         assert state.summary_line() is None
         todo_path = tmp_path / ".swival" / "todo.md"
-        assert not todo_path.exists()
+        assert todo_path.read_text() == ""
 
     def test_summary_line_all_done(self):
         state = TodoState()

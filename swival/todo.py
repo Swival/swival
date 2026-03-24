@@ -1,11 +1,23 @@
 """Todo list tool for tracking work items across an agent session."""
 
 import json
+import os
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # type: ignore[assignment]  # Windows
+
 from . import fmt
 
+# Per-session add cap.  The shared todo.md file may temporarily exceed
+# this when concurrent sessions each add items up to the cap, because the
+# merge preserves all successfully-added items rather than silently
+# discarding them.  The cap is only enforced at add-time against the
+# local session's item count.
 MAX_ITEMS = 50
 MAX_ITEM_TEXT = 500
 VALID_ACTIONS = {"add", "done", "remove", "clear", "list"}
@@ -16,6 +28,45 @@ _REASON_LIST_FULL = "todo list full"
 class TodoItem:
     text: str
     done: bool = False
+
+
+def _task_key(text: str) -> str:
+    return text.casefold()
+
+
+def _parse_todo_file(path: Path) -> list[TodoItem]:
+    """Parse a todo.md file into a list of TodoItems."""
+    items: list[TodoItem] = []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return items
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- [x] "):
+            items.append(TodoItem(text=stripped[6:], done=True))
+        elif stripped.startswith("- [ ] "):
+            items.append(TodoItem(text=stripped[6:], done=False))
+    return items
+
+
+@contextmanager
+def _todo_lock(todo_path: Path):
+    """Acquire an exclusive flock on the todo.md sidecar lock file."""
+    if fcntl is None:
+        yield
+        return
+    lock_path = todo_path.parent / "todo.md.lock"
+    lock_fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        os.close(lock_fd)
 
 
 def _safe_todo_path(notes_dir: str, todo_dir: str | None = None) -> Path:
@@ -92,17 +143,26 @@ class TodoState:
         self.add_count = 0
         self.done_count = 0
         self._total_actions = 0
+        self._removed_keys: set[str] = set()
+        self._baseline_keys: set[str] = set()
 
-        # Session isolation: delete stale todo file from a prior run.
+        # Session isolation: record which items already exist on disk so
+        # this session's merges preserve them for concurrent sessions but
+        # don't absorb them into self.items.  _baseline_keys is kept
+        # separate from _removed_keys so baseline items are still written
+        # back to disk (a live peer session may own them).
         if notes_dir is not None:
             try:
                 todo_path = _safe_todo_path(notes_dir, todo_dir)
-                todo_path.unlink()
-            except FileNotFoundError:
-                pass
+                todo_path.parent.mkdir(parents=True, exist_ok=True)
+                with _todo_lock(todo_path):
+                    for item in _parse_todo_file(todo_path):
+                        self._baseline_keys.add(_task_key(item.text))
             except ValueError:
                 # .swival is a symlink escaping base_dir — disable persistence.
                 self.notes_dir = None
+            except OSError:
+                pass
 
     @property
     def remaining_count(self) -> int:
@@ -121,6 +181,9 @@ class TodoState:
 
         if action == "clear":
             count = len(self.items)
+            self._removed_keys.update(_task_key(i.text) for i in self.items)
+            self._removed_keys.update(self._baseline_keys)
+            self._baseline_keys.clear()
             self.items.clear()
             self._save()
             if self.verbose:
@@ -172,8 +235,8 @@ class TodoState:
         skipped: list[str] = []
         added = 0
         for task in tasks:
-            task_key = self._task_key(task)
-            if any(self._task_key(i.text) == task_key for i in self.items):
+            task_key = _task_key(task)
+            if any(_task_key(i.text) == task_key for i in self.items):
                 skipped.append(task)
                 continue
             if len(self.items) >= MAX_ITEMS:
@@ -186,7 +249,7 @@ class TodoState:
         succeeded = added + len(skipped)
         if succeeded == 0 and errors:
             if all(e["reason"] == _REASON_LIST_FULL for e in errors):
-                return f"error: todo list full ({MAX_ITEMS} items max)"
+                return f"error: todo list full ({MAX_ITEMS} items max per session)"
             return self._all_failed_error(errors, tasks)
 
         self._save()
@@ -219,6 +282,7 @@ class TodoState:
             if isinstance(match, str):
                 errors.append({"task": task, "reason": match.removeprefix("error: ")})
                 continue
+            self._removed_keys.add(_task_key(match.text))
             self.items.remove(match)
             removed += 1
 
@@ -263,20 +327,20 @@ class TodoState:
         candidates = (
             self.items if include_done else [i for i in self.items if not i.done]
         )
-        lower = self._task_key(task)
+        lower = _task_key(task)
 
         # 1. Exact match (case-insensitive)
-        exact = [i for i in candidates if self._task_key(i.text) == lower]
+        exact = [i for i in candidates if _task_key(i.text) == lower]
         if len(exact) == 1:
             return exact[0]
 
         # 2. Prefix match
-        prefix = [i for i in candidates if self._task_key(i.text).startswith(lower)]
+        prefix = [i for i in candidates if _task_key(i.text).startswith(lower)]
         if len(prefix) == 1:
             return prefix[0]
 
         # 3. Substring match
-        sub = [i for i in candidates if lower in self._task_key(i.text)]
+        sub = [i for i in candidates if lower in _task_key(i.text)]
         if len(sub) == 1:
             return sub[0]
 
@@ -287,10 +351,6 @@ class TodoState:
         ambiguous = exact or prefix or sub
         items_str = "; ".join(f"'{i.text}'" for i in ambiguous[:5])
         return f"error: '{task}' matches multiple items — be more specific: {items_str}"
-
-    @staticmethod
-    def _task_key(task: str) -> str:
-        return task.casefold()
 
     def _response(
         self,
@@ -321,28 +381,62 @@ class TodoState:
             return
         try:
             todo_path.parent.mkdir(parents=True, exist_ok=True)
-            lines = []
-            for item in self.items:
-                marker = "x" if item.done else " "
-                lines.append(f"- [{marker}] {item.text}")
-            todo_path.write_text(
-                ("\n".join(lines) + "\n") if lines else "", encoding="utf-8"
-            )
+            with _todo_lock(todo_path):
+                on_disk = {_task_key(i.text): i for i in _parse_todo_file(todo_path)}
+
+                to_write: dict[str, TodoItem] = {}
+                own_keys: set[str] = set()
+                for item in self.items:
+                    key = _task_key(item.text)
+                    own_keys.add(key)
+                    disk_item = on_disk.get(key)
+                    if disk_item is not None and disk_item.done and not item.done:
+                        item.done = True
+                    to_write[key] = item
+
+                for key, item in on_disk.items():
+                    if key not in to_write and key not in self._removed_keys:
+                        to_write[key] = item
+                        # Absorb genuinely new concurrent items into self.items.
+                        if key not in own_keys and key not in self._baseline_keys:
+                            self.items.append(item)
+
+                lines = []
+                for item in to_write.values():
+                    marker = "x" if item.done else " "
+                    lines.append(f"- [{marker}] {item.text}")
+                content = ("\n".join(lines) + "\n") if lines else ""
+                todo_path.write_text(content, encoding="utf-8")
         except OSError:
             pass
 
     def reset(self) -> None:
-        """Reset all state. Used by REPL /clear."""
+        """Reset all state. Used by REPL /clear.
+
+        Moves all known keys (in-memory + on-disk) to _baseline_keys so
+        they are preserved on disk for concurrent sessions but not absorbed
+        back into this session.  _removed_keys is cleared so that future
+        saves from this session don't keep deleting items that a concurrent
+        session may have restored.
+        """
+        baseline: set[str] = set()
+        baseline.update(_task_key(i.text) for i in self.items)
         self.items.clear()
         self.add_count = 0
         self.done_count = 0
         self._total_actions = 0
+        self._removed_keys.clear()
         if self.notes_dir is not None:
             try:
                 todo_path = _safe_todo_path(self.notes_dir, self.todo_dir)
-                todo_path.unlink(missing_ok=True)
-            except ValueError:
+                todo_path.parent.mkdir(parents=True, exist_ok=True)
+                with _todo_lock(todo_path):
+                    for item in _parse_todo_file(todo_path):
+                        baseline.add(_task_key(item.text))
+                    todo_path.write_text("", encoding="utf-8")
+            except (ValueError, OSError):
                 pass
+        self._baseline_keys = baseline
 
     def summary_line(self) -> str | None:
         """One-line usage summary, or None if todo was never called."""

@@ -93,7 +93,7 @@ class TestTodoIsolation:
         assert (tmp_path / ".swival" / "todo.md").exists()
 
     def test_reset_clears_todo_dir_file(self, tmp_path):
-        """reset() removes todo.md from todo_dir, not just notes_dir/.swival/."""
+        """reset() empties todo.md in todo_dir, not just notes_dir/.swival/."""
         ctx_dir = tmp_path / "ctx"
         ctx_dir.mkdir()
         todo = TodoState(notes_dir=str(tmp_path), todo_dir=str(ctx_dir))
@@ -101,8 +101,245 @@ class TestTodoIsolation:
         assert (ctx_dir / "todo.md").exists()
 
         todo.reset()
-        assert not (ctx_dir / "todo.md").exists()
+        assert (ctx_dir / "todo.md").read_text() == ""
         assert len(todo.items) == 0
+
+    def test_concurrent_saves_no_corruption(self, tmp_path):
+        """Concurrent _save() calls to the same todo.md don't produce garbled output."""
+        n_threads = 5
+        n_writes = 20
+        todo_dir = tmp_path / "shared"
+        todo_dir.mkdir()
+        errors = []
+
+        def write_items(thread_id):
+            try:
+                state = TodoState(notes_dir=str(tmp_path), todo_dir=str(todo_dir))
+                for i in range(n_writes):
+                    state.items.clear()
+                    from swival.todo import TodoItem
+
+                    state.items.append(TodoItem(text=f"t{thread_id}-{i}"))
+                    state._save()
+            except Exception as e:
+                errors.append(e)
+
+        threads = [
+            threading.Thread(target=write_items, args=(tid,))
+            for tid in range(n_threads)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors
+
+        content = (todo_dir / "todo.md").read_text()
+        lines = [ln for ln in content.splitlines() if ln.strip()]
+        for line in lines:
+            assert line.startswith("- ["), f"corrupted line: {line!r}"
+
+    def test_concurrent_adds_no_lost_updates(self, tmp_path):
+        """Two sessions adding distinct items to the same file preserve both sides."""
+        todo_dir = tmp_path / "shared"
+        todo_dir.mkdir()
+
+        state_a = TodoState(notes_dir=str(tmp_path), todo_dir=str(todo_dir))
+        state_b = TodoState(notes_dir=str(tmp_path), todo_dir=str(todo_dir))
+
+        errors = []
+
+        def add_items(state, prefix, count):
+            try:
+                for i in range(count):
+                    state.process({"action": "add", "tasks": f"{prefix}-{i}"})
+            except Exception as e:
+                errors.append(e)
+
+        t1 = threading.Thread(target=add_items, args=(state_a, "A", 10))
+        t2 = threading.Thread(target=add_items, args=(state_b, "B", 10))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert not errors
+
+        from swival.todo import _parse_todo_file
+
+        on_disk = {item.text for item in _parse_todo_file(todo_dir / "todo.md")}
+        for i in range(10):
+            assert f"A-{i}" in on_disk, f"A-{i} lost"
+            assert f"B-{i}" in on_disk, f"B-{i} lost"
+
+    def test_concurrent_done_not_reverted(self, tmp_path):
+        """If one session marks an item done, a concurrent save doesn't revert it."""
+        todo_dir = tmp_path / "shared"
+        todo_dir.mkdir()
+
+        state_a = TodoState(notes_dir=str(tmp_path), todo_dir=str(todo_dir))
+        state_b = TodoState(notes_dir=str(tmp_path), todo_dir=str(todo_dir))
+
+        # Both sessions know about the same item.
+        state_a.process({"action": "add", "tasks": "shared-task"})
+        # B picks it up via a save-merge cycle.
+        state_b.process({"action": "add", "tasks": "shared-task"})
+
+        # A marks it done.
+        state_a.process({"action": "done", "tasks": "shared-task"})
+
+        # B adds something else — its save must not revert A's done.
+        state_b.process({"action": "add", "tasks": "other-task"})
+
+        from swival.todo import _parse_todo_file
+
+        on_disk = {
+            item.text: item.done for item in _parse_todo_file(todo_dir / "todo.md")
+        }
+        assert on_disk["shared-task"] is True, "done status reverted by concurrent save"
+
+    def test_remove_not_resurrected_by_own_save(self, tmp_path):
+        """After session A removes an item, A's own later saves don't resurrect it
+        even if another session wrote the item back to disk in the meantime."""
+        todo_dir = tmp_path / "shared"
+        todo_dir.mkdir()
+
+        state_a = TodoState(notes_dir=str(tmp_path), todo_dir=str(todo_dir))
+        state_a.process({"action": "add", "tasks": "doomed"})
+        state_a.process({"action": "remove", "tasks": "doomed"})
+
+        # Simulate another session writing "doomed" back to disk.
+        (todo_dir / "todo.md").write_text("- [ ] doomed\n")
+
+        # A adds something else — merge must not pull "doomed" back in.
+        state_a.process({"action": "add", "tasks": "survivor"})
+
+        from swival.todo import _parse_todo_file
+
+        on_disk = {item.text for item in _parse_todo_file(todo_dir / "todo.md")}
+        assert "doomed" not in on_disk, "'doomed' resurrected by own merge"
+        assert "survivor" in on_disk
+
+    def test_init_baseline_not_absorbed(self, tmp_path):
+        """__init__ preserves the file AND baseline items on disk, but does
+        not absorb them into self.items (session isolation)."""
+        todo_dir = tmp_path / "ctx"
+        todo_dir.mkdir()
+        (todo_dir / "todo.md").write_text("- [ ] stale\n")
+
+        state = TodoState(notes_dir=str(tmp_path), todo_dir=str(todo_dir))
+
+        # File is preserved.
+        assert (todo_dir / "todo.md").exists()
+        assert "stale" in (todo_dir / "todo.md").read_text()
+
+        # Adding a new item keeps stale on disk but doesn't pull it into self.items.
+        state.process({"action": "add", "tasks": "fresh"})
+        from swival.todo import _parse_todo_file
+
+        on_disk = {item.text for item in _parse_todo_file(todo_dir / "todo.md")}
+        assert "fresh" in on_disk
+        assert "stale" in on_disk  # preserved for concurrent sessions
+        assert not any(i.text == "stale" for i in state.items)  # not absorbed
+
+    def test_clear_removes_baseline_from_disk(self, tmp_path):
+        """clear wipes baseline items from disk, not just self.items."""
+        todo_dir = tmp_path / "ctx"
+        todo_dir.mkdir()
+        (todo_dir / "todo.md").write_text("- [ ] stale\n")
+
+        state = TodoState(notes_dir=str(tmp_path), todo_dir=str(todo_dir))
+        state.process({"action": "clear"})
+
+        content = (todo_dir / "todo.md").read_text()
+        assert content == ""
+
+    def test_init_does_not_nuke_concurrent_session(self, tmp_path):
+        """A second session starting AND saving doesn't destroy the first
+        session's items from disk."""
+        todo_dir = tmp_path / "shared"
+        todo_dir.mkdir()
+
+        state_a = TodoState(notes_dir=str(tmp_path), todo_dir=str(todo_dir))
+        state_a.process({"action": "add", "tasks": "alive"})
+
+        # Session B starts and immediately saves its own item.
+        state_b = TodoState(notes_dir=str(tmp_path), todo_dir=str(todo_dir))
+        state_b.process({"action": "add", "tasks": "b-item"})
+
+        from swival.todo import _parse_todo_file
+
+        on_disk = {item.text for item in _parse_todo_file(todo_dir / "todo.md")}
+        assert "alive" in on_disk, "session B save destroyed session A's items"
+        assert "b-item" in on_disk
+
+        # A can still save and its item survives alongside B's.
+        state_a.process({"action": "add", "tasks": "still-here"})
+        on_disk = {item.text for item in _parse_todo_file(todo_dir / "todo.md")}
+        assert "alive" in on_disk
+        assert "still-here" in on_disk
+        assert "b-item" in on_disk
+
+    def test_reset_writes_empty_under_lock(self, tmp_path):
+        """reset() empties the file under lock; other sessions can restore,
+        and the resetting session's future saves don't re-delete them."""
+        todo_dir = tmp_path / "shared"
+        todo_dir.mkdir()
+
+        state_a = TodoState(notes_dir=str(tmp_path), todo_dir=str(todo_dir))
+        state_b = TodoState(notes_dir=str(tmp_path), todo_dir=str(todo_dir))
+
+        state_a.process({"action": "add", "tasks": "a-item"})
+        state_b.process({"action": "add", "tasks": "b-item"})
+
+        # A resets — file goes empty.
+        state_a.reset()
+        content = (todo_dir / "todo.md").read_text()
+        assert content == ""
+        assert (todo_dir / "todo.md.lock").exists()
+
+        # B saves again — its item is restored from B's in-memory state.
+        state_b.process({"action": "add", "tasks": "b-extra"})
+        from swival.todo import _parse_todo_file
+
+        on_disk = {item.text for item in _parse_todo_file(todo_dir / "todo.md")}
+        assert "b-item" in on_disk
+        assert "b-extra" in on_disk
+
+        # A saves again — must NOT re-delete B's restored items.
+        state_a.process({"action": "add", "tasks": "a-post-reset"})
+        on_disk = {item.text for item in _parse_todo_file(todo_dir / "todo.md")}
+        assert "b-item" in on_disk, "reset session re-deleted peer's restored items"
+        assert "b-extra" in on_disk, "reset session re-deleted peer's restored items"
+        assert "a-post-reset" in on_disk
+
+    def test_merge_preserves_all_successful_adds(self, tmp_path):
+        """Both sessions' successful adds survive the merge — no silent discard."""
+        import json
+
+        todo_dir = tmp_path / "shared"
+        todo_dir.mkdir()
+
+        state_a = TodoState(notes_dir=str(tmp_path), todo_dir=str(todo_dir))
+        state_b = TodoState(notes_dir=str(tmp_path), todo_dir=str(todo_dir))
+
+        # Both sessions fill to 49 with the same items (dedup'd).
+        for i in range(49):
+            state_a.process({"action": "add", "tasks": f"shared-{i}"})
+            state_b.process({"action": "add", "tasks": f"shared-{i}"})
+
+        # Each adds a different 50th item — both return success.
+        result_a = json.loads(state_a.process({"action": "add", "tasks": "a-50th"}))
+        result_b = json.loads(state_b.process({"action": "add", "tasks": "b-50th"}))
+        assert result_a["action"] == "add"
+        assert result_b["action"] == "add"
+
+        from swival.todo import _parse_todo_file
+
+        on_disk = {item.text for item in _parse_todo_file(todo_dir / "todo.md")}
+        assert "a-50th" in on_disk, "a-50th silently discarded by merge"
+        assert "b-50th" in on_disk, "b-50th silently discarded by merge"
 
 
 # ---------------------------------------------------------------------------
