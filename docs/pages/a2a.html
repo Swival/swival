@@ -166,6 +166,7 @@ session = Session(
 )
 result = session.run(&quot;Ask the research agent to summarize recent papers on RAG&quot;)
 </code></pre>
+<p>For streaming events and cooperative cancellation, set <code>session.event_callback</code> and <code>session.cancel_flag</code> after construction. See the <a href="python-api.html#streaming-and-cancellation-hooks">Streaming and Cancellation Hooks</a> section of the Python API docs.</p>
 <p>Use <code>Session</code> as a context manager to ensure A2A connections are cleaned up:</p>
 <pre><code class="language-python">with Session(a2a_servers={&quot;agent&quot;: {&quot;url&quot;: &quot;https://...&quot;}}) as session:
     result = session.run(&quot;task&quot;)
@@ -259,7 +260,7 @@ server.serve()
 <p>This walkthrough sets up two swival instances — one serving project documentation over A2A, and another querying it. The server agent has access to source code and docs via its base directory, so it can read files and answer questions grounded in the actual codebase.</p>
 <h3 id="the-project">The project</h3>
 <p>Suppose you have a project with an API and some docs:</p>
-<pre><code>acme-api/
+<pre><code class="language-text">acme-api/
   README.md       # endpoint reference, auth, error codes
   app.py          # FastAPI source
   CHANGELOG.md

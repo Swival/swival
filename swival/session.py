@@ -1,6 +1,10 @@
 """Public library API for swival: Session class and Result dataclass."""
 
+from __future__ import annotations
+
 import copy
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -149,9 +153,15 @@ class Session:
         self.lifecycle_fail_closed = lifecycle_fail_closed
         self.lifecycle_enabled = lifecycle_enabled
 
-        # Streaming hooks (set externally, e.g. by A2A server)
-        self.event_callback = None
-        self.cancel_flag = None
+        # Streaming / cancellation hooks (set externally, e.g. by A2A server).
+        # event_callback receives (kind, data) where kind is one of the
+        # EVENT_* constants from a2a_types (text_chunk, tool_start,
+        # tool_finish, tool_error, status_update) and data is a dict
+        # with event-specific keys.
+        self.event_callback: Callable[[str, dict], None] | None = None
+        # cancel_flag: set the event to request graceful cancellation of the
+        # running agent loop.
+        self.cancel_flag: threading.Event | None = None
 
         # Setup state (cached after first _setup())
         self._setup_done = False

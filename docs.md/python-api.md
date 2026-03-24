@@ -82,33 +82,74 @@ Session(
 
 All parameters are keyword-only. The important ones:
 
-| Parameter | Description |
-|-----------|-------------|
-| `base_dir` | Project root. Tools resolve paths relative to this. |
-| `provider` | LLM provider: `"lmstudio"`, `"huggingface"`, `"openrouter"`, `"chatgpt"`, `"google"`, `"generic"`, or a command string. |
-| `model` | Model identifier. Required for most providers; LM Studio auto-discovers. |
-| `api_key` | API key. Can also be set via provider-specific env vars. |
-| `base_url` | Override the provider's default endpoint. |
-| `max_turns` | Maximum agent loop iterations before returning `exhausted=True`. |
-| `max_output_tokens` | Maximum tokens per LLM response. |
-| `max_context_tokens` | Hard cap on context window size. `None` uses the provider's default. |
-| `temperature` | Sampling temperature. `None` uses the provider's default. |
-| `allowed_commands` | Whitelist of shell commands the agent may run. `None` uses the built-in default list. |
-| `yolo` | Disable command restrictions entirely. |
-| `system_prompt` | Override the default system prompt. |
-| `mcp_servers` | MCP server configurations (see [MCP](mcp.html)). |
-| `a2a_servers` | A2A server configurations (see [A2A](a2a.html)). |
-| `lifecycle_command` | Shell command to run at startup and exit (see [Lifecycle Hooks](lifecycle-hooks.html)). |
-| `lifecycle_fail_closed` | If `True`, hook failures raise `LifecycleError` instead of being silently ignored. |
-| `llm_filter` | Path to a filter script that can redact or block outbound LLM requests (see [Outbound LLM Filter](llm-filter.html)). |
-| `encrypt_secrets` | Enable format-preserving secret encryption (see [Secret Encryption](secrets.html)). |
-| `retries` | Number of LLM call retries on transient failures. Must be >= 1. |
-| `history` | Write `HISTORY.md` after successful runs. |
-| `memory` | Load memory files (`.swival/memory/`) into the system prompt. |
-| `cache` | Cache LLM responses to disk for deterministic replay. |
-| `verbose` | Print diagnostics to stderr. |
+| Parameter               | Description                                                                                                             |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `base_dir`              | Project root. Tools resolve paths relative to this.                                                                     |
+| `provider`              | LLM provider: `"lmstudio"`, `"huggingface"`, `"openrouter"`, `"chatgpt"`, `"google"`, `"generic"`, or a command string. |
+| `model`                 | Model identifier. Required for most providers; LM Studio auto-discovers.                                                |
+| `api_key`               | API key. Can also be set via provider-specific env vars.                                                                |
+| `base_url`              | Override the provider's default endpoint.                                                                               |
+| `max_turns`             | Maximum agent loop iterations before returning `exhausted=True`.                                                        |
+| `max_output_tokens`     | Maximum tokens per LLM response.                                                                                        |
+| `max_context_tokens`    | Hard cap on context window size. `None` uses the provider's default.                                                    |
+| `temperature`           | Sampling temperature. `None` uses the provider's default.                                                               |
+| `allowed_commands`      | Whitelist of shell commands the agent may run. `None` uses the built-in default list.                                   |
+| `yolo`                  | Disable command restrictions entirely.                                                                                  |
+| `system_prompt`         | Override the default system prompt.                                                                                     |
+| `mcp_servers`           | MCP server configurations (see [MCP](mcp.html)).                                                                        |
+| `a2a_servers`           | A2A server configurations (see [A2A](a2a.html)).                                                                        |
+| `lifecycle_command`     | Shell command to run at startup and exit (see [Lifecycle Hooks](lifecycle-hooks.html)).                                 |
+| `lifecycle_fail_closed` | If `True`, hook failures raise `LifecycleError` instead of being silently ignored.                                      |
+| `llm_filter`            | Path to a filter script that can redact or block outbound LLM requests (see [Outbound LLM Filter](llm-filter.html)).    |
+| `encrypt_secrets`       | Enable format-preserving secret encryption (see [Secret Encryption](secrets.html)).                                     |
+| `retries`               | Number of LLM call retries on transient failures. Must be >= 1.                                                         |
+| `history`               | Write `HISTORY.md` after successful runs.                                                                               |
+| `memory`                | Load memory files (`.swival/memory/`) into the system prompt.                                                           |
+| `cache`                 | Cache LLM responses to disk for deterministic replay.                                                                   |
+| `verbose`               | Print diagnostics to stderr.                                                                                            |
 
 Parameters not listed here correspond to the same-named CLI flags and config keys. See [Customization](customization.html) for the full config reference.
+
+### Streaming and Cancellation Hooks
+
+After constructing a `Session`, you can set two attributes for streaming events and cooperative cancellation. These are used by the A2A server internally, but are available to any library consumer.
+
+```python
+import threading
+from collections.abc import Callable
+
+session = Session(provider="lmstudio")
+
+# Stream agent loop events (tool calls, text chunks, status changes).
+def on_event(kind: str, data: dict) -> None:
+    print(f"{kind}: {data}")
+
+session.event_callback = on_event
+
+# Cancel a running agent loop from another thread.
+stop = threading.Event()
+session.cancel_flag = stop
+
+# In another thread: stop.set() to request graceful cancellation.
+```
+
+**`event_callback`** `Callable[[str, dict], None] | None` — called during the agent loop whenever something interesting happens. `kind` is one of:
+
+| Kind              | Data keys                                     | Description                                                                                   |
+| ----------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `"text_chunk"`    | `text`, `turn`                                | Final answer text (emitted when the assistant responds without tool calls).                   |
+| `"tool_start"`    | `name`, `turn`                                | A tool call is about to execute.                                                              |
+| `"tool_finish"`   | `name`, `turn`, `elapsed`                     | A tool call completed. `elapsed` is wall-clock seconds.                                       |
+| `"tool_error"`    | `name`, `turn`, `error`                       | A tool call failed. `error` is the first 500 chars of the error message.                      |
+| `"status_update"` | `turn`, `max_turns`, `elapsed`                | Emitted at the start of each turn with progress info.                                         |
+| `"status_update"` | `turn`, `cancelled`                           | Emitted when the loop exits due to `cancel_flag`.                                             |
+| `"status_update"` | `turn`, `type` (`"reasoning"`), `text_length` | Emitted when the assistant produces reasoning text alongside tool calls (not a final answer). |
+
+Exceptions raised by the callback are silently swallowed — the agent loop never fails because of a callback error.
+
+**`cancel_flag`** `threading.Event | None` — the agent loop checks this at the start of each turn and between tool calls. When set, the loop exits gracefully at the next check point. The loop does not interrupt a tool call that is already running.
+
+Both default to `None` (no streaming, no external cancellation).
 
 ### `Session.run(question, *, report=False) -> Result`
 
@@ -179,12 +220,12 @@ class Result:
     report: dict | None
 ```
 
-| Field | Description |
-|-------|-------------|
-| `answer` | The agent's final text answer, or `None` if it never produced one. |
-| `exhausted` | `True` if the agent hit `max_turns` without finishing. |
-| `messages` | Deep copy of the full message history (system, user, assistant, tool results). |
-| `report` | Timing and token report dict if `report=True` was passed, otherwise `None`. |
+| Field       | Description                                                                    |
+| ----------- | ------------------------------------------------------------------------------ |
+| `answer`    | The agent's final text answer, or `None` if it never produced one.             |
+| `exhausted` | `True` if the agent hit `max_turns` without finishing.                         |
+| `messages`  | Deep copy of the full message history (system, user, assistant, tool results). |
+| `report`    | Timing and token report dict if `report=True` was passed, otherwise `None`.    |
 
 ## Exceptions
 
@@ -192,7 +233,7 @@ Exceptions from the agent loop and configuration layer are subclasses of `AgentE
 
 The constructor itself may raise standard Python exceptions for argument validation errors (e.g. `ValueError` for `retries < 1`). Unexpected runtime failures from underlying libraries can also escape as their original types — `AgentError` covers swival's own error paths, not every possible exception.
 
-```
+```text
 AgentError
 ├── ConfigError
 ├── ContextOverflowError

@@ -108,6 +108,8 @@ session = Session(
 result = session.run("Ask the research agent to summarize recent papers on RAG")
 ```
 
+For streaming events and cooperative cancellation, set `session.event_callback` and `session.cancel_flag` after construction. See the [Streaming and Cancellation Hooks](python-api.html#streaming-and-cancellation-hooks) section of the Python API docs.
+
 Use `Session` as a context manager to ensure A2A connections are cleaned up:
 
 ```python
@@ -252,7 +254,7 @@ This walkthrough sets up two swival instances — one serving project documentat
 
 Suppose you have a project with an API and some docs:
 
-```
+```text
 acme-api/
   README.md       # endpoint reference, auth, error codes
   app.py          # FastAPI source

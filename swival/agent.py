@@ -1,4 +1,5 @@
 import argparse
+from collections.abc import Callable
 from contextlib import nullcontext
 import copy
 from datetime import datetime
@@ -12,6 +13,7 @@ import shutil
 import subprocess
 import shlex
 import sys
+import threading
 import time
 import urllib.request
 import urllib.error
@@ -4564,8 +4566,8 @@ def run_agent_loop(
     cache=None,
     secret_shield=None,
     llm_filter=None,
-    event_callback=None,
-    cancel_flag=None,
+    event_callback: "Callable[[str, dict], None] | None" = None,
+    cancel_flag: "threading.Event | None" = None,
 ) -> tuple[str | None, bool]:
     """Run the tool-calling loop until a final answer or max turns.
 
