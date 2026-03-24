@@ -1,4 +1,4 @@
-.PHONY: all install test lint format check website clean dist formula
+.PHONY: all install test lint format check website clean dist
 
 all: check test
 
@@ -26,6 +26,4 @@ clean:
 
 dist: clean
 	uv build
-
-formula: dist
 	uv run python scripts/generate_formula.py
