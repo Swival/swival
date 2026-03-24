@@ -3152,6 +3152,13 @@ def _handle_init_config(args):
 
 
 def main():
+    import signal
+
+    def _sigterm_handler(_signum, _frame):
+        raise SystemExit(143)
+
+    signal.signal(signal.SIGTERM, _sigterm_handler)
+
     parser = build_parser()
     args = parser.parse_args()
 
@@ -3458,9 +3465,12 @@ def main():
         sys.exit(1)
     except SystemExit as e:
         _run_exit_code = e.code if isinstance(e.code, int) else 1
-        _run_outcome = {0: "success", 2: "exhausted", 130: "interrupted"}.get(
-            _run_exit_code, "error"
-        )
+        _run_outcome = {
+            0: "success",
+            2: "exhausted",
+            130: "interrupted",
+            143: "interrupted",
+        }.get(_run_exit_code, "error")
         raise
     finally:
         # --- Lifecycle exit hook ---
@@ -3538,6 +3548,12 @@ def main():
         _shield = getattr(args, "_secret_shield", None)
         if _shield is not None:
             _shield.destroy()
+        _mcp = getattr(args, "_mcp_manager", None)
+        if _mcp is not None:
+            _mcp.close()
+        _a2a = getattr(args, "_a2a_manager", None)
+        if _a2a is not None:
+            _a2a.close()
 
         if _lc_error is not None:
             sys.exit(1)
@@ -4159,6 +4175,7 @@ def _run_main(args, report, _write_report, parser):
 
             # Capture tool info AFTER pruning so prompt matches reality
             mcp_tool_info = mcp_manager.get_tool_info()
+    args._mcp_manager = mcp_manager
 
     # Initialize A2A agents
     a2a_manager = None
@@ -4174,6 +4191,7 @@ def _run_main(args, report, _write_report, parser):
             if a2a_tools:
                 tools.extend(a2a_tools)
             a2a_tool_info = a2a_manager.get_tool_info()
+    args._a2a_manager = a2a_manager
 
     # --- Secret encryption lifecycle ---
     secret_shield = None
@@ -4372,8 +4390,10 @@ def _run_main(args, report, _write_report, parser):
                     report=report,
                     turn_offset=turn_offset,
                 )
-            except KeyboardInterrupt:
-                fmt.warning("interrupted.")
+            except (KeyboardInterrupt, SystemExit) as exc:
+                is_term = isinstance(exc, SystemExit)
+                exit_code = exc.code if is_term else 130
+                fmt.warning("terminated." if is_term else "interrupted.")
                 if _continue_here:
                     from .continue_here import write_continue_file
 
@@ -4384,7 +4404,7 @@ def _run_main(args, report, _write_report, parser):
                         snapshot_state=snapshot_state,
                         thinking_state=thinking_state,
                     )
-                sys.exit(130)
+                sys.exit(exit_code)
 
             if not reviewer_cmd or answer is None or exhausted:
                 break
@@ -4484,6 +4504,19 @@ def _run_main(args, report, _write_report, parser):
                     thinking_state=thinking_state,
                 )
             answer, exhausted = None, False
+        except SystemExit as exc:
+            fmt.warning("terminated during initial question.")
+            if _continue_here:
+                from .continue_here import write_continue_file
+
+                write_continue_file(
+                    base_dir,
+                    messages,
+                    todo_state=todo_state,
+                    snapshot_state=snapshot_state,
+                    thinking_state=thinking_state,
+                )
+            raise SystemExit(exc.code)
         if not no_history and answer:
             append_history(base_dir, args.question, answer, diagnostics=args.verbose)
         if answer is not None:
