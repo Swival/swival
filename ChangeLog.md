@@ -2,6 +2,18 @@
 
 All notable user-facing changes to Swival.
 
+## 0.9.2
+
+- Homebrew installation support has been added.
+- `Session.ask()` now rolls back conversation history on failure, so a failed turn
+  doesn't corrupt a long-lived Python session.
+- Public Python API exceptions have been formalized: `ContextOverflowError` and
+  `LifecycleError` are now exported
+- The persistent todo list is now safer across concurrent sessions and processes:
+  writes use file locking and merge on-disk changes instead of clobbering them.
+- SIGTERM now shuts Swival down cleanly with exit code 143, preserves
+  continue-here state, and closes MCP/A2A managers during teardown.
+
 ## 0.9.1
 
 - Generic lifecycle hooks have been added: user-configured commands run at

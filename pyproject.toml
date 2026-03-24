@@ -1,6 +1,6 @@
 [project]
 name = "swival"
-version = "0.9.1"
+version = "0.9.2"
 description = "A small, powerful CLI coding agent for open AI models"
 readme = "README.md"
 license = "MIT"
