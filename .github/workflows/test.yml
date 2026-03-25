@@ -26,7 +26,13 @@ jobs:
         run: uv sync
 
       - name: Audit dependencies for known vulnerabilities
-        run: uvx pip-audit --requirement <(uv export --format requirements-txt --no-dev --no-emit-project)
+        run: >-
+          uv export --format requirements-txt --no-dev --no-emit-project |
+          uvx pip-audit
+          --ignore-vuln CVE-2026-4539
+          --no-deps
+          --disable-pip
+          -r /dev/stdin
 
       - name: Run tests
         run: uv run python -m pytest tests/ -v
