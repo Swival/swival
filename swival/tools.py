@@ -459,8 +459,9 @@ FETCH_URL_TOOL = {
     "function": {
         "name": "fetch_url",
         "description": (
-            "Fetch the content of a URL and return it as markdown, plain text, or raw HTML. "
-            "Use this to read documentation, APIs, web pages, or any HTTP-accessible resource."
+            "Make an HTTP GET request to a URL on the internet and return the response as markdown, plain text, or raw HTML. "
+            "This tool has full internet access. Use it to browse websites, read online documentation, "
+            "search the web, or access any HTTP/HTTPS resource on the internet."
         ),
         "parameters": {
             "type": "object",
