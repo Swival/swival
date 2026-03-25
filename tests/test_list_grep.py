@@ -508,3 +508,69 @@ class TestGrep:
         # Match lines 2 and 9, context_lines=1 → blocks [1-3] and [8-10], non-contiguous
         result = _grep(r"^[29]$", "sep.txt", str(sandbox), context_lines=1)
         assert "  --" in result
+
+
+class TestListFileTilde:
+    def test_tilde_pattern_finds_files(self, tmp_path, monkeypatch):
+        """~/subdir/**/*.py finds files when HOME is under base_dir."""
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        sub = home / "subdir"
+        sub.mkdir()
+        (sub / "a.py").write_text("# a")
+        (sub / "b.py").write_text("# b")
+
+        result = _list_files("~/subdir/**/*.py", ".", str(tmp_path))
+        assert "a.py" in result
+        assert "b.py" in result
+
+    def test_tilde_pattern_outside_roots_rejected(self, tmp_path, monkeypatch):
+        """~/subdir/**/*.py fails when HOME is outside allowed roots."""
+        home = tmp_path / "home"
+        home.mkdir()
+        base = tmp_path / "project"
+        base.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+
+        result = _list_files("~/subdir/**/*.py", ".", str(base))
+        assert result.startswith("error:")
+
+    def test_tilde_otheruser_pattern_rejected(self, tmp_path):
+        """~otheruser/**/*.py returns an error."""
+        result = _list_files("~otheruser/**/*.py", ".", str(tmp_path))
+        assert result.startswith("error:")
+        assert "~user syntax" in result
+
+
+class TestGrepTilde:
+    def test_grep_tilde_path(self, tmp_path, monkeypatch):
+        """grep with path=~/subdir works when HOME is under base_dir."""
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        sub = home / "subdir"
+        sub.mkdir()
+        (sub / "code.py").write_text("def hello():\n    pass\n")
+
+        result = _grep("hello", "~/subdir", str(tmp_path))
+        assert "hello" in result
+        assert "No matches" not in result
+
+    def test_grep_tilde_path_outside_roots_rejected(self, tmp_path, monkeypatch):
+        """grep with path=~/subdir fails when HOME is outside allowed roots."""
+        home = tmp_path / "home"
+        home.mkdir()
+        base = tmp_path / "project"
+        base.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+
+        result = _grep("pattern", "~/subdir", str(base))
+        assert result.startswith("error:")
+
+    def test_grep_tilde_include_no_match(self, tmp_path):
+        """grep with include=~weird*.py is not an error — just no matches."""
+        (tmp_path / "normal.py").write_text("hello\n")
+        result = _grep("hello", ".", str(tmp_path), include="~weird*.py")
+        assert "No matches" in result
+        assert not result.startswith("error:")

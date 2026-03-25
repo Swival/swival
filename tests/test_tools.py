@@ -5,6 +5,7 @@ import os
 import pytest
 
 from swival.tools import (
+    _expand_tilde,
     _read_file,
     _write_file,
     _edit_file,
@@ -655,3 +656,31 @@ class TestAgentLoop:
         # it should just hit the else branch without trying to connect.
         assert result.returncode == 2
         assert "max turns" in result.stderr.lower()
+
+
+class TestExpandTilde:
+    def test_home_slash_path(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        assert _expand_tilde("~/foo.txt") == str(tmp_path / "foo.txt")
+
+    def test_bare_tilde(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        assert _expand_tilde("~") == str(tmp_path)
+
+    def test_tilde_otheruser_raises(self):
+        with pytest.raises(ValueError, match="~user syntax"):
+            _expand_tilde("~otheruser/foo")
+
+    def test_bare_tilde_otheruser_raises(self):
+        with pytest.raises(ValueError, match="~user syntax"):
+            _expand_tilde("~otheruser")
+
+    def test_absolute_path_unchanged(self):
+        assert _expand_tilde("/absolute/path") == "/absolute/path"
+
+    def test_relative_path_unchanged(self):
+        assert _expand_tilde("relative/path") == "relative/path"
+
+    def test_backslash_tilde_rejected(self):
+        with pytest.raises(ValueError, match="~user syntax"):
+            _expand_tilde("~\\foo")

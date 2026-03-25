@@ -931,3 +931,77 @@ class TestDispatchExtraReadRoots:
         )
         assert "find_me" in result
         assert "No matches" not in result
+
+
+class TestSafeResolveTilde:
+    def test_tilde_under_base_dir(self, tmp_path, monkeypatch):
+        """~/foo.txt resolves when HOME is under base_dir."""
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        (home / "foo.txt").write_text("hi")
+
+        result = safe_resolve("~/foo.txt", str(tmp_path))
+        assert result == (home / "foo.txt").resolve()
+
+    def test_tilde_outside_base_dir_rejected(self, tmp_path, monkeypatch):
+        """~/foo.txt raises when HOME is outside base_dir and not in extra roots."""
+        home = tmp_path / "home"
+        home.mkdir()
+        base = tmp_path / "project"
+        base.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+
+        with pytest.raises(ValueError, match="outside base directory"):
+            safe_resolve("~/foo.txt", str(base))
+
+    def test_tilde_with_extra_read_roots(self, tmp_path, monkeypatch):
+        """~/foo.txt succeeds when HOME is in extra_read_roots."""
+        home = tmp_path / "home"
+        home.mkdir()
+        base = tmp_path / "project"
+        base.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+
+        result = safe_resolve("~/foo.txt", str(base), extra_read_roots=[home.resolve()])
+        assert result == (home / "foo.txt").resolve()
+
+    def test_tilde_with_extra_write_roots(self, tmp_path, monkeypatch):
+        """~/foo.txt succeeds when HOME is in extra_write_roots."""
+        home = tmp_path / "home"
+        home.mkdir()
+        base = tmp_path / "project"
+        base.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+
+        result = safe_resolve(
+            "~/foo.txt", str(base), extra_write_roots=[home.resolve()]
+        )
+        assert result == (home / "foo.txt").resolve()
+
+    def test_tilde_otheruser_rejected(self, tmp_path):
+        """~otheruser/foo raises ValueError."""
+        with pytest.raises(ValueError, match="~user syntax"):
+            safe_resolve("~otheruser/foo", str(tmp_path))
+
+
+class TestFileOpsTilde:
+    def test_read_file_tilde(self, tmp_path, monkeypatch):
+        """read_file with ~/path works when HOME is under base_dir."""
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        (home / "test.txt").write_text("hello\n")
+
+        result = _read_file("~/test.txt", str(tmp_path))
+        assert "1: hello" in result
+
+    def test_write_file_tilde(self, tmp_path, monkeypatch):
+        """write_file with ~/path works when HOME is under base_dir."""
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+
+        result = _write_file("~/output.txt", "content", str(tmp_path))
+        assert "Wrote" in result
+        assert (home / "output.txt").read_text() == "content"

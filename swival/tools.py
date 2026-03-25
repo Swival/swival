@@ -606,6 +606,22 @@ IMAGE_MIME = {
 MAX_IMAGE_BYTES = 20 * 1024 * 1024  # 20 MB
 
 
+def _expand_tilde(raw: str) -> str:
+    """Expand leading ``~`` to the current user's home directory.
+
+    Raises ValueError for ``~otheruser`` syntax (including ``~\\foo``).
+    Returns the input unchanged if it doesn't start with ``~``.
+    """
+    if not raw.startswith("~"):
+        return raw
+    if raw == "~" or raw.startswith("~/"):
+        return str(Path(raw).expanduser())
+    raise ValueError(
+        f"Path {raw!r} uses ~user syntax, which is not supported. "
+        f"Use an absolute path instead."
+    )
+
+
 def safe_resolve(
     file_path: str,
     base_dir: str,
@@ -626,11 +642,13 @@ def safe_resolve(
     """
     base = Path(base_dir).resolve()
 
-    # For absolute paths, resolve directly; for relative, resolve against base_dir
-    if Path(file_path).is_absolute():
-        resolved = Path(file_path).resolve()
+    expanded = _expand_tilde(file_path)
+    p = Path(expanded)
+
+    if p.is_absolute():
+        resolved = p.resolve()
     else:
-        resolved = (base / file_path).resolve()
+        resolved = (base / p).resolve()
 
     if unrestricted:
         # Even in unrestricted mode, block the filesystem root
@@ -744,6 +762,13 @@ def _list_files(
     unrestricted: bool = False,
 ) -> str:
     """Recursively list files matching a glob pattern."""
+    # Expand ~ so ~/src/**/*.py becomes /home/user/src/**/*.py and is
+    # recognised as absolute by the branch below.
+    try:
+        pattern = _expand_tilde(pattern)
+    except ValueError as exc:
+        return f"error: {exc}"
+
     # When the pattern is an absolute glob, split it into a root directory
     # and a relative pattern.  safe_resolve() will then authorize the root
     # against base_dir / extra roots (or skip checks in unrestricted mode).
