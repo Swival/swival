@@ -2,6 +2,15 @@
 
 All notable user-facing changes to Swival.
 
+## 0.9.3
+
+- When Swival is launched on a TTY with no task, it now enters REPL mode
+  directly.
+- Filesystem built-in tools now expand `~` in paths, so home-directory paths work
+  consistently across file reads, writes, edits, deletes, and searches.
+- The fetch_url tool has a higher probability to get used consistently
+  by small models.
+
 ## 0.9.2
 
 - Homebrew installation support has been added.
