@@ -640,8 +640,40 @@ def compact_tool_result(name: str, args: dict | None, content: str) -> str:
 
     if name == "read_multiple_files":
         files = args.get("files", [])
-        paths = [f.get("file_path", "?") for f in files] if files else ["?"]
+        if isinstance(files, str):
+            files = [files]
+        if files and isinstance(files, list):
+            paths = []
+            for f in files:
+                if isinstance(f, dict):
+                    paths.append(f.get("file_path", "?"))
+                elif isinstance(f, str):
+                    paths.append(f)
+                else:
+                    paths.append("?")
+        else:
+            paths = ["?"]
         return f"[read_multiple_files: {', '.join(paths)}, {len(content)} chars — compacted]"
+
+    if name == "outline":
+        files = args.get("files")
+        if files:
+            if isinstance(files, str):
+                files = [files]
+            if isinstance(files, list):
+                paths = []
+                for f in files:
+                    if isinstance(f, dict):
+                        paths.append(f.get("file_path", "?"))
+                    elif isinstance(f, str):
+                        paths.append(f)
+                    else:
+                        paths.append("?")
+                return (
+                    f"[outline: {', '.join(paths)}, {len(content)} chars — compacted]"
+                )
+        path = args.get("file_path", "?")
+        return f"[outline: {path} — compacted]"
 
     if name == "grep":
         pattern = args.get("pattern", "?")

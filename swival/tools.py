@@ -430,6 +430,8 @@ _TOOL_ALIASES = {
     "read_files": "read_multiple_files",
     "file_write": "write_file",
     "file_edit": "edit_file",
+    "code_outline": "outline",
+    "file_outline": "outline",
 }
 
 DELETE_FILE_TOOL = {
@@ -542,6 +544,62 @@ SNAPSHOT_TOOL = {
 }
 
 TOOLS.append(SNAPSHOT_TOOL)
+
+OUTLINE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "outline",
+        "description": (
+            "Show the structural skeleton of one or more files: classes, functions, "
+            "and top-level declarations with line numbers. No bodies. "
+            "Use this to survey files before reading specific sections. "
+            "Pass file_path for a single file, or files for a batch."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Path to a single file to outline.",
+                },
+                "depth": {
+                    "type": "integer",
+                    "description": (
+                        "Default nesting depth: 1=top-level only, "
+                        "2=classes+methods (default), 3=nested functions/classes. "
+                        "In batch mode, acts as default for files without per-file depth."
+                    ),
+                    "minimum": 1,
+                    "maximum": 3,
+                    "default": 2,
+                },
+                "files": {
+                    "type": "array",
+                    "description": "List of files to outline (batch mode).",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "file_path": {
+                                "type": "string",
+                                "description": "Path to the file to outline.",
+                            },
+                            "depth": {
+                                "type": "integer",
+                                "description": "Per-file nesting depth override.",
+                                "minimum": 1,
+                                "maximum": 3,
+                            },
+                        },
+                        "required": ["file_path"],
+                    },
+                    "maxItems": 20,
+                },
+            },
+        },
+    },
+}
+
+TOOLS.append(OUTLINE_TOOL)
 
 USE_SKILL_TOOL = {
     "type": "function",
@@ -2496,6 +2554,36 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             args,
             messages=kwargs.get("messages"),
             tool_call_id=kwargs.get("tool_call_id"),
+        )
+    elif name == "outline":
+        from .outline import outline as _outline, outline_files as _outline_files
+
+        files = args.get("files")
+        file_path = args.get("file_path")
+        if files and file_path:
+            return "error: set file_path or files, not both"
+        if files:
+            if isinstance(files, str):
+                files = [{"file_path": files}]
+            elif not isinstance(files, list):
+                return "error: 'files' must be an array"
+            return _outline_files(
+                files=files,
+                base_dir=base_dir,
+                default_depth=args.get("depth", 2),
+                extra_read_roots=skill_read_roots,
+                extra_write_roots=extra_write_roots,
+                unrestricted=yolo,
+            )
+        if not file_path:
+            return "error: file_path or files is required"
+        return _outline(
+            file_path=file_path,
+            base_dir=base_dir,
+            depth=args.get("depth", 2),
+            extra_read_roots=skill_read_roots,
+            extra_write_roots=extra_write_roots,
+            unrestricted=yolo,
         )
     elif name == "fetch_url":
         from .fetch import fetch_url as _fetch_url

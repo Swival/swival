@@ -292,6 +292,71 @@ class TestCompactToolResult:
         assert result != content
         assert "compacted" in result
 
+    def test_read_multiple_files_batch_list(self):
+        content = "x" * 2000
+        result = compact_tool_result(
+            "read_multiple_files",
+            {"files": [{"file_path": "a.py"}, {"file_path": "b.py"}]},
+            content,
+        )
+        assert result.startswith("[read_multiple_files: a.py, b.py,")
+        assert "compacted" in result
+
+    def test_read_multiple_files_bare_string(self):
+        content = "x" * 2000
+        result = compact_tool_result(
+            "read_multiple_files",
+            {"files": "x.py"},
+            content,
+        )
+        assert result.startswith("[read_multiple_files: x.py,")
+        assert "compacted" in result
+
+    def test_read_multiple_files_mixed_entries(self):
+        content = "x" * 2000
+        result = compact_tool_result(
+            "read_multiple_files",
+            {"files": [{"file_path": "a.py"}, "b.py", 42]},
+            content,
+        )
+        assert "a.py" in result
+        assert "b.py" in result
+        assert "?" in result
+        assert "compacted" in result
+
+    def test_outline_single_file(self):
+        content = "x" * 2000
+        result = compact_tool_result("outline", {"file_path": "src/app.py"}, content)
+        assert result == "[outline: src/app.py — compacted]"
+
+    def test_outline_batch_list(self):
+        content = "x" * 2000
+        result = compact_tool_result(
+            "outline",
+            {"files": [{"file_path": "a.py"}, {"file_path": "b.py"}]},
+            content,
+        )
+        assert result.startswith("[outline: a.py, b.py,")
+        assert "compacted" in result
+
+    def test_outline_batch_bare_string(self):
+        content = "x" * 2000
+        result = compact_tool_result("outline", {"files": "x.py"}, content)
+        assert result.startswith("[outline: x.py,")
+        assert "compacted" in result
+
+    def test_outline_batch_mixed_entries(self):
+        content = "x" * 2000
+        result = compact_tool_result(
+            "outline",
+            {"files": [{"file_path": "a.py"}, "b.py", 42]},
+            content,
+        )
+        assert "a.py" in result
+        assert "b.py" in result
+        assert "?" in result
+        assert "compacted" in result
+
     def test_mcp_tool_compacted_with_head(self):
         content = "abcdefgh" * 250  # 2000 chars
         result = compact_tool_result("mcp__server__tool", {}, content)

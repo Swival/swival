@@ -684,3 +684,68 @@ class TestExpandTilde:
     def test_backslash_tilde_rejected(self):
         with pytest.raises(ValueError, match="~user syntax"):
             _expand_tilde("~\\foo")
+
+
+class TestOutlineDispatch:
+    """Dispatch tests for the outline tool."""
+
+    def test_outline_dispatch_single_file(self, tmp_path):
+        f = tmp_path / "s.py"
+        f.write_text("def hello(): pass\n")
+        result = dispatch("outline", {"file_path": str(f)}, str(tmp_path), yolo=True)
+        assert "def hello()" in result
+
+    def test_outline_dispatch_batch(self, tmp_path):
+        a = tmp_path / "a.py"
+        a.write_text("class A: pass\n")
+        b = tmp_path / "b.py"
+        b.write_text("def b(): pass\n")
+        result = dispatch(
+            "outline",
+            {"files": [{"file_path": str(a)}, {"file_path": str(b)}]},
+            str(tmp_path),
+            yolo=True,
+        )
+        assert "=== FILE:" in result
+        assert "class A" in result
+        assert "def b()" in result
+
+    def test_outline_dispatch_both_args_rejected(self, tmp_path):
+        result = dispatch(
+            "outline",
+            {"file_path": "x.py", "files": [{"file_path": "x.py"}]},
+            str(tmp_path),
+            yolo=True,
+        )
+        assert result == "error: set file_path or files, not both"
+
+    def test_outline_dispatch_neither_arg(self, tmp_path):
+        result = dispatch("outline", {}, str(tmp_path), yolo=True)
+        assert result == "error: file_path or files is required"
+
+    def test_outline_dispatch_files_not_array(self, tmp_path):
+        result = dispatch(
+            "outline",
+            {"files": {"file_path": "x.py"}},
+            str(tmp_path),
+            yolo=True,
+        )
+        assert result == "error: 'files' must be an array"
+
+    def test_outline_dispatch_files_bare_string(self, tmp_path):
+        f = tmp_path / "t.py"
+        f.write_text("def t(): pass\n")
+        result = dispatch(
+            "outline",
+            {"files": str(f)},
+            str(tmp_path),
+            yolo=True,
+        )
+        assert "def t()" in result
+        assert "files_succeeded: 1" in result
+
+    def test_outline_aliases_suggest_not_route(self, tmp_path):
+        with pytest.raises(KeyError, match="Did you mean 'outline'"):
+            dispatch("code_outline", {}, str(tmp_path))
+        with pytest.raises(KeyError, match="Did you mean 'outline'"):
+            dispatch("file_outline", {}, str(tmp_path))
