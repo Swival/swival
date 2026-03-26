@@ -500,13 +500,13 @@ wheels = [
 
 [[package]]
 name = "html-to-markdown"
-version = "2.28.2"
+version = "2.29.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/fe/bb/10587e46ad673c76faf5d02ec8fa6fe2fe4529239bfef3a678b2ba8b7f6b/html_to_markdown-2.28.2.tar.gz", hash = "sha256:d3bd995d5d77ff3536454155d5b35504f0272181526650f3e8aa8351d8fd23b0", size = 310235, upload-time = "2026-03-09T18:38:18.947Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/30/c7/e93b067527880dd488263bad17aef1ab857bd386792677f7720694bcf25d/html_to_markdown-2.29.0.tar.gz", hash = "sha256:7ae9ae76b408709366adc99d2c2507dfa2ea84fd19a94e99e5a64e5bb7a7ca0e", size = 312274, upload-time = "2026-03-22T10:09:16.267Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4d/7a/ce8efd40027860586c4039bbc22fb03d29e46dbf5917f6589d976e8a81a1/html_to_markdown-2.28.2-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:7bf29320dd50e69816b8a0bf6b4677e408262b6609612d639911d075c7834a74", size = 8880708, upload-time = "2026-03-09T18:38:11.222Z" },
-    { url = "https://files.pythonhosted.org/packages/4b/5f/c8ceb53ab4570fe974080999c739ca5d2d936877cb029b4c7325db9b13df/html_to_markdown-2.28.2-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:57d45dc680c81654181719cf05aa9ac3c33a074c7b7a823cae62ed14130096b8", size = 9689204, upload-time = "2026-03-09T18:38:13.558Z" },
-    { url = "https://files.pythonhosted.org/packages/ce/bd/c3ce18af6479735141a7e3e38ec6b4afdaad63f4a208f00e37801334d5e0/html_to_markdown-2.28.2-cp310-abi3-win_amd64.whl", hash = "sha256:67942aae9b1c5dd2442b9d7a45bccf2e8189c946c5ac3ec887934e9a3d465bb3", size = 9310129, upload-time = "2026-03-09T18:38:16.861Z" },
+    { url = "https://files.pythonhosted.org/packages/13/20/7a8b9ce3be865178f96f99adcb2db2cd46cbcd3f0189f4892101697d798b/html_to_markdown-2.29.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:bfd141cd2a3df50bd93bdd6ec5df364e7232f174ef93bc444746e7e7f9071f2d", size = 8891342, upload-time = "2026-03-22T10:09:10.138Z" },
+    { url = "https://files.pythonhosted.org/packages/47/18/417b074088b5840221ab788089bcd89339e8b8b367bb457ec339c91cc81e/html_to_markdown-2.29.0-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:db3319e82d2b0c696be6a80dc699d19cdf868a9f859e11bcdb6f8358422cca18", size = 9705068, upload-time = "2026-03-22T10:09:12.191Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/70/cbec633dc9f8904890879fc70813226e9bce4e9900ca78c0251b9ad91e9e/html_to_markdown-2.29.0-cp310-abi3-win_amd64.whl", hash = "sha256:fbec6d3c383cc15a9c36797c73cd51d9d1944ad8713445ae3cc5be8b8baa0125", size = 9328942, upload-time = "2026-03-22T10:09:14.228Z" },
 ]
 
 [[package]]
@@ -688,7 +688,7 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.82.3"
+version = "1.82.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -704,9 +704,9 @@ dependencies = [
     { name = "tiktoken" },
     { name = "tokenizers" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/53/00/13993312e6d2fb29cd6d5ffceb293455ef747fe5675eaa9aa49b09184656/litellm-1.82.3.tar.gz", hash = "sha256:7215b95e7cc38a52b5ae778d67e8829dec86594c8b05d8431294e95c7d59937c", size = 17368754, upload-time = "2026-03-16T21:51:30.356Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/29/75/1c537aa458426a9127a92bc2273787b2f987f4e5044e21f01f2eed5244fd/litellm-1.82.6.tar.gz", hash = "sha256:2aa1c2da21fe940c33613aa447119674a3ad4d2ad5eb064e4d5ce5ee42420136", size = 17414147, upload-time = "2026-03-22T06:36:00.452Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5a/3a/590d58dee65a238f7f3d5c37f8f9f9021ecaf27fe379a393b4259324b56e/litellm-1.82.3-py3-none-any.whl", hash = "sha256:609901f6c5a5cf8c24386e4e3f50738bb8a9db719709fd76b208c8ee6d00f7a7", size = 15551034, upload-time = "2026-03-16T21:51:26.747Z" },
+    { url = "https://files.pythonhosted.org/packages/02/6c/5327667e6dbe9e98cbfbd4261c8e91386a52e38f41419575854248bbab6a/litellm-1.82.6-py3-none-any.whl", hash = "sha256:164a3ef3e19f309e3cabc199bef3d2045212712fefdfa25fc7f75884a5b5b205", size = 15591595, upload-time = "2026-03-22T06:35:56.795Z" },
 ]
 
 [[package]]
@@ -1569,14 +1569,14 @@ wheels = [
 
 [[package]]
 name = "starlette"
-version = "0.52.1"
+version = "1.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c4/68/79977123bb7be889ad680d79a40f339082c1978b5cfcf62c2d8d196873ac/starlette-0.52.1.tar.gz", hash = "sha256:834edd1b0a23167694292e94f597773bc3f89f362be6effee198165a35d62933", size = 2653702, upload-time = "2026-01-18T13:34:11.062Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/81/69/17425771797c36cded50b7fe44e850315d039f28b15901ab44839e70b593/starlette-1.0.0.tar.gz", hash = "sha256:6a4beaf1f81bb472fd19ea9b918b50dc3a77a6f2e190a12954b25e6ed5eea149", size = 2655289, upload-time = "2026-03-22T18:29:46.779Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/81/0d/13d1d239a25cbfb19e740db83143e95c772a1fe10202dda4b76792b114dd/starlette-0.52.1-py3-none-any.whl", hash = "sha256:0029d43eb3d273bc4f83a08720b4912ea4b071087a3b48db01b7c839f7954d74", size = 74272, upload-time = "2026-01-18T13:34:09.188Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/c9/584bc9651441b4ba60cc4d557d8a547b5aff901af35bda3a4ee30c819b82/starlette-1.0.0-py3-none-any.whl", hash = "sha256:d3ec55e0bb321692d275455ddfd3df75fff145d009685eb40dc91fc66b03d38b", size = 72651, upload-time = "2026-03-22T18:29:45.111Z" },
 ]
 
 [[package]]
@@ -1610,16 +1610,16 @@ website = [
 [package.metadata]
 requires-dist = [
     { name = "fast-cipher", specifier = ">=0.2.0" },
-    { name = "html-to-markdown", specifier = ">=2.28" },
+    { name = "html-to-markdown", specifier = ">=2.29" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "litellm", specifier = "==1.82.3" },
+    { name = "litellm", specifier = "==1.82.6" },
     { name = "mcp", specifier = ">=1.26,<2" },
     { name = "prompt-toolkit", specifier = ">=3.0.52" },
     { name = "rank-bm25", specifier = ">=0.2.2" },
-    { name = "rich", specifier = ">=14.3" },
-    { name = "starlette", specifier = ">=0.52.1" },
+    { name = "rich", specifier = ">=14.3.3" },
+    { name = "starlette", specifier = ">=1.0.0" },
     { name = "tiktoken", specifier = ">=0.12" },
-    { name = "uvicorn", specifier = ">=0.41.0" },
+    { name = "uvicorn", specifier = ">=0.42.0" },
 ]
 
 [package.metadata.requires-dev]
