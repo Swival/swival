@@ -28,6 +28,8 @@ from swival.agent import (
     _repl_snapshot_save,
     _repl_snapshot_restore,
     _repl_snapshot_unsave,
+    _repl_copy,
+    _last_assistant_text,
 )
 from swival.snapshot import SnapshotState
 from swival.thinking import ThinkingState
@@ -508,6 +510,13 @@ class TestHelpCommand:
         assert "/tools" in captured.err
         assert "/init" in captured.err
         assert "/exit" in captured.err
+
+    def test_help_commands_are_sorted(self, capsys):
+        """Slash commands in /help are listed in lexicographic order."""
+        _repl_help()
+        lines = [line.strip() for line in capsys.readouterr().err.splitlines()]
+        commands = [line.split()[0] for line in lines if line.startswith("/")]
+        assert commands == sorted(commands)
 
     def test_help_in_repl(self, tmp_path):
         """/help does not append to messages or call the model."""
@@ -2006,3 +2015,153 @@ class TestSnapshotReplIntegration:
         result = state._resolve_start(messages)
         assert isinstance(result, str)
         assert "invalidated" in result
+
+
+# ---------------------------------------------------------------------------
+# /copy command
+# ---------------------------------------------------------------------------
+
+
+class TestCopyCommand:
+    def test_copy_macos(self):
+        """On macOS, /copy shells out to pbcopy."""
+        with (
+            patch("sys.platform", "darwin"),
+            patch("subprocess.run") as mock_run,
+        ):
+            _repl_copy("hello world")
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert args[0] == ["pbcopy"]
+        assert kwargs["input"] == b"hello world"
+        assert kwargs["check"] is True
+
+    def test_copy_win32(self):
+        """On Windows, /copy shells out to clip."""
+        with (
+            patch("sys.platform", "win32"),
+            patch("subprocess.run") as mock_run,
+        ):
+            _repl_copy("hello")
+        assert mock_run.call_args[0][0] == ["clip"]
+
+    def test_copy_linux_wl_copy(self):
+        """On Linux with wl-copy available, prefer it."""
+        with (
+            patch("sys.platform", "linux"),
+            patch("shutil.which", return_value="/usr/bin/wl-copy"),
+            patch("subprocess.run") as mock_run,
+        ):
+            _repl_copy("hello")
+        assert mock_run.call_args[0][0] == ["wl-copy"]
+
+    def test_copy_linux_xclip(self):
+        """On Linux without wl-copy, fall back to xclip."""
+
+        def _which(name):
+            if name == "wl-copy":
+                return None
+            if name == "xclip":
+                return "/usr/bin/xclip"
+            return None
+
+        with (
+            patch("sys.platform", "linux"),
+            patch("shutil.which", side_effect=_which),
+            patch("subprocess.run") as mock_run,
+        ):
+            _repl_copy("hello")
+        assert mock_run.call_args[0][0] == ["xclip", "-selection", "clipboard"]
+
+    def test_copy_linux_no_utility(self, capsys):
+        """On Linux with no clipboard utility, warn."""
+        with (
+            patch("sys.platform", "linux"),
+            patch("shutil.which", return_value=None),
+            patch("subprocess.run") as mock_run,
+        ):
+            _repl_copy("hello")
+        mock_run.assert_not_called()
+        assert "no clipboard utility" in capsys.readouterr().err
+
+    def test_copy_no_text(self, capsys):
+        """With no prior answer, warn and do not shell out."""
+        with patch("subprocess.run") as mock_run:
+            _repl_copy(None)
+        mock_run.assert_not_called()
+        assert "nothing to copy" in capsys.readouterr().err
+
+    def test_copy_subprocess_failure(self, capsys):
+        """On subprocess failure, warn gracefully."""
+        import subprocess
+
+        with (
+            patch("sys.platform", "darwin"),
+            patch(
+                "subprocess.run",
+                side_effect=subprocess.SubprocessError("broken"),
+            ),
+        ):
+            _repl_copy("hello")
+        assert "clipboard copy failed" in capsys.readouterr().err
+
+    def test_help_includes_copy(self, capsys):
+        """/help text mentions /copy."""
+        _repl_help()
+        assert "/copy" in capsys.readouterr().err
+
+    def test_copy_in_repl_after_turn(self, tmp_path):
+        """/copy after a model turn copies that answer; no extra model call."""
+        messages = [_sys("system")]
+        mock_session = MagicMock()
+        mock_session.prompt.side_effect = ["hello", "/copy", "/exit"]
+
+        def fake_loop(msgs, tools, **kwargs):
+            msgs.append({"role": "assistant", "content": "the answer"})
+            return "the answer", False
+
+        with (
+            patch("prompt_toolkit.PromptSession", return_value=mock_session),
+            patch("swival.agent.run_agent_loop", side_effect=fake_loop) as mock_loop,
+            patch("swival.agent._repl_copy") as mock_copy,
+        ):
+            repl_loop(messages, [], **_loop_kwargs(tmp_path))
+
+        # Model called once for "hello", not for /copy
+        assert mock_loop.call_count == 1
+        mock_copy.assert_called_once_with("the answer")
+
+    def test_copy_after_clear_is_none(self, tmp_path):
+        """/clear resets messages so _last_assistant_text returns None."""
+        messages = [_sys("system")]
+        mock_session = MagicMock()
+        mock_session.prompt.side_effect = ["hello", "/clear", "/copy", "/exit"]
+
+        def fake_loop(msgs, tools, **kwargs):
+            msgs.append({"role": "assistant", "content": "the answer"})
+            return "the answer", False
+
+        with (
+            patch("prompt_toolkit.PromptSession", return_value=mock_session),
+            patch("swival.agent.run_agent_loop", side_effect=fake_loop),
+            patch("swival.agent._repl_copy") as mock_copy,
+        ):
+            repl_loop(messages, [], **_loop_kwargs(tmp_path))
+
+        mock_copy.assert_called_once_with(None)
+
+    def test_last_assistant_text_finds_latest(self):
+        """_last_assistant_text returns the most recent assistant content."""
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "q2"},
+            {"role": "assistant", "content": "a2"},
+        ]
+        assert _last_assistant_text(messages) == "a2"
+
+    def test_last_assistant_text_empty(self):
+        """_last_assistant_text returns None when no assistant messages exist."""
+        assert _last_assistant_text([{"role": "system", "content": "sys"}]) is None
+        assert _last_assistant_text([]) is None

@@ -1784,13 +1784,6 @@ def discover_model(base_url, verbose):
             instance = entry["loaded_instances"][0]
             context_length = instance.get("config", {}).get("context_length")
             model_key = entry.get("id", entry.get("key"))
-            vision = False
-            try:
-                import litellm
-
-                vision = litellm.supports_vision(model=f"openai/{model_key}")
-            except Exception:
-                pass
             return model_key, context_length
 
     return None, None
@@ -5522,21 +5515,22 @@ def _repl_help() -> None:
     """Print available REPL commands."""
     fmt.info(
         "Available commands:\n"
-        "  /help              Show this help message\n"
-        "  /clear, /new       Reset conversation to initial state\n"
-        "  /compact [--drop]  Compress context (--drop removes middle turns)\n"
-        "  /save [label]      Set a context checkpoint\n"
-        "  /restore           Summarize & collapse since checkpoint\n"
-        "  /unsave            Cancel active checkpoint\n"
         "  /add-dir <path>    Grant read+write access to a directory\n"
         "  /add-dir-ro <path> Grant read-only access to a directory\n"
-        "  /extend [N]        Double max turns, or set to N\n"
+        "  /clear, /new       Reset conversation to initial state\n"
+        "  /compact [--drop]  Compress context (--drop removes middle turns)\n"
         "  /continue          Reset turn counter and continue the agent loop\n"
         "  /continue-status   Show if a continue file exists from a prior session\n"
-        "  /learn             Review session for mistakes and persist to memory\n"
-        "  /tools             List all available tools\n"
-        "  /init              Scan project for build/test/lint workflow and conventions, write AGENTS.md\n"
+        "  /copy              Copy last output to clipboard\n"
         "  /exit, /quit       Exit the REPL\n"
+        "  /extend [N]        Double max turns, or set to N\n"
+        "  /help              Show this help message\n"
+        "  /init              Scan project for build/test/lint workflow and conventions, write AGENTS.md\n"
+        "  /learn             Review session for mistakes and persist to memory\n"
+        "  /restore           Summarize & collapse since checkpoint\n"
+        "  /save [label]      Set a context checkpoint\n"
+        "  /tools             List all available tools\n"
+        "  /unsave            Cancel active checkpoint\n"
         "\n"
         "  !command [args]    Run <config_dir>/commands/command; output becomes your next prompt"
     )
@@ -5724,6 +5718,43 @@ def _repl_extend(arg: str, state: dict) -> None:
         old = state["max_turns"]
         state["max_turns"] = old * 2
         fmt.info(f"max turns doubled: {old} -> {old * 2}")
+
+
+def _last_assistant_text(messages: list) -> str | None:
+    """Return the content of the most recent assistant message, or None."""
+    for msg in reversed(messages):
+        if _msg_role(msg) == "assistant":
+            content = _msg_content(msg)
+            if content:
+                return content
+    return None
+
+
+def _repl_copy(text: str | None) -> None:
+    """Copy text to the system clipboard (best-effort, platform-dependent)."""
+    if not text:
+        fmt.warning("nothing to copy — no output yet.")
+        return
+    import shutil
+    import subprocess
+
+    if sys.platform == "darwin":
+        cmd = ["pbcopy"]
+    elif sys.platform == "win32":
+        cmd = ["clip"]
+    else:
+        if shutil.which("wl-copy"):
+            cmd = ["wl-copy"]
+        elif shutil.which("xclip"):
+            cmd = ["xclip", "-selection", "clipboard"]
+        else:
+            fmt.warning("no clipboard utility found (install xclip or wl-clipboard).")
+            return
+    try:
+        subprocess.run(cmd, input=text.encode(), check=True, timeout=5)
+        fmt.info("copied to clipboard.")
+    except (subprocess.SubprocessError, FileNotFoundError) as exc:
+        fmt.warning(f"clipboard copy failed: {exc}")
 
 
 def _repl_snapshot_save(
@@ -5932,6 +5963,7 @@ def repl_loop(
                 append_history(base_dir, history_label, answer, diagnostics=verbose)
             if answer is not None:
                 print(answer)
+
             if exhausted and verbose:
                 fmt.warning(
                     "max turns reached for this question. Use /continue to resume."
@@ -5946,11 +5978,11 @@ def repl_loop(
         cmd = cmd_parts[0].lower()
         cmd_arg = cmd_parts[1] if len(cmd_parts) > 1 else ""
 
-        if cmd == "/help":
-            _repl_help()
+        if cmd == "/add-dir":
+            _repl_add_dir(cmd_arg, extra_write_roots)
             continue
-        elif cmd == "/tools":
-            _repl_tools(tools, mcp_manager, a2a_manager)
+        elif cmd == "/add-dir-ro":
+            _repl_add_dir_ro(cmd_arg, skill_read_roots)
             continue
         elif cmd in ("/clear", "/new"):
             _repl_clear(
@@ -5961,36 +5993,40 @@ def repl_loop(
                 snapshot_state=snapshot_state,
             )
             continue
-        elif cmd == "/add-dir":
-            _repl_add_dir(cmd_arg, extra_write_roots)
-            continue
-        elif cmd == "/add-dir-ro":
-            _repl_add_dir_ro(cmd_arg, skill_read_roots)
-            continue
         elif cmd == "/compact":
             _repl_compact(messages, tools, context_length, cmd_arg, snapshot_state)
             continue
-        elif cmd == "/save":
-            label = cmd_arg.strip() or "user-checkpoint"
-            _repl_snapshot_save(label, messages, snapshot_state)
-            continue
-        elif cmd == "/restore":
-            _repl_snapshot_restore(
-                messages,
-                snapshot_state,
-                model_id=model_id,
-                api_base=api_base,
-                api_key=llm_kwargs.get("api_key"),
-                top_p=top_p,
-                seed=seed,
-                provider=llm_kwargs.get("provider"),
-            )
-            continue
-        elif cmd == "/unsave":
-            _repl_snapshot_unsave(snapshot_state)
-            continue
-        elif cmd == "/extend":
-            _repl_extend(cmd_arg, turn_state)
+        elif cmd == "/continue":
+            fmt.info("continuing agent loop...")
+            try:
+                answer, exhausted = run_agent_loop(
+                    messages,
+                    tools,
+                    max_turns=turn_state["max_turns"],
+                    **_repl_loop_kwargs,
+                )
+            except KeyboardInterrupt:
+                fmt.warning("interrupted, continuation aborted.")
+                if continue_here:
+                    from .continue_here import write_continue_file
+
+                    write_continue_file(
+                        base_dir,
+                        messages,
+                        todo_state=todo_state,
+                        snapshot_state=snapshot_state,
+                        thinking_state=thinking_state,
+                    )
+                continue
+            if not no_history and answer:
+                append_history(base_dir, "(continued)", answer, diagnostics=verbose)
+            if answer is not None:
+                print(answer)
+
+            if exhausted and verbose:
+                fmt.warning(
+                    "max turns reached for this question. Use /continue to resume."
+                )
             continue
         elif cmd == "/continue-status":
             from .continue_here import load_continue_file
@@ -6003,6 +6039,15 @@ def repl_loop(
                 fmt.info(f"Continue file exists ({len(content)} chars):\n{preview}")
             else:
                 fmt.info("No continue file found.")
+            continue
+        elif cmd == "/copy":
+            _repl_copy(_last_assistant_text(messages))
+            continue
+        elif cmd == "/extend":
+            _repl_extend(cmd_arg, turn_state)
+            continue
+        elif cmd == "/help":
+            _repl_help()
             continue
         elif cmd == "/init":
             if cmd_arg:
@@ -6051,6 +6096,7 @@ def repl_loop(
                     )
                 if answer is not None:
                     print(answer)
+
                 if exhausted and verbose:
                     fmt.warning(f"max turns reached during /init pass {_pass}.")
             # Post-write validation and conditional retry
@@ -6090,6 +6136,7 @@ def repl_loop(
                             )
                         if answer is not None:
                             print(answer)
+
                         retry_reason, content = validate_agents_md(agents_path)
                         if retry_reason is not None:
                             fmt.warning(
@@ -6129,39 +6176,31 @@ def repl_loop(
                 append_history(base_dir, "/learn", answer, diagnostics=verbose)
             if answer is not None:
                 print(answer)
+
             if exhausted and verbose:
                 fmt.warning("max turns reached for /learn. Use /continue to resume.")
             continue
-        elif cmd == "/continue":
-            fmt.info("continuing agent loop...")
-            try:
-                answer, exhausted = run_agent_loop(
-                    messages,
-                    tools,
-                    max_turns=turn_state["max_turns"],
-                    **_repl_loop_kwargs,
-                )
-            except KeyboardInterrupt:
-                fmt.warning("interrupted, continuation aborted.")
-                if continue_here:
-                    from .continue_here import write_continue_file
-
-                    write_continue_file(
-                        base_dir,
-                        messages,
-                        todo_state=todo_state,
-                        snapshot_state=snapshot_state,
-                        thinking_state=thinking_state,
-                    )
-                continue
-            if not no_history and answer:
-                append_history(base_dir, "(continued)", answer, diagnostics=verbose)
-            if answer is not None:
-                print(answer)
-            if exhausted and verbose:
-                fmt.warning(
-                    "max turns reached for this question. Use /continue to resume."
-                )
+        elif cmd == "/restore":
+            _repl_snapshot_restore(
+                messages,
+                snapshot_state,
+                model_id=model_id,
+                api_base=api_base,
+                api_key=llm_kwargs.get("api_key"),
+                top_p=top_p,
+                seed=seed,
+                provider=llm_kwargs.get("provider"),
+            )
+            continue
+        elif cmd == "/save":
+            label = cmd_arg.strip() or "user-checkpoint"
+            _repl_snapshot_save(label, messages, snapshot_state)
+            continue
+        elif cmd == "/tools":
+            _repl_tools(tools, mcp_manager, a2a_manager)
+            continue
+        elif cmd == "/unsave":
+            _repl_snapshot_unsave(snapshot_state)
             continue
 
         messages.append({"role": "user", "content": line})
