@@ -1581,7 +1581,7 @@ wheels = [
 
 [[package]]
 name = "swival"
-version = "0.9.3"
+version = "0.9.4"
 source = { editable = "." }
 dependencies = [
     { name = "fast-cipher" },

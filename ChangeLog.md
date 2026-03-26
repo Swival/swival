@@ -2,6 +2,13 @@
 
 All notable user-facing changes to Swival.
 
+## 0.9.4
+
+- `/copy` REPL command has been added to copy the last assistant response to
+  the clipboard.
+- When using LM Studio, the max context length is now always queried from the
+  server instead of relying on a hardcoded default.
+
 ## 0.9.3
 
 - When Swival is launched on a TTY with no task, it now enters REPL mode
