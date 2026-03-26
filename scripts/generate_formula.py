@@ -134,6 +134,7 @@ def main():
     resource_text = "\n".join(format_resource(n, u, s) for n, u, s in results)
 
     template = FORMULA.read_text()
+    template = re.sub(r'version ".*?"', f'version "{version}"', template, count=1)
     template = re.sub(r'sha256 ".*?"', f'sha256 "{our_sha}"', template, count=1)
     template = re.sub(
         r"  # RESOURCES_START\n.*?  # RESOURCES_END",
