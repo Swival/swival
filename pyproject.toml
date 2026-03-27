@@ -24,7 +24,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "litellm==1.82.3",
+    "litellm==1.82.6",
     "tiktoken>=0.12",
     "html-to-markdown>=2.29",
     "rich>=14.3.3",
