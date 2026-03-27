@@ -2,6 +2,12 @@
 
 All notable user-facing changes to Swival.
 
+## 0.9.5
+
+- `outline` tool has been added: shows the structural skeleton of one or more
+  files (classes, functions, top-level declarations) with line numbers, without
+  bodies. Useful for navigating unfamiliar code.
+
 ## 0.9.4
 
 - `/copy` REPL command has been added to copy the last assistant response to
