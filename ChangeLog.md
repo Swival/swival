@@ -2,6 +2,12 @@
 
 All notable user-facing changes to Swival.
 
+## 0.9.6
+
+- Prompt caching has been added. When a provider supports it, the system
+  prompt is cached on the first request and reused for subsequent calls,
+  reducing costs and latency. Can be disabled with `--no-cache-prompts`.
+
 ## 0.9.5
 
 - `outline` tool has been added: shows the structural skeleton of one or more
