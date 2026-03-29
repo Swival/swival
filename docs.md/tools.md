@@ -72,7 +72,7 @@ Every final answer is appended to `.swival/HISTORY.md` with a timestamp and the 
 
 `view_image` reads an image file from the filesystem and presents it to the model for visual analysis. It supports PNG, JPEG, GIF, WebP, and BMP formats. The tool takes a required `image_path` parameter and an optional `question` to focus the model's description.
 
-This tool is only available when the model supports vision. Swival checks vision support via LiteLLM's model registry at startup and removes the tool if the model is known not to support image input. For models not in the registry, the tool is included optimistically.
+This tool is only available when the model supports vision. Swival checks vision support at startup and removes the tool if the model is known not to support image input. For unrecognized models, the tool is included optimistically.
 
 `read_file` does not work on image files — `view_image` is the only way to inspect images.
 

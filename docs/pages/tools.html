@@ -104,7 +104,7 @@
 <p>Every final answer is appended to <code>.swival/HISTORY.md</code> with a timestamp and the originating question. This file is capped at 500 KB. Once full, new entries are skipped instead of rotating older content. Use <code>--no-history</code> if you do not want history writes.</p>
 <h2 id="view_image"><code>view_image</code></h2>
 <p><code>view_image</code> reads an image file from the filesystem and presents it to the model for visual analysis. It supports PNG, JPEG, GIF, WebP, and BMP formats. The tool takes a required <code>image_path</code> parameter and an optional <code>question</code> to focus the model's description.</p>
-<p>This tool is only available when the model supports vision. Swival checks vision support via LiteLLM's model registry at startup and removes the tool if the model is known not to support image input. For models not in the registry, the tool is included optimistically.</p>
+<p>This tool is only available when the model supports vision. Swival checks vision support at startup and removes the tool if the model is known not to support image input. For unrecognized models, the tool is included optimistically.</p>
 <p><code>read_file</code> does not work on image files — <code>view_image</code> is the only way to inspect images.</p>
 <h2 id="fetch_url"><code>fetch_url</code></h2>
 <p><code>fetch_url</code> downloads HTTP or HTTPS content and returns it as markdown, plain text, or raw HTML. It is designed for documentation lookup and API reference pulls. Binary content types are rejected. The <code>format</code> parameter selects the output format: <code>"markdown"</code> (default), <code>"text"</code>, or <code>"html"</code>. The <code>timeout</code> parameter sets the request timeout in seconds (1–120, default 30).</p>

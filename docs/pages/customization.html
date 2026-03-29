@@ -198,7 +198,7 @@ Don't add dependencies without asking.
 <p>In the library API:</p>
 <pre><code class="language-python">session = Session(extra_body={&quot;chat_template_kwargs&quot;: {&quot;enable_thinking&quot;: False}})
 </code></pre>
-<p>The dictionary is forwarded as <code>extra_body</code> to the LiteLLM completion call, which passes it through to the provider's API. Refer to your model's documentation for supported parameters.</p>
+<p>The dictionary is forwarded as <code>extra_body</code> to the provider's API. Refer to your model's documentation for supported parameters.</p>
 <h2 id="reasoning-effort">Reasoning Effort</h2>
 <p>Some models support a tunable reasoning level that controls how much effort the model puts into thinking before responding. This is a first-class parameter in Swival, separate from <code>extra_body</code>.</p>
 <p>On the command line:</p>

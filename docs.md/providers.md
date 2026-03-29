@@ -1,6 +1,6 @@
 # Providers
 
-Swival supports LM Studio for local inference, HuggingFace Inference API for hosted inference, OpenRouter for multi-provider access through a single API, Google Gemini API for Google's models, a ChatGPT Plus/Pro provider for using OpenAI models through your existing subscription via OAuth, AWS Bedrock for models hosted on AWS, a generic provider for any OpenAI-compatible server, and a command provider for shelling out to an external program. All provider calls are normalized through [LiteLLM](https://docs.litellm.ai/), so the runtime loop stays consistent while credential and model routing change per provider.
+Swival supports LM Studio for local inference, HuggingFace Inference API for hosted inference, OpenRouter for multi-provider access through a single API, Google Gemini API for Google's models, a ChatGPT Plus/Pro provider for using OpenAI models through your existing subscription via OAuth, AWS Bedrock for models hosted on AWS, a generic provider for any OpenAI-compatible server, and a command provider for shelling out to an external program.
 
 ## LM Studio
 
@@ -29,8 +29,6 @@ swival --max-context-tokens 131072 "task"
 If the requested value already matches the loaded context length, no reload happens.
 
 When a reload is required, it can take noticeable time depending on model size and hardware.
-
-Internally, LM Studio calls are routed through LiteLLM as an OpenAI-compatible endpoint. Swival sends the model as `openai/<model_id>`, sets `api_base` to `<base_url>/v1`, and uses the placeholder API key `lm-studio`.
 
 ## HuggingFace Inference API
 
@@ -73,8 +71,6 @@ The `--tool-call-parser` value depends on the model you deploy. For Qwen models 
 
 For recently released models, the default vLLM version configured in Inference Endpoints may not support them yet. If you hit errors during model loading, set the **Engine URI** in your endpoint configuration to `vllm/vllm-openai:latest` to use a more recent build.
 
-Internally, Swival normalizes the model to `huggingface/<model_id>` for LiteLLM and strips an existing `huggingface/` prefix if you already included it. If `--base-url` is set, it is forwarded as `api_base`.
-
 Some models served through vLLM leak internal reasoning markers like `<think>` tags into their responses. If you see these in the output, enable `--sanitize-thinking` to strip them. See [Thinking Tag Sanitization](customization.md#thinking-tag-sanitization) for details.
 
 Dedicated endpoints usually let you use the full deployed model context window rather than tighter serverless limits.
@@ -105,7 +101,7 @@ swival --provider openrouter --model z-ai/glm-5 \
     --max-context-tokens 131072 "task"
 ```
 
-Internally, Swival normalizes OpenRouter models to LiteLLM's `openrouter/...` format. Pass bare model identifiers like `z-ai/glm-5`. If you pass a model ID that already includes the full LiteLLM prefix (e.g. `openrouter/z-ai/glm-5`), Swival detects and corrects the double prefix.
+Pass bare model identifiers like `z-ai/glm-5`. If you accidentally include a provider prefix (e.g. `openrouter/z-ai/glm-5`), Swival detects and corrects the double prefix.
 
 ## Generic (OpenAI-compatible)
 
@@ -160,8 +156,6 @@ swival --provider generic \
 
 There is no model auto-discovery and no context window reload. Set `--max-context-tokens` manually if you need Swival to know the window size.
 
-Internally, generic calls are routed through LiteLLM as `openai/<model_id>` with `api_base` pointing at your server's `/v1` path.
-
 ## Google Gemini API
 
 The `google` provider connects to Google's Gemini API through its OpenAI-compatible endpoint (`/v1beta/openai`).
@@ -175,15 +169,15 @@ swival --provider google \
     "task"
 ```
 
-When `--max-context-tokens` is not set, Swival auto-detects the context window via `litellm.get_model_info()`. If detection fails, context length is unknown and compaction may not trigger at the right time — set `--max-context-tokens` explicitly if you hit issues.
+When `--max-context-tokens` is not set, Swival auto-detects the context window from the model's known limits. If detection fails, context length is unknown and compaction may not trigger at the right time — set `--max-context-tokens` explicitly if you hit issues.
 
-Internally, the model is routed through Google's OpenAI-compatible endpoint at `https://generativelanguage.googleapis.com/v1beta/openai`. `--base-url` overrides this if you need a custom endpoint.
+`--base-url` overrides the default endpoint if you need a custom one.
 
 ## ChatGPT Plus/Pro
 
 The `chatgpt` provider lets you use OpenAI models through your existing ChatGPT Plus or ChatGPT Pro subscription, without needing a separate API key.
 
-Authentication uses an OAuth device-code flow handled by LiteLLM -- on first use, LiteLLM prints a device code and a verification URL to your terminal. Open the URL, enter the code, and authorize with your ChatGPT account. The resulting tokens are cached locally and refreshed automatically on subsequent runs.
+Authentication uses an OAuth device-code flow — on first use, Swival prints a device code and a verification URL to your terminal. Open the URL, enter the code, and authorize with your ChatGPT account. The resulting tokens are cached locally and refreshed automatically on subsequent runs.
 
 If you need to pass an API key explicitly (for example, when using `--self-review` which passes credentials via environment variables), set `CHATGPT_API_KEY` or use `--api-key`.
 
@@ -193,9 +187,9 @@ If you need to pass an API key explicitly (for example, when using `--self-revie
 swival --provider chatgpt --model gpt-5.4 "task"
 ```
 
-On the first run, you will see a device-code prompt with a URL and a code to enter in your browser. Once you complete the flow, the OAuth tokens are stored at `~/.config/litellm/chatgpt/auth.json` and refreshed automatically.
+On the first run, you will see a device-code prompt with a URL and a code to enter in your browser. Once you complete the flow, the OAuth tokens are stored locally and refreshed automatically.
 
-Supported model names come from LiteLLM's ChatGPT provider and may change over time. See the [LiteLLM ChatGPT provider docs](https://docs.litellm.ai/docs/providers/chatgpt) for the current model list and naming conventions.
+Supported model names may change over time. Check OpenAI's documentation for the current model list and naming conventions.
 
 Two environment variables are available for advanced use. `CHATGPT_TOKEN_DIR` overrides the default token storage directory. `CHATGPT_API_BASE` overrides the API base URL.
 
@@ -212,7 +206,7 @@ Models like `gpt-5.4` support tunable reasoning effort. Use `--reasoning-effort`
 swival --provider chatgpt --model gpt-5.4 --reasoning-effort high "task"
 ```
 
-All OAuth handling happens inside LiteLLM. Swival normalizes the model to `chatgpt/<model_id>` and passes it through. No other configuration is needed.
+No other configuration is needed.
 
 ## AWS Bedrock
 
@@ -272,7 +266,7 @@ model = "Qwen/Qwen3.5-35B-A3B"
 extra_body = { chat_template_kwargs = { enable_thinking = false } }
 ```
 
-The dictionary is forwarded as `extra_body` to LiteLLM, which passes it through to the server. Refer to your model or server documentation for supported parameters.
+The dictionary is forwarded as `extra_body` to the provider's API. Refer to your model or server documentation for supported parameters.
 
 When using vLLM as the inference backend, models may leak internal reasoning markers like `<think>` tags into their output even with thinking disabled. Use `--sanitize-thinking` to strip them. See [Thinking Tag Sanitization](customization.md#thinking-tag-sanitization) for details.
 
@@ -297,7 +291,7 @@ provider = "command"
 model = "codex exec --skip-git-repo-check --full-auto --ephemeral"
 ```
 
-Because the external program handles all model routing, there is no auto-discovery and no LiteLLM involvement. If you set `--max-context-tokens`, Swival will apply output clamping and graduated compaction as usual; otherwise context management is left to the command itself.
+Because the external program handles all model routing, there is no auto-discovery. If you set `--max-context-tokens`, Swival will apply output clamping and graduated compaction as usual; otherwise context management is left to the command itself.
 
 ## Prompt Caching
 
@@ -310,9 +304,9 @@ For providers that support explicit cache annotations, Swival automatically mark
 | AWS Bedrock                  | Explicit `cache_control` injected by Swival | Supported for Anthropic models on Bedrock                        |
 | OpenAI / Deepseek            | Automatic (provider-side)                   | No annotation needed; prompts >1024 tokens cached automatically  |
 | LM Studio                    | None                                        | Local inference, no server-side cache                            |
-| Generic with custom base_url | None                                        | LiteLLM cannot identify the upstream provider from the URL alone |
+| Generic with custom base_url | None                                        | Swival cannot identify the upstream provider from the URL alone   |
 
-The injection is gated on `litellm.utils.supports_prompt_caching(model)` at runtime, so it activates only when the resolved model string is recognized. If the call succeeds with an unexpected provider, the extra annotation is silently dropped because `litellm.drop_params = True` is always set.
+Cache annotation is applied automatically when the model is known to support it. If the call succeeds with an unexpected provider, the extra annotation is silently ignored.
 
 When `--verbose` is active, Swival prints cache hit and write stats to stderr after each turn:
 
@@ -322,9 +316,3 @@ Prompt cache: 6103 tokens written to cache
 ```
 
 To opt out of explicit cache annotations, pass `--no-prompt-cache`. This only suppresses the injection; providers that cache automatically are unaffected.
-
-## Adding More Providers Later
-
-Because API calls are already abstracted behind LiteLLM, adding a provider is mostly a matter of argument validation, model normalization, and credential wiring. The provider-specific branch in `call_llm()` is intentionally compact so new providers can be added without changing the rest of the agent loop.
-
-In practice, each provider branch is only about ten lines of routing logic.

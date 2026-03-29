@@ -70,7 +70,7 @@ By default, Swival connects to `http://127.0.0.1:1234`, queries LM Studio for th
 
 ## What Happens Internally
 
-When you run a task against LM Studio, Swival first calls `/api/v1/models` to discover the loaded model and context size. It then builds a system prompt that includes tool definitions and workspace context, sends your task through LiteLLM, and enters the agent loop where the model can read files, edit files, search, and continue tool-calling until it finishes. When the model returns a final text answer with no more tool calls, Swival prints that answer to standard output and exits.
+When you run a task against LM Studio, Swival first calls `/api/v1/models` to discover the loaded model and context size. It then builds a system prompt that includes tool definitions and workspace context, sends your task to the model, and enters the agent loop where the model can read files, edit files, search, and continue tool-calling until it finishes. When the model returns a final text answer with no more tool calls, Swival prints that answer to standard output and exits.
 
 Diagnostic logs such as turn headers, tool traces, and timing information are written to standard error, which keeps standard output clean for piping into other tools.
 
@@ -175,9 +175,9 @@ If you have a ChatGPT Plus or ChatGPT Pro subscription and want to use OpenAI's 
 swival "Hello world" --provider chatgpt --model gpt-5.4
 ```
 
-On the first run, Swival will print a URL and a code. Open the URL in your browser, enter the code, and authorize. After that, tokens are cached at `~/.config/litellm/chatgpt/auth.json` and you won't be prompted again.
+On the first run, Swival will print a URL and a code. Open the URL in your browser, enter the code, and authorize. After that, tokens are cached locally and you won't be prompted again.
 
-`--model` is required -- there is no default. Supported model names can change over time, so check [Providers](providers.md) or LiteLLM's ChatGPT provider docs if you need the current naming.
+`--model` is required -- there is no default. Supported model names can change over time, so check [Providers](providers.md) if you need the current naming.
 
 For a deeper look at ChatGPT Plus/Pro-specific options, see [Providers](providers.md).
 

@@ -199,7 +199,7 @@ In the library API:
 session = Session(extra_body={"chat_template_kwargs": {"enable_thinking": False}})
 ```
 
-The dictionary is forwarded as `extra_body` to the LiteLLM completion call, which passes it through to the provider's API. Refer to your model's documentation for supported parameters.
+The dictionary is forwarded as `extra_body` to the provider's API. Refer to your model's documentation for supported parameters.
 
 ## Reasoning Effort
 

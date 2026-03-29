@@ -145,7 +145,7 @@ brew uninstall swival     # if installed with Homebrew
 </code></pre>
 <p>By default, Swival connects to <code>http://127.0.0.1:1234</code>, queries LM Studio for the currently loaded model, and uses that model automatically.</p>
 <h2 id="what-happens-internally">What Happens Internally</h2>
-<p>When you run a task against LM Studio, Swival first calls <code>/api/v1/models</code> to discover the loaded model and context size. It then builds a system prompt that includes tool definitions and workspace context, sends your task through LiteLLM, and enters the agent loop where the model can read files, edit files, search, and continue tool-calling until it finishes. When the model returns a final text answer with no more tool calls, Swival prints that answer to standard output and exits.</p>
+<p>When you run a task against LM Studio, Swival first calls <code>/api/v1/models</code> to discover the loaded model and context size. It then builds a system prompt that includes tool definitions and workspace context, sends your task to the model, and enters the agent loop where the model can read files, edit files, search, and continue tool-calling until it finishes. When the model returns a final text answer with no more tool calls, Swival prints that answer to standard output and exits.</p>
 <p>Diagnostic logs such as turn headers, tool traces, and timing information are written to standard error, which keeps standard output clean for piping into other tools.</p>
 <h2 id="passing-the-task-on-stdin">Passing The Task On Stdin</h2>
 <p>If you omit the positional task and pipe stdin, Swival reads the task from stdin. On an interactive terminal with no task, Swival enters REPL mode automatically.</p>
@@ -204,8 +204,8 @@ swival &quot;Hello world&quot; --provider google --model gemini-2.5-flash
 <p>If you have a ChatGPT Plus or ChatGPT Pro subscription and want to use OpenAI's models without a separate API key, the <code>chatgpt</code> provider authenticates through an OAuth device-code flow using your existing subscription.</p>
 <pre><code class="language-sh">swival &quot;Hello world&quot; --provider chatgpt --model gpt-5.4
 </code></pre>
-<p>On the first run, Swival will print a URL and a code. Open the URL in your browser, enter the code, and authorize. After that, tokens are cached at <code>~/.config/litellm/chatgpt/auth.json</code> and you won't be prompted again.</p>
-<p><code>--model</code> is required -- there is no default. Supported model names can change over time, so check <a href="providers.html">Providers</a> or LiteLLM's ChatGPT provider docs if you need the current naming.</p>
+<p>On the first run, Swival will print a URL and a code. Open the URL in your browser, enter the code, and authorize. After that, tokens are cached locally and you won't be prompted again.</p>
+<p><code>--model</code> is required -- there is no default. Supported model names can change over time, so check <a href="providers.html">Providers</a> if you need the current naming.</p>
 <p>For a deeper look at ChatGPT Plus/Pro-specific options, see <a href="providers.html">Providers</a>.</p>
 <h2 id="where-to-go-next">Where To Go Next</h2>
 <p>If you want the full command surface and mode behavior, continue with <a href="usage.html">Usage</a>. If you want a deeper look at built-in capabilities, read <a href="tools.html">Tools</a>. If you need to understand trust boundaries before enabling stronger actions, read <a href="safety-and-sandboxing.html">Safety and Sandboxing</a>.</p>
