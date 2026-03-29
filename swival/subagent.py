@@ -12,7 +12,7 @@ from .tracker import FileAccessTracker
 
 
 _SUBAGENT_TOOLS = {"spawn_subagent", "check_subagents"}
-_MAX_CONCURRENT = 8
+_MAX_CONCURRENT = 4
 
 # Keys from loop_kwargs that represent per-run mutable state or
 # non-shareable resources. Excluded when building the subagent template.

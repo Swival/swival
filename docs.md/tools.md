@@ -156,7 +156,7 @@ In REPL mode, you can also trigger snapshots manually with `/save`, `/restore`, 
 
 Subagents inherit the parent's full system prompt (instructions, memory, AGENTS.md) but have no access to the parent's conversation history. The `task` parameter must include all necessary context.
 
-Subagents cannot spawn their own subagents — the tool is removed from their tool list to prevent recursion. Up to 8 subagents can run concurrently.
+Subagents cannot spawn their own subagents — the tool is removed from their tool list to prevent recursion. Up to 4 subagents can run concurrently.
 
 This tool is only available when `--subagents` is passed on the CLI or `subagents=True` is set in the Session constructor or config file.
 

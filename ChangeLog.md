@@ -4,12 +4,20 @@ All notable user-facing changes to Swival.
 
 ## 0.9.7
 
+- Parallel subagents have been added: `spawn_subagent` launches an independent
+  agent loop in a background thread to work on a task concurrently, and
+  `check_subagents` polls, collects results, or cancels running subagents.
+  Up to 4 subagents can run in parallel. Each gets its own thinking, todo,
+  snapshot, and file-tracker state. Subagents have access to all file and
+  search tools but cannot spawn their own subagents.
 - The todo list is now session-scoped and purely in-memory. It no longer
   persists to `.swival/todo.md` or uses file locking. Concurrent sessions
   get fully independent todo lists with no cross-session interference.
 - `/remember <text>` REPL command has been added to persist a project fact
-  to `AGENTS.md` under `## Conventions`. Deduplicates by normalized text.
-  Creates a minimal `AGENTS.md` scaffold if the file does not exist yet.
+  to `AGENTS.md` under `## Conventions`. The live system prompt is updated
+  immediately so the agent sees the new fact without restarting.
+- `read_file` on a missing `MEMORY.md` now returns a helpful hint explaining
+  its purpose instead of a generic "file not found" error.
 
 ## 0.9.6
 

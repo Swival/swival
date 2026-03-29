@@ -151,7 +151,7 @@
 <h2 id="spawn_subagent"><code>spawn_subagent</code></h2>
 <p><code>spawn_subagent</code> launches an independent subagent in a background thread to work on a task in parallel. The subagent runs its own <code>run_agent_loop()</code> with isolated state (messages, thinking, todo, snapshot) but shares the parent's LLM config, MCP/A2A connections, secret encryption, and LLM filter.</p>
 <p>Subagents inherit the parent's full system prompt (instructions, memory, AGENTS.md) but have no access to the parent's conversation history. The <code>task</code> parameter must include all necessary context.</p>
-<p>Subagents cannot spawn their own subagents — the tool is removed from their tool list to prevent recursion. Up to 8 subagents can run concurrently.</p>
+<p>Subagents cannot spawn their own subagents — the tool is removed from their tool list to prevent recursion. Up to 4 subagents can run concurrently.</p>
 <p>This tool is only available when <code>--subagents</code> is passed on the CLI or <code>subagents=True</code> is set in the Session constructor or config file.</p>
 <h2 id="check_subagents"><code>check_subagents</code></h2>
 <p><code>check_subagents</code> monitors and manages spawned subagents. It supports three actions:</p>
