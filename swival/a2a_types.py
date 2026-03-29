@@ -98,32 +98,30 @@ def _to_camel(snake: str) -> str:
     return parts[0] + "".join(p.capitalize() for p in parts[1:])
 
 
-def to_wire(obj: dict) -> dict:
-    """Recursively convert dict keys from snake_case to camelCase."""
+def _convert_wire_keys(obj: dict, key_fn) -> dict:
+    """Recursively convert dict keys while preserving existing list handling."""
     result = {}
     for k, v in obj.items():
-        ck = _to_camel(k)
+        converted_key = key_fn(k)
         if isinstance(v, dict):
-            result[ck] = to_wire(v)
+            result[converted_key] = _convert_wire_keys(v, key_fn)
         elif isinstance(v, list):
-            result[ck] = [to_wire(i) if isinstance(i, dict) else i for i in v]
+            result[converted_key] = [
+                _convert_wire_keys(i, key_fn) if isinstance(i, dict) else i for i in v
+            ]
         else:
-            result[ck] = v
+            result[converted_key] = v
     return result
+
+
+def to_wire(obj: dict) -> dict:
+    """Recursively convert dict keys from snake_case to camelCase."""
+    return _convert_wire_keys(obj, _to_camel)
 
 
 def from_wire(obj: dict) -> dict:
     """Recursively convert dict keys from camelCase to snake_case."""
-    result = {}
-    for k, v in obj.items():
-        sk = _to_snake(k)
-        if isinstance(v, dict):
-            result[sk] = from_wire(v)
-        elif isinstance(v, list):
-            result[sk] = [from_wire(i) if isinstance(i, dict) else i for i in v]
-        else:
-            result[sk] = v
-    return result
+    return _convert_wire_keys(obj, _to_snake)
 
 
 _CAMEL_RE = re.compile(r"(?<=[a-z0-9])([A-Z])")
