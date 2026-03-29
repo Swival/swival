@@ -49,6 +49,14 @@ class TestIsTransient:
         )
         assert _is_transient(exc) is True
 
+    def test_service_unavailable(self):
+        import litellm
+
+        exc = litellm.ServiceUnavailableError(
+            message="upstream connect error", llm_provider="openai", model="x"
+        )
+        assert _is_transient(exc) is True
+
     def test_bad_request_not_transient(self):
         import litellm
 

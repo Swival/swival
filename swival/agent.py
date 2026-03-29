@@ -375,7 +375,8 @@ _EMPTY_ASSISTANT_RE = re.compile(
 _TRANSIENT_PATTERNS = re.compile(
     r"Connection reset by peer|Connection refused|timed out"
     r"|RemoteDisconnected|Temporary failure in name resolution"
-    r"|SSLError|EOF occurred|BrokenPipeError",
+    r"|SSLError|EOF occurred|BrokenPipeError"
+    r"|ServiceUnavailableError|upstream connect error",
     re.IGNORECASE,
 )
 
@@ -398,6 +399,7 @@ def _is_transient(exc):
         exc,
         (
             _lt.InternalServerError,
+            _lt.ServiceUnavailableError,
             _lt.APIConnectionError,
             _lt.Timeout,
             _lt.RateLimitError,
