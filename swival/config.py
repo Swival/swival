@@ -969,6 +969,7 @@ def generate_config(project: bool = False) -> str:
         "# no_history = false",
         "# no_memory = false",
         "# no_continue = false",
+        "# subagents = false               # enable parallel subagent support (spawn_subagent / check_subagents)",
         "",
         "# --- Cache ---",
         "# cache = false                   # enable LLM response caching (.swival/cache.db)",
