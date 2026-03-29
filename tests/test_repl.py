@@ -18,6 +18,7 @@ from swival.agent import (
     _INIT_AGENTS_MD_BUDGET,
     validate_agents_md,
     LEARN_PROMPT,
+    SIMPLIFY_PROMPT,
     _repl_help,
     _repl_tools,
     _repl_clear,
@@ -1346,6 +1347,96 @@ class TestLearnCommand:
         args = mock_history.call_args
         assert args[0][1] == "/learn"
         assert args[0][2] == "noted"
+
+
+# ---------------------------------------------------------------------------
+# /simplify command
+# ---------------------------------------------------------------------------
+
+
+class TestSimplifyCommand(TestLearnCommand):
+    """Tests for /simplify REPL command — mirrors TestLearnCommand structure."""
+
+    def test_simplify_invokes_loop(self, tmp_path, capsys):
+        """/simplify prints the answer from the agent loop."""
+        messages = [_sys("system")]
+        inputs = ["/simplify", "/exit"]
+        mock_session = self._mock_session(inputs)
+
+        with (
+            patch("prompt_toolkit.PromptSession", return_value=mock_session),
+            patch(
+                "swival.agent.run_agent_loop", return_value=("simplify result", False)
+            ),
+        ):
+            repl_loop(messages, [], **_loop_kwargs(tmp_path))
+
+        captured = capsys.readouterr()
+        assert "simplify result" in captured.out
+
+    def test_simplify_with_focus_arg(self, tmp_path):
+        """/simplify <focus> appends focus area to the prompt."""
+        messages = [_sys("system")]
+        inputs = ["/simplify swival/edit.py", "/exit"]
+        mock_session = self._mock_session(inputs)
+        call_snapshots = []
+
+        def capture_run(msgs, tools, **kwargs):
+            call_snapshots.append([dict(m) for m in msgs])
+            return ("done", False)
+
+        with (
+            patch("prompt_toolkit.PromptSession", return_value=mock_session),
+            patch("swival.agent.run_agent_loop", side_effect=capture_run),
+        ):
+            repl_loop(messages, [], **_loop_kwargs(tmp_path))
+
+        assert len(call_snapshots) == 1
+        last_user = [m for m in call_snapshots[0] if m["role"] == "user"]
+        assert len(last_user) == 1
+        assert last_user[0]["content"].startswith(SIMPLIFY_PROMPT)
+        assert "\n\nFocus area: swival/edit.py" in last_user[0]["content"]
+
+    def test_simplify_keyboard_interrupt(self, tmp_path):
+        """KeyboardInterrupt during /simplify doesn't crash the REPL."""
+        messages = [_sys("system")]
+        call_count = 0
+
+        def fake_run(msgs, tools, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise KeyboardInterrupt
+            return ("after", False)
+
+        inputs = ["/simplify", "q1", "/exit"]
+        mock_session = self._mock_session(inputs)
+
+        with (
+            patch("prompt_toolkit.PromptSession", return_value=mock_session),
+            patch("swival.agent.run_agent_loop", side_effect=fake_run),
+        ):
+            repl_loop(messages, [], **_loop_kwargs(tmp_path))
+
+        assert call_count == 2
+
+    def test_simplify_history_label(self, tmp_path):
+        """/simplify records history with '/simplify' label."""
+        messages = [_sys("system")]
+        inputs = ["/simplify", "/exit"]
+        mock_session = self._mock_session(inputs)
+
+        with (
+            patch("prompt_toolkit.PromptSession", return_value=mock_session),
+            patch("swival.agent.run_agent_loop", return_value=("simplified", False)),
+            patch("swival.agent.append_history") as mock_history,
+        ):
+            repl_loop(messages, [], **_loop_kwargs(tmp_path))
+
+        mock_history.assert_called_once()
+        args = mock_history.call_args
+        assert args[0][1] == "/simplify"
+        assert args[0][2] == "simplified"
 
 
 # ---------------------------------------------------------------------------

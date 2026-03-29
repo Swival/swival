@@ -240,6 +240,111 @@ def validate_agents_md(path: Path) -> tuple[str | None, str | None]:
     return None, content
 
 
+SIMPLIFY_PROMPT = """\
+You are an extremely careful senior software engineer working on an existing production codebase.
+
+Your task is to simplify the current project's codebase, in whatever programming language(s) it uses, while preserving behavior exactly.
+
+Your top priority is safety, correctness, and strict behavioral equivalence.
+
+Goals:
+- Reduce unnecessary code duplication.
+- Make the code smaller where appropriate.
+- Make the code more idiomatic for the language/framework already used.
+- Improve clarity and maintainability.
+- Preserve the current architecture, style, naming conventions, coding patterns, and project-specific conventions.
+- Keep all user-facing behavior, public APIs, side effects, outputs, error behavior, timing-sensitive semantics, and observable behavior exactly the same.
+
+Hard constraints:
+- Do not break anything.
+- Do not introduce regressions.
+- Do not change existing conventions unless absolutely required for correctness.
+- Do not change user-facing functions, public interfaces, external behavior, CLI/API contracts, file formats, logs, error messages, exit codes, serialization formats, network behavior, database behavior, or configuration semantics.
+- Do not change behavior for any input, including edge cases, invalid inputs, unusual runtime states, partial failures, concurrency situations, or environment-dependent behavior.
+- Do not change dependency versions, build tooling, infrastructure, test semantics, or formatting configuration unless explicitly necessary.
+- Do not perform broad refactors, redesigns, or "cleanups" that increase risk.
+- Do not make speculative improvements.
+- Do not remove code unless you can justify that it is provably redundant and behavior-preserving.
+
+Definition of success:
+The resulting code must be behaviorally equivalent to the original for all possible inputs and environments. The only allowed changes are internal simplifications that preserve exact semantics.
+
+Working method:
+1. First, inspect the codebase carefully and identify only low-risk simplification opportunities.
+2. Prioritize:
+   - obvious duplication,
+   - repeated logic that can be safely unified,
+   - overly verbose but equivalent constructions,
+   - language-idiomatic simplifications that do not alter semantics,
+   - dead-simple extract/helper opportunities that preserve conventions.
+3. For every proposed change, assume there is hidden business logic unless you can prove otherwise.
+4. Prefer the smallest safe change over the cleverest change.
+5. Preserve naming style, file organization style, error-handling style, and existing abstractions.
+6. Do not change function signatures or call patterns unless they are purely internal and provably behavior-preserving.
+7. Be especially careful with:
+   - null/none/nil/undefined handling,
+   - truthiness differences,
+   - short-circuit behavior,
+   - mutation and aliasing,
+   - evaluation order,
+   - exception/error behavior,
+   - async/concurrency behavior,
+   - resource cleanup,
+   - floating-point behavior,
+   - integer overflow/underflow semantics,
+   - string/encoding behavior,
+   - locale/timezone/date behavior,
+   - environment variables and platform-specific behavior,
+   - logging and metrics side effects,
+   - caching/memoization,
+   - lazy vs eager evaluation,
+   - reflection, macros, metaprogramming, decorators, annotations, generics, templates, and inheritance,
+   - serialization/deserialization formats.
+8. If there is any meaningful doubt that a simplification is perfectly safe, do not apply it.
+9. When choosing where to inspect first, prefer files or areas changed recently, but only if doing so does not reduce confidence or cause you to miss safer opportunities elsewhere.
+
+Execution rules:
+- Work incrementally.
+- Make a small number of high-confidence changes rather than many risky ones.
+- After each change, reason explicitly about why behavior is unchanged.
+- Prefer local refactors over cross-cutting refactors.
+- Preserve comments unless they become inaccurate; if you update comments, keep intent unchanged.
+- Preserve test coverage and add tests only if needed to lock down existing behavior, not to redefine it.
+
+Output format:
+For each proposed or applied change, provide:
+1. A short title.
+2. Why the original code is more complex or duplicated than necessary.
+3. Why the new version is behaviorally equivalent.
+4. Any risks or edge cases considered.
+5. The exact patch or rewritten code.
+
+Mandatory safety check before finalizing:
+Before presenting the final result, perform a strict self-review and reject any change that could possibly alter:
+- public behavior,
+- edge-case handling,
+- side effects,
+- ordering,
+- error semantics,
+- performance characteristics in a way that could affect observable behavior.
+
+If a change is not provably safe, do not include it.
+
+Decision policy:
+- When choosing between "more simplified" and "more certain to preserve behavior," always choose certainty.
+- When choosing between "more idiomatic" and "more aligned with existing project conventions," always choose existing conventions.
+- When unsure, keep the original code.
+
+Continuation rule:
+- Keep iterating on additional small, high-confidence simplifications after each successful change.
+- Only stop when you have positively determined that no further simplifications are provably safe under the constraints above.
+- Do not stop just because you already made a few good changes; continue searching for more safe opportunities until the remaining candidates are meaningfully risky, behaviorally uncertain, or too trivial to justify touching.
+- When you stop, explicitly state that you searched for more candidates and rejected the remaining ones as not provably safe.
+
+Final instruction:
+Be conservative, precise, and skeptical. Your job is not to improve the design. Your job is to simplify implementation details only where semantic equivalence is extremely likely and defensible."""
+
+
 LEARN_PROMPT = (
     "Review this session for concrete mistakes, confusions, or surprises you "
     "encountered with tools, commands, APIs, or syntax. Persist concise notes "
@@ -5779,6 +5884,7 @@ def _repl_help() -> None:
         "  /remember <text>   Add a durable project fact to AGENTS.md\n"
         "  /restore           Summarize & collapse since checkpoint\n"
         "  /save [label]      Set a context checkpoint\n"
+        "  /simplify [focus]  Simplify codebase (optionally scoped to focus area)\n"
         "  /tools             List all available tools\n"
         "  /unsave            Cancel active checkpoint\n"
         "\n"
@@ -6509,6 +6615,40 @@ def repl_loop(
         elif cmd == "/save":
             label = cmd_arg.strip() or "user-checkpoint"
             _repl_snapshot_save(label, messages, snapshot_state)
+            continue
+        elif cmd == "/simplify":
+            focus = cmd_arg.strip()
+            prompt = SIMPLIFY_PROMPT
+            if focus:
+                prompt += f"\n\nFocus area: {focus}"
+            messages.append({"role": "user", "content": prompt})
+            try:
+                answer, exhausted = run_agent_loop(
+                    messages,
+                    tools,
+                    max_turns=turn_state["max_turns"],
+                    **_repl_loop_kwargs,
+                )
+            except KeyboardInterrupt:
+                _reset_subagent_manager()
+                fmt.warning("interrupted, /simplify aborted.")
+                if continue_here:
+                    from .continue_here import write_continue_file
+
+                    write_continue_file(
+                        base_dir,
+                        messages,
+                        todo_state=todo_state,
+                        snapshot_state=snapshot_state,
+                        thinking_state=thinking_state,
+                    )
+                continue
+            if not no_history and answer:
+                append_history(base_dir, "/simplify", answer, diagnostics=verbose)
+            if answer is not None:
+                fmt.repl_answer(answer)
+            if exhausted and verbose:
+                fmt.warning("max turns reached for /simplify. Use /continue to resume.")
             continue
         elif cmd == "/tools":
             _repl_tools(tools, mcp_manager, a2a_manager)
