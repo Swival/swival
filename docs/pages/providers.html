@@ -68,18 +68,16 @@
         </aside>
         <article class="docs-content">
             <h1 id="providers">Providers</h1>
-<p>Swival supports LM Studio for local inference, HuggingFace Inference API for hosted inference, OpenRouter for multi-provider access through a single API, Google Gemini API for Google's models, a ChatGPT Plus/Pro provider for using OpenAI models through your existing subscription via OAuth, AWS Bedrock for models hosted on AWS, a generic provider for any OpenAI-compatible server, and a command provider for shelling out to an external program.</p>
+<p>Swival supports local, hosted, and API-based model providers:</p>
 <ul>
-<li><a href="#lm-studio">LM Studio</a></li>
-<li><a href="#huggingface-inference-api">HuggingFace Inference API</a></li>
-<li><a href="#openrouter">OpenRouter</a></li>
-<li><a href="#generic-openai-compatible">Generic (OpenAI-compatible)</a></li>
-<li><a href="#google-gemini-api">Google Gemini API</a></li>
-<li><a href="#chatgpt-pluspro">ChatGPT Plus/Pro</a></li>
-<li><a href="#aws-bedrock">AWS Bedrock</a></li>
-<li><a href="#extra-provider-parameters">Extra Provider Parameters</a></li>
-<li><a href="#command-external-program">Command (External Program)</a></li>
-<li><a href="#prompt-caching">Prompt Caching</a></li>
+<li><a href="#lm-studio">LM Studio</a> — local inference</li>
+<li><a href="#huggingface-inference-api">HuggingFace Inference API</a> — hosted inference</li>
+<li><a href="#openrouter">OpenRouter</a> — multi-provider access through a single API</li>
+<li><a href="#generic-openai-compatible">Generic (OpenAI-compatible)</a> — any OpenAI-compatible server</li>
+<li><a href="#google-gemini-api">Google Gemini API</a> — Google's models</li>
+<li><a href="#chatgpt-pluspro">ChatGPT Plus/Pro</a> — OpenAI models via your existing subscription</li>
+<li><a href="#aws-bedrock">AWS Bedrock</a> — models hosted on AWS</li>
+<li><a href="#command-external-program">Command (External Program)</a> — shell out to an external program</li>
 </ul>
 <h2 id="lm-studio">LM Studio</h2>
 <p>LM Studio is the default provider and usually requires no flags when the local server is already running with a loaded model.</p>

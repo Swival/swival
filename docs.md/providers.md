@@ -1,17 +1,15 @@
 # Providers
 
-Swival supports LM Studio for local inference, HuggingFace Inference API for hosted inference, OpenRouter for multi-provider access through a single API, Google Gemini API for Google's models, a ChatGPT Plus/Pro provider for using OpenAI models through your existing subscription via OAuth, AWS Bedrock for models hosted on AWS, a generic provider for any OpenAI-compatible server, and a command provider for shelling out to an external program.
+Swival supports local, hosted, and API-based model providers:
 
-- [LM Studio](#lm-studio)
-- [HuggingFace Inference API](#huggingface-inference-api)
-- [OpenRouter](#openrouter)
-- [Generic (OpenAI-compatible)](#generic-openai-compatible)
-- [Google Gemini API](#google-gemini-api)
-- [ChatGPT Plus/Pro](#chatgpt-pluspro)
-- [AWS Bedrock](#aws-bedrock)
-- [Extra Provider Parameters](#extra-provider-parameters)
-- [Command (External Program)](#command-external-program)
-- [Prompt Caching](#prompt-caching)
+- [LM Studio](#lm-studio) — local inference
+- [HuggingFace Inference API](#huggingface-inference-api) — hosted inference
+- [OpenRouter](#openrouter) — multi-provider access through a single API
+- [Generic (OpenAI-compatible)](#generic-openai-compatible) — any OpenAI-compatible server
+- [Google Gemini API](#google-gemini-api) — Google's models
+- [ChatGPT Plus/Pro](#chatgpt-pluspro) — OpenAI models via your existing subscription
+- [AWS Bedrock](#aws-bedrock) — models hosted on AWS
+- [Command (External Program)](#command-external-program) — shell out to an external program
 
 ## LM Studio
 
