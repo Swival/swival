@@ -1788,6 +1788,7 @@ def handle_tool_call(
     messages=None,
     image_stash=None,
     scratch_dir=None,
+    subagent_manager=None,
 ):
     """Execute a single tool call and return (tool_msg, metadata).
 
@@ -1843,6 +1844,7 @@ def handle_tool_call(
             verbose=verbose,
             image_stash=image_stash,
             scratch_dir=scratch_dir,
+            subagent_manager=subagent_manager,
         )
     except McpShutdownError:
         result = "error: MCP server is shutting down"
@@ -2774,10 +2776,7 @@ def build_parser():
     )
     parser = argparse.ArgumentParser(
         prog="swival",
-        usage=(
-            "%(prog)s [options] [task]\n"
-            "       %(prog)s [options] < task.md"
-        ),
+        usage=("%(prog)s [options] [task]\n       %(prog)s [options] < task.md"),
         description=(
             "A CLI coding agent with tool-calling, sandboxed file access, and "
             "multi-provider LLM support.\n"
@@ -3041,6 +3040,18 @@ def build_parser():
         action="store_true",
         default=_UNSET,
         help="Disable A2A agent connections entirely.",
+    )
+    integrations_group.add_argument(
+        "--subagents",
+        action="store_true",
+        default=_UNSET,
+        help="Enable parallel subagent support (spawn_subagent / check_subagents tools).",
+    )
+    integrations_group.add_argument(
+        "--no-subagents",
+        action="store_true",
+        default=_UNSET,
+        help="Disable parallel subagent support.",
     )
     integrations_group.add_argument(
         "--lifecycle-command",
@@ -3925,6 +3936,7 @@ def build_tools(
     resolved_commands: dict[str, str],
     skills_catalog: dict,
     yolo: bool,
+    subagents: bool = False,
 ) -> list:
     """Construct the tools list from base + conditionals."""
     tools = list(TOOLS)
@@ -3972,6 +3984,10 @@ def build_tools(
             f"Run a command and return its output. Allowed commands: {', '.join(sorted(resolved_commands))}."
         )
         tools.append(tool)
+    if subagents:
+        from .subagent import SPAWN_SUBAGENT_TOOL, CHECK_SUBAGENTS_TOOL
+
+        tools.extend([SPAWN_SUBAGENT_TOOL, CHECK_SUBAGENTS_TOOL])
     return tools
 
 
@@ -4329,7 +4345,8 @@ def _run_main(args, report, _write_report, parser):
                 skill_read_roots.append(skill.path)
     args._resolved_skills = skills_catalog
 
-    tools = build_tools(resolved_commands, skills_catalog, yolo)
+    _subagents = getattr(args, "subagents", False) is True
+    tools = build_tools(resolved_commands, skills_catalog, yolo, subagents=_subagents)
 
     # Initialize MCP servers
     mcp_manager = None
@@ -4524,6 +4541,22 @@ def _run_main(args, report, _write_report, parser):
     if getattr(args, "proactive_summaries", False):
         loop_kwargs["compaction_state"] = CompactionState()
 
+    subagent_manager = None
+    if _subagents:
+        from .subagent import SubagentManager, SA_TEMPLATE_EXCLUDE
+
+        sa_template = {
+            k: v for k, v in loop_kwargs.items() if k not in SA_TEMPLATE_EXCLUDE
+        }
+        subagent_manager = SubagentManager(
+            loop_kwargs_template=sa_template,
+            tools=tools,
+            resolved_system_content=system_content,
+            parent_cancel_flag=threading.Event(),
+            verbose=args.verbose,
+        )
+        loop_kwargs["subagent_manager"] = subagent_manager
+
     no_history = getattr(args, "no_history", False)
     no_continue = getattr(args, "no_continue", False)
     _continue_here = not no_continue
@@ -4537,43 +4570,155 @@ def _run_main(args, report, _write_report, parser):
 
     if not args.repl:
         # Single-shot path
-        messages.append({"role": "user", "content": args.question})
-        review_round = 0
-        turn_offset = 0
+        try:
+            messages.append({"role": "user", "content": args.question})
+            review_round = 0
+            turn_offset = 0
 
-        # Build env vars for reviewer subprocess
-        reviewer_env: dict[str, str] | None = None
-        if reviewer_cmd:
-            reviewer_env = {"SWIVAL_TASK": args.question}
-            model_id = getattr(args, "_resolved_model_id", None)
-            if model_id:
-                reviewer_env["SWIVAL_MODEL"] = model_id
-            # Pass API key via provider-specific env var (avoid CLI exposure)
-            if args.self_review and args.api_key:
-                env_var = _PROVIDER_KEY_ENV.get(args.provider)
-                if env_var:
-                    reviewer_env[env_var] = args.api_key
-            # Pass encryption key via env var (avoid ps exposure)
-            if getattr(args, "encrypt_secrets", False):
-                key_hex = getattr(args, "encrypt_secrets_key", None)
-                if key_hex:
-                    from .secrets import ENCRYPT_KEY_ENV
+            # Build env vars for reviewer subprocess
+            reviewer_env: dict[str, str] | None = None
+            if reviewer_cmd:
+                reviewer_env = {"SWIVAL_TASK": args.question}
+                model_id = getattr(args, "_resolved_model_id", None)
+                if model_id:
+                    reviewer_env["SWIVAL_MODEL"] = model_id
+                # Pass API key via provider-specific env var (avoid CLI exposure)
+                if args.self_review and args.api_key:
+                    env_var = _PROVIDER_KEY_ENV.get(args.provider)
+                    if env_var:
+                        reviewer_env[env_var] = args.api_key
+                # Pass encryption key via env var (avoid ps exposure)
+                if getattr(args, "encrypt_secrets", False):
+                    key_hex = getattr(args, "encrypt_secrets_key", None)
+                    if key_hex:
+                        from .secrets import ENCRYPT_KEY_ENV
 
-                    reviewer_env[ENCRYPT_KEY_ENV] = key_hex
+                        reviewer_env[ENCRYPT_KEY_ENV] = key_hex
 
-        while True:
-            try:
-                answer, exhausted = run_agent_loop(
-                    messages,
-                    tools,
-                    **loop_kwargs,
-                    report=report,
-                    turn_offset=turn_offset,
+            while True:
+                try:
+                    answer, exhausted = run_agent_loop(
+                        messages,
+                        tools,
+                        **loop_kwargs,
+                        report=report,
+                        turn_offset=turn_offset,
+                    )
+                except (KeyboardInterrupt, SystemExit) as exc:
+                    is_term = isinstance(exc, SystemExit)
+                    exit_code = exc.code if is_term else 130
+                    fmt.warning("terminated." if is_term else "interrupted.")
+                    if _continue_here:
+                        from .continue_here import write_continue_file
+
+                        write_continue_file(
+                            base_dir,
+                            messages,
+                            todo_state=todo_state,
+                            snapshot_state=snapshot_state,
+                            thinking_state=thinking_state,
+                        )
+                    sys.exit(exit_code)
+
+                if not reviewer_cmd or answer is None or exhausted:
+                    break
+
+                review_round += 1
+                args._review_rounds = review_round
+                if args.verbose:
+                    fmt.review_sending(review_round)
+
+                reviewer_env["SWIVAL_REVIEW_ROUND"] = str(review_round)
+                exit_code, review_text, review_stderr = run_reviewer(
+                    reviewer_cmd,
+                    base_dir,
+                    answer,
+                    args.verbose,
+                    env_extra=reviewer_env,
                 )
-            except (KeyboardInterrupt, SystemExit) as exc:
-                is_term = isinstance(exc, SystemExit)
-                exit_code = exc.code if is_term else 130
-                fmt.warning("terminated." if is_term else "interrupted.")
+
+                if report:
+                    report.record_review(
+                        review_round, exit_code, review_text, stderr=review_stderr
+                    )
+
+                if exit_code == 0:
+                    if args.verbose:
+                        fmt.review_accepted(review_round)
+                    break
+                elif exit_code == 1:
+                    if review_round >= args.max_review_rounds:
+                        if args.verbose:
+                            fmt.warning(
+                                f"Max review rounds ({args.max_review_rounds}) reached, accepting answer"
+                            )
+                        break
+                    if args.verbose:
+                        fmt.review_feedback(review_round, review_text)
+                    retry_msg = (
+                        f"[REVIEWER FEEDBACK — Round {review_round}]\n"
+                        "A reviewer has evaluated your answer and requested changes. "
+                        "You MUST address the feedback below by taking concrete "
+                        "tool-call actions — do not simply rewrite your previous "
+                        "answer. If the task cannot be completed as requested, use "
+                        "tools to gather evidence, then report the failure clearly.\n\n"
+                        f"{review_text}"
+                    )
+                    messages.append({"role": "user", "content": retry_msg})
+                    if report:
+                        turn_offset = report.max_turn_seen
+                    loop_kwargs["max_turns"] = args.max_turns
+                    continue
+                else:
+                    if args.verbose:
+                        fmt.warning(
+                            f"Reviewer exited with code {exit_code}, accepting answer as-is"
+                        )
+                    break
+
+            if not no_history and answer:
+                append_history(
+                    base_dir, args.question, answer, diagnostics=args.verbose
+                )
+            if answer is not None:
+                print(answer)
+            if report:
+                _write_report(
+                    "exhausted" if exhausted else "success",
+                    answer=answer,
+                    exit_code=2 if exhausted else 0,
+                    turns=report.max_turn_seen,
+                    model_id=model_id,
+                    skills_catalog=skills_catalog,
+                    instructions_loaded=instructions_loaded,
+                    review_rounds=review_round,
+                    todo_state=todo_state,
+                    snapshot_state=snapshot_state,
+                )
+            _show_agentfs_diff_hint(args)
+            if exhausted:
+                if args.verbose:
+                    fmt.warning("max turns reached, agent stopped.")
+                sys.exit(2)
+            return
+        finally:
+            if subagent_manager is not None:
+                subagent_manager.shutdown()
+
+    # REPL path
+    _sa_holder = [subagent_manager]
+    try:
+        if args.question:
+            messages.append({"role": "user", "content": args.question})
+            try:
+                answer, exhausted = run_agent_loop(messages, tools, **loop_kwargs)
+            except KeyboardInterrupt:
+                if subagent_manager is not None:
+                    subagent_manager.shutdown()
+                    subagent_manager = subagent_manager.fresh_copy()
+                    loop_kwargs["subagent_manager"] = subagent_manager
+                    _sa_holder[0] = subagent_manager
+                fmt.warning("interrupted during initial question.")
                 if _continue_here:
                     from .continue_here import write_continue_file
 
@@ -4584,129 +4729,41 @@ def _run_main(args, report, _write_report, parser):
                         snapshot_state=snapshot_state,
                         thinking_state=thinking_state,
                     )
-                sys.exit(exit_code)
+                answer, exhausted = None, False
+            except SystemExit as exc:
+                fmt.warning("terminated during initial question.")
+                if _continue_here:
+                    from .continue_here import write_continue_file
 
-            if not reviewer_cmd or answer is None or exhausted:
-                break
-
-            review_round += 1
-            args._review_rounds = review_round
-            if args.verbose:
-                fmt.review_sending(review_round)
-
-            reviewer_env["SWIVAL_REVIEW_ROUND"] = str(review_round)
-            exit_code, review_text, review_stderr = run_reviewer(
-                reviewer_cmd,
-                base_dir,
-                answer,
-                args.verbose,
-                env_extra=reviewer_env,
-            )
-
-            if report:
-                report.record_review(
-                    review_round, exit_code, review_text, stderr=review_stderr
-                )
-
-            if exit_code == 0:
-                if args.verbose:
-                    fmt.review_accepted(review_round)
-                break
-            elif exit_code == 1:
-                if review_round >= args.max_review_rounds:
-                    if args.verbose:
-                        fmt.warning(
-                            f"Max review rounds ({args.max_review_rounds}) reached, accepting answer"
-                        )
-                    break
-                if args.verbose:
-                    fmt.review_feedback(review_round, review_text)
-                retry_msg = (
-                    f"[REVIEWER FEEDBACK — Round {review_round}]\n"
-                    "A reviewer has evaluated your answer and requested changes. "
-                    "You MUST address the feedback below by taking concrete "
-                    "tool-call actions — do not simply rewrite your previous "
-                    "answer. If the task cannot be completed as requested, use "
-                    "tools to gather evidence, then report the failure clearly.\n\n"
-                    f"{review_text}"
-                )
-                messages.append({"role": "user", "content": retry_msg})
-                if report:
-                    turn_offset = report.max_turn_seen
-                loop_kwargs["max_turns"] = args.max_turns
-                continue
-            else:
-                if args.verbose:
-                    fmt.warning(
-                        f"Reviewer exited with code {exit_code}, accepting answer as-is"
+                    write_continue_file(
+                        base_dir,
+                        messages,
+                        todo_state=todo_state,
+                        snapshot_state=snapshot_state,
+                        thinking_state=thinking_state,
                     )
-                break
-
-        if not no_history and answer:
-            append_history(base_dir, args.question, answer, diagnostics=args.verbose)
-        if answer is not None:
-            print(answer)
-        if report:
-            _write_report(
-                "exhausted" if exhausted else "success",
-                answer=answer,
-                exit_code=2 if exhausted else 0,
-                turns=report.max_turn_seen,
-                model_id=model_id,
-                skills_catalog=skills_catalog,
-                instructions_loaded=instructions_loaded,
-                review_rounds=review_round,
-                todo_state=todo_state,
-                snapshot_state=snapshot_state,
-            )
-        _show_agentfs_diff_hint(args)
-        if exhausted:
-            if args.verbose:
-                fmt.warning("max turns reached, agent stopped.")
-            sys.exit(2)
-        return
-
-    # REPL path
-    if args.question:
-        messages.append({"role": "user", "content": args.question})
-        try:
-            answer, exhausted = run_agent_loop(messages, tools, **loop_kwargs)
-        except KeyboardInterrupt:
-            fmt.warning("interrupted during initial question.")
-            if _continue_here:
-                from .continue_here import write_continue_file
-
-                write_continue_file(
-                    base_dir,
-                    messages,
-                    todo_state=todo_state,
-                    snapshot_state=snapshot_state,
-                    thinking_state=thinking_state,
+                raise SystemExit(exc.code)
+            if not no_history and answer:
+                append_history(
+                    base_dir, args.question, answer, diagnostics=args.verbose
                 )
-            answer, exhausted = None, False
-        except SystemExit as exc:
-            fmt.warning("terminated during initial question.")
-            if _continue_here:
-                from .continue_here import write_continue_file
-
-                write_continue_file(
-                    base_dir,
-                    messages,
-                    todo_state=todo_state,
-                    snapshot_state=snapshot_state,
-                    thinking_state=thinking_state,
+            if answer is not None:
+                print(answer)
+            if exhausted and args.verbose:
+                fmt.warning(
+                    "max turns reached for initial question. Use /continue to resume."
                 )
-            raise SystemExit(exc.code)
-        if not no_history and answer:
-            append_history(base_dir, args.question, answer, diagnostics=args.verbose)
-        if answer is not None:
-            print(answer)
-        if exhausted and args.verbose:
-            fmt.warning(
-                "max turns reached for initial question. Use /continue to resume."
-            )
 
-    repl_loop(messages, tools, **loop_kwargs, no_history=no_history)
+        repl_loop(
+            messages,
+            tools,
+            **loop_kwargs,
+            no_history=no_history,
+            _subagent_holder=_sa_holder,
+        )
+    finally:
+        if _sa_holder[0] is not None:
+            _sa_holder[0].shutdown()
     _show_agentfs_diff_hint(args)
 
 
@@ -4740,6 +4797,7 @@ def run_agent_loop(
     compaction_state: "CompactionState | None" = None,
     mcp_manager=None,
     a2a_manager=None,
+    subagent_manager=None,
     continue_here: bool = True,
     cache=None,
     secret_shield=None,
@@ -4835,6 +4893,7 @@ def run_agent_loop(
             snapshot_state=snapshot_state,
             mcp_manager=mcp_manager,
             a2a_manager=a2a_manager,
+            subagent_manager=subagent_manager,
             messages=None,  # inner loop manages its own transcript
             image_stash=None,
             scratch_dir=scratch_dir,
@@ -5406,6 +5465,7 @@ def run_agent_loop(
                 messages=messages,
                 image_stash=image_stash,
                 scratch_dir=scratch_dir,
+                subagent_manager=subagent_manager,
             )
             messages.append(tool_msg)
 
@@ -6055,10 +6115,12 @@ def repl_loop(
     compaction_state: "CompactionState | None" = None,
     mcp_manager=None,
     a2a_manager=None,
+    subagent_manager=None,
     continue_here: bool = True,
     cache=None,
     secret_shield=None,
-) -> None:
+    _subagent_holder: list | None = None,
+):
     """Interactive read-eval-print loop."""
     from prompt_toolkit import PromptSession
     from prompt_toolkit.formatted_text import FormattedText
@@ -6075,6 +6137,15 @@ def repl_loop(
     fmt.reset_state()
     if verbose:
         fmt.repl_banner()
+
+    def _reset_subagent_manager():
+        nonlocal subagent_manager
+        if subagent_manager is not None:
+            subagent_manager.shutdown()
+            subagent_manager = subagent_manager.fresh_copy()
+            _repl_loop_kwargs["subagent_manager"] = subagent_manager
+            if _subagent_holder is not None:
+                _subagent_holder[0] = subagent_manager
 
     turn_state = {"max_turns": max_turns}
     _repl_loop_kwargs = dict(
@@ -6100,6 +6171,7 @@ def repl_loop(
         compaction_state=compaction_state,
         mcp_manager=mcp_manager,
         a2a_manager=a2a_manager,
+        subagent_manager=subagent_manager,
         cache=cache,
         secret_shield=secret_shield,
     )
@@ -6147,6 +6219,7 @@ def repl_loop(
                     **_repl_loop_kwargs,
                 )
             except KeyboardInterrupt:
+                _reset_subagent_manager()
                 fmt.warning("interrupted, question aborted.")
                 if continue_here:
                     from .continue_here import write_continue_file
@@ -6187,6 +6260,7 @@ def repl_loop(
             _repl_add_dir_ro(cmd_arg, skill_read_roots)
             continue
         elif cmd in ("/clear", "/new"):
+            _reset_subagent_manager()
             _repl_clear(
                 messages,
                 thinking_state,
@@ -6208,6 +6282,7 @@ def repl_loop(
                     **_repl_loop_kwargs,
                 )
             except KeyboardInterrupt:
+                _reset_subagent_manager()
                 fmt.warning("interrupted, continuation aborted.")
                 if continue_here:
                     from .continue_here import write_continue_file
@@ -6255,6 +6330,7 @@ def repl_loop(
             if cmd_arg:
                 fmt.warning(f"/init takes no arguments, ignoring {cmd_arg!r}")
             # Clear conversation history first to start with a clean context
+            _reset_subagent_manager()
             _repl_clear(
                 messages,
                 thinking_state,
@@ -6276,6 +6352,7 @@ def repl_loop(
                         **_repl_loop_kwargs,
                     )
                 except KeyboardInterrupt:
+                    _reset_subagent_manager()
                     fmt.warning("interrupted, /init aborted.")
                     if continue_here:
                         from .continue_here import write_continue_file
@@ -6316,6 +6393,7 @@ def repl_loop(
                             **_repl_loop_kwargs,
                         )
                     except KeyboardInterrupt:
+                        _reset_subagent_manager()
                         fmt.warning("interrupted, /init retry aborted.")
                         if continue_here:
                             from .continue_here import write_continue_file
@@ -6362,6 +6440,7 @@ def repl_loop(
                     **_repl_loop_kwargs,
                 )
             except KeyboardInterrupt:
+                _reset_subagent_manager()
                 fmt.warning("interrupted, /learn aborted.")
                 if continue_here:
                     from .continue_here import write_continue_file
@@ -6417,6 +6496,7 @@ def repl_loop(
                 **_repl_loop_kwargs,
             )
         except KeyboardInterrupt:
+            _reset_subagent_manager()
             fmt.warning("interrupted, question aborted.")
             if continue_here:
                 from .continue_here import write_continue_file

@@ -74,6 +74,7 @@ Session(
     encrypt_secrets_tweak: str | None = None,
     encrypt_secrets_patterns: list | None = None,
     llm_filter: str | None = None,
+    subagents: bool = False,
     lifecycle_command: str | None = None,
     lifecycle_timeout: int = 300,
     lifecycle_fail_closed: bool = False,
@@ -102,6 +103,7 @@ All parameters are keyword-only. The important ones:
 | `lifecycle_command`     | Shell command to run at startup and exit (see [Lifecycle Hooks](lifecycle-hooks.html)).                                 |
 | `lifecycle_fail_closed` | If `True`, hook failures raise `LifecycleError` instead of being silently ignored.                                      |
 | `llm_filter`            | Path to a filter script that can redact or block outbound LLM requests (see [Outbound LLM Filter](llm-filter.html)).    |
+| `subagents`             | Enable parallel subagent support (`spawn_subagent` / `check_subagents` tools).                                          |
 | `encrypt_secrets`       | Enable format-preserving secret encryption (see [Secret Encryption](secrets.html)).                                     |
 | `retries`               | Number of LLM call retries on transient failures. Must be >= 1.                                                         |
 | `history`               | Write `HISTORY.md` after successful runs.                                                                               |

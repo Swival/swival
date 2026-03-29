@@ -135,11 +135,13 @@ class TodoState:
         notes_dir: str | None = None,
         verbose: bool = False,
         todo_dir: str | None = None,
+        persist: bool = True,
     ):
         self.items: list[TodoItem] = []
         self.notes_dir = notes_dir
         self.todo_dir = todo_dir
         self.verbose = verbose
+        self._persist = persist
         self.add_count = 0
         self.done_count = 0
         self._total_actions = 0
@@ -151,7 +153,7 @@ class TodoState:
         # don't absorb them into self.items.  _baseline_keys is kept
         # separate from _removed_keys so baseline items are still written
         # back to disk (a live peer session may own them).
-        if notes_dir is not None:
+        if notes_dir is not None and persist:
             try:
                 todo_path = _safe_todo_path(notes_dir, todo_dir)
                 todo_path.parent.mkdir(parents=True, exist_ok=True)
@@ -373,7 +375,7 @@ class TodoState:
         return json.dumps(resp)
 
     def _save(self) -> None:
-        if self.notes_dir is None:
+        if self.notes_dir is None or not self._persist:
             return
         try:
             todo_path = _safe_todo_path(self.notes_dir, self.todo_dir)

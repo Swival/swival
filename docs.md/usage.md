@@ -187,6 +187,12 @@ See [MCP](mcp.md) for full configuration details.
 
 See [A2A](a2a.md) for full configuration details.
 
+### Subagent Flags
+
+`--subagents` enables parallel subagent support. When enabled, the model gets access to `spawn_subagent` and `check_subagents` tools that let it fork independent tasks into background threads. Each subagent runs its own agent loop with isolated state but shared LLM config and MCP/A2A connections. Off by default.
+
+`--no-subagents` explicitly disables subagent support (the default).
+
 ### A2A Server Flags
 
 `--serve` starts Swival as an A2A server instead of running a one-shot task or REPL. Incoming tasks are handled by Session instances keyed by contextId. Incompatible with `--repl`.

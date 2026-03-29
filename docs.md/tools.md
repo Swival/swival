@@ -46,7 +46,7 @@ Trash retention is enforced automatically. Entries older than seven days are rem
 
 ## `grep`
 
-`grep` searches file contents with Python regular expressions. Matches are grouped by file, include line numbers, and are sorted by file recency so the newest files are surfaced first. You can narrow by directory with `path` and by filename glob with `include` (supports `**/*.ext` patterns). Set `context_lines` to show surrounding lines around each match; when active, matching lines are marked with ` <<<` to distinguish them from context.
+`grep` searches file contents with Python regular expressions. Matches are grouped by file, include line numbers, and are sorted by file recency so the newest files are surfaced first. You can narrow by directory with `path` and by filename glob with `include` (supports `**/*.ext` patterns). Set `context_lines` to show surrounding lines around each match; when active, matching lines are marked with `<<<` to distinguish them from context.
 
 Set `case_insensitive` to `true` for case-insensitive matching. Results are capped at 100 matches and long lines are truncated to 2,000 characters.
 
@@ -132,7 +132,7 @@ Completed snapshots are preserved across context compaction. Up to 10 past summa
 
 The collapsed message that replaces all intermediate turns looks like this:
 
-```
+```text
 [snapshot: <label>]
 <your summary>
 (collapsed N turns, saved ~K tokens)
@@ -149,6 +149,28 @@ In REPL mode, you can also trigger snapshots manually with `/save`, `/restore`, 
 3. Agent calls `snapshot` with `action=restore` and `summary="Bottleneck is in db/queries.py:89. The get_users() query does N+1 selects. Fix: add .select_related('profile') to the queryset."`.
 4. All exploration collapses to roughly 100 tokens.
 5. Agent proceeds to implement the fix with a clean context.
+
+## `spawn_subagent`
+
+`spawn_subagent` launches an independent subagent in a background thread to work on a task in parallel. The subagent runs its own `run_agent_loop()` with isolated state (messages, thinking, todo, snapshot) but shares the parent's LLM config, MCP/A2A connections, secret encryption, and LLM filter.
+
+Subagents inherit the parent's full system prompt (instructions, memory, AGENTS.md) but have no access to the parent's conversation history. The `task` parameter must include all necessary context.
+
+Subagents cannot spawn their own subagents — the tool is removed from their tool list to prevent recursion. Up to 8 subagents can run concurrently.
+
+This tool is only available when `--subagents` is passed on the CLI or `subagents=True` is set in the Session constructor or config file.
+
+## `check_subagents`
+
+`check_subagents` monitors and manages spawned subagents. It supports three actions:
+
+`poll` returns the status of all subagents: running, done, failed, or cancelled. Done subagents include a preview of their result (first 500 characters). Failed subagents include the error message.
+
+`collect` blocks until a specific subagent finishes and returns its full result. Requires `subagent_id`. The default timeout is 300 seconds.
+
+`cancel` sends a cancellation signal to a specific subagent. Requires `subagent_id`. The subagent will stop at its next cancellation check point (start of turn or between tool calls).
+
+This tool is only available when subagent support is enabled.
 
 ## MCP Tools
 

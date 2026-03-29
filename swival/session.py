@@ -96,6 +96,7 @@ class Session:
         encrypt_secrets_tweak: str | None = None,
         encrypt_secrets_patterns: list | None = None,
         llm_filter: str | None = None,
+        subagents: bool = False,
         lifecycle_command: str | None = None,
         lifecycle_timeout: int = 300,
         lifecycle_fail_closed: bool = False,
@@ -150,6 +151,7 @@ class Session:
         self.encrypt_secrets_tweak = encrypt_secrets_tweak
         self.encrypt_secrets_patterns = encrypt_secrets_patterns
         self.llm_filter = llm_filter
+        self.subagents = subagents
         self.lifecycle_command = lifecycle_command
         self.lifecycle_timeout = lifecycle_timeout
         self.lifecycle_fail_closed = lifecycle_fail_closed
@@ -276,7 +278,10 @@ class Session:
 
         # Build tools
         self._tools = build_tools(
-            self._resolved_commands, self._skills_catalog, self.yolo
+            self._resolved_commands,
+            self._skills_catalog,
+            self.yolo,
+            subagents=self.subagents,
         )
 
         # Initialize MCP servers
@@ -433,6 +438,7 @@ class Session:
             "skill_read_roots": list(self._allowed_dir_ro_paths),
             "messages": self._make_initial_messages(system_content),
             "compaction_state": CompactionState() if self.proactive_summaries else None,
+            "resolved_system_content": system_content,
         }
         return state
 
@@ -477,6 +483,19 @@ class Session:
             kwargs["event_callback"] = self.event_callback
         if self.cancel_flag is not None:
             kwargs["cancel_flag"] = self.cancel_flag
+        if self.subagents:
+            from .subagent import SubagentManager, SA_TEMPLATE_EXCLUDE
+
+            sa_template = {
+                k: v for k, v in kwargs.items() if k not in SA_TEMPLATE_EXCLUDE
+            }
+            kwargs["subagent_manager"] = SubagentManager(
+                loop_kwargs_template=sa_template,
+                tools=self._tools,
+                resolved_system_content=state.get("resolved_system_content"),
+                parent_cancel_flag=self.cancel_flag,
+                verbose=self.verbose,
+            )
         return kwargs
 
     def run(self, question: str, *, report: bool = False) -> Result:
@@ -496,6 +515,7 @@ class Session:
         exhausted = False
         outcome = "error"
         exit_code = 1
+        _subagent_mgr = loop_kwargs.get("subagent_manager")
         try:
             answer, exhausted = run_agent_loop(
                 messages, self._tools, **loop_kwargs, report=collector
@@ -508,6 +528,8 @@ class Session:
                     self.base_dir, question, answer, diagnostics=self.verbose
                 )
         finally:
+            if _subagent_mgr is not None:
+                _subagent_mgr.shutdown()
             self._run_lifecycle_exit(outcome=outcome, exit_code=exit_code)
 
         report_dict = None
@@ -575,12 +597,16 @@ class Session:
         messages.append({"role": "user", "content": question})
 
         loop_kwargs = self._build_loop_kwargs(state)
+        _subagent_mgr = loop_kwargs.get("subagent_manager")
 
         try:
             answer, exhausted = run_agent_loop(messages, self._tools, **loop_kwargs)
         except BaseException:
             messages[:] = snapshot
             raise
+        finally:
+            if _subagent_mgr is not None:
+                _subagent_mgr.shutdown()
 
         if self.history and answer:
             append_history(self.base_dir, question, answer, diagnostics=self.verbose)

@@ -8,6 +8,7 @@ see real values.
 
 import copy
 import os
+import threading
 
 from fast_cipher.tokens import TokenEncryptor
 from fast_cipher.tokens.alphabets import ALPHANUMERIC
@@ -33,6 +34,7 @@ class SecretShield:
 
         self._encryptor = TokenEncryptor(key, tweak=tweak)
         self._registry: dict[str, str] = {}  # ciphertext -> plaintext
+        self._lock = threading.Lock()
         self._destroyed = False
 
         if extra_patterns:
@@ -106,8 +108,9 @@ class SecretShield:
         if not text:
             return text
         encrypted, mappings = self._encryptor.encrypt(text)
-        for m in mappings:
-            self._registry[m.ciphertext] = m.plaintext
+        with self._lock:
+            for m in mappings:
+                self._registry[m.ciphertext] = m.plaintext
         return encrypted
 
     # --- Inbound (after LLM) ---
@@ -121,7 +124,9 @@ class SecretShield:
         if self._destroyed or not self._registry:
             return text
 
-        for ciphertext, plaintext in self._registry.items():
+        with self._lock:
+            snapshot = dict(self._registry)
+        for ciphertext, plaintext in snapshot.items():
             text = text.replace(ciphertext, plaintext)
 
         return text

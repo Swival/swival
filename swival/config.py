@@ -82,6 +82,7 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "lifecycle_timeout": int,
     "lifecycle_fail_closed": bool,
     "no_lifecycle": bool,
+    "subagents": bool,
 }
 
 _LIST_OF_STR_KEYS = {
@@ -844,6 +845,14 @@ def args_to_session_kwargs(args, base_dir: str) -> dict:
         kwargs["encrypt_secrets_key"] = env_key
         if "encrypt_secrets" not in kwargs:
             kwargs["encrypt_secrets"] = True
+
+    # subagents: resolve --subagents / --no-subagents pair
+    _sa = getattr(args, "subagents", False)
+    _no_sa = getattr(args, "no_subagents", False)
+    if _sa is True:
+        kwargs["subagents"] = True
+    elif _no_sa is True:
+        kwargs["subagents"] = False
 
     # skills_dir uses None as sentinel for "not set"
     skills_dir = getattr(args, "skills_dir", None)

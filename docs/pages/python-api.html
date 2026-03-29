@@ -131,6 +131,7 @@ print(answer)
     encrypt_secrets_tweak: str | None = None,
     encrypt_secrets_patterns: list | None = None,
     llm_filter: str | None = None,
+    subagents: bool = False,
     lifecycle_command: str | None = None,
     lifecycle_timeout: int = 300,
     lifecycle_fail_closed: bool = False,
@@ -213,6 +214,10 @@ print(answer)
 <tr>
 <td><code>llm_filter</code></td>
 <td>Path to a filter script that can redact or block outbound LLM requests (see <a href="llm-filter.html">Outbound LLM Filter</a>).</td>
+</tr>
+<tr>
+<td><code>subagents</code></td>
+<td>Enable parallel subagent support (<code>spawn_subagent</code> / <code>check_subagents</code> tools).</td>
 </tr>
 <tr>
 <td><code>encrypt_secrets</code></td>

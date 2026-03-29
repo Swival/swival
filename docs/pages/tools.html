@@ -134,7 +134,7 @@
 <h3 id="snapshot-history">Snapshot History</h3>
 <p>Completed snapshots are preserved across context compaction. Up to 10 past summaries are retained and injected into the system prompt so knowledge survives aggressive compaction.</p>
 <p>The collapsed message that replaces all intermediate turns looks like this:</p>
-<pre><code>[snapshot: &lt;label&gt;]
+<pre><code class="language-text">[snapshot: &lt;label&gt;]
 &lt;your summary&gt;
 (collapsed N turns, saved ~K tokens)
 </code></pre>
@@ -148,6 +148,17 @@
 <li>All exploration collapses to roughly 100 tokens.</li>
 <li>Agent proceeds to implement the fix with a clean context.</li>
 </ol>
+<h2 id="spawn_subagent"><code>spawn_subagent</code></h2>
+<p><code>spawn_subagent</code> launches an independent subagent in a background thread to work on a task in parallel. The subagent runs its own <code>run_agent_loop()</code> with isolated state (messages, thinking, todo, snapshot) but shares the parent's LLM config, MCP/A2A connections, secret encryption, and LLM filter.</p>
+<p>Subagents inherit the parent's full system prompt (instructions, memory, AGENTS.md) but have no access to the parent's conversation history. The <code>task</code> parameter must include all necessary context.</p>
+<p>Subagents cannot spawn their own subagents — the tool is removed from their tool list to prevent recursion. Up to 8 subagents can run concurrently.</p>
+<p>This tool is only available when <code>--subagents</code> is passed on the CLI or <code>subagents=True</code> is set in the Session constructor or config file.</p>
+<h2 id="check_subagents"><code>check_subagents</code></h2>
+<p><code>check_subagents</code> monitors and manages spawned subagents. It supports three actions:</p>
+<p><code>poll</code> returns the status of all subagents: running, done, failed, or cancelled. Done subagents include a preview of their result (first 500 characters). Failed subagents include the error message.</p>
+<p><code>collect</code> blocks until a specific subagent finishes and returns its full result. Requires <code>subagent_id</code>. The default timeout is 300 seconds.</p>
+<p><code>cancel</code> sends a cancellation signal to a specific subagent. Requires <code>subagent_id</code>. The subagent will stop at its next cancellation check point (start of turn or between tool calls).</p>
+<p>This tool is only available when subagent support is enabled.</p>
 <h2 id="mcp-tools">MCP Tools</h2>
 <p>Swival can connect to external tool servers via the <a href="https://modelcontextprotocol.io/">Model Context Protocol</a> (MCP). MCP tools are discovered at startup and exposed alongside built-in tools. MCP tool output is size-guarded: results up to 20 KB are returned inline, larger results are saved to <code>.swival/</code> for paginated reads via <code>read_file</code>, and output is hard-capped at 10 MB.</p>
 <p>See <a href="mcp.html">MCP</a> for configuration and details.</p>

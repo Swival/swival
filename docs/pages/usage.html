@@ -108,7 +108,7 @@ cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5
 <p><code>/learn</code> reviews the current session for mistakes and confusions, then persists notes to <code>.swival/memory/MEMORY.md</code> for future sessions to learn from. On subsequent runs, memory entries are parsed by heading and selectively injected into the prompt using BM25 retrieval keyed from the user's question, keeping memory token cost bounded.</p>
 <p><code>/tools</code> lists all tools available in the current session — built-in, MCP, and A2A — grouped by source with full descriptions.</p>
 <p><code>/copy</code> copies the most recent assistant output to the system clipboard. Uses <code>pbcopy</code> on macOS, <code>clip</code> on Windows, and <code>wl-copy</code> or <code>xclip</code> on Linux (one of these must be installed). Warns if no output exists yet or if no clipboard utility is found.</p>
-<p><code>/remember &lt;text&gt;</code> adds a single convention bullet to the project-level <code>AGENTS.md</code> file. If the fact is already present (after normalizing whitespace and casing), it is skipped. If <code>AGENTS.md</code> does not exist yet, a minimal scaffold is created. The command is instant — no LLM call is made.</p>
+<p><code>/remember &lt;text&gt;</code> adds a convention to the project-level <code>AGENTS.md</code> file under <code>## Conventions</code>. Duplicates are skipped.</p>
 <p><code>/init</code> scans your project for build/test/lint/format commands and cross-cutting conventions, then generates a structured <code>AGENTS.md</code> file with a <code>## Workflow</code> section (exact commands including an after-every-edit reflex) followed by a <code>## Conventions</code> section. Validates the output and retries once if the structure is wrong.</p>
 <p><code>/exit</code> and <code>/quit</code> leave the REPL. Pressing <code>Ctrl-D</code> exits as well.</p>
 <p><code>!command [args]</code> runs an executable from your commands directory (<code>$XDG_CONFIG_HOME/swival/commands/</code> or <code>~/.config/swival/commands/</code>) and injects its stdout as the next user message. See <a href="custom-commands.html">Custom Commands</a> for setup and details.</p>
@@ -163,6 +163,9 @@ cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5
 <p><code>--no-a2a</code> disables A2A agent connections entirely, even if agents are configured in <code>swival.toml</code>.</p>
 <p><code>--a2a-config FILE</code> provides an explicit path to an A2A TOML config file with <code>[a2a_servers.*]</code> tables.</p>
 <p>See <a href="a2a.html">A2A</a> for full configuration details.</p>
+<h3 id="subagent-flags">Subagent Flags</h3>
+<p><code>--subagents</code> enables parallel subagent support. When enabled, the model gets access to <code>spawn_subagent</code> and <code>check_subagents</code> tools that let it fork independent tasks into background threads. Each subagent runs its own agent loop with isolated state but shared LLM config and MCP/A2A connections. Off by default.</p>
+<p><code>--no-subagents</code> explicitly disables subagent support (the default).</p>
 <h3 id="a2a-server-flags">A2A Server Flags</h3>
 <p><code>--serve</code> starts Swival as an A2A server instead of running a one-shot task or REPL. Incoming tasks are handled by Session instances keyed by contextId. Incompatible with <code>--repl</code>.</p>
 <p><code>--serve-host HOST</code> sets the bind address for the A2A server. Default is <code>0.0.0.0</code>.</p>

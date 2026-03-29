@@ -2624,6 +2624,33 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             extra_write_roots=extra_write_roots,
             unrestricted=yolo,
         )
+    elif name == "spawn_subagent":
+        manager = kwargs.get("subagent_manager")
+        if manager is None:
+            return "error: subagent support is not enabled"
+        return manager.spawn(
+            task=args["task"],
+            max_turns=args.get("max_turns"),
+            system_hint=args.get("system_hint"),
+        )
+    elif name == "check_subagents":
+        manager = kwargs.get("subagent_manager")
+        if manager is None:
+            return "error: subagent support is not enabled"
+        action = args.get("action", "poll")
+        if action == "poll":
+            return manager.poll()
+        elif action == "collect":
+            sid = args.get("subagent_id")
+            if not sid:
+                return "error: subagent_id is required for collect"
+            return manager.collect(sid, timeout=args.get("timeout"))
+        elif action == "cancel":
+            sid = args.get("subagent_id")
+            if not sid:
+                return "error: subagent_id is required for cancel"
+            return manager.cancel(sid)
+        return f"error: unknown action {action!r}"
     else:
         suggestion = _TOOL_ALIASES.get(name)
         if suggestion:
