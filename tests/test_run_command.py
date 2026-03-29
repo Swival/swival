@@ -688,3 +688,32 @@ def test_truncated_output_label(tmp_base):
     # Non-truncated save should say "Full output"
     summary2 = _save_large_output("y" * 20_000, tmp_base, was_truncated=False)
     assert "Full output" in summary2
+
+
+# ---------- Test: cd to filesystem root is blocked ----------
+
+
+def test_cd_root_blocked(tmp_base):
+    result = _run_command(["cd", "/"], tmp_base, {})
+    assert "error:" in result
+    assert "filesystem root" in result
+    assert tmp_base in result
+
+
+def test_cd_root_blocked_backslash(tmp_base):
+    result = _run_command(["cd", "\\"], tmp_base, {})
+    assert "error:" in result
+    assert "filesystem root" in result
+    assert tmp_base in result
+
+
+def test_cd_root_blocked_drive(tmp_base):
+    result = _run_command(["cd", "C:\\"], tmp_base, {})
+    assert "error:" in result
+    assert "filesystem root" in result
+    assert tmp_base in result
+
+
+def test_cd_subdir_not_blocked(tmp_base):
+    result = _run_command(["cd", "src"], tmp_base, {})
+    assert "filesystem root" not in result

@@ -632,6 +632,47 @@ class TestShellStringExecution:
         )
         assert "Exit code: 42" in result
 
+    def test_cd_root_blocked_shell(self, tmp_path):
+        result = _run_command(
+            "cd / && ls",
+            str(tmp_path),
+            resolved_commands={},
+            unrestricted=True,
+        )
+        assert "error:" in result
+        assert "filesystem root" in result
+        assert str(tmp_path) in result
+
+    def test_cd_root_midcommand_shell(self, tmp_path):
+        result = _run_command(
+            "echo hi && cd / && ls",
+            str(tmp_path),
+            resolved_commands={},
+            unrestricted=True,
+        )
+        assert "error:" in result
+        assert "filesystem root" in result
+        assert str(tmp_path) in result
+
+    def test_cd_root_case_insensitive_shell(self, tmp_path):
+        result = _run_command(
+            "CD / && ls",
+            str(tmp_path),
+            resolved_commands={},
+            unrestricted=True,
+        )
+        assert "error:" in result
+        assert "filesystem root" in result
+
+    def test_cd_subdir_shell_not_blocked(self, tmp_path):
+        result = _run_command(
+            "cd src && ls",
+            str(tmp_path),
+            resolved_commands={},
+            unrestricted=True,
+        )
+        assert "filesystem root" not in result
+
 
 class TestShellStringCompat:
     def test_json_array_string_repaired_in_yolo(self, tmp_path):

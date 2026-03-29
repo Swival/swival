@@ -2248,6 +2248,30 @@ def _safe_truncate(text: str, limit: int, suffix: str) -> str:
     return text.encode("utf-8")[:limit].decode("utf-8", errors="replace") + suffix
 
 
+_CD_ROOT_RE = re.compile(
+    r"(?:^|[;&|]\s*)"
+    r"cd\s+"
+    r"(?:/|\\|[A-Za-z]:[/\\])"
+    r"(?:\s|$|[;&|])",
+    re.IGNORECASE,
+)
+
+_CD_ROOT_ERROR = (
+    "error: accessing the filesystem root is not allowed. "
+    "The base directory for this project is: {base_dir} "
+)
+
+
+def _is_root_path(p: str) -> bool:
+    """Return True if p is a filesystem root: /, \\, or X:\\ (drive root)."""
+    s = p.strip()
+    if s in ("/", "\\"):
+        return True
+    if len(s) == 3 and s[0].isalpha() and s[1] == ":" and s[2] in ("/", "\\"):
+        return True
+    return False
+
+
 def _run_shell_command(
     command: str, base_dir: str, timeout: int, scratch_dir: str | None = None
 ) -> str:
@@ -2257,6 +2281,9 @@ def _run_shell_command(
         return f"error: base directory does not exist: {base_dir}"
     if not base_path.is_dir():
         return f"error: base directory is not a directory: {base_dir}"
+
+    if _CD_ROOT_RE.search(command):
+        return _CD_ROOT_ERROR.format(base_dir=base_dir)
 
     timeout = max(1, min(timeout, MAX_TIMEOUT))
 
@@ -2339,6 +2366,14 @@ def _run_command(
 
     if not command:
         return "error: command list is empty"
+
+    if command[0].lower() == "cd":
+        target = command[1] if len(command) > 1 else ""
+        if _is_root_path(target):
+            return _finalize(
+                _CD_ROOT_ERROR.format(base_dir=base_dir),
+                was_repaired,
+            )
 
     base_path = Path(base_dir)
     if not base_path.exists():
