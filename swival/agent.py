@@ -4749,7 +4749,7 @@ def _run_main(args, report, _write_report, parser):
                     base_dir, args.question, answer, diagnostics=args.verbose
                 )
             if answer is not None:
-                print(answer)
+                fmt.repl_answer(answer)
             if exhausted and args.verbose:
                 fmt.warning(
                     "max turns reached for initial question. Use /continue to resume."
@@ -6270,7 +6270,7 @@ def repl_loop(
             if not no_history and answer:
                 append_history(base_dir, history_label, answer, diagnostics=verbose)
             if answer is not None:
-                print(answer)
+                fmt.repl_answer(answer)
 
             if exhausted and verbose:
                 fmt.warning(
@@ -6331,7 +6331,7 @@ def repl_loop(
             if not no_history and answer:
                 append_history(base_dir, "(continued)", answer, diagnostics=verbose)
             if answer is not None:
-                print(answer)
+                fmt.repl_answer(answer)
 
             if exhausted and verbose:
                 fmt.warning(
@@ -6407,7 +6407,7 @@ def repl_loop(
                         diagnostics=verbose,
                     )
                 if answer is not None:
-                    print(answer)
+                    fmt.repl_answer(answer)
 
                 if exhausted and verbose:
                     fmt.warning(f"max turns reached during /init pass {_pass}.")
@@ -6448,7 +6448,7 @@ def repl_loop(
                                 diagnostics=verbose,
                             )
                         if answer is not None:
-                            print(answer)
+                            fmt.repl_answer(answer)
 
                         retry_reason, content = validate_agents_md(agents_path)
                         if retry_reason is not None:
@@ -6489,7 +6489,7 @@ def repl_loop(
             if not no_history and answer:
                 append_history(base_dir, "/learn", answer, diagnostics=verbose)
             if answer is not None:
-                print(answer)
+                fmt.repl_answer(answer)
 
             if exhausted and verbose:
                 fmt.warning("max turns reached for /learn. Use /continue to resume.")
@@ -6546,7 +6546,7 @@ def repl_loop(
         if not no_history and answer:
             append_history(base_dir, line, answer, diagnostics=verbose)
         if answer is not None:
-            print(answer)
+            fmt.repl_answer(answer)
         if exhausted and verbose:
             fmt.warning("max turns reached for this question. Use /continue to resume.")
 

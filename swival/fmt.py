@@ -13,6 +13,7 @@ from rich.style import Style
 from rich.text import Text
 
 _console = Console(stderr=True)
+_stdout_console = Console(stderr=False)
 
 _think_count = 0
 
@@ -28,14 +29,17 @@ def init(*, color: bool = False, no_color: bool = False) -> None:
 
     Call once at startup, before any output.
     """
-    global _console
+    global _console, _stdout_console
     kwargs: dict = {"stderr": True}
+    stdout_kwargs: dict = {"stderr": False}
     if color:
         kwargs["force_terminal"] = True
         kwargs["no_color"] = False
     if no_color:
         kwargs["no_color"] = True
+        stdout_kwargs["no_color"] = True
     _console = Console(**kwargs)
+    _stdout_console = Console(**stdout_kwargs)
 
 
 # -- Turn structure ----------------------------------------------------------
@@ -280,6 +284,17 @@ def assistant_text(text: str) -> None:
     else:
         md = Markdown(text)
         _console.print(_LeftBar(md), end="")
+
+
+def repl_answer(text: str) -> None:
+    """Print a REPL answer to stdout, with syntax highlighting when on a TTY."""
+    if _stdout_console.is_terminal and not _stdout_console.no_color:
+        from rich.syntax import Syntax
+
+        highlighted = Syntax(text, "markdown", background_color="default")
+        _stdout_console.print(highlighted)
+    else:
+        print(text)
 
 
 # -- Reviewer feedback -------------------------------------------------------

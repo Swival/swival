@@ -443,3 +443,73 @@ class TestInit:
         fmt.init(color=True)
         assert fmt._console.no_color is False
         fmt._console = old
+
+    def test_init_configures_stdout_console(self):
+        old = fmt._stdout_console
+        try:
+            fmt.init(no_color=True)
+            assert fmt._stdout_console.no_color is True
+        finally:
+            fmt._stdout_console = old
+
+    def test_init_color_configures_stdout_console(self):
+        old = fmt._stdout_console
+        try:
+            fmt.init(color=True)
+            assert fmt._stdout_console.no_color is False
+        finally:
+            fmt._stdout_console = old
+
+    def test_color_does_not_force_stdout_terminal(self):
+        """--color forces stderr terminal mode but not stdout (keeps piped stdout clean)."""
+        old_stderr = fmt._console
+        old_stdout = fmt._stdout_console
+        try:
+            fmt.init(color=True)
+            assert fmt._console.is_terminal is True
+            assert fmt._stdout_console.is_terminal is False
+        finally:
+            fmt._console = old_stderr
+            fmt._stdout_console = old_stdout
+
+
+class TestReplAnswer:
+    def test_no_color_produces_plain_text(self, capsys):
+        """With no_color, repl_answer falls back to plain print on stdout."""
+        old = fmt._stdout_console
+        fmt._stdout_console = Console(file=None, no_color=True, width=80)
+        try:
+            fmt.repl_answer("hello world")
+        finally:
+            fmt._stdout_console = old
+        captured = capsys.readouterr()
+        assert "hello world" in captured.out
+        # No ANSI escape sequences
+        assert "\x1b[" not in captured.out
+
+    def test_non_tty_produces_plain_text(self, capsys):
+        """When stdout is not a TTY, repl_answer falls back to plain print."""
+        old = fmt._stdout_console
+        buf = StringIO()
+        fmt._stdout_console = Console(file=buf, width=80)
+        try:
+            fmt.repl_answer("hello world")
+        finally:
+            fmt._stdout_console = old
+        # The non-TTY console writes to buf, but the fallback plain print
+        # should go to real stdout (captured by capsys)
+        captured = capsys.readouterr()
+        assert "hello world" in captured.out
+
+    def test_tty_renders_markdown(self):
+        """When stdout is a TTY with color, repl_answer renders Markdown."""
+        buf = StringIO()
+        old = fmt._stdout_console
+        fmt._stdout_console = Console(file=buf, force_terminal=True, width=80)
+        try:
+            fmt.repl_answer("**bold text**")
+        finally:
+            fmt._stdout_console = old
+        output = buf.getvalue()
+        assert "**bold text**" in output  # raw markers preserved for copy/paste
+        assert "\x1b[" in output  # but with ANSI styling
