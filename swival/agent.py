@@ -6266,14 +6266,20 @@ def repl_loop(
     from prompt_toolkit import PromptSession
     from prompt_toolkit.formatted_text import FormattedText
     from prompt_toolkit.history import FileHistory
+    from prompt_toolkit.styles import Style
 
     history_path = os.path.join(base_dir, ".swival", "repl_history")
     os.makedirs(os.path.dirname(history_path), exist_ok=True)
+    prompt_style = Style.from_dict({
+        "": "ansicyan",
+        "prompt": "bold ansigreen",
+    })
     session = PromptSession(
         history=FileHistory(history_path),
         enable_history_search=True,
+        style=prompt_style,
     )
-    prompt_text = FormattedText([("bold fg:ansigreen", "swival> ")])
+    prompt_text = FormattedText([("class:prompt", "swival> ")])
 
     fmt.reset_state()
     if verbose:
