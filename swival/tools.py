@@ -680,6 +680,11 @@ def _expand_tilde(raw: str) -> str:
     )
 
 
+def _memory_path(base_dir: str) -> Path:
+    """Return the fully-resolved canonical memory path for *base_dir*."""
+    return (Path(base_dir).resolve() / ".swival" / "memory" / "MEMORY.md").resolve()
+
+
 def safe_resolve(
     file_path: str,
     base_dir: str,
@@ -1180,6 +1185,15 @@ def _read_file(
         return f"error: {exc}"
 
     if not resolved.exists():
+        if resolved == _memory_path(base_dir):
+            return (
+                ".swival/memory/MEMORY.md does not exist yet. "
+                "This file stores durable, reusable lessons (short bulleted notes) "
+                "that persist across sessions. Create it when you learn something "
+                "worth remembering — tool quirks, API pitfalls, syntax surprises, "
+                "or project-specific conventions. For detailed topics, create "
+                "separate files in .swival/memory/ and reference them from MEMORY.md."
+            )
         return f"error: path does not exist: {file_path}"
 
     # Directory listing

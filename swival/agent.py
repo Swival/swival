@@ -59,6 +59,7 @@ from .tools import (
     TOOLS,
     RUN_COMMAND_TOOL,
     USE_SKILL_TOOL,
+    _memory_path,
     dispatch,
     cleanup_old_cmd_outputs,
 )
@@ -388,7 +389,7 @@ def _safe_history_path(base_dir: str) -> Path:
 def _safe_memory_path(base_dir: str) -> Path:
     """Build memory path, verify it resolves inside base_dir."""
     base = Path(base_dir).resolve()
-    memory_path = (Path(base_dir) / ".swival" / "memory" / "MEMORY.md").resolve()
+    memory_path = _memory_path(base_dir)
     if not memory_path.is_relative_to(base):
         raise ValueError(f"memory path {memory_path} escapes base directory {base}")
     return memory_path

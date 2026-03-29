@@ -56,6 +56,35 @@ class TestReadFilePositive:
 
 
 # =========================================================================
+# read_file -- missing MEMORY.md hint
+# =========================================================================
+
+
+class TestReadFileMemoryHint:
+    """When read_file targets a missing .swival/memory/MEMORY.md, return a
+    helpful hint instead of a generic error."""
+
+    def test_missing_memory_returns_hint(self, tmp_path):
+        result = _read_file(".swival/memory/MEMORY.md", base_dir=str(tmp_path))
+        assert not result.startswith("error:")
+        assert "does not exist yet" in result
+
+    def test_other_missing_file_still_errors(self, tmp_path):
+        result = _read_file("foo.txt", base_dir=str(tmp_path))
+        assert result.startswith("error: path does not exist:")
+
+    def test_symlinked_memory_dir_returns_hint(self, tmp_path):
+        real_dir = tmp_path / "real_memory"
+        real_dir.mkdir()
+        swival_dir = tmp_path / ".swival"
+        swival_dir.mkdir()
+        (swival_dir / "memory").symlink_to(real_dir)
+        result = _read_file(".swival/memory/MEMORY.md", base_dir=str(tmp_path))
+        assert not result.startswith("error:")
+        assert "does not exist yet" in result
+
+
+# =========================================================================
 # read_file -- tail support
 # =========================================================================
 
