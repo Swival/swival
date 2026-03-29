@@ -125,14 +125,15 @@ class TodoState:
                 f"error: all {len(normalized)} items failed — no valid tasks provided"
             )
 
-        if action == "add":
-            return self._batch_add(valid_tasks, errors)
-        elif action == "done":
-            return self._batch_done(valid_tasks, errors)
-        elif action == "remove":
-            return self._batch_remove(valid_tasks, errors)
-
-        return f"error: unhandled action {action!r}"
+        batch_handlers = {
+            "add": self._batch_add,
+            "done": self._batch_done,
+            "remove": self._batch_remove,
+        }
+        handler = batch_handlers.get(action)
+        if handler is None:
+            return f"error: unhandled action {action!r}"
+        return handler(valid_tasks, errors)
 
     def _batch_add(self, tasks: list[str], errors: list[dict]) -> str:
         skipped: list[str] = []
