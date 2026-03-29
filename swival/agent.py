@@ -484,31 +484,30 @@ def _sanitize_assistant_message(msg) -> None:
         _set_msg_content(msg, _sanitize_assistant_content(content))
 
 
+def _safe_subpath(base_dir: str, target: Path, label: str) -> Path:
+    """Verify *target* resolves inside *base_dir* and return it."""
+    base = Path(base_dir).resolve()
+    if not target.is_relative_to(base):
+        raise ValueError(f"{label} {target} escapes base directory {base}")
+    return target
+
+
 def _safe_history_path(base_dir: str) -> Path:
     """Build history path, verify it resolves inside base_dir."""
-    base = Path(base_dir).resolve()
-    history_path = (Path(base_dir) / ".swival" / "HISTORY.md").resolve()
-    if not history_path.is_relative_to(base):
-        raise ValueError(f"history path {history_path} escapes base directory {base}")
-    return history_path
+    return _safe_subpath(
+        base_dir, (Path(base_dir) / ".swival" / "HISTORY.md").resolve(), "history path"
+    )
 
 
 def _safe_memory_path(base_dir: str) -> Path:
     """Build memory path, verify it resolves inside base_dir."""
-    base = Path(base_dir).resolve()
-    memory_path = _memory_path(base_dir)
-    if not memory_path.is_relative_to(base):
-        raise ValueError(f"memory path {memory_path} escapes base directory {base}")
-    return memory_path
+    return _safe_subpath(base_dir, _memory_path(base_dir), "memory path")
 
 
 def _safe_agents_md_path(base_dir: str) -> Path:
     """Build project AGENTS.md path, verify it resolves inside base_dir."""
     base = Path(base_dir).resolve()
-    agents_path = (base / "AGENTS.md").resolve()
-    if not agents_path.is_relative_to(base):
-        raise ValueError(f"AGENTS.md path {agents_path} escapes base directory {base}")
-    return agents_path
+    return _safe_subpath(base_dir, (base / "AGENTS.md").resolve(), "AGENTS.md path")
 
 
 _NORMALIZE_WS_RE = re.compile(r"\s+")
@@ -1076,6 +1075,45 @@ def _build_checkpoint_recap(compaction_state) -> dict | None:
     return None
 
 
+def _build_recap(
+    turns_to_summarize,
+    call_llm_fn,
+    model_id,
+    base_url,
+    api_key,
+    top_p,
+    seed,
+    provider,
+    compaction_state,
+):
+    """Build a recap message via AI summarization, checkpoint, or static marker."""
+    recap = None
+    if call_llm_fn and turns_to_summarize:
+        summary = summarize_turns(
+            turns_to_summarize,
+            call_llm_fn,
+            model_id,
+            base_url,
+            api_key=api_key,
+            top_p=top_p,
+            seed=seed,
+            provider=provider,
+        )
+        if summary:
+            recap = {
+                "role": "assistant",
+                "content": _RECAP_PREFIX + summary,
+            }
+
+    if recap is None:
+        recap = _build_checkpoint_recap(compaction_state)
+
+    if recap is None:
+        recap = dict(_STATIC_SPLICE_MARKER)
+
+    return recap
+
+
 def drop_middle_turns(
     messages: list,
     *,
@@ -1124,29 +1162,17 @@ def drop_middle_turns(
     dropped = droppable[keep_count:]
 
     # Try AI summarization of dropped turns, fall back to static marker.
-    recap = None
-    if call_llm_fn and dropped:
-        summary = summarize_turns(
-            dropped,
-            call_llm_fn,
-            model_id,
-            base_url,
-            api_key=api_key,
-            top_p=top_p,
-            seed=seed,
-            provider=provider,
-        )
-        if summary:
-            recap = {
-                "role": "assistant",
-                "content": _RECAP_PREFIX + summary,
-            }
-
-    if recap is None:
-        recap = _build_checkpoint_recap(compaction_state)
-
-    if recap is None:
-        recap = dict(_STATIC_SPLICE_MARKER)
+    recap = _build_recap(
+        dropped,
+        call_llm_fn,
+        model_id,
+        base_url,
+        api_key,
+        top_p,
+        seed,
+        provider,
+        compaction_state,
+    )
 
     result = []
     for turn in leading:
@@ -1193,29 +1219,17 @@ def aggressive_drop_turns(
     tail = turns[-keep_tail:]
 
     # Try to summarize everything being dropped
-    recap = None
-    if call_llm_fn and middle:
-        summary = summarize_turns(
-            middle,
-            call_llm_fn,
-            model_id,
-            base_url,
-            api_key=api_key,
-            top_p=top_p,
-            seed=seed,
-            provider=provider,
-        )
-        if summary:
-            recap = {
-                "role": "assistant",
-                "content": _RECAP_PREFIX + summary,
-            }
-
-    if recap is None:
-        recap = _build_checkpoint_recap(compaction_state)
-
-    if recap is None:
-        recap = dict(_STATIC_SPLICE_MARKER)
+    recap = _build_recap(
+        middle,
+        call_llm_fn,
+        model_id,
+        base_url,
+        api_key,
+        top_p,
+        seed,
+        provider,
+        compaction_state,
+    )
 
     result = []
     for turn in leading:
@@ -2797,7 +2811,7 @@ def call_llm(
             msg += (
                 "\n\nBedrock authentication requires valid AWS credentials. Example:\n"
                 "  swival --provider bedrock \\\n"
-                '    --model global.anthropic.claude-opus-4-6-v1 \\\n'
+                "    --model global.anthropic.claude-opus-4-6-v1 \\\n"
                 "    --base-url us-east-2 \\\n"
                 '    --aws-profile bedrock "task"'
             )
@@ -6325,10 +6339,12 @@ def repl_loop(
 
     history_path = os.path.join(base_dir, ".swival", "repl_history")
     os.makedirs(os.path.dirname(history_path), exist_ok=True)
-    prompt_style = Style.from_dict({
-        "": "ansicyan",
-        "prompt": "bold ansigreen",
-    })
+    prompt_style = Style.from_dict(
+        {
+            "": "ansicyan",
+            "prompt": "bold ansigreen",
+        }
+    )
     session = PromptSession(
         history=FileHistory(history_path),
         enable_history_search=True,

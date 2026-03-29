@@ -371,7 +371,9 @@ class TestReplLoop:
         inputs = ["/exit"]
         mock_session = self._mock_session(inputs)
         with (
-            patch("prompt_toolkit.PromptSession", return_value=mock_session) as mock_cls,
+            patch(
+                "prompt_toolkit.PromptSession", return_value=mock_session
+            ) as mock_cls,
             patch("swival.agent.run_agent_loop"),
         ):
             repl_loop([], [], **_loop_kwargs(tmp_path))

@@ -291,7 +291,11 @@ def repl_answer(text: str) -> None:
         from rich.syntax import Syntax
 
         highlighted = Syntax(
-            text, "markdown", theme="ansi_dark", background_color="default", word_wrap=True
+            text,
+            "markdown",
+            theme="ansi_dark",
+            background_color="default",
+            word_wrap=True,
         )
         _stdout_console.print(highlighted)
     else:
