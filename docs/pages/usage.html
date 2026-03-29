@@ -156,8 +156,8 @@ cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5
 <p><code>--skills-dir</code> adds external skill directories and can be passed more than once.</p>
 <p><code>--no-skills</code> disables skill discovery and removes the <code>use_skill</code> tool path.</p>
 <h3 id="mcp-flags">MCP Flags</h3>
-<p><code>--no-mcp</code> disables MCP server connections entirely, even if servers are configured in <code>swival.toml</code> or <code>.mcp.json</code>.</p>
-<p><code>--mcp-config FILE</code> provides an explicit path to an MCP JSON config file. When set, this replaces the default <code>.mcp.json</code> lookup in the project root.</p>
+<p><code>--no-mcp</code> disables MCP server connections entirely, even if servers are configured in <code>swival.toml</code> or <code>.swival/mcp.json</code>.</p>
+<p><code>--mcp-config FILE</code> provides an explicit path to an MCP JSON config file. When set, this replaces the default <code>.swival/mcp.json</code> lookup.</p>
 <p>See <a href="mcp.html">MCP</a> for full configuration details.</p>
 <h3 id="a2a-flags">A2A Flags</h3>
 <p><code>--no-a2a</code> disables A2A agent connections entirely, even if agents are configured in <code>swival.toml</code>.</p>

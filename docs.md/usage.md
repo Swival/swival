@@ -173,9 +173,9 @@ Useful for long-running sessions.
 
 ### MCP Flags
 
-`--no-mcp` disables MCP server connections entirely, even if servers are configured in `swival.toml` or `.mcp.json`.
+`--no-mcp` disables MCP server connections entirely, even if servers are configured in `swival.toml` or `.swival/mcp.json`.
 
-`--mcp-config FILE` provides an explicit path to an MCP JSON config file. When set, this replaces the default `.mcp.json` lookup in the project root.
+`--mcp-config FILE` provides an explicit path to an MCP JSON config file. When set, this replaces the default `.swival/mcp.json` lookup.
 
 See [MCP](mcp.md) for full configuration details.
 

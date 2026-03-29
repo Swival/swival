@@ -4,7 +4,7 @@ Swival can connect to external tool servers via the [Model Context Protocol](htt
 
 Each MCP tool is namespaced as `mcp__<server_name>__<tool_name>` to avoid collisions with built-in tools and across servers. The model calls them like any other tool. Swival routes the call to the correct server and returns the result as a string following the same conventions as built-in tools.
 
-MCP servers can use stdio transport (local subprocess) or SSE transport (remote HTTP). Both are configured through `swival.toml` or `.mcp.json`.
+MCP servers can use stdio transport (local subprocess) or SSE transport (remote HTTP). Both are configured through `swival.toml` or `.swival/mcp.json`.
 
 If an MCP server fails to connect at startup, Swival logs a warning and continues without that server's tools. If a server crashes mid-session, its tools are marked as degraded and return an error message instead of blocking the agent loop.
 
@@ -44,7 +44,7 @@ For SSE servers, `url` is the endpoint and `headers` is an optional dictionary o
 
 ## JSON Configuration
 
-Swival also reads `.mcp.json` from the project root directory. This uses the same format as other MCP-compatible tools:
+Swival also reads `.swival/mcp.json`. This uses the same format as other MCP-compatible tools:
 
 ```json
 {
@@ -62,19 +62,19 @@ The JSON format supports the same fields as TOML: `command`, `args`, `env` for s
 
 ## Config Precedence
 
-When both `swival.toml` and `.mcp.json` define servers, the TOML config takes precedence by server name. Servers defined only in `.mcp.json` are merged in.
+When both `swival.toml` and `.swival/mcp.json` define servers, the TOML config takes precedence by server name. Servers defined only in `.swival/mcp.json` are merged in.
 
 The full precedence order is:
 
-`--no-mcp` (disables all) > `--mcp-config FILE` (explicit JSON path) > `swival.toml [mcp_servers.*]` > `.mcp.json`
+`--no-mcp` (disables all) > `--mcp-config FILE` (explicit JSON path) > `swival.toml [mcp_servers.*]` > `.swival/mcp.json`
 
 When the project and global config both define MCP servers, project-level servers win by name, and global-only servers are merged in.
 
 ## CLI Flags
 
-`--no-mcp` disables MCP server connections entirely, even if servers are configured in `swival.toml` or `.mcp.json`.
+`--no-mcp` disables MCP server connections entirely, even if servers are configured in `swival.toml` or `.swival/mcp.json`.
 
-`--mcp-config FILE` provides an explicit path to an MCP JSON config file. When set, this replaces the default `.mcp.json` lookup in the project root.
+`--mcp-config FILE` provides an explicit path to an MCP JSON config file. When set, this replaces the default `.swival/mcp.json` lookup.
 
 ## Output Handling
 

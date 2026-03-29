@@ -457,7 +457,7 @@ def _validate_mcp_server_configs(servers: dict, source: str) -> None:
 
 
 def load_mcp_json(path: Path) -> dict[str, dict]:
-    """Load MCP server configs from a .mcp.json file.
+    """Load MCP server configs from an MCP JSON file.
 
     Returns a dict of server_name -> server_config.
     Raises ConfigError on invalid JSON or structure.

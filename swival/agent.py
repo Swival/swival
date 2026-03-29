@@ -2985,7 +2985,7 @@ def build_parser():
         type=str,
         default=None,
         metavar="FILE",
-        help="Path to an MCP JSON config file (replaces .mcp.json default lookup).",
+        help="Path to an MCP JSON config file (replaces .swival/mcp.json default lookup).",
     )
     provider_group.add_argument(
         "--model",
@@ -4228,7 +4228,7 @@ def _resolve_mcp_servers(args, base_dir) -> dict | None:
             raise ConfigError(f"--mcp-config file not found: {mcp_config_path}")
         json_servers = load_mcp_json(p)
     else:
-        default_mcp = Path(base_dir).resolve() / ".mcp.json"
+        default_mcp = Path(base_dir).resolve() / ".swival" / "mcp.json"
         if default_mcp.is_file():
             json_servers = load_mcp_json(default_mcp)
 

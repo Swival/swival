@@ -70,7 +70,7 @@
             <h1 id="mcp">MCP</h1>
 <p>Swival can connect to external tool servers via the <a href="https://modelcontextprotocol.io/">Model Context Protocol</a> (MCP). When MCP servers are configured, their tools are discovered at startup, converted to the same function-calling format as built-in tools, and exposed alongside them in the agent loop.</p>
 <p>Each MCP tool is namespaced as <code>mcp__&lt;server_name&gt;__&lt;tool_name&gt;</code> to avoid collisions with built-in tools and across servers. The model calls them like any other tool. Swival routes the call to the correct server and returns the result as a string following the same conventions as built-in tools.</p>
-<p>MCP servers can use stdio transport (local subprocess) or SSE transport (remote HTTP). Both are configured through <code>swival.toml</code> or <code>.mcp.json</code>.</p>
+<p>MCP servers can use stdio transport (local subprocess) or SSE transport (remote HTTP). Both are configured through <code>swival.toml</code> or <code>.swival/mcp.json</code>.</p>
 <p>If an MCP server fails to connect at startup, Swival logs a warning and continues without that server's tools. If a server crashes mid-session, its tools are marked as degraded and return an error message instead of blocking the agent loop.</p>
 <p>Tool name collisions across servers cause the colliding server's tools to be skipped entirely, with a warning.</p>
 <p>When MCP tool schemas consume more than 30% of the context window, Swival warns. At 50%, it iteratively drops the most expensive server's tools until usage is under budget.</p>
@@ -95,7 +95,7 @@ env = { API_KEY = &quot;secret&quot; }
 <p>For example, you can connect Swival to a browser automation server. See <a href="web-browsing.html">Web Browsing</a> for Chrome DevTools MCP, agent-browser, and Lightpanda setup guides.</p>
 <p>For SSE servers, <code>url</code> is the endpoint and <code>headers</code> is an optional dictionary of HTTP headers.</p>
 <h2 id="json-configuration">JSON Configuration</h2>
-<p>Swival also reads <code>.mcp.json</code> from the project root directory. This uses the same format as other MCP-compatible tools:</p>
+<p>Swival also reads <code>.swival/mcp.json</code>. This uses the same format as other MCP-compatible tools:</p>
 <pre><code class="language-json">{
   &quot;mcpServers&quot;: {
     &quot;brave-search&quot;: {
@@ -108,13 +108,13 @@ env = { API_KEY = &quot;secret&quot; }
 </code></pre>
 <p>The JSON format supports the same fields as TOML: <code>command</code>, <code>args</code>, <code>env</code> for stdio, and <code>url</code>, <code>headers</code> for SSE.</p>
 <h2 id="config-precedence">Config Precedence</h2>
-<p>When both <code>swival.toml</code> and <code>.mcp.json</code> define servers, the TOML config takes precedence by server name. Servers defined only in <code>.mcp.json</code> are merged in.</p>
+<p>When both <code>swival.toml</code> and <code>.swival/mcp.json</code> define servers, the TOML config takes precedence by server name. Servers defined only in <code>.swival/mcp.json</code> are merged in.</p>
 <p>The full precedence order is:</p>
-<p><code>--no-mcp</code> (disables all) &gt; <code>--mcp-config FILE</code> (explicit JSON path) &gt; <code>swival.toml [mcp_servers.*]</code> &gt; <code>.mcp.json</code></p>
+<p><code>--no-mcp</code> (disables all) &gt; <code>--mcp-config FILE</code> (explicit JSON path) &gt; <code>swival.toml [mcp_servers.*]</code> &gt; <code>.swival/mcp.json</code></p>
 <p>When the project and global config both define MCP servers, project-level servers win by name, and global-only servers are merged in.</p>
 <h2 id="cli-flags">CLI Flags</h2>
-<p><code>--no-mcp</code> disables MCP server connections entirely, even if servers are configured in <code>swival.toml</code> or <code>.mcp.json</code>.</p>
-<p><code>--mcp-config FILE</code> provides an explicit path to an MCP JSON config file. When set, this replaces the default <code>.mcp.json</code> lookup in the project root.</p>
+<p><code>--no-mcp</code> disables MCP server connections entirely, even if servers are configured in <code>swival.toml</code> or <code>.swival/mcp.json</code>.</p>
+<p><code>--mcp-config FILE</code> provides an explicit path to an MCP JSON config file. When set, this replaces the default <code>.swival/mcp.json</code> lookup.</p>
 <h2 id="output-handling">Output Handling</h2>
 <p>MCP tool outputs are size-guarded similarly to <code>run_command</code>, with higher thresholds to accommodate richer external tool results. Results up to 20 KB are returned inline.</p>
 <p>Larger results are saved to <code>.swival/cmd_output_*.txt</code> and the model receives a pointer message telling it to use <code>read_file</code> for paginated access. Output is hard-capped at 10 MB before writing to disk, so a misbehaving server cannot consume unbounded memory or storage.</p>

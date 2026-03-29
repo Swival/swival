@@ -320,7 +320,7 @@ class TestMcpConfig:
     def test_load_mcp_json(self, tmp_path):
         from swival.config import load_mcp_json
 
-        mcp_file = tmp_path / ".mcp.json"
+        mcp_file = tmp_path / "mcp.json"
         mcp_file.write_text(
             json.dumps(
                 {
@@ -343,7 +343,7 @@ class TestMcpConfig:
     def test_load_mcp_json_invalid_json(self, tmp_path):
         from swival.config import load_mcp_json
 
-        mcp_file = tmp_path / ".mcp.json"
+        mcp_file = tmp_path / "mcp.json"
         mcp_file.write_text("{invalid json")
         with pytest.raises(ConfigError, match="invalid JSON"):
             load_mcp_json(mcp_file)
@@ -351,7 +351,7 @@ class TestMcpConfig:
     def test_load_mcp_json_invalid_structure(self, tmp_path):
         from swival.config import load_mcp_json
 
-        mcp_file = tmp_path / ".mcp.json"
+        mcp_file = tmp_path / "mcp.json"
         mcp_file.write_text(json.dumps({"mcpServers": "not a dict"}))
         with pytest.raises(ConfigError, match="must be a JSON object"):
             load_mcp_json(mcp_file)
@@ -402,7 +402,7 @@ class TestMcpConfig:
     def test_mcp_json_missing_command_and_url(self, tmp_path):
         from swival.config import load_mcp_json
 
-        mcp_file = tmp_path / ".mcp.json"
+        mcp_file = tmp_path / "mcp.json"
         mcp_file.write_text(
             json.dumps({"mcpServers": {"bad": {"env": {"KEY": "val"}}}})
         )
@@ -412,7 +412,7 @@ class TestMcpConfig:
     def test_mcp_json_both_command_and_url(self, tmp_path):
         from swival.config import load_mcp_json
 
-        mcp_file = tmp_path / ".mcp.json"
+        mcp_file = tmp_path / "mcp.json"
         mcp_file.write_text(
             json.dumps({"mcpServers": {"bad": {"command": "cmd", "url": "http://x"}}})
         )
@@ -422,7 +422,7 @@ class TestMcpConfig:
     def test_mcp_server_command_wrong_type(self, tmp_path):
         from swival.config import load_mcp_json
 
-        mcp_file = tmp_path / ".mcp.json"
+        mcp_file = tmp_path / "mcp.json"
         mcp_file.write_text(json.dumps({"mcpServers": {"s": {"command": 42}}}))
         with pytest.raises(ConfigError, match="expected str, got int"):
             load_mcp_json(mcp_file)
@@ -430,7 +430,7 @@ class TestMcpConfig:
     def test_mcp_server_args_wrong_type(self, tmp_path):
         from swival.config import load_mcp_json
 
-        mcp_file = tmp_path / ".mcp.json"
+        mcp_file = tmp_path / "mcp.json"
         mcp_file.write_text(
             json.dumps({"mcpServers": {"s": {"command": "cmd", "args": "bad"}}})
         )
@@ -440,7 +440,7 @@ class TestMcpConfig:
     def test_mcp_server_args_element_wrong_type(self, tmp_path):
         from swival.config import load_mcp_json
 
-        mcp_file = tmp_path / ".mcp.json"
+        mcp_file = tmp_path / "mcp.json"
         mcp_file.write_text(
             json.dumps({"mcpServers": {"s": {"command": "cmd", "args": [1]}}})
         )
@@ -450,7 +450,7 @@ class TestMcpConfig:
     def test_mcp_server_env_wrong_type(self, tmp_path):
         from swival.config import load_mcp_json
 
-        mcp_file = tmp_path / ".mcp.json"
+        mcp_file = tmp_path / "mcp.json"
         mcp_file.write_text(
             json.dumps({"mcpServers": {"s": {"command": "cmd", "env": "bad"}}})
         )
@@ -460,7 +460,7 @@ class TestMcpConfig:
     def test_mcp_server_env_value_wrong_type(self, tmp_path):
         from swival.config import load_mcp_json
 
-        mcp_file = tmp_path / ".mcp.json"
+        mcp_file = tmp_path / "mcp.json"
         mcp_file.write_text(
             json.dumps({"mcpServers": {"s": {"command": "cmd", "env": {"K": 1}}}})
         )
@@ -470,7 +470,7 @@ class TestMcpConfig:
     def test_mcp_server_headers_value_wrong_type(self, tmp_path):
         from swival.config import load_mcp_json
 
-        mcp_file = tmp_path / ".mcp.json"
+        mcp_file = tmp_path / "mcp.json"
         mcp_file.write_text(
             json.dumps({"mcpServers": {"s": {"url": "http://x", "headers": {"H": 1}}}})
         )
@@ -480,7 +480,7 @@ class TestMcpConfig:
     def test_mcp_server_url_wrong_type(self, tmp_path):
         from swival.config import load_mcp_json
 
-        mcp_file = tmp_path / ".mcp.json"
+        mcp_file = tmp_path / "mcp.json"
         mcp_file.write_text(json.dumps({"mcpServers": {"s": {"url": 123}}}))
         with pytest.raises(ConfigError, match="expected str, got int"):
             load_mcp_json(mcp_file)
