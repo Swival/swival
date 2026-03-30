@@ -137,11 +137,29 @@ swival --list-profiles
 
 Each profile requires `provider`. The allowed keys are: `provider`, `model`, `api_key`, `base_url`, `aws_profile`, `max_output_tokens`, `max_context_tokens`, `temperature`, `top_p`, `seed`, `extra_body`, `reasoning_effort`, and `sanitize_thinking`. Keys outside this set — like `files`, `commands`, or `reviewer` — are rejected with an error listing the allowed keys. Profiles are for choosing a model stack, not for changing agent behavior.
 
-If `--profile` is combined with explicit flags like `--provider` or `--reasoning-effort`, the explicit flags win on a per-key basis, just like CLI flags override config everywhere else in Swival.
+If `--profile` is combined with explicit flags like `--provider` or `--model`, the explicit flags win on a per-key basis, just like CLI flags override config everywhere else in Swival.
 
 ```sh
 swival --profile gpt5 --reasoning-effort medium "task"
 ```
+
+This is particularly useful with `--model`. A profile can lock down the provider, base URL, API key, and other settings for a given service, while `--model` lets you swap models on the fly without duplicating the rest of the configuration. For example, with a HuggingFace profile:
+
+```toml
+active_profile = "hf"
+
+[profiles.hf]
+provider = "huggingface"
+```
+
+You get the default model most of the time, and override it for a specific task:
+
+```sh
+swival "everyday task"
+swival --model "Qwen/Qwen3-Coder" "task needing a different model"
+```
+
+Any model supported by the inference endpoint works — no extra profile needed.
 
 Profiles defined in global config and project config merge per-key for the same profile name. A project can refine a global profile by overriding just one or two keys without copying the whole table.
 
