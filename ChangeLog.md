@@ -8,7 +8,7 @@ All notable user-facing changes to Swival.
   `--files` (`all`, `some`, `none`) controls file access independently, and
   `--commands` (`all`, `none`, or a comma-separated whitelist) controls which
   shell commands the agent may run. `--yolo` is now shorthand for
-`--files all --commands all`.
+  `--files all --commands all`.
 - AWS Bedrock has been added as a provider.
 - `/simplify` REPL command has been added: runs a review pass over recently
   changed code, checking for reuse opportunities, quality issues, and
