@@ -519,7 +519,7 @@ class TestAPIKeyResolution:
         assert captured["api_key"] == "hf_cli"
 
     def test_env_var_used_when_no_cli_key(self, monkeypatch, tmp_path):
-        from swival import agent
+        from swival import agent, config
 
         monkeypatch.setattr(
             sys,
@@ -537,6 +537,7 @@ class TestAPIKeyResolution:
             ],
         )
         monkeypatch.setenv("HF_TOKEN", "hf_env")
+        monkeypatch.setattr(config, "load_config", lambda *a, **kw: {})
 
         captured = {}
 
@@ -589,7 +590,7 @@ class TestAPIKeyResolution:
         assert captured["api_key"] == "sk_or_cli"
 
     def test_openrouter_env_var_used(self, monkeypatch, tmp_path):
-        from swival import agent
+        from swival import agent, config
 
         monkeypatch.setattr(
             sys,
@@ -607,6 +608,7 @@ class TestAPIKeyResolution:
             ],
         )
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk_or_env")
+        monkeypatch.setattr(config, "load_config", lambda *a, **kw: {})
 
         captured = {}
 
@@ -623,7 +625,7 @@ class TestAPIKeyResolution:
         assert captured["api_key"] == "sk_or_env"
 
     def test_openrouter_no_key_errors(self, monkeypatch):
-        from swival import agent
+        from swival import agent, config
 
         monkeypatch.setattr(
             sys,
@@ -638,12 +640,13 @@ class TestAPIKeyResolution:
             ],
         )
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        monkeypatch.setattr(config, "load_config", lambda *a, **kw: {})
         with pytest.raises(SystemExit) as exc_info:
             agent.main()
         assert exc_info.value.code == 2
 
     def test_no_key_errors(self, monkeypatch):
-        from swival import agent
+        from swival import agent, config
 
         monkeypatch.setattr(
             sys,
@@ -658,6 +661,7 @@ class TestAPIKeyResolution:
             ],
         )
         monkeypatch.delenv("HF_TOKEN", raising=False)
+        monkeypatch.setattr(config, "load_config", lambda *a, **kw: {})
         with pytest.raises(SystemExit) as exc_info:
             agent.main()
         assert exc_info.value.code == 2
@@ -926,7 +930,9 @@ class TestGenericProviderValidation:
         assert exc_info.value.code == 2
 
     def test_generic_works_without_api_key(self, monkeypatch, tmp_path):
-        from swival import agent
+        from swival import agent, config
+
+        monkeypatch.setattr(config, "load_config", lambda *a, **kw: {})
 
         monkeypatch.setattr(
             sys,
@@ -962,7 +968,9 @@ class TestGenericProviderValidation:
         assert captured["api_key"] is None
 
     def test_generic_picks_up_openai_api_key_env(self, monkeypatch, tmp_path):
-        from swival import agent
+        from swival import agent, config
+
+        monkeypatch.setattr(config, "load_config", lambda *a, **kw: {})
 
         monkeypatch.setattr(
             sys,
@@ -1149,7 +1157,9 @@ class TestGoogleProviderValidation:
         assert exc_info.value.code == 2
 
     def test_google_no_base_url_by_default(self, monkeypatch, tmp_path):
-        from swival import agent
+        from swival import agent, config
+
+        monkeypatch.setattr(config, "load_config", lambda *a, **kw: {})
 
         monkeypatch.setattr(
             sys,
@@ -1442,7 +1452,9 @@ class TestChatGPTCLIValidation:
         assert exc_info.value.code == 2
 
     def test_chatgpt_no_key_ok(self, monkeypatch, tmp_path):
-        from swival import agent
+        from swival import agent, config
+
+        monkeypatch.setattr(config, "load_config", lambda *a, **kw: {})
 
         monkeypatch.setattr(
             sys,

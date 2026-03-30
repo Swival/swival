@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 
+from swival.config import _UNSET
 from swival.tools import (
     _delete_file,
     _cleanup_trash,
@@ -178,7 +179,7 @@ class TestDeleteRoots:
 
     def test_delete_yolo(self, tmp_path):
         (tmp_path / "f.txt").write_text("data")
-        result = _delete_file("f.txt", str(tmp_path), unrestricted=True)
+        result = _delete_file("f.txt", str(tmp_path), files_mode="all")
         assert result.startswith("Trashed")
 
     def test_delete_add_dir_absolute_path(self, tmp_path):
@@ -494,6 +495,7 @@ class TestThinkNudge:
             color=False,
             no_color=False,
             yolo=False,
+            files=_UNSET,
             report=None,
             reviewer=None,
             version=False,

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from swival.report import AgentError, ReportCollector
+from swival.config import _UNSET
 from swival import agent
 
 
@@ -367,7 +368,7 @@ class TestOverflowRetrySeed:
                 skills_catalog={},
                 skill_read_roots=[],
                 extra_write_roots=[],
-                yolo=False,
+                files_mode="some",
                 verbose=False,
                 llm_kwargs={"provider": "lmstudio", "api_key": None},
             )
@@ -421,7 +422,7 @@ class TestNonOverflowLLMFailure:
                     skills_catalog={},
                     skill_read_roots=[],
                     extra_write_roots=[],
-                    yolo=False,
+                    files_mode="some",
                     verbose=False,
                     llm_kwargs={"provider": "lmstudio", "api_key": None},
                     report=rc,
@@ -496,6 +497,7 @@ class TestReportIntegration:
             add_dir=[],
             add_dir_ro=[],
             yolo=False,
+            files=_UNSET,
             color=False,
             no_color=True,
             verbose=True,

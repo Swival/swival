@@ -468,7 +468,7 @@ class TestRunAgentLoop:
             skills_catalog={},
             skill_read_roots=[],
             extra_write_roots=[],
-            yolo=False,
+            files_mode="some",
             verbose=False,
             llm_kwargs={},
         )

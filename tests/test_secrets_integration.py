@@ -376,6 +376,7 @@ class TestConfigIntegration:
             max_context_tokens=None,
             max_output_tokens=32768,
             encrypt_secrets=True,
+            commands=None,
         )
 
         cmd = _build_self_review_cmd(args)

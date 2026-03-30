@@ -28,7 +28,7 @@ def top_func(a, b=1):
 async def async_func():
     pass
 """)
-    result = outline(str(src), str(tmp_path), depth=2, unrestricted=True)
+    result = outline(str(src), str(tmp_path), depth=2, files_mode="all")
     assert "class Foo(Base):" in result
     assert "@dataclass" in result
     assert "def method(self)" in result
@@ -49,7 +49,7 @@ class MyClass:
 def top_level():
     pass
 """)
-    result = outline(str(src), str(tmp_path), depth=1, unrestricted=True)
+    result = outline(str(src), str(tmp_path), depth=1, files_mode="all")
     assert "class MyClass:" in result
     assert "def top_level()" in result
     assert "inner_method" not in result
@@ -68,7 +68,7 @@ class Outer:
 def top():
     pass
 """)
-    result = outline(str(src), str(tmp_path), depth=3, unrestricted=True)
+    result = outline(str(src), str(tmp_path), depth=3, files_mode="all")
     assert "class Outer:" in result
     assert "class Inner:" in result
     assert "def deep_method(self)" in result
@@ -92,7 +92,7 @@ class Widget {
 
 export function helper() {}
 """)
-    result = outline(str(src), str(tmp_path), depth=2, unrestricted=True)
+    result = outline(str(src), str(tmp_path), depth=2, files_mode="all")
     assert "const API_URL" in result
     assert "function greet" in result
     assert "class Widget" in result
@@ -117,7 +117,7 @@ func (s *Server) Start() error {
     return nil
 }
 """)
-    result = outline(str(src), str(tmp_path), depth=2, unrestricted=True)
+    result = outline(str(src), str(tmp_path), depth=2, files_mode="all")
     assert "package main" in result
     assert "func main()" in result
     assert "type Server struct" in result
@@ -146,7 +146,7 @@ enum Status {
     Err(String),
 }
 """)
-    result = outline(str(src), str(tmp_path), depth=2, unrestricted=True)
+    result = outline(str(src), str(tmp_path), depth=2, files_mode="all")
     assert "pub fn process" in result
     assert "struct Config" in result
     assert "impl Config" in result
@@ -178,7 +178,7 @@ test "process works" {
     try process("hello");
 }
 """)
-    result = outline(str(src), str(tmp_path), depth=2, unrestricted=True)
+    result = outline(str(src), str(tmp_path), depth=2, files_mode="all")
     # Module-level const/pub const at depth 0
     assert "const std" in result
     assert "pub const Config" in result
@@ -216,7 +216,7 @@ int main(int argc, char *argv[]) {
 
 void process(const char *data);
 """)
-    result = outline(str(src), str(tmp_path), depth=2, unrestricted=True)
+    result = outline(str(src), str(tmp_path), depth=2, files_mode="all")
     assert "typedef struct" in result
     assert "enum Color" in result
     assert "static int helper" in result
@@ -241,7 +241,7 @@ public:
 
 int main() { return 0; }
 """)
-    result = outline(str(src), str(tmp_path), depth=2, unrestricted=True)
+    result = outline(str(src), str(tmp_path), depth=2, files_mode="all")
     assert "namespace utils" in result
     assert "class Parser" in result
     assert "int main" in result
@@ -271,7 +271,7 @@ trait Loggable {
     public function log(string $msg): void {}
 }
 """)
-    result = outline(str(src), str(tmp_path), depth=2, unrestricted=True)
+    result = outline(str(src), str(tmp_path), depth=2, files_mode="all")
     assert "namespace App" in result
     assert "class Controller" in result
     assert "public function index" in result
@@ -299,7 +299,7 @@ class ViewModel {
     private func fetch() -> Data { Data() }
 }
 """)
-    result = outline(str(src), str(tmp_path), depth=2, unrestricted=True)
+    result = outline(str(src), str(tmp_path), depth=2, files_mode="all")
     assert "struct Point" in result
     assert "func distance" in result
     assert "protocol Identifiable" in result
@@ -328,7 +328,7 @@ abstract class Base {
 
 export const VERSION = '1.0';
 """)
-    result = outline(str(src), str(tmp_path), depth=2, unrestricted=True)
+    result = outline(str(src), str(tmp_path), depth=2, files_mode="all")
     assert "interface Config" in result
     assert "type Handler" in result
     assert "export class Server" in result
@@ -340,28 +340,28 @@ export const VERSION = '1.0';
 def test_empty_file(tmp_path):
     src = tmp_path / "empty.py"
     src.write_text("")
-    result = outline(str(src), str(tmp_path), depth=2, unrestricted=True)
+    result = outline(str(src), str(tmp_path), depth=2, files_mode="all")
     assert result == "empty file"
 
 
 def test_whitespace_only_file(tmp_path):
     src = tmp_path / "blank.py"
     src.write_text("   \n\n  \n")
-    result = outline(str(src), str(tmp_path), depth=2, unrestricted=True)
+    result = outline(str(src), str(tmp_path), depth=2, files_mode="all")
     assert result == "empty file"
 
 
 def test_binary_file(tmp_path):
     src = tmp_path / "data.bin"
     src.write_bytes(b"\x00\x01\x02\xff\xfe")
-    result = outline(str(src), str(tmp_path), depth=2, unrestricted=True)
+    result = outline(str(src), str(tmp_path), depth=2, files_mode="all")
     assert result.startswith("error:")
     assert "binary" in result
 
 
 def test_nonexistent_file(tmp_path):
     result = outline(
-        str(tmp_path / "nope.py"), str(tmp_path), depth=2, unrestricted=True
+        str(tmp_path / "nope.py"), str(tmp_path), depth=2, files_mode="all"
     )
     assert result.startswith("error:")
     assert "not found" in result
@@ -370,7 +370,7 @@ def test_nonexistent_file(tmp_path):
 def test_directory(tmp_path):
     d = tmp_path / "subdir"
     d.mkdir()
-    result = outline(str(d), str(tmp_path), depth=2, unrestricted=True)
+    result = outline(str(d), str(tmp_path), depth=2, files_mode="all")
     assert result.startswith("error:")
     assert "directory" in result
 
@@ -387,7 +387,7 @@ class Incomplete(
 def another():
     pass
 """)
-    result = outline(str(src), str(tmp_path), depth=2, unrestricted=True)
+    result = outline(str(src), str(tmp_path), depth=2, files_mode="all")
     assert "def valid_func" in result
     assert "def another" in result
 
@@ -405,7 +405,7 @@ class Config:
 def setup():
     x = 10
 """)
-    result = outline(str(src), str(tmp_path), depth=1, unrestricted=True)
+    result = outline(str(src), str(tmp_path), depth=1, files_mode="all")
     assert "VERSION = ..." in result
     assert "DEBUG: bool = ..." in result
     assert "NAME: str" in result
@@ -418,7 +418,7 @@ def setup():
 def test_outline_depth_invalid_type(tmp_path):
     src = tmp_path / "f.py"
     src.write_text("class Foo: pass\n")
-    result = outline(str(src), str(tmp_path), depth="bad", unrestricted=True)
+    result = outline(str(src), str(tmp_path), depth="bad", files_mode="all")
     assert result == "error: depth must be an integer"
 
 
@@ -434,7 +434,7 @@ def test_outline_files_batch(tmp_path):
     result = outline_files(
         [{"file_path": a}, {"file_path": b}],
         str(tmp_path),
-        unrestricted=True,
+        files_mode="all",
     )
     assert "=== FILE:" in result
     assert "status: ok" in result
@@ -450,7 +450,7 @@ def test_outline_files_per_file_depth(tmp_path):
     r1 = outline_files(
         [{"file_path": src, "depth": 1}],
         str(tmp_path),
-        unrestricted=True,
+        files_mode="all",
     )
     assert "class C" in r1
     assert "inner" not in r1
@@ -458,7 +458,7 @@ def test_outline_files_per_file_depth(tmp_path):
     r2 = outline_files(
         [{"file_path": src, "depth": 2}],
         str(tmp_path),
-        unrestricted=True,
+        files_mode="all",
     )
     assert "def inner" in r2
 
@@ -469,7 +469,7 @@ def test_outline_files_default_depth(tmp_path):
         [{"file_path": src}],
         str(tmp_path),
         default_depth=1,
-        unrestricted=True,
+        files_mode="all",
     )
     assert "class D" in result
     assert "method" not in result
@@ -480,7 +480,7 @@ def test_outline_files_with_error(tmp_path):
     result = outline_files(
         [{"file_path": good}, {"file_path": str(tmp_path / "nope.py")}],
         str(tmp_path),
-        unrestricted=True,
+        files_mode="all",
     )
     assert "files_succeeded: 1" in result
     assert "files_with_errors: 1" in result
@@ -489,32 +489,32 @@ def test_outline_files_with_error(tmp_path):
 
 
 def test_outline_files_empty_list(tmp_path):
-    result = outline_files([], str(tmp_path), unrestricted=True)
+    result = outline_files([], str(tmp_path), files_mode="all")
     assert result == "error: files list is empty"
 
 
 def test_outline_files_too_many(tmp_path):
     files = [{"file_path": "x.py"}] * 21
-    result = outline_files(files, str(tmp_path), unrestricted=True)
+    result = outline_files(files, str(tmp_path), files_mode="all")
     assert result.startswith("error: too many files requested")
 
 
 def test_outline_files_string_entry(tmp_path):
     src = _make_py(tmp_path, "s.py", "def f(): pass\n")
-    result = outline_files([src], str(tmp_path), unrestricted=True)
+    result = outline_files([src], str(tmp_path), files_mode="all")
     assert "files_succeeded: 1" in result
     assert "def f()" in result
 
 
 def test_outline_files_missing_file_path(tmp_path):
-    result = outline_files([{}], str(tmp_path), unrestricted=True)
+    result = outline_files([{}], str(tmp_path), files_mode="all")
     assert "status: error" in result
     assert "missing file_path" in result
     assert "files_with_errors: 1" in result
 
 
 def test_outline_files_invalid_entry_type(tmp_path):
-    result = outline_files([42], str(tmp_path), unrestricted=True)
+    result = outline_files([42], str(tmp_path), files_mode="all")
     assert "status: error" in result
     assert "expected object or string, got int" in result
     assert "files_with_errors: 1" in result
@@ -525,7 +525,7 @@ def test_outline_files_header_counts(tmp_path):
     result = outline_files(
         [{"file_path": good}, {"file_path": str(tmp_path / "missing.py")}, 99],
         str(tmp_path),
-        unrestricted=True,
+        files_mode="all",
     )
     assert "files_succeeded: 1" in result
     assert "files_with_errors: 2" in result
@@ -537,7 +537,7 @@ def test_outline_files_budget_truncation_errors(tmp_path, monkeypatch):
 
     monkeypatch.setattr(outline_mod, "MAX_OUTPUT_BYTES", 100)
     files = [{"file_path": str(tmp_path / f"miss{i}.py")} for i in range(10)]
-    result = outline_files(files, str(tmp_path), unrestricted=True)
+    result = outline_files(files, str(tmp_path), files_mode="all")
     assert "batch_truncated: true" in result
     assert "[batch_truncated:" in result
 
@@ -550,7 +550,7 @@ def test_outline_files_budget_first_oversized_kept(tmp_path, monkeypatch):
     result = outline_files(
         [{"file_path": src}, {"file_path": src}],
         str(tmp_path),
-        unrestricted=True,
+        files_mode="all",
     )
     assert "files_succeeded: 1" in result
     assert "batch_truncated: true" in result
@@ -569,7 +569,7 @@ def test_outline_files_budget_second_rejected_skip_count(tmp_path, monkeypatch):
     result = outline_files(
         [{"file_path": small}, {"file_path": big}, {"file_path": small}],
         str(tmp_path),
-        unrestricted=True,
+        files_mode="all",
     )
     assert "files_succeeded: 1" in result
     assert "batch_truncated: true" in result
