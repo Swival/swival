@@ -960,7 +960,9 @@ class TestIntegration:
         _make_skill(skills_dir, "pdf", "PDF processing.")
         catalog = discover_skills(str(tmp_path))
 
-        tools = build_tools(resolved_commands={}, skills_catalog=catalog, yolo=False)
+        tools = build_tools(
+            resolved_commands={}, skills_catalog=catalog, commands_unrestricted=False
+        )
         tool_names = [t["function"]["name"] for t in tools]
         assert "use_skill" in tool_names
 
@@ -970,7 +972,9 @@ class TestIntegration:
         catalog = discover_skills(str(tmp_path))
         assert catalog == {}
 
-        tools = build_tools(resolved_commands={}, skills_catalog=catalog, yolo=False)
+        tools = build_tools(
+            resolved_commands={}, skills_catalog=catalog, commands_unrestricted=False
+        )
         tool_names = [t["function"]["name"] for t in tools]
         assert "use_skill" not in tool_names
 
@@ -983,7 +987,9 @@ class TestIntegration:
         _make_skill(skills_dir, "deploy", "Deploy to prod.")
         catalog = discover_skills(str(tmp_path))
 
-        tools = build_tools(resolved_commands={}, skills_catalog=catalog, yolo=False)
+        tools = build_tools(
+            resolved_commands={}, skills_catalog=catalog, commands_unrestricted=False
+        )
         skill_tool = [t for t in tools if t["function"]["name"] == "use_skill"][0]
         desc = skill_tool["function"]["description"]
         assert "deploy" in desc
@@ -998,7 +1004,9 @@ class TestIntegration:
         _make_skill(skills_dir, "deploy", "Deploy to prod.")
         catalog = discover_skills(str(tmp_path))
 
-        tools = build_tools(resolved_commands={}, skills_catalog=catalog, yolo=False)
+        tools = build_tools(
+            resolved_commands={}, skills_catalog=catalog, commands_unrestricted=False
+        )
         skill_tool = [t for t in tools if t["function"]["name"] == "use_skill"][0]
         enum = skill_tool["function"]["parameters"]["properties"]["name"]["enum"]
         assert sorted(enum) == ["deploy", "pdf"]
@@ -1016,7 +1024,9 @@ class TestIntegration:
         _make_skill(skills_dir, "pdf", "PDF processing.")
         catalog = discover_skills(str(tmp_path))
 
-        build_tools(resolved_commands={}, skills_catalog=catalog, yolo=False)
+        build_tools(
+            resolved_commands={}, skills_catalog=catalog, commands_unrestricted=False
+        )
 
         # Global should be untouched.
         assert USE_SKILL_TOOL["function"]["description"] == original_desc
@@ -1036,7 +1046,9 @@ class TestIntegration:
         catalog = discover_skills(str(tmp_path))
         assert len(catalog) == 30
 
-        tools = build_tools(resolved_commands={}, skills_catalog=catalog, yolo=False)
+        tools = build_tools(
+            resolved_commands={}, skills_catalog=catalog, commands_unrestricted=False
+        )
         skill_tool = [t for t in tools if t["function"]["name"] == "use_skill"][0]
         desc = skill_tool["function"]["description"]
         assert "30 skills available" in desc

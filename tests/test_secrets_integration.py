@@ -324,7 +324,7 @@ class TestConfigIntegration:
             temperature=None,
             top_p=1.0,
             seed=None,
-            allowed_commands=None,
+            commands=None,
             yolo=False,
             system_prompt=None,
             no_system_prompt=False,

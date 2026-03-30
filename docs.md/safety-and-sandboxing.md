@@ -81,12 +81,12 @@ Each allowed directory must already exist, must be a directory, and cannot be th
 
 ## Command Execution Policy
 
-Command execution is off by default. The agent only receives `run_command` when you explicitly enable it.
+Command execution is unrestricted by default (`--commands all`). You can restrict or disable it.
 
-In whitelist mode, you pass a comma-separated set of command basenames.
+In whitelist mode, you pass a comma-separated set of command basenames. Pass `"none"` to disable commands entirely.
 
 ```sh
-swival --allowed-commands ls,git,python3 "task"
+swival --commands ls,git,python3 "task"
 ```
 
 At startup, each basename is resolved to an absolute path using `which`. If a command cannot be found, Swival exits with an error. If a command resolves inside your base directory, Swival rejects it so the agent cannot modify and execute workspace binaries in one session.

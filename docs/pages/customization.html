@@ -88,7 +88,7 @@ max_turns = 250
 # temperature = 0.3
 # top_p = 0.9
 # seed = 42
-allowed_commands = [&quot;ls&quot;, &quot;git&quot;, &quot;python3&quot;]
+commands = [&quot;ls&quot;, &quot;git&quot;, &quot;python3&quot;]
 allowed_dirs = [&quot;/tmp&quot;]
 allowed_dirs_ro = [&quot;/opt/zig/lib/std&quot;]
 proactive_summaries = true
@@ -100,7 +100,7 @@ cache = true
 # cache_dir = &quot;.swival&quot;
 # retries = 5              # max provider retries on transient network errors
 # color = true             # true = force color, false = force no-color, absent = auto
-# yolo = false             # disable sandbox checks and command whitelisting
+# yolo = false             # disable all sandbox checks (implies commands = &quot;all&quot;)
 # no_read_guard = false    # disable read-before-write guard
 # no_mcp = false           # disable MCP server connections
 # no_a2a = false           # disable A2A agent connections

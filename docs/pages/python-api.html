@@ -95,7 +95,7 @@ print(answer)
     temperature: float | None = None,
     top_p: float = 1.0,
     seed: int | None = None,
-    allowed_commands: list[str] | None = None,
+    commands: list[str] | str | None = &quot;all&quot;,
     yolo: bool = False,
     verbose: bool = False,
     system_prompt: str | None = None,
@@ -184,8 +184,8 @@ print(answer)
 <td>Sampling temperature. <code>None</code> uses the provider's default.</td>
 </tr>
 <tr>
-<td><code>allowed_commands</code></td>
-<td>Whitelist of shell commands the agent may run. <code>None</code> uses the built-in default list.</td>
+<td><code>commands</code></td>
+<td>Command execution policy: <code>"all"</code> (unrestricted, the default), <code>"none"</code> (disabled), or a list of whitelisted command names.</td>
 </tr>
 <tr>
 <td><code>yolo</code></td>

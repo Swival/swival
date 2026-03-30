@@ -1,6 +1,6 @@
 # Tools
 
-Swival gives the model a fixed set of tools at runtime. Most tools are always available. `run_command` appears only when you enable command execution with `--allowed-commands` or `--yolo`, `use_skill` appears only when skills are discovered, MCP tools appear when external MCP servers are configured, and A2A tools appear when remote A2A agents are configured.
+Swival gives the model a fixed set of tools at runtime. Most tools are always available. `run_command` is included by default (commands default to `"all"`); pass `--commands none` to remove it. `use_skill` appears only when skills are discovered, MCP tools appear when external MCP servers are configured, and A2A tools appear when remote A2A agents are configured.
 
 ## `read_file`
 
@@ -86,17 +86,17 @@ SSRF protections are built in. Swival resolves every URL in the redirect chain a
 
 ## `run_command`
 
-`run_command` is disabled by default. You can enable it with a whitelist.
+`run_command` is enabled by default with unrestricted access. You can restrict it with `--commands`.
 
 ```sh
-swival --allowed-commands ls,git,python3 "Run the tests"
+swival --commands ls,git,python3 "Run the tests"
 ```
 
-In whitelist mode, the command must be passed as an array of arguments, not as a shell string. Swival resolves each allowed command to an absolute path at startup and rejects commands that resolve inside the base directory, so the model cannot edit and execute workspace scripts in one loop.
+`--commands` accepts `"all"` (unrestricted, the default), `"none"` (disabled), or a comma-separated whitelist like `ls,git,python3`. In whitelist mode, the command must be passed as an array of arguments, not as a shell string. Swival resolves each whitelisted command to an absolute path at startup and rejects commands that resolve inside the base directory, so the model cannot edit and execute workspace scripts in one loop.
 
 Timeout defaults to 30 seconds and is clamped to a maximum of 120 seconds. Inline command output is capped at 10 KB. Larger output is written to `.swival/cmd_output_*.txt` and hard-capped at 1 MB before writing to disk. Those files are cleaned up automatically after roughly ten minutes.
 
-In YOLO mode, command execution is unrestricted and Swival also accepts shell command strings through `/bin/sh -c` on Unix or `cmd.exe /c` on Windows.
+When commands are set to `"all"` (the default) or when `--yolo` is active, command execution is unrestricted and Swival also accepts shell command strings through `/bin/sh -c` on Unix or `cmd.exe /c` on Windows.
 
 ## `use_skill`
 

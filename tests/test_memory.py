@@ -275,7 +275,7 @@ class TestBuildSystemPrompt:
             no_instructions=True,
             no_memory=False,
             skills_catalog={},
-            yolo=False,
+            commands_unrestricted=False,
             resolved_commands={},
             verbose=False,
         )

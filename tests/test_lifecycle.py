@@ -344,7 +344,7 @@ class TestConfigIntegration:
             top_p=1.0,
             seed=None,
             yolo=False,
-            allowed_commands=None,
+            commands=None,
             system_prompt=None,
             no_system_prompt=False,
             no_instructions=False,

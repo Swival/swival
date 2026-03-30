@@ -633,7 +633,7 @@ class TestConfigIntegration:
             max_turns=_UNSET,
             system_prompt=_UNSET,
             no_system_prompt=_UNSET,
-            allowed_commands=_UNSET,
+            commands=_UNSET,
             yolo=_UNSET,
             add_dir=None,
             add_dir_ro=None,

@@ -168,13 +168,13 @@ agent-browser install
 Allow the `agent-browser` command in `swival.toml`:
 
 ```toml
-allowed_commands = ["agent-browser"]
+commands = ["agent-browser"]
 ```
 
 Or pass it on the command line:
 
 ```sh
-swival --allowed-commands agent-browser "Open example.com and tell me what's on the page"
+swival --commands agent-browser "Open example.com and tell me what's on the page"
 ```
 
 ### How the model uses it
@@ -208,7 +208,7 @@ A typical snapshot is 200-400 tokens compared to 3,000-5,000 for a full DOM dump
 ### Example session
 
 ```sh
-swival --allowed-commands agent-browser
+swival --commands agent-browser
 > Go to https://news.ycombinator.com, click on the top story, and summarize the article
 ```
 
@@ -257,7 +257,7 @@ To use it with Swival, add the environment variable to your shell profile (`.zsh
 
 ```sh
 export AGENT_BROWSER_ENGINE=lightpanda
-swival --allowed-commands agent-browser "Open example.com and describe the page"
+swival --commands agent-browser "Open example.com and describe the page"
 ```
 
 Note that Lightpanda doesn't support screenshots, so commands like `agent-browser screenshot` won't work with this engine. Everything else, including snapshots, clicking, form filling, and JavaScript evaluation, works the same as with Chrome.

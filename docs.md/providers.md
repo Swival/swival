@@ -287,7 +287,7 @@ The `command` provider shells out to an external program instead of calling an A
 
 The conversation transcript is written to the program's stdin, and the program's stdout is read back as the model response. `--model` holds the command string, which is split with `shlex`. `--base-url` and `--api-key` are ignored.
 
-Tool calling is supported when commands are whitelisted (via `--allowed-commands` or `--yolo`). The external program can request tool execution by emitting `<swival:call>` XML blocks in its output. Swival parses these, dispatches the tool calls, appends results to the transcript, and re-invokes the command. This loop continues (up to 20 rounds) until the program responds without tool calls. When no commands are whitelisted, the command provider runs without tools.
+Tool calling is supported when command execution is enabled (the default, or via `--commands` / `--yolo`). The external program can request tool execution by emitting `<swival:call>` XML blocks in its output. Swival parses these, dispatches the tool calls, appends results to the transcript, and re-invokes the command. This loop continues (up to 20 rounds) until the program responds without tool calls. When no commands are whitelisted, the command provider runs without tools.
 
 ```sh
 swival --provider command --model "codex exec --skip-git-repo-check --full-auto --ephemeral" "task"

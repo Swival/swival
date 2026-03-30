@@ -38,7 +38,7 @@ Session(
     temperature: float | None = None,
     top_p: float = 1.0,
     seed: int | None = None,
-    allowed_commands: list[str] | None = None,
+    commands: list[str] | str | None = "all",
     yolo: bool = False,
     verbose: bool = False,
     system_prompt: str | None = None,
@@ -95,7 +95,7 @@ All parameters are keyword-only. The important ones:
 | `max_output_tokens`     | Maximum tokens per LLM response.                                                                                        |
 | `max_context_tokens`    | Hard cap on context window size. `None` uses the provider's default.                                                    |
 | `temperature`           | Sampling temperature. `None` uses the provider's default.                                                               |
-| `allowed_commands`      | Whitelist of shell commands the agent may run. `None` uses the built-in default list.                                   |
+| `commands`              | Command execution policy: `"all"` (unrestricted, the default), `"none"` (disabled), or a list of whitelisted command names. |
 | `yolo`                  | Disable command restrictions entirely.                                                                                  |
 | `system_prompt`         | Override the default system prompt.                                                                                     |
 | `mcp_servers`           | MCP server configurations (see [MCP](mcp.html)).                                                                        |

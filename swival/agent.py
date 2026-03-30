@@ -1902,6 +1902,7 @@ def handle_tool_call(
     skill_read_roots=None,
     extra_write_roots=None,
     yolo=False,
+    commands_unrestricted=False,
     file_tracker=None,
     todo_state=None,
     snapshot_state=None,
@@ -1958,6 +1959,7 @@ def handle_tool_call(
             if extra_write_roots is not None
             else [],
             yolo=yolo,
+            commands_unrestricted=commands_unrestricted,
             file_tracker=file_tracker,
             tool_call_id=tool_call.id,
             mcp_manager=mcp_manager,
@@ -2965,10 +2967,10 @@ def build_parser():
         help="Grant read-only access to an extra directory (repeatable).",
     )
     access_group.add_argument(
-        "--allowed-commands",
+        "--commands",
         type=str,
         default=_UNSET,
-        help='Comma-separated list of allowed command basenames (e.g. "ls,git,python3").',
+        help='Command execution mode: "all" (default, unrestricted), "none" (disabled), or comma-separated whitelist (e.g. "ls,git,python3").',
     )
     provider_group.add_argument(
         "--api-key",
@@ -3698,13 +3700,13 @@ def main():
                 args, "_resolved_context_length", args.max_context_tokens
             ),
             "yolo": args.yolo,
-            "allowed_commands": (
-                sorted(args.allowed_commands)
-                if isinstance(args.allowed_commands, list)
+            "commands": (
+                sorted(args.commands)
+                if isinstance(args.commands, list)
+                else args.commands
+                if args.commands in ("all", "none")
                 else sorted(
-                    c.strip()
-                    for c in (args.allowed_commands or "").split(",")
-                    if c.strip()
+                    c.strip() for c in (args.commands or "").split(",") if c.strip()
                 )
             ),
             "max_review_rounds": args.max_review_rounds,
@@ -4072,35 +4074,26 @@ def resolve_provider(
 
 
 def resolve_commands(
-    allowed_commands: str | list[str] | None,
-    yolo: bool,
+    commands: list[str],
     base_dir: str,
 ) -> dict[str, str]:
-    """Validate commands against PATH, reject commands inside workspace.
+    """Validate a whitelist of commands against PATH, reject commands inside workspace.
 
     Returns resolved_commands dict mapping name -> absolute path.
-    In yolo mode, returns empty dict (any command can run).
-    Raises ConfigError/AgentError for invalid commands.
+    Only called for whitelist mode (list of command names).
+    Raises ConfigError for invalid commands.
     """
-    if yolo:
-        return {}
-
-    if isinstance(allowed_commands, list):
-        allowed_names = {c.strip() for c in allowed_commands if c.strip()}
-    elif allowed_commands:
-        allowed_names = {c.strip() for c in allowed_commands.split(",") if c.strip()}
-    else:
-        allowed_names = set()
+    names = {c.strip() for c in commands if c.strip()}
     resolved_commands: dict[str, str] = {}
     base_resolved = Path(base_dir).resolve()
-    for name in sorted(allowed_names):
+    for name in sorted(names):
         cmd_path = shutil.which(name)
         if cmd_path is None:
-            raise ConfigError(f"allowed command {name!r} not found on PATH")
+            raise ConfigError(f"command {name!r} not found on PATH")
         abs_path = Path(cmd_path).resolve()
         if abs_path.is_relative_to(base_resolved):
             raise ConfigError(
-                f"allowed command {name!r} resolves to {abs_path}, "
+                f"command {name!r} resolves to {abs_path}, "
                 f"which is inside base directory {base_resolved}. "
                 f"Commands inside the workspace can be modified by the model."
             )
@@ -4111,7 +4104,7 @@ def resolve_commands(
 def build_tools(
     resolved_commands: dict[str, str],
     skills_catalog: dict,
-    yolo: bool,
+    commands_unrestricted: bool,
     subagents: bool = False,
 ) -> list:
     """Construct the tools list from base + conditionals."""
@@ -4136,7 +4129,7 @@ def build_tools(
                 f"Use this instead of searching for SKILL.md files."
             )
         tools.append(skill_tool)
-    if yolo:
+    if commands_unrestricted:
         tool = copy.deepcopy(RUN_COMMAND_TOOL)
         tool["function"]["description"] = "Run any command and return its output."
         tool["function"]["parameters"]["properties"]["command"] = {
@@ -4231,7 +4224,7 @@ def build_system_prompt(
     no_instructions: bool,
     no_memory: bool,
     skills_catalog: dict,
-    yolo: bool,
+    commands_unrestricted: bool,
     resolved_commands: dict[str, str],
     verbose: bool,
     config_dir: "Path | None" = None,
@@ -4309,7 +4302,7 @@ def build_system_prompt(
             catalog_text = format_skill_catalog(skills_catalog)
             if catalog_text:
                 system_content += "\n\n" + catalog_text
-        if yolo:
+        if commands_unrestricted:
             system_content += (
                 "\n\n**Command execution tool:**\n"
                 "- `run_command`: Run any command and return its output. "
@@ -4507,7 +4500,26 @@ def _run_main(args, report, _write_report, parser):
     base_dir = args.base_dir
     yolo = args.yolo
 
-    resolved_commands = resolve_commands(args.allowed_commands, yolo, base_dir)
+    # Resolve commands mode
+    cmds = args.commands
+    if yolo or cmds is None or cmds == "all":
+        resolved_commands = {}
+        commands_unrestricted = True
+    elif cmds == "none":
+        resolved_commands = {}
+        commands_unrestricted = False
+    elif isinstance(cmds, list):
+        resolved_commands = resolve_commands(cmds, base_dir)
+        commands_unrestricted = False
+    else:
+        # CLI comma-separated string
+        cmd_list = sorted(c.strip() for c in cmds.split(",") if c.strip())
+        if cmd_list:
+            resolved_commands = resolve_commands(cmd_list, base_dir)
+            commands_unrestricted = False
+        else:
+            resolved_commands = {}
+            commands_unrestricted = True
 
     # Discover skills
     from .skills import discover_skills
@@ -4523,7 +4535,12 @@ def _run_main(args, report, _write_report, parser):
     args._resolved_skills = skills_catalog
 
     _subagents = getattr(args, "subagents", False) is True
-    tools = build_tools(resolved_commands, skills_catalog, yolo, subagents=_subagents)
+    tools = build_tools(
+        resolved_commands,
+        skills_catalog,
+        commands_unrestricted=commands_unrestricted,
+        subagents=_subagents,
+    )
 
     # Initialize MCP servers
     mcp_manager = None
@@ -4645,7 +4662,7 @@ def _run_main(args, report, _write_report, parser):
         no_memory=getattr(args, "no_memory", False),
         memory_full=getattr(args, "memory_full", False),
         skills_catalog=skills_catalog,
-        yolo=yolo,
+        commands_unrestricted=commands_unrestricted,
         resolved_commands=resolved_commands,
         verbose=args.verbose,
         config_dir=getattr(args, "config_dir", None),
@@ -4700,6 +4717,7 @@ def _run_main(args, report, _write_report, parser):
         skill_read_roots=skill_read_roots,
         extra_write_roots=allowed_dirs,
         yolo=yolo,
+        commands_unrestricted=commands_unrestricted,
         verbose=args.verbose,
         llm_kwargs=llm_kwargs,
         file_tracker=file_tracker,
@@ -4966,6 +4984,7 @@ def run_agent_loop(
     skill_read_roots: list,
     extra_write_roots: list,
     yolo: bool,
+    commands_unrestricted: bool = False,
     verbose: bool,
     llm_kwargs: dict,
     file_tracker: FileAccessTracker | None = None,
@@ -5065,6 +5084,7 @@ def run_agent_loop(
             skill_read_roots=skill_read_roots,
             extra_write_roots=extra_write_roots,
             yolo=yolo,
+            commands_unrestricted=commands_unrestricted,
             file_tracker=file_tracker,
             todo_state=todo_state,
             snapshot_state=snapshot_state,
@@ -5634,6 +5654,7 @@ def run_agent_loop(
                 skill_read_roots=skill_read_roots,
                 extra_write_roots=extra_write_roots,
                 yolo=yolo,
+                commands_unrestricted=commands_unrestricted,
                 file_tracker=file_tracker,
                 todo_state=todo_state,
                 snapshot_state=snapshot_state,
@@ -6318,6 +6339,7 @@ def repl_loop(
     skill_read_roots: list,
     extra_write_roots: list,
     yolo: bool,
+    commands_unrestricted: bool = False,
     verbose: bool,
     llm_kwargs: dict,
     file_tracker: FileAccessTracker | None = None,
@@ -6383,6 +6405,7 @@ def repl_loop(
         skill_read_roots=skill_read_roots,
         extra_write_roots=extra_write_roots,
         yolo=yolo,
+        commands_unrestricted=commands_unrestricted,
         verbose=verbose,
         llm_kwargs=llm_kwargs,
         file_tracker=file_tracker,

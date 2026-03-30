@@ -82,11 +82,11 @@ cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5
 <p>If you want a clean output stream for scripting, use <code>--quiet</code> or <code>-q</code>.</p>
 <pre><code class="language-sh">swival -q &quot;Summarize the API surface of src/&quot; &gt; api-summary.txt
 </code></pre>
-<p>You can grant command execution when needed by explicitly whitelisting command names.</p>
-<pre><code class="language-sh">swival --allowed-commands ls,git,python3 \
+<p>Command execution is unrestricted by default. You can restrict it to a whitelist of command names:</p>
+<pre><code class="language-sh">swival --commands ls,git,python3 \
     &quot;Create a tool that returns a random number between 0 and 42&quot;
 </code></pre>
-<p>That whitelist changes what the agent can do. If <code>python3</code> is available, it can use Python for implementation and verification. If no commands are whitelisted, <code>run_command</code> is unavailable unless you enable YOLO mode.</p>
+<p><code>--commands</code> accepts <code>"all"</code> (unrestricted, the default), <code>"none"</code> (disabled), or a comma-separated whitelist. The whitelist changes what the agent can do. If <code>python3</code> is available, it can use Python for implementation and verification. Pass <code>--commands none</code> to remove <code>run_command</code> entirely.</p>
 <p>A successful run exits with code <code>0</code>. A runtime or configuration failure exits with code <code>1</code>. A run that reaches the turn limit before finishing exits with code <code>2</code>. A run interrupted with Ctrl+C exits with code <code>130</code>. A run terminated by SIGTERM exits with code <code>143</code>.</p>
 <h2 id="interactive-mode">Interactive Mode</h2>
 <p>REPL mode keeps a shared conversation state, so each new question can build on earlier turns.</p>
@@ -137,10 +137,10 @@ cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5
 <p>Useful for long-running sessions.</p>
 <h3 id="sandboxing-flags">Sandboxing Flags</h3>
 <p><code>--base-dir</code> defines the base directory for file tools and defaults to the current directory.</p>
-<p><code>--allowed-commands</code> enables command execution through a comma-separated whitelist.</p>
+<p><code>--commands</code> controls command execution. Accepts <code>"all"</code> (unrestricted, the default), <code>"none"</code> (disabled), or a comma-separated whitelist.</p>
 <p><code>--add-dir</code> grants read and write access to additional directories and can be repeated.</p>
 <p><code>--add-dir-ro</code> grants read-only access to additional directories and can be repeated. The agent can read, list, and grep files in these directories but cannot write, edit, or delete them.</p>
-<p><code>--yolo</code> disables both filesystem sandbox checks and command whitelisting, except that filesystem root access is still blocked.</p>
+<p><code>--yolo</code> disables filesystem sandbox checks and implies <code>--commands all</code>, except that filesystem root access is still blocked.</p>
 <p><code>--sandbox</code> selects the sandbox backend. The default is <code>builtin</code>, which uses application-layer path guards. Set it to <code>agentfs</code> to re-exec Swival inside an <a href="agentfs.html">AgentFS</a> overlay for OS-enforced write isolation. Requires the <code>agentfs</code> binary on PATH.</p>
 <p><code>--sandbox-session</code> sets an AgentFS session ID so sandbox state persists across runs. Only valid with <code>--sandbox agentfs</code>.</p>
 <p><code>--sandbox-strict-read</code> enables strict read isolation inside the AgentFS sandbox. When set, the agent process can only read files that have been explicitly allowed, rather than having unrestricted read access to the host filesystem. This requires an AgentFS version with strict read support. If the installed version does not support it, Swival exits with an error. Only valid with <code>--sandbox agentfs</code>.</p>
@@ -180,7 +180,7 @@ cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5
 <p><code>--report FILE</code> writes a JSON run report to <code>FILE</code>. Requires a task; incompatible with <code>--repl</code>.</p>
 <p><code>--reviewer COMMAND</code> runs an external reviewer after each answer. The command string is shell-split, so you can pass arguments inline (e.g. <code>--reviewer "swival --reviewer-mode"</code>). Requires a task; incompatible with <code>--repl</code>.</p>
 <p><code>--max-review-rounds N</code> limits how many times the reviewer can request retries and defaults to <code>15</code>. Set to <code>0</code> to accept the first answer without retries.</p>
-<p><code>--self-review</code> uses a second Swival instance as reviewer, inheriting provider, model, skills-dir, and yolo settings from the current invocation. Requires a task; incompatible with <code>--repl</code> and <code>--reviewer</code>. See <a href="reviews.html">Reviews</a> for details.</p>
+<p><code>--self-review</code> uses a second Swival instance as reviewer, inheriting provider, model, and skills-dir settings from the current invocation. Requires a task; incompatible with <code>--repl</code> and <code>--reviewer</code>. See <a href="reviews.html">Reviews</a> for details.</p>
 <p><code>--reviewer-mode</code> runs Swival as a reviewer process that speaks the reviewer protocol. It reads <code>base_dir</code> from the positional argument, the answer from standard input, evaluates with the LLM, and exits 0 (accept), 1 (retry), or 2 (error). Incompatible with <code>--repl</code> and <code>--reviewer</code>.</p>
 <p><code>--review-prompt TEXT</code> appends custom instructions to the built-in review prompt when running in reviewer mode.</p>
 <p><code>--objective FILE</code> reads the task description from a file instead of the <code>SWIVAL_TASK</code> environment variable when running in reviewer mode.</p>

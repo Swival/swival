@@ -489,7 +489,7 @@ class TestReportIntegration:
             quiet=False,
             max_turns=5,
             base_dir=str(tmp_path),
-            allowed_commands=None,
+            commands=None,
             no_instructions=True,
             skills_dir=[],
             no_skills=True,

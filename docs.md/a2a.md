@@ -150,7 +150,7 @@ This starts an HTTP server at `0.0.0.0:8080` that accepts A2A JSON-RPC requests 
 
 `--serve-auth-token TOKEN` enables bearer token authentication. When set, all JSON-RPC requests must include an `Authorization: Bearer <token>` header.
 
-All other flags (`--provider`, `--model`, `--allowed-commands`, `--yolo`, `--mcp-config`, etc.) configure the underlying Session that handles incoming tasks.
+All other flags (`--provider`, `--model`, `--commands`, `--yolo`, `--mcp-config`, etc.) configure the underlying Session that handles incoming tasks.
 
 ### How It Works
 

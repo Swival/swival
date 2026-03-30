@@ -107,7 +107,7 @@ swival "Add pagination to the API" \
 
 ```sh
 swival "Fix the security vulnerability in auth.py" \
-    --allowed-commands python3,pytest \
+    --commands python3,pytest \
     --reviewer "swival --reviewer-mode --verify ci/security-criteria.md" \
     --report results.json \
     --quiet

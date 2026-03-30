@@ -26,14 +26,14 @@ If you want a clean output stream for scripting, use `--quiet` or `-q`.
 swival -q "Summarize the API surface of src/" > api-summary.txt
 ```
 
-You can grant command execution when needed by explicitly whitelisting command names.
+Command execution is unrestricted by default. You can restrict it to a whitelist of command names:
 
 ```sh
-swival --allowed-commands ls,git,python3 \
+swival --commands ls,git,python3 \
     "Create a tool that returns a random number between 0 and 42"
 ```
 
-That whitelist changes what the agent can do. If `python3` is available, it can use Python for implementation and verification. If no commands are whitelisted, `run_command` is unavailable unless you enable YOLO mode.
+`--commands` accepts `"all"` (unrestricted, the default), `"none"` (disabled), or a comma-separated whitelist. The whitelist changes what the agent can do. If `python3` is available, it can use Python for implementation and verification. Pass `--commands none` to remove `run_command` entirely.
 
 A successful run exits with code `0`. A runtime or configuration failure exits with code `1`. A run that reaches the turn limit before finishing exits with code `2`. A run interrupted with Ctrl+C exits with code `130`. A run terminated by SIGTERM exits with code `143`.
 
@@ -135,13 +135,13 @@ Useful for long-running sessions.
 
 `--base-dir` defines the base directory for file tools and defaults to the current directory.
 
-`--allowed-commands` enables command execution through a comma-separated whitelist.
+`--commands` controls command execution. Accepts `"all"` (unrestricted, the default), `"none"` (disabled), or a comma-separated whitelist.
 
 `--add-dir` grants read and write access to additional directories and can be repeated.
 
 `--add-dir-ro` grants read-only access to additional directories and can be repeated. The agent can read, list, and grep files in these directories but cannot write, edit, or delete them.
 
-`--yolo` disables both filesystem sandbox checks and command whitelisting, except that filesystem root access is still blocked.
+`--yolo` disables filesystem sandbox checks and implies `--commands all`, except that filesystem root access is still blocked.
 
 `--sandbox` selects the sandbox backend. The default is `builtin`, which uses application-layer path guards. Set it to `agentfs` to re-exec Swival inside an [AgentFS](agentfs.md) overlay for OS-enforced write isolation. Requires the `agentfs` binary on PATH.
 
@@ -221,7 +221,7 @@ See [A2A](a2a.md) for full server documentation.
 
 `--max-review-rounds N` limits how many times the reviewer can request retries and defaults to `15`. Set to `0` to accept the first answer without retries.
 
-`--self-review` uses a second Swival instance as reviewer, inheriting provider, model, skills-dir, and yolo settings from the current invocation. Requires a task; incompatible with `--repl` and `--reviewer`. See [Reviews](reviews.md) for details.
+`--self-review` uses a second Swival instance as reviewer, inheriting provider, model, and skills-dir settings from the current invocation. Requires a task; incompatible with `--repl` and `--reviewer`. See [Reviews](reviews.md) for details.
 
 `--reviewer-mode` runs Swival as a reviewer process that speaks the reviewer protocol. It reads `base_dir` from the positional argument, the answer from standard input, evaluates with the LLM, and exits 0 (accept), 1 (retry), or 2 (error). Incompatible with `--repl` and `--reviewer`.
 

@@ -360,7 +360,7 @@ class TestBuildSystemPrompt:
             no_instructions=True,
             no_memory=True,
             skills_catalog={},
-            yolo=False,
+            commands_unrestricted=False,
             resolved_commands={},
             verbose=False,
         )
@@ -383,7 +383,7 @@ class TestBuildSystemPrompt:
             no_instructions=True,
             no_memory=True,
             skills_catalog={},
-            yolo=False,
+            commands_unrestricted=False,
             resolved_commands={},
             verbose=False,
         )
@@ -409,7 +409,7 @@ class TestBuildSystemPrompt:
             no_instructions=True,
             no_memory=True,
             skills_catalog={},
-            yolo=False,
+            commands_unrestricted=False,
             resolved_commands={},
             verbose=False,
         )
@@ -430,7 +430,7 @@ class TestBuildSystemPrompt:
             no_instructions=True,
             no_memory=True,
             skills_catalog={},
-            yolo=False,
+            commands_unrestricted=False,
             resolved_commands={},
             verbose=False,
             no_continue=True,

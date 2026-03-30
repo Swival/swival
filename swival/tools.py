@@ -2657,7 +2657,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             base_dir=base_dir,
             resolved_commands=resolved,
             timeout=args.get("timeout", 30),
-            unrestricted=yolo,
+            unrestricted=kwargs.get("commands_unrestricted", False) or yolo,
             scratch_dir=scratch_dir,
         )
     elif name == "view_image":

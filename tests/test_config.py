@@ -43,7 +43,7 @@ def _make_args(**overrides):
         "max_turns": _UNSET,
         "system_prompt": _UNSET,
         "no_system_prompt": _UNSET,
-        "allowed_commands": _UNSET,
+        "commands": _UNSET,
         "yolo": _UNSET,
         "add_dir": None,  # append actions use None sentinel
         "add_dir_ro": None,  # append actions use None sentinel
@@ -156,17 +156,17 @@ class TestTypeValidation:
 
     def test_mixed_type_list(self, tmp_path, monkeypatch):
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
-        _write_toml(tmp_path / "swival.toml", 'allowed_commands = ["ls", 42]\n')
+        _write_toml(tmp_path / "swival.toml", 'commands = ["ls", 42]\n')
         with pytest.raises(
-            ConfigError, match=r"allowed_commands\[1\].*expected string.*got int"
+            ConfigError, match=r"commands\[1\].*expected string.*got int"
         ):
             load_config(tmp_path)
 
     def test_empty_list_is_valid(self, tmp_path, monkeypatch):
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
-        _write_toml(tmp_path / "swival.toml", "allowed_commands = []\n")
+        _write_toml(tmp_path / "swival.toml", "commands = []\n")
         result = load_config(tmp_path)
-        assert result["allowed_commands"] == []
+        assert result["commands"] == []
 
     def test_toml_int_for_float_field(self, tmp_path, monkeypatch):
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
@@ -463,23 +463,11 @@ class TestConfigToSessionKwargs:
 
 
 class TestResolveCommandsTypes:
-    def test_string_input(self):
-        from swival.agent import resolve_commands
-
-        result = resolve_commands("ls", False, "/tmp")
-        assert "ls" in result
-
     def test_list_input(self):
         from swival.agent import resolve_commands
 
-        result = resolve_commands(["ls"], False, "/tmp")
+        result = resolve_commands(["ls"], "/tmp")
         assert "ls" in result
-
-    def test_none_input(self):
-        from swival.agent import resolve_commands
-
-        result = resolve_commands(None, False, "/tmp")
-        assert result == {}
 
 
 # ===========================================================================
@@ -488,7 +476,7 @@ class TestResolveCommandsTypes:
 
 
 class TestReportSettingsTypes:
-    def test_string_allowed_commands(self):
+    def test_string_commands(self):
         args = types.SimpleNamespace(
             temperature=0.5,
             top_p=1.0,
@@ -497,10 +485,10 @@ class TestReportSettingsTypes:
             max_output_tokens=1024,
             max_context_tokens=None,
             yolo=False,
-            allowed_commands="ls,git",
+            commands="ls,git",
         )
         # Reproduce the logic from _report_settings
-        cmds = args.allowed_commands
+        cmds = args.commands
         if isinstance(cmds, list):
             cmd_list = sorted(cmds)
         elif cmds:
@@ -509,7 +497,7 @@ class TestReportSettingsTypes:
             cmd_list = []
         assert cmd_list == ["git", "ls"]
 
-    def test_list_allowed_commands(self):
+    def test_list_commands(self):
         cmds = ["git", "ls"]
         if isinstance(cmds, list):
             cmd_list = sorted(cmds)
@@ -679,18 +667,18 @@ class TestCLIIntegration:
         assert "swival --yolo --repl" in help_text
         assert "--self-review" in help_text
 
-    def test_allowed_commands_list_flows_through(self, tmp_path, monkeypatch):
+    def test_commands_list_flows_through(self, tmp_path, monkeypatch):
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
-        _write_toml(tmp_path / "swival.toml", 'allowed_commands = ["ls"]\n')
+        _write_toml(tmp_path / "swival.toml", 'commands = ["ls"]\n')
 
         config = load_config(tmp_path)
         args = _make_args()
         apply_config_to_args(args, config)
-        assert args.allowed_commands == ["ls"]
+        assert args.commands == ["ls"]
 
         from swival.agent import resolve_commands
 
-        result = resolve_commands(args.allowed_commands, False, str(tmp_path))
+        result = resolve_commands(args.commands, str(tmp_path))
         assert "ls" in result
 
     def test_malformed_toml_clear_error(self, tmp_path, monkeypatch):

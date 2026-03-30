@@ -27,7 +27,7 @@ The JSON below is from a verified local run using `--model dummy-model --max-tur
     "max_output_tokens": 32768,
     "context_length": null,
     "yolo": false,
-    "allowed_commands": [],
+    "commands": "none",
     "max_review_rounds": 15,
     "skills_discovered": [],
     "instructions_loaded": []
@@ -70,9 +70,9 @@ The JSON below is from a verified local run using `--model dummy-model --max-tur
 
 ### `settings`
 
-`temperature` stores the sampling temperature or `null` when omitted. `top_p` stores nucleus sampling. `seed` stores the random seed or `null`. `max_turns` and `max_output_tokens` store turn and output-token limits. `context_length` stores effective context length after provider resolution. `yolo` indicates unrestricted mode.
+`temperature` stores the sampling temperature or `null` when omitted. `top_p` stores nucleus sampling. `seed` stores the random seed or `null`. `max_turns` and `max_output_tokens` store turn and output-token limits. `context_length` stores effective context length after provider resolution. `yolo` indicates whether `--yolo` was active.
 
-`allowed_commands` records the configured command whitelist as sorted basenames. `max_review_rounds` records the reviewer retry limit. `skills_discovered` records skill names discovered at startup. `instructions_loaded` records loaded instruction files as absolute paths (e.g. the user-level `AGENTS.md` from `~/.config/swival/`, the cross-agent `~/.agents/AGENTS.md`, and the project-level files).
+`commands` records the configured command policy: `"all"` (unrestricted, the default), `"none"` (disabled), or a sorted list of whitelisted basenames. `max_review_rounds` records the reviewer retry limit. `skills_discovered` records skill names discovered at startup. `instructions_loaded` records loaded instruction files as absolute paths (e.g. the user-level `AGENTS.md` from `~/.config/swival/`, the cross-agent `~/.agents/AGENTS.md`, and the project-level files).
 
 ### `sandbox`
 

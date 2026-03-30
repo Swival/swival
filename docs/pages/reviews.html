@@ -147,7 +147,7 @@
 </code></pre>
 <h3 id="ci-with-report">CI With Report</h3>
 <pre><code class="language-sh">swival &quot;Fix the security vulnerability in auth.py&quot; \
-    --allowed-commands python3,pytest \
+    --commands python3,pytest \
     --reviewer &quot;swival --reviewer-mode --verify ci/security-criteria.md&quot; \
     --report results.json \
     --quiet

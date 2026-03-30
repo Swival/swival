@@ -802,7 +802,7 @@ def _base_args(tmp_path, **overrides):
         question="test todo reminder",
         repl=False,
         max_context_tokens=None,
-        allowed_commands=None,
+        commands=None,
         add_dir=[],
         add_dir_ro=[],
         provider="lmstudio",

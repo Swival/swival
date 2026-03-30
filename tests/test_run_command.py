@@ -307,7 +307,7 @@ def test_large_output_truncation(tmp_base):
 # ---------- Test 14: Tool absent when no allowed commands ----------
 
 
-def test_tool_absent_when_no_allowed_commands():
+def test_tool_absent_when_no_commands():
     from swival.tools import TOOLS
 
     tool_names = [t["function"]["name"] for t in TOOLS]
@@ -399,7 +399,7 @@ def test_path_shadowing_blocked(tmp_base, tmp_path):
 
 
 def test_startup_resolution_failure(tmp_path):
-    """If --allowed-commands=nonexistent_xyz, agent.py should exit with error."""
+    """If --commands=nonexistent_xyz, agent.py should exit with error."""
     env = os.environ.copy()
     env["XDG_CONFIG_HOME"] = str(tmp_path)  # isolate from global config
     result = subprocess.run(
@@ -409,7 +409,7 @@ def test_startup_resolution_failure(tmp_path):
             "swival.agent",
             "test",
             "--model=dummy-model",
-            "--allowed-commands=nonexistent_xyz_abc",
+            "--commands=nonexistent_xyz_abc",
         ],
         cwd=str(Path(__file__).parent.parent),
         capture_output=True,
@@ -469,7 +469,7 @@ def test_startup_rejects_commands_inside_base_dir(tmp_path):
             "test",
             "--model=dummy-model",
             f"--base-dir={tmp_path}",
-            "--allowed-commands=mycmd",
+            "--commands=mycmd",
         ],
         cwd=str(Path(__file__).parent.parent),
         capture_output=True,

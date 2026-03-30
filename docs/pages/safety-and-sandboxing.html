@@ -109,9 +109,9 @@
 </code></pre>
 <p>Each allowed directory must already exist, must be a directory, and cannot be the filesystem root. In REPL mode, you can grant the same access dynamically with <code>/add-dir &lt;path&gt;</code> or <code>/add-dir-ro &lt;path&gt;</code>.</p>
 <h2 id="command-execution-policy">Command Execution Policy</h2>
-<p>Command execution is off by default. The agent only receives <code>run_command</code> when you explicitly enable it.</p>
-<p>In whitelist mode, you pass a comma-separated set of command basenames.</p>
-<pre><code class="language-sh">swival --allowed-commands ls,git,python3 &quot;task&quot;
+<p>Command execution is unrestricted by default (<code>--commands all</code>). You can restrict or disable it.</p>
+<p>In whitelist mode, you pass a comma-separated set of command basenames. Pass <code>"none"</code> to disable commands entirely.</p>
+<pre><code class="language-sh">swival --commands ls,git,python3 &quot;task&quot;
 </code></pre>
 <p>At startup, each basename is resolved to an absolute path using <code>which</code>. If a command cannot be found, Swival exits with an error. If a command resolves inside your base directory, Swival rejects it so the agent cannot modify and execute workspace binaries in one session.</p>
 <p>At runtime in whitelist mode, commands must be passed as argument arrays, not shell strings. This removes shell interpolation and injection risk from ordinary command calls.</p>

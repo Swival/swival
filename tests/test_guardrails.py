@@ -42,7 +42,7 @@ def _base_args(tmp_path, **overrides):
         question="test guardrails",
         repl=False,
         max_context_tokens=None,
-        allowed_commands=None,
+        commands=None,
         add_dir=[],
         add_dir_ro=[],
         provider="lmstudio",
@@ -268,7 +268,7 @@ def test_repaired_run_command_error_still_triggers_guardrail(tmp_path, monkeypat
         ),
     )
 
-    args = _base_args(tmp_path, allowed_commands=None)
+    args = _base_args(tmp_path, commands=None)
     monkeypatch.setattr(sys, "argv", ["agent", "test guardrails"])
     monkeypatch.setattr("argparse.ArgumentParser.parse_args", lambda self: args)
 

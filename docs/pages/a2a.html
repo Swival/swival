@@ -190,7 +190,7 @@ result = session.run(&quot;Ask the research agent to summarize recent papers on 
 <p><code>--serve-host HOST</code> sets the bind address (default: <code>0.0.0.0</code>).</p>
 <p><code>--serve-port PORT</code> sets the port (default: <code>8080</code>).</p>
 <p><code>--serve-auth-token TOKEN</code> enables bearer token authentication. When set, all JSON-RPC requests must include an <code>Authorization: Bearer &lt;token&gt;</code> header.</p>
-<p>All other flags (<code>--provider</code>, <code>--model</code>, <code>--allowed-commands</code>, <code>--yolo</code>, <code>--mcp-config</code>, etc.) configure the underlying Session that handles incoming tasks.</p>
+<p>All other flags (<code>--provider</code>, <code>--model</code>, <code>--commands</code>, <code>--yolo</code>, <code>--mcp-config</code>, etc.) configure the underlying Session that handles incoming tasks.</p>
 <h3 id="how-it-works">How It Works</h3>
 <p>Each incoming <code>SendMessage</code> request is routed to a Session instance keyed by <code>contextId</code>. If no <code>contextId</code> is provided, the server generates one. The server uses <code>Session.ask()</code> for each message, preserving conversation state across calls within the same context.</p>
 <p>Sessions are cleaned up after a configurable TTL (default: 1 hour). If the session limit is reached (default: 100), the least-recently-used session is evicted. Per-context locks ensure sequential processing of messages within the same context.</p>

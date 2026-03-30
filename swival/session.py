@@ -60,7 +60,7 @@ class Session:
         temperature: float | None = None,
         top_p: float = 1.0,
         seed: int | None = None,
-        allowed_commands: list[str] | None = None,
+        commands: str | list[str] | None = "all",
         yolo: bool = False,
         verbose: bool = False,
         system_prompt: str | None = None,
@@ -120,7 +120,7 @@ class Session:
         if retries < 1:
             raise ValueError("retries must be >= 1")
         self.retries = retries
-        self.allowed_commands = allowed_commands
+        self.commands = commands
         self.yolo = yolo
         self.verbose = verbose
         self.system_prompt = system_prompt
@@ -262,9 +262,21 @@ class Session:
         )
 
         # Resolve commands
-        self._resolved_commands = resolve_commands(
-            self.allowed_commands, self.yolo, self.base_dir
-        )
+        cmds = self.commands
+        if self.yolo or cmds is None or cmds == "all":
+            self._resolved_commands = {}
+            self._commands_unrestricted = True
+        elif cmds == "none":
+            self._resolved_commands = {}
+            self._commands_unrestricted = False
+        elif isinstance(cmds, list):
+            self._resolved_commands = resolve_commands(cmds, self.base_dir)
+            self._commands_unrestricted = False
+        else:
+            raise ConfigError(
+                f"'commands' must be 'all', 'none', or a list of command names, "
+                f"got {cmds!r}"
+            )
 
         # Discover skills
         self._skills_catalog = {}
@@ -283,7 +295,7 @@ class Session:
         self._tools = build_tools(
             self._resolved_commands,
             self._skills_catalog,
-            self.yolo,
+            commands_unrestricted=self._commands_unrestricted,
             subagents=self.subagents,
         )
 
@@ -369,7 +381,7 @@ class Session:
             no_instructions=self.no_instructions,
             no_memory=True,
             skills_catalog=self._skills_catalog,
-            yolo=self.yolo,
+            commands_unrestricted=self._commands_unrestricted,
             resolved_commands=self._resolved_commands,
             verbose=self.verbose,
             config_dir=self.config_dir,
@@ -464,6 +476,7 @@ class Session:
             skill_read_roots=state["skill_read_roots"],
             extra_write_roots=self._allowed_dir_paths,
             yolo=self.yolo,
+            commands_unrestricted=self._commands_unrestricted,
             verbose=self.verbose,
             llm_kwargs=self._llm_kwargs,
             file_tracker=state["file_tracker"],

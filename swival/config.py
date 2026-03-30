@@ -40,7 +40,7 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "retries": int,
     "system_prompt": str,
     "no_system_prompt": bool,
-    "allowed_commands": list,
+    "commands": (str, list),
     "yolo": bool,
     "allowed_dirs": list,
     "allowed_dirs_ro": list,
@@ -87,7 +87,6 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
 }
 
 _LIST_OF_STR_KEYS = {
-    "allowed_commands",
     "allowed_dirs",
     "allowed_dirs_ro",
     "skills_dir",
@@ -114,7 +113,7 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "retries": 5,
     "system_prompt": None,
     "no_system_prompt": False,
-    "allowed_commands": None,
+    "commands": "all",
     "yolo": False,
     "add_dir": [],
     "add_dir_ro": [],
@@ -207,6 +206,18 @@ def _validate_config(config: dict, source: str) -> None:
             raise ConfigError(
                 f"{source}: {key!r} expected {_type_name(expected)}, got {type(value).__name__}"
             )
+        if key == "commands":
+            if isinstance(value, str) and value not in ("all", "none"):
+                raise ConfigError(
+                    f"{source}: 'commands' must be 'all', 'none', or a list of command names, "
+                    f"got {value!r}"
+                )
+            if isinstance(value, list):
+                for i, elem in enumerate(value):
+                    if not isinstance(elem, str):
+                        raise ConfigError(
+                            f"{source}: commands[{i}]: expected string, got {type(elem).__name__}"
+                        )
 
         # Validate list element types
         if key in _LIST_OF_STR_KEYS:
@@ -792,7 +803,7 @@ def args_to_session_kwargs(args, base_dir: str) -> dict:
         "top_p",
         "seed",
         "yolo",
-        "allowed_commands",
+        "commands",
         "system_prompt",
         "no_system_prompt",
         "no_instructions",
@@ -952,7 +963,7 @@ def generate_config(project: bool = False) -> str:
         '# sandbox_session = "my-session"  # agentfs session ID (optional)',
         "# sandbox_strict_read = false",
         "# sandbox_auto_session = true",
-        '# allowed_commands = ["ls", "git", "cat", "head", "tail", "find", "rg", "grep", "make", "zig", "cargo", "bun", "uv", "curl", "printf", "diff", "patch", "wc", "sort", "uniq", "sed", "awk", "tar", "python3"]',
+        '# commands = "all"                # "all" (default) | "none" | ["ls", "git", "python3"]',
         "# yolo = false",
         '# allowed_dirs = ["../shared-lib", "/data/assets"]',
         '# allowed_dirs_ro = ["/reference/docs", "~/datasets"]',

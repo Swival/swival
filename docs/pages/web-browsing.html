@@ -188,10 +188,10 @@ agent-browser install
 </code></pre>
 <h3 id="configure-swival">Configure Swival</h3>
 <p>Allow the <code>agent-browser</code> command in <code>swival.toml</code>:</p>
-<pre><code class="language-toml">allowed_commands = [&quot;agent-browser&quot;]
+<pre><code class="language-toml">commands = [&quot;agent-browser&quot;]
 </code></pre>
 <p>Or pass it on the command line:</p>
-<pre><code class="language-sh">swival --allowed-commands agent-browser &quot;Open example.com and tell me what's on the page&quot;
+<pre><code class="language-sh">swival --commands agent-browser &quot;Open example.com and tell me what's on the page&quot;
 </code></pre>
 <h3 id="how-the-model-uses-it">How the model uses it</h3>
 <p>The model calls <code>run_command</code> with agent-browser subcommands. First it opens a URL, then takes a snapshot to get an accessibility tree with element refs like <code>@e1</code> and <code>@e2</code>, then interacts with those elements, and finally closes the browser when it's done:</p>
@@ -214,7 +214,7 @@ agent-browser close
 </code></pre>
 <p>A typical snapshot is 200-400 tokens compared to 3,000-5,000 for a full DOM dump. This matters when you're browsing multiple pages in a single session.</p>
 <h3 id="example-session">Example session</h3>
-<pre><code class="language-sh">swival --allowed-commands agent-browser
+<pre><code class="language-sh">swival --commands agent-browser
 &gt; Go to https://news.ycombinator.com, click on the top story, and summarize the article
 </code></pre>
 <p>The model will run <code>agent-browser open</code>, <code>agent-browser snapshot -i</code>, <code>agent-browser click @e1</code>, and so on, chaining commands until it has the information it needs.</p>
@@ -244,7 +244,7 @@ agent-browser close
 </code></pre>
 <p>To use it with Swival, add the environment variable to your shell profile (<code>.zshrc</code>, <code>.bashrc</code>, etc.) and configure Swival as usual:</p>
 <pre><code class="language-sh">export AGENT_BROWSER_ENGINE=lightpanda
-swival --allowed-commands agent-browser &quot;Open example.com and describe the page&quot;
+swival --commands agent-browser &quot;Open example.com and describe the page&quot;
 </code></pre>
 <p>Note that Lightpanda doesn't support screenshots, so commands like <code>agent-browser screenshot</code> won't work with this engine. Everything else, including snapshots, clicking, form filling, and JavaScript evaluation, works the same as with Chrome.</p>
 <h2 id="which-approach-should-i-use">Which approach should I use?</h2>

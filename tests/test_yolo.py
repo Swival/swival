@@ -430,7 +430,7 @@ class TestRunCommandUnrestricted:
         )
         assert result == "error: command not found on PATH: 'no_such_cmd_xyz_12345'"
 
-    def test_yolo_overrides_allowed_commands(self, tmp_path):
+    def test_yolo_overrides_commands(self, tmp_path):
         """When unrestricted, any command runs even if resolved_commands is limited."""
         ls_path = _which("ls")
         # Only "ls" is in resolved_commands, but "echo" should still work
@@ -499,7 +499,7 @@ class TestAgentYolo:
         assert args.yolo is _UNSET
 
     def test_yolo_tool_list_includes_run_command(self, tmp_path, monkeypatch):
-        """With --yolo and no --allowed-commands, the tools list passed to
+        """With --yolo and no --commands, the tools list passed to
         call_llm includes run_command with unrestricted description."""
         from swival import agent
 

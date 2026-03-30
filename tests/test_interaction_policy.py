@@ -26,7 +26,7 @@ def _build(tmp_path, **kwargs):
         no_instructions=True,
         no_memory=True,
         skills_catalog={},
-        yolo=False,
+        commands_unrestricted=False,
         resolved_commands={},
         verbose=False,
     )

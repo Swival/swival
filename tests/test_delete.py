@@ -486,7 +486,7 @@ class TestThinkNudge:
             question="test nudge",
             repl=False,
             max_context_tokens=None,
-            allowed_commands=None,
+            commands=None,
             add_dir=[],
             add_dir_ro=[],
             provider="lmstudio",
