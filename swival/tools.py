@@ -2400,26 +2400,6 @@ def _run_command(
             command = repaired_command
             was_repaired = True
 
-    # Single-element array where the element is a full command string
-    # (typically from wrap_string_in_array repair).  Unpack and re-split.
-    if isinstance(command, list) and len(command) == 1 and " " in command[0]:
-        solo = command[0]
-        if unrestricted:
-            return _run_shell_command(solo, base_dir, timeout, scratch_dir=scratch_dir)
-        if not (_SHELL_CHARS & set(solo)):
-            command = solo.split()
-            was_repaired = True
-        else:
-            return (
-                'error: "command" must be a JSON array of strings, '
-                "not a single string.\n"
-                'Wrong: "command": "grep -n pattern file.py"\n'
-                'Right: "command": ["grep", "-n", "pattern", "file.py"]\n'
-                "Each argument must be a separate element in the array.\n"
-                "Shell syntax (&&, |, >, 2>&1, etc.) is not supported — "
-                "run one command at a time."
-            )
-
     if not command:
         return "error: command list is empty"
 

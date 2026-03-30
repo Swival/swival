@@ -225,11 +225,12 @@ class TestShapeRepair:
         assert result["config"] == [{"a": 1}, {"b": 2}]
         assert not any(r["type"] == "unwrap_single_item" for r in repairs)
 
-    def test_wrap_string_in_string_array(self):
+    def test_string_for_array_left_alone(self):
+        """String passed for an array[string] field is left as-is for the tool to handle."""
         args = {"command": "ls -la"}
         result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
-        assert result["command"] == ["ls -la"]
-        assert any(r["type"] == "wrap_string_in_array" for r in repairs)
+        assert result["command"] == "ls -la"
+        assert not any(r["type"] == "wrap_string_in_array" for r in repairs)
 
 
 class TestNearMissFields:

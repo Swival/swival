@@ -143,48 +143,6 @@ def test_auto_repair_plain_string_sandboxed_auto_splits(tmp_base):
     assert "(auto-corrected:" in result
 
 
-# ---------- Test 5d2: Single-element array with full command string ----------
-
-
-def test_single_element_array_splits_sandboxed(tmp_base):
-    """wrap_string_in_array produces ["echo hello"] — should split and run."""
-    echo_path = _which("echo")
-    resolved = {"echo": echo_path}
-    result = _run_command(
-        ["echo single-elem-ok"],
-        tmp_base,
-        resolved,
-        unrestricted=False,
-    )
-    assert "single-elem-ok" in result
-    assert not result.startswith("error:")
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="requires /bin/sh")
-def test_single_element_array_shell_unrestricted(tmp_base):
-    """In unrestricted mode, single-element array with pipes runs as shell."""
-    result = _run_command(
-        ["echo piped-ok | cat"],
-        tmp_base,
-        resolved_commands={},
-        unrestricted=True,
-    )
-    assert "piped-ok" in result
-    assert not result.startswith("error:")
-
-
-def test_single_element_array_shell_chars_sandboxed_errors(tmp_base):
-    """Shell metacharacters in single-element array should error in sandbox."""
-    result = _run_command(
-        ["echo hello | cat"],
-        tmp_base,
-        {},
-        unrestricted=False,
-    )
-    assert result.startswith("error:")
-    assert "Each argument must be a separate element" in result
-
-
 # ---------- Test 5e: Auto-repair annotation and error-prefix interaction ----------
 
 

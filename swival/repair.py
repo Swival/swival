@@ -163,10 +163,6 @@ def _repair_shapes(
         if expected == "array" and isinstance(value, dict):
             result[field] = [value]
             repairs.append({"type": "wrap_in_array", "field": field})
-        elif expected == "array" and isinstance(value, str):
-            if "items" in prop and prop["items"].get("type") == "string":
-                result[field] = [value]
-                repairs.append({"type": "wrap_string_in_array", "field": field})
         elif expected == "object" and isinstance(value, list):
             if len(value) == 1 and isinstance(value[0], dict):
                 result[field] = value[0]
