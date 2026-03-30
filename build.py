@@ -48,6 +48,11 @@ NAV = [
                 "Context Management",
                 "How Swival fits large tasks into small context windows",
             ),
+            (
+                "open-models",
+                "Designed for Imperfect Models",
+                "Why Swival is built to handle smaller, open, and imperfect models",
+            ),
         ],
     ),
     (

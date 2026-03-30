@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Designed for Imperfect Models — Swival</title>
+    <meta name="description" content="Designed for Imperfect Models — Swival documentation">
+    <meta property="og:type" content="article">
+    <meta property="og:title" content="Designed for Imperfect Models — Swival">
+    <meta property="og:description" content="Designed for Imperfect Models — Swival documentation">
+    <meta property="og:image" content="https://swival.dev/img/logo.png">
+    <meta property="og:url" content="https://swival.dev/pages/open-models.html">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="Designed for Imperfect Models — Swival">
+    <meta name="twitter:description" content="Designed for Imperfect Models — Swival documentation">
+    <meta name="twitter:image" content="https://swival.dev/img/logo.png">
+    <link rel="icon" href="../favicon.ico">
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../" class="header-logo">
+                <img src="../img/logo.png" alt="Swival">
+            </a>
+            <nav class="header-nav">
+                <a href="./">Docs</a>
+                <a href="https://github.com/swival/swival">GitHub</a>
+            </nav>
+        </div>
+    </header>
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <div class="sidebar-section">
+<h4>Basics</h4>
+<ul>
+<li><a href="getting-started.html">Getting Started</a></li>
+<li><a href="usage.html">Usage</a></li>
+<li><a href="tools.html">Tools</a></li>
+<li><a href="context-management.html">Context Management</a></li>
+<li><a href="open-models.html" class="active">Designed for Imperfect Models</a></li>
+</ul>
+</div>
+<div class="sidebar-section">
+<h4>Configuration & Deployment</h4>
+<ul>
+<li><a href="safety-and-sandboxing.html">Safety & Sandboxing</a></li>
+<li><a href="secrets.html">Secret Encryption</a></li>
+<li><a href="llm-filter.html">Outbound LLM Filter</a></li>
+<li><a href="skills.html">Skills</a></li>
+<li><a href="web-browsing.html">Web Browsing</a></li>
+<li><a href="mcp.html">MCP</a></li>
+<li><a href="a2a.html">A2A</a></li>
+<li><a href="lifecycle-hooks.html">Lifecycle Hooks</a></li>
+<li><a href="custom-commands.html">Custom Commands</a></li>
+<li><a href="customization.html">Customization</a></li>
+<li><a href="providers.html">Providers</a></li>
+<li><a href="reports.html">Reports</a></li>
+<li><a href="reviews.html">Reviews</a></li>
+<li><a href="agentfs.html">AgentFS</a></li>
+</ul>
+</div>
+<div class="sidebar-section">
+<h4>Reference</h4>
+<ul>
+<li><a href="python-api.html">Python API</a></li>
+</ul>
+</div>
+        </aside>
+        <article class="docs-content">
+            <h1 id="designed-for-imperfect-models">Designed for Imperfect Models</h1>
+<p>Most coding agents are built and tested against one or two frontier models.</p>
+<p>They assume clean tool calls, reliable instruction following, and context windows measured in hundreds of thousands of tokens. When those assumptions hold, things work fine. When they don't, the agent falls apart in ways that look like the model's fault but are really the agent's.</p>
+<p>Swival takes the opposite approach. It assumes the model will be messy, forgetful, and working with limited space. Then it tries to keep the task moving anyway.</p>
+<h2 id="what-goes-wrong-with-small-models">What goes wrong with small models</h2>
+<p>Smaller and open models hit a few recurring problems when used inside an agent loop. A 16K or 32K context window fills up fast once you add a system prompt, tool schemas, a few file reads, and some back-and-forth. Once the window is full, the agent either crashes or silently drops context and starts hallucinating.</p>
+<p>The model might omit required fields in tool calls, nest arguments wrong, or produce JSON that doesn't parse. Formatting rules in the system prompt get ignored. And longer tasks require the model to remember what it already tried, what files it changed, and what it planned to do next. Smaller models lose this thread more easily, especially after compaction or interruption.</p>
+<p>None of this means small models are useless. It means the agent needs to do more of the work.</p>
+<h2 id="how-swival-compensates">How Swival compensates</h2>
+<p>These are engineering choices, not marketing claims. Each one exists because a specific failure mode showed up during testing with real models.</p>
+<p><strong>Graduated context compaction.</strong> When the window fills up, Swival runs a four-level compaction pipeline: shrink old tool results, drop low-value turns (scored by importance), nuclear-drop to just the last two turns, and finally shed tool schemas entirely. Each level fires only if the previous one wasn't enough. See <a href="context-management.html">Context Management</a> for the full breakdown.</p>
+<p><strong>Knowledge that survives compaction.</strong> Thinking notes, todo lists, and snapshot summaries live outside the message history. Even after the most aggressive compaction, the agent still has its reasoning chain, its task list, and what it learned during investigation. This is the single most important thing for small-model reliability: the agent can lose old messages and keep working.</p>
+<p><strong>Bounded tool output.</strong> File reads are capped at 50KB. Grep returns at most 100 matches. Command output over 10KB is saved to a temp file and replaced with a pointer. MCP tool schemas that would eat more than half the context window are dropped at startup. These limits exist specifically so that one unlucky tool call can't blow the budget on a small window.</p>
+<p><strong>Forgiving parsers.</strong> Tool-call parsing uses a multi-pass approach. If the model's JSON is slightly broken, Swival tries to recover before giving up. The edit tool uses three-pass matching (exact, line-trimmed, unicode-normalized) so edits still land even when the model's whitespace is off. These are small things individually, but they add up to fewer stalled loops.</p>
+<p><strong>Durable state tools.</strong> The <code>think</code> tool gives the model a structured scratchpad that persists across compaction. The <code>todo</code> tool tracks work items that survive context drops. The <code>snapshot</code> tool lets the agent compress its own investigation into a summary and reclaim context space on demand. These tools exist because smaller models need external scaffolding to stay on track through multi-step tasks.</p>
+<p><strong>Error guardrails.</strong> If the model repeats the same error twice, Swival warns it. Three times, it tells the model to stop and try something different. This keeps small models from burning their entire context budget on a loop.</p>
+<h3 id="a-real-example">A real example</h3>
+<p>Running <a href="https://huggingface.co/unsloth/Qwen3-Coder-Next-GGUF">qwen3-coder-next</a> locally in LM Studio with a 32K context window, Swival can complete multi-file refactoring tasks that involve reading several files, planning changes, and editing across modules.</p>
+<p>The agent typically fires context compaction two or three times during a task like this. Without compaction and durable state, the same model stalls or hallucinates partway through because the context fills up and earlier reasoning is lost.</p>
+<p>This is not a benchmark claim. It is a description of what happens in practice when the agent is designed around the model's real constraints instead of assuming they don't exist. You can reproduce it yourself with <code>swival --report run.json</code> to capture a full telemetry report of the run, including compaction events, tool usage, and timing. See <a href="reports.html">Reports</a> for the details.</p>
+<p>If Swival struggles with a model you care about, tell us. Before blaming the model, we'll look for ways to make the agent more forgiving and effective with it. That is what it means to be designed for imperfect models: the agent takes responsibility for compensating, not just connecting.</p>
+<h2 id="related-docs">Related docs</h2>
+<ul>
+<li><a href="context-management.html">Context Management</a> covers the full compaction pipeline, snapshot tool, and configuration options.</li>
+<li><a href="tools.html">Tools</a> documents every built-in tool, including <code>think</code>, <code>todo</code>, and <code>snapshot</code>.</li>
+<li><a href="providers.html">Providers</a> explains how to connect Swival to LM Studio, HuggingFace, OpenRouter, and other backends.</li>
+<li><a href="reports.html">Reports</a> explains the <code>--report</code> flag and the JSON telemetry format.</li>
+</ul>
+        </article>
+    </div>
+    <footer class="site-footer">
+        MIT License &middot;
+        <a href="https://github.com/swival/swival">GitHub</a>
+    </footer>
+</body>
+</html>

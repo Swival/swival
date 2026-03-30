@@ -266,6 +266,30 @@ img {
     line-height: 1.5;
 }
 
+/* Open models story */
+.open-models-story {
+    padding: 3rem 1.5rem;
+    max-width: var(--max-width);
+    margin: 0 auto;
+}
+
+.open-models-story h2 {
+    font-size: 1.5rem;
+    margin-bottom: 1.5rem;
+    color: var(--text);
+}
+
+.open-models-story p {
+    font-size: 0.95rem;
+    line-height: 1.7;
+    color: #555;
+    margin-bottom: 1rem;
+}
+
+.open-models-story a {
+    color: var(--blue);
+}
+
 /* Quickstart */
 .quickstart {
     padding: 3rem 1.5rem;
