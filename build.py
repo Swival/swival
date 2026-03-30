@@ -50,8 +50,8 @@ NAV = [
             ),
             (
                 "open-models",
-                "Designed for Imperfect Models",
-                "Why Swival is built to handle smaller, open, and imperfect models",
+                "Not Just for Frontier Models",
+                "Why Swival is built to work well with small and open models too",
             ),
         ],
     ),

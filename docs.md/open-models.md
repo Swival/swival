@@ -1,10 +1,10 @@
-# Designed for Imperfect Models
+# Not Just for Frontier Models
 
 Most coding agents are built and tested against one or two frontier models.
 
 They assume clean tool calls, reliable instruction following, and context windows measured in hundreds of thousands of tokens. When those assumptions hold, things work fine. When they don't, the agent falls apart in ways that look like the model's fault but are really the agent's.
 
-Swival takes the opposite approach. It assumes the model will be messy, forgetful, and working with limited space. Then it tries to keep the task moving anyway.
+Swival takes the opposite approach. It assumes the model will be working with tighter limits and rougher edges. Then it tries to keep the task moving anyway.
 
 ## What goes wrong with small models
 
@@ -38,7 +38,7 @@ The agent typically fires context compaction two or three times during a task li
 
 This is not a benchmark claim. It is a description of what happens in practice when the agent is designed around the model's real constraints instead of assuming they don't exist. You can reproduce it yourself with `swival --report run.json` to capture a full telemetry report of the run, including compaction events, tool usage, and timing. See [Reports](reports.md) for the details.
 
-If Swival struggles with a model you care about, tell us. Before blaming the model, we'll look for ways to make the agent more forgiving and effective with it. That is what it means to be designed for imperfect models: the agent takes responsibility for compensating, not just connecting.
+If Swival struggles with a model you care about, tell us. Before blaming the model, we'll look for ways to make the agent more forgiving and effective with it. That is what it means to build for small and open models, not just frontier ones: the agent takes responsibility for compensating, not just connecting.
 
 ## Related docs
 

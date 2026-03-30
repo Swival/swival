@@ -3,16 +3,16 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Designed for Imperfect Models — Swival</title>
-    <meta name="description" content="Designed for Imperfect Models — Swival documentation">
+    <title>Not Just for Frontier Models — Swival</title>
+    <meta name="description" content="Not Just for Frontier Models — Swival documentation">
     <meta property="og:type" content="article">
-    <meta property="og:title" content="Designed for Imperfect Models — Swival">
-    <meta property="og:description" content="Designed for Imperfect Models — Swival documentation">
+    <meta property="og:title" content="Not Just for Frontier Models — Swival">
+    <meta property="og:description" content="Not Just for Frontier Models — Swival documentation">
     <meta property="og:image" content="https://swival.dev/img/logo.png">
     <meta property="og:url" content="https://swival.dev/pages/open-models.html">
     <meta name="twitter:card" content="summary">
-    <meta name="twitter:title" content="Designed for Imperfect Models — Swival">
-    <meta name="twitter:description" content="Designed for Imperfect Models — Swival documentation">
+    <meta name="twitter:title" content="Not Just for Frontier Models — Swival">
+    <meta name="twitter:description" content="Not Just for Frontier Models — Swival documentation">
     <meta name="twitter:image" content="https://swival.dev/img/logo.png">
     <link rel="icon" href="../favicon.ico">
     <link rel="stylesheet" href="../css/style.css">
@@ -38,7 +38,7 @@
 <li><a href="usage.html">Usage</a></li>
 <li><a href="tools.html">Tools</a></li>
 <li><a href="context-management.html">Context Management</a></li>
-<li><a href="open-models.html" class="active">Designed for Imperfect Models</a></li>
+<li><a href="open-models.html" class="active">Not Just for Frontier Models</a></li>
 </ul>
 </div>
 <div class="sidebar-section">
@@ -68,10 +68,10 @@
 </div>
         </aside>
         <article class="docs-content">
-            <h1 id="designed-for-imperfect-models">Designed for Imperfect Models</h1>
+            <h1 id="not-just-for-frontier-models">Not Just for Frontier Models</h1>
 <p>Most coding agents are built and tested against one or two frontier models.</p>
 <p>They assume clean tool calls, reliable instruction following, and context windows measured in hundreds of thousands of tokens. When those assumptions hold, things work fine. When they don't, the agent falls apart in ways that look like the model's fault but are really the agent's.</p>
-<p>Swival takes the opposite approach. It assumes the model will be messy, forgetful, and working with limited space. Then it tries to keep the task moving anyway.</p>
+<p>Swival takes the opposite approach. It assumes the model will be working with tighter limits and rougher edges. Then it tries to keep the task moving anyway.</p>
 <h2 id="what-goes-wrong-with-small-models">What goes wrong with small models</h2>
 <p>Smaller and open models hit a few recurring problems when used inside an agent loop. A 16K or 32K context window fills up fast once you add a system prompt, tool schemas, a few file reads, and some back-and-forth. Once the window is full, the agent either crashes or silently drops context and starts hallucinating.</p>
 <p>The model might omit required fields in tool calls, nest arguments wrong, or produce JSON that doesn't parse. Formatting rules in the system prompt get ignored. And longer tasks require the model to remember what it already tried, what files it changed, and what it planned to do next. Smaller models lose this thread more easily, especially after compaction or interruption.</p>
@@ -88,7 +88,7 @@
 <p>Running <a href="https://huggingface.co/unsloth/Qwen3-Coder-Next-GGUF">qwen3-coder-next</a> locally in LM Studio with a 32K context window, Swival can complete multi-file refactoring tasks that involve reading several files, planning changes, and editing across modules.</p>
 <p>The agent typically fires context compaction two or three times during a task like this. Without compaction and durable state, the same model stalls or hallucinates partway through because the context fills up and earlier reasoning is lost.</p>
 <p>This is not a benchmark claim. It is a description of what happens in practice when the agent is designed around the model's real constraints instead of assuming they don't exist. You can reproduce it yourself with <code>swival --report run.json</code> to capture a full telemetry report of the run, including compaction events, tool usage, and timing. See <a href="reports.html">Reports</a> for the details.</p>
-<p>If Swival struggles with a model you care about, tell us. Before blaming the model, we'll look for ways to make the agent more forgiving and effective with it. That is what it means to be designed for imperfect models: the agent takes responsibility for compensating, not just connecting.</p>
+<p>If Swival struggles with a model you care about, tell us. Before blaming the model, we'll look for ways to make the agent more forgiving and effective with it. That is what it means to build for small and open models, not just frontier ones: the agent takes responsibility for compensating, not just connecting.</p>
 <h2 id="related-docs">Related docs</h2>
 <ul>
 <li><a href="context-management.html">Context Management</a> covers the full compaction pipeline, snapshot tool, and configuration options.</li>

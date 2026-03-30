@@ -2,6 +2,15 @@
 
 All notable user-facing changes to Swival.
 
+## 0.10.2
+
+- Named LLM profiles have been added: `[profiles.NAME]` tables can be defined
+  in config files to bundle provider, model, API key, and other LLM settings
+  under a short name. Use `--profile NAME` to select one at runtime, or set
+  `active_profile` in config for a default. `--list-profiles` prints all
+  available profiles.
+- Provider error messages now include the model ID for easier debugging.
+
 ## 0.10.1
 
 - Filesystem access controls have been decoupled from `--yolo`:
