@@ -82,7 +82,7 @@
 <pre><code class="language-sh">swival --sandbox agentfs --no-sandbox-auto-session &quot;One-off task&quot; --yolo
 </code></pre>
 <p>After a run, Swival prints a diff hint showing how to review changes (unless <code>--quiet</code> is set):</p>
-<pre><code>  Review changes: agentfs diff swival-a1b2c3d4e5f6
+<pre><code class="language-text">  Review changes: agentfs diff swival-a1b2c3d4e5f6
 </code></pre>
 <p>This requires the <code>agentfs</code> binary on PATH. If it is not found, Swival exits with an actionable error. See <a href="agentfs.html">Using Swival With AgentFS</a> for more workflows.</p>
 <h3 id="strict-read-mode">Strict Read Mode</h3>
@@ -96,7 +96,7 @@
 </code></pre>
 <h2 id="base-directory-enforcement">Base Directory Enforcement</h2>
 <p>All filesystem operations are anchored to <code>--base-dir</code>, which defaults to the current directory. Path checks resolve both the base directory and target path through symlinks, then verify that the resolved target remains inside an allowed root. If a path escapes through traversal or symlink indirection, the operation fails.</p>
-<p>Even in YOLO mode, Swival blocks the filesystem root itself. You cannot grant the agent unrestricted access to <code>/</code> by accident.</p>
+<p>Even with <code>--files all</code>, Swival blocks the filesystem root itself. You cannot grant the agent access to <code>/</code> by accident.</p>
 <h2 id="additional-allowed-directories">Additional Allowed Directories</h2>
 <p>When the agent needs full access outside <code>--base-dir</code>, pass one or more <code>--add-dir</code> flags.</p>
 <pre><code class="language-sh">swival --add-dir ~/shared-data --add-dir /opt/configs &quot;Update the config&quot;
@@ -115,8 +115,15 @@
 </code></pre>
 <p>At startup, each basename is resolved to an absolute path using <code>which</code>. If a command cannot be found, Swival exits with an error. If a command resolves inside your base directory, Swival rejects it so the agent cannot modify and execute workspace binaries in one session.</p>
 <p>At runtime in whitelist mode, commands must be passed as argument arrays, not shell strings. This removes shell interpolation and injection risk from ordinary command calls.</p>
-<p>In YOLO mode, both the filesystem sandbox and the command whitelist are disabled. The agent can read or write any non-root path and run arbitrary commands.</p>
-<pre><code class="language-sh">swival --yolo &quot;do whatever you want&quot;
+<h2 id="filesystem-access-policy">Filesystem Access Policy</h2>
+<p><code>--files</code> controls what the filesystem tools can access. It accepts <code>"some"</code> (the default), <code>"all"</code>, or <code>"none"</code>.</p>
+<p>In the default mode (<code>--files some</code>), filesystem tools are restricted to the base directory and any <code>--add-dir</code> / <code>--add-dir-ro</code> paths. In <code>--files all</code> mode, the agent can read or write any non-root path. In <code>--files none</code> mode, only the <code>.swival/</code> directory is accessible through tools — the agent can still think, run commands, and fetch URLs.</p>
+<pre><code class="language-sh">swival --files all &quot;do whatever you want&quot;
+swival --files none --commands ls,git &quot;read-only analysis&quot;
+</code></pre>
+<p><code>--yolo</code> is shorthand for <code>--files all --commands all</code>. If you also pass an explicit <code>--files</code> or <code>--commands</code>, the explicit flag wins.</p>
+<pre><code class="language-sh">swival --yolo &quot;unrestricted access&quot;
+swival --yolo --files none &quot;commands only, no file access&quot;
 </code></pre>
 <h2 id="read-before-write-guard">Read-Before-Write Guard</h2>
 <p>By default, Swival blocks writes to existing files unless that file has already been read or previously written during the current session. This reduces accidental overwrites when the model has not inspected current file contents.</p>

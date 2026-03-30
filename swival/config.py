@@ -40,6 +40,7 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "retries": int,
     "system_prompt": str,
     "no_system_prompt": bool,
+    "files": str,
     "commands": (str, list),
     "yolo": bool,
     "allowed_dirs": list,
@@ -113,6 +114,7 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "retries": 5,
     "system_prompt": None,
     "no_system_prompt": False,
+    "files": "some",
     "commands": "all",
     "yolo": False,
     "add_dir": [],
@@ -206,6 +208,11 @@ def _validate_config(config: dict, source: str) -> None:
             raise ConfigError(
                 f"{source}: {key!r} expected {_type_name(expected)}, got {type(value).__name__}"
             )
+        if key == "files":
+            if value not in ("none", "some", "all"):
+                raise ConfigError(
+                    f"{source}: 'files' must be 'none', 'some', or 'all', got {value!r}"
+                )
         if key == "commands":
             if isinstance(value, str) and value not in ("all", "none"):
                 raise ConfigError(
@@ -802,6 +809,7 @@ def args_to_session_kwargs(args, base_dir: str) -> dict:
         "temperature",
         "top_p",
         "seed",
+        "files",
         "yolo",
         "commands",
         "system_prompt",
@@ -963,8 +971,9 @@ def generate_config(project: bool = False) -> str:
         '# sandbox_session = "my-session"  # agentfs session ID (optional)',
         "# sandbox_strict_read = false",
         "# sandbox_auto_session = true",
+        '# files = "some"                  # "some" (default, workspace) | "all" (unrestricted) | "none" (.swival/ only)',
         '# commands = "all"                # "all" (default) | "none" | ["ls", "git", "python3"]',
-        "# yolo = false",
+        "# yolo = false                    # shorthand for files = all + commands = all",
         '# allowed_dirs = ["../shared-lib", "/data/assets"]',
         '# allowed_dirs_ro = ["/reference/docs", "~/datasets"]',
         "# no_read_guard = false",

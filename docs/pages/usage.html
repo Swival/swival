@@ -137,10 +137,11 @@ cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5
 <p>Useful for long-running sessions.</p>
 <h3 id="sandboxing-flags">Sandboxing Flags</h3>
 <p><code>--base-dir</code> defines the base directory for file tools and defaults to the current directory.</p>
+<p><code>--files</code> controls filesystem tool access. Accepts <code>"some"</code> (the default, workspace only), <code>"all"</code> (unrestricted), or <code>"none"</code> (<code>.swival/</code> directory only). With <code>--files none</code>, the agent can still run commands and fetch URLs but cannot read or write project files.</p>
 <p><code>--commands</code> controls command execution. Accepts <code>"all"</code> (unrestricted, the default), <code>"none"</code> (disabled), or a comma-separated whitelist.</p>
 <p><code>--add-dir</code> grants read and write access to additional directories and can be repeated.</p>
 <p><code>--add-dir-ro</code> grants read-only access to additional directories and can be repeated. The agent can read, list, and grep files in these directories but cannot write, edit, or delete them.</p>
-<p><code>--yolo</code> disables filesystem sandbox checks and implies <code>--commands all</code>, except that filesystem root access is still blocked.</p>
+<p><code>--yolo</code> is shorthand for <code>--files all --commands all</code>. Explicit <code>--files</code> or <code>--commands</code> flags take precedence over <code>--yolo</code>. Filesystem root access is always blocked.</p>
 <p><code>--sandbox</code> selects the sandbox backend. The default is <code>builtin</code>, which uses application-layer path guards. Set it to <code>agentfs</code> to re-exec Swival inside an <a href="agentfs.html">AgentFS</a> overlay for OS-enforced write isolation. Requires the <code>agentfs</code> binary on PATH.</p>
 <p><code>--sandbox-session</code> sets an AgentFS session ID so sandbox state persists across runs. Only valid with <code>--sandbox agentfs</code>.</p>
 <p><code>--sandbox-strict-read</code> enables strict read isolation inside the AgentFS sandbox. When set, the agent process can only read files that have been explicitly allowed, rather than having unrestricted read access to the host filesystem. This requires an AgentFS version with strict read support. If the installed version does not support it, Swival exits with an error. Only valid with <code>--sandbox agentfs</code>.</p>

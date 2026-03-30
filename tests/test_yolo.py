@@ -1,4 +1,4 @@
-"""Tests for --yolo (unrestricted) mode."""
+"""Tests for --yolo (files_mode) mode."""
 
 import os
 import shutil
@@ -65,21 +65,21 @@ class TestSafeResolveUnrestricted:
     def test_safe_resolve_unrestricted(self, setup_dirs):
         base, outside = setup_dirs
         outside_file = outside / "out.txt"
-        # Without unrestricted, this raises
+        # Without files_mode="all", this raises
         with pytest.raises(ValueError):
             safe_resolve(str(outside_file), str(base))
-        # With unrestricted, it returns the resolved path
-        result = safe_resolve(str(outside_file), str(base), unrestricted=True)
+        # With files_mode="all", it returns the resolved path
+        result = safe_resolve(str(outside_file), str(base), files_mode="all")
         assert result == outside_file.resolve()
 
     def test_safe_resolve_unrestricted_blocks_root(self, setup_dirs):
         base, _ = setup_dirs
         with pytest.raises(ValueError, match="filesystem root"):
-            safe_resolve("/", str(base), unrestricted=True)
+            safe_resolve("/", str(base), files_mode="all")
 
     def test_safe_resolve_unrestricted_allows_subdirs_of_root(self, setup_dirs):
         base, _ = setup_dirs
-        result = safe_resolve("/opt", str(base), unrestricted=True)
+        result = safe_resolve("/opt", str(base), files_mode="all")
         assert result == Path("/opt").resolve()
 
     def test_is_within_base_unrestricted(self, tmp_path):
@@ -87,7 +87,7 @@ class TestSafeResolveUnrestricted:
         base = tmp_path / "base"
         base.mkdir()
         assert not _is_within_base(some_path, base)
-        assert _is_within_base(some_path, base, unrestricted=True)
+        assert _is_within_base(some_path, base, files_mode="all")
 
 
 # ---------------------------------------------------------------------------
@@ -96,23 +96,23 @@ class TestSafeResolveUnrestricted:
 
 
 class TestRootBlocked:
-    """Even in unrestricted mode, operating on / is blocked."""
+    """Even in files_mode='all', operating on / is blocked."""
 
     def test_read_file_root_blocked(self, setup_dirs):
         base, _ = setup_dirs
-        result = _read_file("/", str(base), unrestricted=True)
+        result = _read_file("/", str(base), files_mode="all")
         assert result.startswith("error:")
         assert "filesystem root" in result
 
     def test_list_files_root_blocked(self, setup_dirs):
         base, _ = setup_dirs
-        result = _list_files("*", "/", str(base), unrestricted=True)
+        result = _list_files("*", "/", str(base), files_mode="all")
         assert result.startswith("error:")
         assert "filesystem root" in result
 
     def test_grep_root_blocked(self, setup_dirs):
         base, _ = setup_dirs
-        result = _grep(".", "/", str(base), unrestricted=True)
+        result = _grep(".", "/", str(base), files_mode="all")
         assert result.startswith("error:")
         assert "filesystem root" in result
 
@@ -120,7 +120,7 @@ class TestRootBlocked:
 class TestFileOpsOutsideBase:
     def test_read_outside_base_dir(self, setup_dirs):
         base, outside = setup_dirs
-        result = _read_file(str(outside / "out.txt"), str(base), unrestricted=True)
+        result = _read_file(str(outside / "out.txt"), str(base), files_mode="all")
         assert "outside base" in result
         assert not result.startswith("error:")
 
@@ -132,7 +132,7 @@ class TestFileOpsOutsideBase:
     def test_write_outside_base_dir(self, setup_dirs):
         base, outside = setup_dirs
         target = outside / "new.txt"
-        result = _write_file(str(target), "hello yolo", str(base), unrestricted=True)
+        result = _write_file(str(target), "hello yolo", str(base), files_mode="all")
         assert "Wrote" in result
         assert target.read_text(encoding="utf-8") == "hello yolo"
 
@@ -149,7 +149,7 @@ class TestFileOpsOutsideBase:
             "outside base",
             "edited content",
             str(base),
-            unrestricted=True,
+            files_mode="all",
         )
         assert result == f"Edited {outside / 'out.txt'}"
         assert (outside / "out.txt").read_text(encoding="utf-8") == "edited content"
@@ -173,7 +173,7 @@ class TestFileOpsOutsideBase:
 class TestListFilesOutsideBase:
     def test_list_files_outside_base_dir(self, setup_dirs):
         base, outside = setup_dirs
-        result = _list_files("*.txt", str(outside), str(base), unrestricted=True)
+        result = _list_files("*.txt", str(outside), str(base), files_mode="all")
         assert "out.txt" in result
         assert not result.startswith("error:")
         # Should use absolute path since it's outside base
@@ -193,7 +193,7 @@ class TestListFilesOutsideBase:
 class TestGrepOutsideBase:
     def test_grep_outside_base_dir(self, setup_dirs):
         base, outside = setup_dirs
-        result = _grep("outside", str(outside), str(base), unrestricted=True)
+        result = _grep("outside", str(outside), str(base), files_mode="all")
         assert "outside base" in result
         assert not result.startswith("error:")
         assert "No matches" not in result
@@ -207,7 +207,7 @@ class TestGrepOutsideBase:
 
 
 # ---------------------------------------------------------------------------
-# Absolute patterns in unrestricted mode
+# Absolute patterns in files_mode="all"
 # ---------------------------------------------------------------------------
 
 
@@ -249,17 +249,19 @@ class TestSplitAbsoluteGlob:
 
 
 class TestAbsolutePatternUnrestricted:
-    """In yolo mode, absolute glob patterns should work for list_files and grep."""
+    """In files_mode="all", absolute glob patterns should work for list_files and grep."""
 
     def test_list_files_absolute_pattern(self, setup_dirs):
         base, outside = setup_dirs
-        result = _list_files(f"{outside}/*.txt", ".", str(base), unrestricted=True)
+        result = _list_files(f"{outside}/*.txt", ".", str(base), files_mode="all")
         assert "out.txt" in result
         assert not result.startswith("error:")
 
-    def test_list_files_absolute_pattern_blocked_without_yolo(self, setup_dirs):
+    def test_list_files_absolute_pattern_blocked_without_files_mode_all(
+        self, setup_dirs
+    ):
         base, outside = setup_dirs
-        result = _list_files(f"{outside}/*.txt", ".", str(base), unrestricted=False)
+        result = _list_files(f"{outside}/*.txt", ".", str(base), files_mode="some")
         assert result.startswith("error:")
         assert "outside base directory" in result
 
@@ -268,24 +270,24 @@ class TestAbsolutePatternUnrestricted:
         sub = outside / "deep"
         sub.mkdir()
         (sub / "nested.py").write_text("x = 1")
-        result = _list_files(f"{outside}/**/*.py", ".", str(base), unrestricted=True)
+        result = _list_files(f"{outside}/**/*.py", ".", str(base), files_mode="all")
         assert "nested.py" in result
 
-    def test_grep_absolute_include_unrestricted(self, setup_dirs):
+    def test_grep_absolute_include_files_mode_all(self, setup_dirs):
         base, outside = setup_dirs
-        # grep's include parameter should accept absolute-looking patterns in yolo
+        # grep's include parameter should accept absolute-looking patterns in files_mode="all"
         result = _grep(
             "outside",
             str(outside),
             str(base),
             include="/some/abs/*.txt",  # would normally be rejected
-            unrestricted=True,
+            files_mode="all",
         )
         # The include won't actually match filenames (it's a fnmatch against
         # basenames), but the point is it doesn't error out.
         assert not result.startswith("error:")
 
-    def test_grep_absolute_include_blocked_without_yolo(self, setup_dirs):
+    def test_grep_absolute_include_blocked_without_files_mode_all(self, setup_dirs):
         base, outside = setup_dirs
         result = _grep(
             "outside",
@@ -445,7 +447,7 @@ class TestRunCommandUnrestricted:
 
 
 # ---------------------------------------------------------------------------
-# dispatch with yolo=True
+# dispatch with files_mode="all"
 # ---------------------------------------------------------------------------
 
 
@@ -456,7 +458,7 @@ class TestDispatchYolo:
             "read_file",
             {"file_path": str(outside / "out.txt")},
             str(base),
-            yolo=True,
+            files_mode="all",
         )
         assert "outside base" in result
 
@@ -465,7 +467,8 @@ class TestDispatchYolo:
             "run_command",
             {"command": ["echo", "dispatch-yolo"]},
             str(tmp_path),
-            yolo=True,
+            files_mode="all",
+            commands_unrestricted=True,
             resolved_commands={},
         )
         assert "dispatch-yolo" in result

@@ -343,6 +343,7 @@ class TestConfigIntegration:
             temperature=None,
             top_p=1.0,
             seed=None,
+            files="some",
             yolo=False,
             commands=None,
             system_prompt=None,

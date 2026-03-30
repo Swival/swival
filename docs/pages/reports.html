@@ -87,7 +87,7 @@
     &quot;max_turns&quot;: 0,
     &quot;max_output_tokens&quot;: 32768,
     &quot;context_length&quot;: null,
-    &quot;yolo&quot;: false,
+    &quot;files&quot;: &quot;some&quot;,
     &quot;commands&quot;: &quot;none&quot;,
     &quot;max_review_rounds&quot;: 15,
     &quot;skills_discovered&quot;: [],
@@ -125,7 +125,7 @@
 <p><code>version</code> is the schema version and is currently <code>1</code>. <code>timestamp</code> is the run completion time in UTC ISO 8601 format. <code>task</code> is the original question string passed on the command line. <code>model</code> is the resolved model identifier that was actually used. <code>provider</code> is one of <code>lmstudio</code>, <code>huggingface</code>, <code>openrouter</code>, <code>chatgpt</code>, <code>google</code>, <code>generic</code>, or <code>command</code>.</p>
 <p><code>settings</code> captures run configuration. <code>sandbox</code> captures the sandbox backend in use. <code>result</code> captures outcome and exit semantics. <code>stats</code> captures aggregate counters. <code>timeline</code> captures ordered event records.</p>
 <h3 id="settings"><code>settings</code></h3>
-<p><code>temperature</code> stores the sampling temperature or <code>null</code> when omitted. <code>top_p</code> stores nucleus sampling. <code>seed</code> stores the random seed or <code>null</code>. <code>max_turns</code> and <code>max_output_tokens</code> store turn and output-token limits. <code>context_length</code> stores effective context length after provider resolution. <code>yolo</code> indicates whether <code>--yolo</code> was active.</p>
+<p><code>temperature</code> stores the sampling temperature or <code>null</code> when omitted. <code>top_p</code> stores nucleus sampling. <code>seed</code> stores the random seed or <code>null</code>. <code>max_turns</code> and <code>max_output_tokens</code> store turn and output-token limits. <code>context_length</code> stores effective context length after provider resolution. <code>files</code> records the filesystem access policy: <code>"some"</code> (workspace only, the default), <code>"all"</code> (unrestricted), or <code>"none"</code> (<code>.swival/</code> only).</p>
 <p><code>commands</code> records the configured command policy: <code>"all"</code> (unrestricted, the default), <code>"none"</code> (disabled), or a sorted list of whitelisted basenames. <code>max_review_rounds</code> records the reviewer retry limit. <code>skills_discovered</code> records skill names discovered at startup. <code>instructions_loaded</code> records loaded instruction files as absolute paths (e.g. the user-level <code>AGENTS.md</code> from <code>~/.config/swival/</code>, the cross-agent <code>~/.agents/AGENTS.md</code>, and the project-level files).</p>
 <h3 id="sandbox"><code>sandbox</code></h3>
 <p><code>mode</code> is always present and is <code>builtin</code> (application-layer path guards) or <code>agentfs</code> (OS-enforced write isolation). <code>session</code> appears when an AgentFS session ID is active. When <code>mode</code> is <code>agentfs</code>, <code>strict_read</code> is always present (whether strict read isolation is enabled). Additional fields may also appear: <code>agentfs_version</code> (the AgentFS binary version) and <code>diff_hint</code> (a hint for reviewing changes).</p>

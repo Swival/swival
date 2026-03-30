@@ -28,7 +28,7 @@ swival --sandbox agentfs --no-sandbox-auto-session "One-off task" --yolo
 
 After a run, Swival prints a diff hint showing how to review changes (unless `--quiet` is set):
 
-```
+```text
   Review changes: agentfs diff swival-a1b2c3d4e5f6
 ```
 
@@ -55,7 +55,7 @@ sandbox-exec -p '(version 1)(allow default)(deny network*)' \
 
 All filesystem operations are anchored to `--base-dir`, which defaults to the current directory. Path checks resolve both the base directory and target path through symlinks, then verify that the resolved target remains inside an allowed root. If a path escapes through traversal or symlink indirection, the operation fails.
 
-Even in YOLO mode, Swival blocks the filesystem root itself. You cannot grant the agent unrestricted access to `/` by accident.
+Even with `--files all`, Swival blocks the filesystem root itself. You cannot grant the agent access to `/` by accident.
 
 ## Additional Allowed Directories
 
@@ -93,10 +93,22 @@ At startup, each basename is resolved to an absolute path using `which`. If a co
 
 At runtime in whitelist mode, commands must be passed as argument arrays, not shell strings. This removes shell interpolation and injection risk from ordinary command calls.
 
-In YOLO mode, both the filesystem sandbox and the command whitelist are disabled. The agent can read or write any non-root path and run arbitrary commands.
+## Filesystem Access Policy
+
+`--files` controls what the filesystem tools can access. It accepts `"some"` (the default), `"all"`, or `"none"`.
+
+In the default mode (`--files some`), filesystem tools are restricted to the base directory and any `--add-dir` / `--add-dir-ro` paths. In `--files all` mode, the agent can read or write any non-root path. In `--files none` mode, only the `.swival/` directory is accessible through tools — the agent can still think, run commands, and fetch URLs.
 
 ```sh
-swival --yolo "do whatever you want"
+swival --files all "do whatever you want"
+swival --files none --commands ls,git "read-only analysis"
+```
+
+`--yolo` is shorthand for `--files all --commands all`. If you also pass an explicit `--files` or `--commands`, the explicit flag wins.
+
+```sh
+swival --yolo "unrestricted access"
+swival --yolo --files none "commands only, no file access"
 ```
 
 ## Read-Before-Write Guard

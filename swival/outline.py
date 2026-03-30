@@ -15,7 +15,7 @@ def outline(
     depth: int = 2,
     extra_read_roots: list[Path] = (),
     extra_write_roots: list[Path] = (),
-    unrestricted: bool = False,
+    files_mode: str = "some",
     **kwargs,
 ) -> str:
     try:
@@ -29,7 +29,7 @@ def outline(
             base_dir,
             extra_read_roots=extra_read_roots,
             extra_write_roots=extra_write_roots,
-            unrestricted=unrestricted,
+            files_mode=files_mode,
         )
     except ValueError as exc:
         return f"error: {exc}"
@@ -241,7 +241,7 @@ def outline_files(
     default_depth: int = 2,
     extra_read_roots: list[Path] = (),
     extra_write_roots: list[Path] = (),
-    unrestricted: bool = False,
+    files_mode: str = "some",
 ) -> str:
     """Outline multiple files. Returns structured sections matching read_multiple_files format."""
     if not files:
@@ -298,7 +298,7 @@ def outline_files(
             depth=depth,
             extra_read_roots=extra_read_roots,
             extra_write_roots=extra_write_roots,
-            unrestricted=unrestricted,
+            files_mode=files_mode,
         )
 
         is_error = result.startswith("error:")

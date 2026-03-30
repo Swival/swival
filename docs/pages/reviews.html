@@ -101,7 +101,7 @@
     --self-review \
     &quot;task&quot;
 </code></pre>
-<p>The synthesized reviewer command inherits <code>--provider</code>, <code>--model</code>, <code>--base-url</code>, <code>--yolo</code>, <code>--skills-dir</code>, <code>--max-context-tokens</code>, and <code>--max-output-tokens</code> from the outer invocation. It always adds <code>--reviewer-mode</code> and <code>--quiet</code>.</p>
+<p>The synthesized reviewer command inherits <code>--provider</code>, <code>--model</code>, <code>--base-url</code>, <code>--files</code>, <code>--skills-dir</code>, <code>--max-context-tokens</code>, and <code>--max-output-tokens</code> from the outer invocation. It always adds <code>--reviewer-mode</code> and <code>--quiet</code>.</p>
 <p>API keys are not placed on the reviewer command line to avoid exposing secrets in process listings. If <code>--api-key</code> was set on the outer invocation, Swival passes it to the reviewer subprocess via the provider-specific environment variable (<code>HF_TOKEN</code>, <code>OPENROUTER_API_KEY</code>, <code>OPENAI_API_KEY</code> for generic, <code>GEMINI_API_KEY</code> for google, or <code>CHATGPT_API_KEY</code>). Keys already set via environment variables are inherited automatically.</p>
 <p><code>--report</code> and <code>--cache</code> are not mirrored because reviewer mode does not initialize report or cache infrastructure.</p>
 <p><code>--self-review</code> is incompatible with <code>--reviewer</code>, <code>--repl</code>, and <code>--reviewer-mode</code>. It can be set in <code>swival.toml</code>:</p>

@@ -96,6 +96,7 @@ print(answer)
     top_p: float = 1.0,
     seed: int | None = None,
     commands: list[str] | str | None = &quot;all&quot;,
+    files: str = &quot;some&quot;,
     yolo: bool = False,
     verbose: bool = False,
     system_prompt: str | None = None,
@@ -184,12 +185,16 @@ print(answer)
 <td>Sampling temperature. <code>None</code> uses the provider's default.</td>
 </tr>
 <tr>
+<td><code>files</code></td>
+<td>Filesystem access policy: <code>"some"</code> (workspace only, the default), <code>"all"</code> (unrestricted), or <code>"none"</code> (<code>.swival/</code> only).</td>
+</tr>
+<tr>
 <td><code>commands</code></td>
 <td>Command execution policy: <code>"all"</code> (unrestricted, the default), <code>"none"</code> (disabled), or a list of whitelisted command names.</td>
 </tr>
 <tr>
 <td><code>yolo</code></td>
-<td>Disable command restrictions entirely.</td>
+<td>Shorthand for <code>files="all"</code>. Explicit <code>files</code> takes precedence.</td>
 </tr>
 <tr>
 <td><code>system_prompt</code></td>

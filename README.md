@@ -222,7 +222,7 @@ Full documentation is available at [swival.dev](https://swival.dev/).
 - [Tools](docs.md/tools.md) -- what the agent can do: file ops, search, editing,
   web fetching, thinking, task tracking, command execution
 - [Safety and Sandboxing](docs.md/safety-and-sandboxing.md) -- path resolution,
-  symlink protection, command execution modes, YOLO mode
+  symlink protection, filesystem access modes, command execution modes
 - [Skills](docs.md/skills.md) -- creating and using SKILL.md-based agent skills
 - [Customization](docs.md/customization.md) -- config files, project instructions,
   system prompt overrides, tuning parameters

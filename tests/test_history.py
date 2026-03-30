@@ -267,6 +267,7 @@ class TestIntegration:
             no_skills=True,
             add_dir=[],
             add_dir_ro=[],
+            files="some",
             yolo=False,
             color=False,
             no_color=True,

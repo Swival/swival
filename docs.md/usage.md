@@ -135,13 +135,15 @@ Useful for long-running sessions.
 
 `--base-dir` defines the base directory for file tools and defaults to the current directory.
 
+`--files` controls filesystem tool access. Accepts `"some"` (the default, workspace only), `"all"` (unrestricted), or `"none"` (`.swival/` directory only). With `--files none`, the agent can still run commands and fetch URLs but cannot read or write project files.
+
 `--commands` controls command execution. Accepts `"all"` (unrestricted, the default), `"none"` (disabled), or a comma-separated whitelist.
 
 `--add-dir` grants read and write access to additional directories and can be repeated.
 
 `--add-dir-ro` grants read-only access to additional directories and can be repeated. The agent can read, list, and grep files in these directories but cannot write, edit, or delete them.
 
-`--yolo` disables filesystem sandbox checks and implies `--commands all`, except that filesystem root access is still blocked.
+`--yolo` is shorthand for `--files all --commands all`. Explicit `--files` or `--commands` flags take precedence over `--yolo`. Filesystem root access is always blocked.
 
 `--sandbox` selects the sandbox backend. The default is `builtin`, which uses application-layer path guards. Set it to `agentfs` to re-exec Swival inside an [AgentFS](agentfs.md) overlay for OS-enforced write isolation. Requires the `agentfs` binary on PATH.
 

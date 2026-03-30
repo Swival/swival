@@ -96,7 +96,7 @@ swival --commands ls,git,python3 "Run the tests"
 
 Timeout defaults to 30 seconds and is clamped to a maximum of 120 seconds. Inline command output is capped at 10 KB. Larger output is written to `.swival/cmd_output_*.txt` and hard-capped at 1 MB before writing to disk. Those files are cleaned up automatically after roughly ten minutes.
 
-When commands are set to `"all"` (the default) or when `--yolo` is active, command execution is unrestricted and Swival also accepts shell command strings through `/bin/sh -c` on Unix or `cmd.exe /c` on Windows.
+When commands are set to `"all"` (the default), command execution is unrestricted and Swival also accepts shell command strings through `/bin/sh -c` on Unix or `cmd.exe /c` on Windows.
 
 ## `use_skill`
 

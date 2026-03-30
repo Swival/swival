@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .agent import _InteractionPolicy, _apply_interaction_policy
+from .config import _UNSET
 from .report import ConfigError, ReportCollector
 from .snapshot import SnapshotState
 from .thinking import ThinkingState
@@ -60,7 +61,8 @@ class Session:
         temperature: float | None = None,
         top_p: float = 1.0,
         seed: int | None = None,
-        commands: str | list[str] | None = "all",
+        files: str | object = _UNSET,
+        commands: str | list[str] | None | object = _UNSET,
         yolo: bool = False,
         verbose: bool = False,
         system_prompt: str | None = None,
@@ -120,8 +122,14 @@ class Session:
         if retries < 1:
             raise ValueError("retries must be >= 1")
         self.retries = retries
+        # Resolve _UNSET defaults; yolo only upgrades when the caller didn't
+        # pass an explicit value (same semantics as the CLI path).
+        if files is _UNSET:
+            files = "all" if yolo else "some"
+        if commands is _UNSET:
+            commands = "all"
         self.commands = commands
-        self.yolo = yolo
+        self.files = files
         self.verbose = verbose
         self.system_prompt = system_prompt
         self.no_system_prompt = no_system_prompt
@@ -263,7 +271,7 @@ class Session:
 
         # Resolve commands
         cmds = self.commands
-        if self.yolo or cmds is None or cmds == "all":
+        if cmds is None or cmds == "all":
             self._resolved_commands = {}
             self._commands_unrestricted = True
         elif cmds == "none":
@@ -390,6 +398,7 @@ class Session:
             no_continue=not self.continue_here,
             provider=self.provider,
             command_tool_schemas=_command_tool_schemas,
+            files_mode=self.files,
         )
 
         # Clean up stale cmd_output files
@@ -475,7 +484,7 @@ class Session:
             skills_catalog=self._skills_catalog,
             skill_read_roots=state["skill_read_roots"],
             extra_write_roots=self._allowed_dir_paths,
-            yolo=self.yolo,
+            files_mode=self.files,
             commands_unrestricted=self._commands_unrestricted,
             verbose=self.verbose,
             llm_kwargs=self._llm_kwargs,
@@ -558,7 +567,7 @@ class Session:
                     "temperature": self.temperature,
                     "top_p": self.top_p,
                     "seed": self.seed,
-                    "yolo": self.yolo,
+                    "files": self.files,
                 },
                 outcome=outcome,
                 answer=answer,

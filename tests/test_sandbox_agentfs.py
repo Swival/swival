@@ -52,6 +52,7 @@ def _make_args(**overrides):
         "no_system_prompt": _UNSET,
         "commands": _UNSET,
         "yolo": _UNSET,
+        "files": _UNSET,
         "add_dir": None,
         "add_dir_ro": None,
         "sandbox": _UNSET,

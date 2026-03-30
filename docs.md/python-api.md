@@ -39,6 +39,7 @@ Session(
     top_p: float = 1.0,
     seed: int | None = None,
     commands: list[str] | str | None = "all",
+    files: str = "some",
     yolo: bool = False,
     verbose: bool = False,
     system_prompt: str | None = None,
@@ -84,33 +85,34 @@ Session(
 
 All parameters are keyword-only. The important ones:
 
-| Parameter               | Description                                                                                                             |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `base_dir`              | Project root. Tools resolve paths relative to this.                                                                     |
-| `provider`              | LLM provider: `"lmstudio"`, `"huggingface"`, `"openrouter"`, `"chatgpt"`, `"google"`, `"generic"`, or a command string. |
-| `model`                 | Model identifier. Required for most providers; LM Studio auto-discovers.                                                |
-| `api_key`               | API key. Can also be set via provider-specific env vars.                                                                |
-| `base_url`              | Override the provider's default endpoint.                                                                               |
-| `max_turns`             | Maximum agent loop iterations before returning `exhausted=True`.                                                        |
-| `max_output_tokens`     | Maximum tokens per LLM response.                                                                                        |
-| `max_context_tokens`    | Hard cap on context window size. `None` uses the provider's default.                                                    |
-| `temperature`           | Sampling temperature. `None` uses the provider's default.                                                               |
+| Parameter               | Description                                                                                                                 |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `base_dir`              | Project root. Tools resolve paths relative to this.                                                                         |
+| `provider`              | LLM provider: `"lmstudio"`, `"huggingface"`, `"openrouter"`, `"chatgpt"`, `"google"`, `"generic"`, or a command string.     |
+| `model`                 | Model identifier. Required for most providers; LM Studio auto-discovers.                                                    |
+| `api_key`               | API key. Can also be set via provider-specific env vars.                                                                    |
+| `base_url`              | Override the provider's default endpoint.                                                                                   |
+| `max_turns`             | Maximum agent loop iterations before returning `exhausted=True`.                                                            |
+| `max_output_tokens`     | Maximum tokens per LLM response.                                                                                            |
+| `max_context_tokens`    | Hard cap on context window size. `None` uses the provider's default.                                                        |
+| `temperature`           | Sampling temperature. `None` uses the provider's default.                                                                   |
+| `files`                 | Filesystem access policy: `"some"` (workspace only, the default), `"all"` (unrestricted), or `"none"` (`.swival/` only).    |
 | `commands`              | Command execution policy: `"all"` (unrestricted, the default), `"none"` (disabled), or a list of whitelisted command names. |
-| `yolo`                  | Disable command restrictions entirely.                                                                                  |
-| `system_prompt`         | Override the default system prompt.                                                                                     |
-| `mcp_servers`           | MCP server configurations (see [MCP](mcp.html)).                                                                        |
-| `a2a_servers`           | A2A server configurations (see [A2A](a2a.html)).                                                                        |
-| `lifecycle_command`     | Shell command to run at startup and exit (see [Lifecycle Hooks](lifecycle-hooks.html)).                                 |
-| `lifecycle_fail_closed` | If `True`, hook failures raise `LifecycleError` instead of being silently ignored.                                      |
-| `llm_filter`            | Path to a filter script that can redact or block outbound LLM requests (see [Outbound LLM Filter](llm-filter.html)).    |
-| `subagents`             | Enable parallel subagent support (`spawn_subagent` / `check_subagents` tools).                                          |
-| `encrypt_secrets`       | Enable format-preserving secret encryption (see [Secret Encryption](secrets.html)).                                     |
-| `retries`               | Number of LLM call retries on transient failures. Must be >= 1.                                                         |
-| `history`               | Write `HISTORY.md` after successful runs.                                                                               |
-| `memory`                | Load memory files (`.swival/memory/`) into the system prompt.                                                           |
-| `prompt_cache`          | Inject explicit `cache_control` annotations for Anthropic/Gemini/Bedrock. Default `True`. Set `False` to opt out.       |
-| `cache`                 | Cache LLM responses to disk for deterministic replay.                                                                   |
-| `verbose`               | Print diagnostics to stderr.                                                                                            |
+| `yolo`                  | Shorthand for `files="all"`. Explicit `files` takes precedence.                                                             |
+| `system_prompt`         | Override the default system prompt.                                                                                         |
+| `mcp_servers`           | MCP server configurations (see [MCP](mcp.html)).                                                                            |
+| `a2a_servers`           | A2A server configurations (see [A2A](a2a.html)).                                                                            |
+| `lifecycle_command`     | Shell command to run at startup and exit (see [Lifecycle Hooks](lifecycle-hooks.html)).                                     |
+| `lifecycle_fail_closed` | If `True`, hook failures raise `LifecycleError` instead of being silently ignored.                                          |
+| `llm_filter`            | Path to a filter script that can redact or block outbound LLM requests (see [Outbound LLM Filter](llm-filter.html)).        |
+| `subagents`             | Enable parallel subagent support (`spawn_subagent` / `check_subagents` tools).                                              |
+| `encrypt_secrets`       | Enable format-preserving secret encryption (see [Secret Encryption](secrets.html)).                                         |
+| `retries`               | Number of LLM call retries on transient failures. Must be >= 1.                                                             |
+| `history`               | Write `HISTORY.md` after successful runs.                                                                                   |
+| `memory`                | Load memory files (`.swival/memory/`) into the system prompt.                                                               |
+| `prompt_cache`          | Inject explicit `cache_control` annotations for Anthropic/Gemini/Bedrock. Default `True`. Set `False` to opt out.           |
+| `cache`                 | Cache LLM responses to disk for deterministic replay.                                                                       |
+| `verbose`               | Print diagnostics to stderr.                                                                                                |
 
 Parameters not listed here correspond to the same-named CLI flags and config keys. See [Customization](customization.html) for the full config reference.
 

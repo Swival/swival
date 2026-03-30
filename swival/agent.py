@@ -1901,7 +1901,7 @@ def handle_tool_call(
     skills_catalog=None,
     skill_read_roots=None,
     extra_write_roots=None,
-    yolo=False,
+    files_mode="some",
     commands_unrestricted=False,
     file_tracker=None,
     todo_state=None,
@@ -1958,7 +1958,7 @@ def handle_tool_call(
             extra_write_roots=extra_write_roots
             if extra_write_roots is not None
             else [],
-            yolo=yolo,
+            files_mode=files_mode,
             commands_unrestricted=commands_unrestricted,
             file_tracker=file_tracker,
             tool_call_id=tool_call.id,
@@ -2839,14 +2839,21 @@ _PROVIDER_KEY_ENV: dict[str, str] = {
 }
 
 
-def _build_self_review_cmd(args: argparse.Namespace) -> str:
+def _build_self_review_cmd(
+    args: argparse.Namespace, *, files_mode: str = "some"
+) -> str:
     """Build a reviewer command that mirrors the current invocation's settings."""
     import shlex
 
     parts = [sys.executable, "-m", "swival.agent", "--reviewer-mode", "--quiet"]
 
-    if args.yolo:
-        parts.append("--yolo")
+    if files_mode != "some":
+        parts.extend(["--files", files_mode])
+    cmds = args.commands
+    if isinstance(cmds, list):
+        parts.extend(["--commands", ",".join(cmds)])
+    elif cmds == "none":
+        parts.extend(["--commands", "none"])
     if args.provider and args.provider != "lmstudio":
         parts.extend(["--provider", args.provider])
     if args.model:
@@ -2915,7 +2922,7 @@ def build_parser():
     help_examples = (
         "Examples:\n"
         '  swival --yolo "Refactor the auth module"\n'
-        "  swival --yolo --repl\n"
+        '  swival --files all "Refactor the auth module"\n'
         '  swival --provider huggingface --model zai-org/GLM-5 "Write parser tests"\n'
         '  swival --yolo --self-review "Add input validation"\n'
         "  swival -q < task.md"
@@ -3345,7 +3352,7 @@ def build_parser():
         action="store_true",
         default=_UNSET,
         help="Use a second swival instance as reviewer, inheriting provider, model, "
-        "skills-dir, and yolo settings from the current invocation. "
+        "skills-dir, and files settings from the current invocation. "
         "Requires a task; incompatible with --repl.",
     )
     provider_group.add_argument(
@@ -3436,10 +3443,17 @@ def build_parser():
         help="Print the version and exit.",
     )
     access_group.add_argument(
+        "--files",
+        type=str,
+        choices=["none", "some", "all"],
+        default=_UNSET,
+        help='Filesystem access: "some" (default, workspace only), "all" (unrestricted), "none" (.swival/ only).',
+    )
+    access_group.add_argument(
         "--yolo",
         action="store_true",
         default=_UNSET,
-        help="Disable filesystem sandbox and command whitelist (unrestricted mode).",
+        help="Shorthand for --files all --commands all.",
     )
 
     return parser
@@ -3546,7 +3560,19 @@ def main():
     # Stash serve_skills from TOML config before apply_config_to_args strips them
     args._serve_skills_config = file_config.pop("serve_skills", None)
 
+    # Capture explicitness before apply_config_to_args sweeps _UNSET → defaults
+    _files_explicit = args.files is not _UNSET
+    _commands_explicit = args.commands is not _UNSET
     apply_config_to_args(args, file_config)
+    # Config may have set them explicitly too
+    args._files_explicit = _files_explicit or "files" in file_config
+    args._commands_explicit = _commands_explicit or "commands" in file_config
+
+    # Resolve files_mode: --yolo upgrades defaults but doesn't override explicit
+    files_mode = args.files
+    if args.yolo and not args._files_explicit:
+        files_mode = "all"
+    args._resolved_files_mode = files_mode
 
     # Derived values (after all sentinels are resolved)
     args.verbose = not args.quiet
@@ -3555,7 +3581,7 @@ def main():
     if args.self_review:
         if args.reviewer:
             parser.error("--self-review and --reviewer cannot be used together")
-        args.reviewer = _build_self_review_cmd(args)
+        args.reviewer = _build_self_review_cmd(args, files_mode=files_mode)
 
     # --- A2A serve mode ---
     _is_serve = getattr(args, "serve", False)
@@ -3699,7 +3725,7 @@ def main():
             "context_length": getattr(
                 args, "_resolved_context_length", args.max_context_tokens
             ),
-            "yolo": args.yolo,
+            "files": args._resolved_files_mode,
             "commands": (
                 sorted(args.commands)
                 if isinstance(args.commands, list)
@@ -4236,6 +4262,7 @@ def build_system_prompt(
     report: "ReportCollector | None" = None,
     provider: str | None = None,
     command_tool_schemas: list | None = None,
+    files_mode: str = "some",
 ) -> tuple[str | None, list[str]]:
     """Assemble full system prompt with instructions, date, skills, memory.
 
@@ -4296,6 +4323,16 @@ def build_system_prompt(
     # Tool-related prompt sections are skipped for the command provider,
     # which disables tool calling entirely.
     if provider != "command":
+        if files_mode == "none":
+            system_content += (
+                "\n\nFilesystem access is restricted to .swival/ only. "
+                "You cannot read or write project files."
+            )
+        elif files_mode == "all":
+            system_content += (
+                "\n\nFilesystem access is unrestricted. "
+                "You can read and write any file on the system."
+            )
         if skills_catalog and not system_prompt:
             from .skills import format_skill_catalog
 
@@ -4498,11 +4535,13 @@ def _run_main(args, report, _write_report, parser):
         allowed_dirs_ro.append(p)
 
     base_dir = args.base_dir
-    yolo = args.yolo
+    files_mode = args._resolved_files_mode
 
-    # Resolve commands mode
+    # Resolve commands mode (yolo upgrades default but not explicit --commands)
     cmds = args.commands
-    if yolo or cmds is None or cmds == "all":
+    if args.yolo and not args._commands_explicit:
+        cmds = "all"
+    if cmds is None or cmds == "all":
         resolved_commands = {}
         commands_unrestricted = True
     elif cmds == "none":
@@ -4673,6 +4712,7 @@ def _run_main(args, report, _write_report, parser):
         report=report,
         provider=llm_kwargs.get("provider"),
         command_tool_schemas=_command_tool_schemas,
+        files_mode=files_mode,
     )
     policy: _InteractionPolicy = "interactive" if args.repl else "autonomous"
     if system_content is not None:
@@ -4716,7 +4756,7 @@ def _run_main(args, report, _write_report, parser):
         skills_catalog=skills_catalog,
         skill_read_roots=skill_read_roots,
         extra_write_roots=allowed_dirs,
-        yolo=yolo,
+        files_mode=files_mode,
         commands_unrestricted=commands_unrestricted,
         verbose=args.verbose,
         llm_kwargs=llm_kwargs,
@@ -4983,7 +5023,7 @@ def run_agent_loop(
     skills_catalog: dict,
     skill_read_roots: list,
     extra_write_roots: list,
-    yolo: bool,
+    files_mode: str = "some",
     commands_unrestricted: bool = False,
     verbose: bool,
     llm_kwargs: dict,
@@ -5083,7 +5123,7 @@ def run_agent_loop(
             skills_catalog=skills_catalog,
             skill_read_roots=skill_read_roots,
             extra_write_roots=extra_write_roots,
-            yolo=yolo,
+            files_mode=files_mode,
             commands_unrestricted=commands_unrestricted,
             file_tracker=file_tracker,
             todo_state=todo_state,
@@ -5653,7 +5693,7 @@ def run_agent_loop(
                 skills_catalog=skills_catalog,
                 skill_read_roots=skill_read_roots,
                 extra_write_roots=extra_write_roots,
-                yolo=yolo,
+                files_mode=files_mode,
                 commands_unrestricted=commands_unrestricted,
                 file_tracker=file_tracker,
                 todo_state=todo_state,
@@ -6338,7 +6378,7 @@ def repl_loop(
     skills_catalog: dict,
     skill_read_roots: list,
     extra_write_roots: list,
-    yolo: bool,
+    files_mode: str = "some",
     commands_unrestricted: bool = False,
     verbose: bool,
     llm_kwargs: dict,
@@ -6404,7 +6444,7 @@ def repl_loop(
         skills_catalog=skills_catalog,
         skill_read_roots=skill_read_roots,
         extra_write_roots=extra_write_roots,
-        yolo=yolo,
+        files_mode=files_mode,
         commands_unrestricted=commands_unrestricted,
         verbose=verbose,
         llm_kwargs=llm_kwargs,

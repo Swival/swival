@@ -1222,7 +1222,7 @@ class TestAgentLoopSkillInjection:
             skills_catalog=catalog,
             skill_read_roots=[],
             extra_write_roots=[],
-            yolo=False,
+            files_mode="some",
             verbose=False,
             llm_kwargs={},
         )
@@ -1288,7 +1288,7 @@ class TestAgentLoopSkillInjection:
             skills_catalog=catalog,
             skill_read_roots=[],
             extra_write_roots=[],
-            yolo=False,
+            files_mode="some",
             verbose=False,
             llm_kwargs={},
         )
@@ -1396,7 +1396,7 @@ class TestAgentLoopSkillInjection:
             skills_catalog=catalog,
             skill_read_roots=[],
             extra_write_roots=[],
-            yolo=False,
+            files_mode="some",
             verbose=False,
             llm_kwargs={},
         )
@@ -1467,7 +1467,7 @@ class TestAgentLoopSkillInjection:
             skills_catalog=catalog,
             skill_read_roots=[],
             extra_write_roots=[],
-            yolo=False,
+            files_mode="some",
             verbose=False,
             llm_kwargs={},
             report=report,

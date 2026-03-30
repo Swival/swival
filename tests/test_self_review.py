@@ -29,12 +29,15 @@ def _make_args(**overrides):
         base_url=None,
         max_output_tokens=32768,
         max_context_tokens=None,
+        commands="all",
         yolo=False,
         skills_dir=[],
         report=None,
         cache=False,
         self_review=False,
         reviewer=None,
+        encrypt_secrets=False,
+        retries=5,
     )
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -57,6 +60,9 @@ def _make_unset_args(**overrides):
         "no_system_prompt": _UNSET,
         "commands": _UNSET,
         "yolo": _UNSET,
+        "files": _UNSET,
+        "_files_explicit": False,
+        "_resolved_files_mode": "some",
         "add_dir": None,
         "add_dir_ro": None,
         "sandbox": _UNSET,
@@ -98,12 +104,15 @@ def _make_unset_args(**overrides):
 
 class TestBuildSelfReviewCmd:
     def test_basic(self):
-        args = _make_args(provider="chatgpt", model="gpt-5.4", yolo=True)
-        cmd = agent._build_self_review_cmd(args)
+        args = _make_args(provider="chatgpt", model="gpt-5.4")
+        cmd = agent._build_self_review_cmd(args, files_mode="all")
         parts = shlex.split(cmd)
         assert "--reviewer-mode" in parts
         assert "--quiet" in parts
-        assert "--yolo" in parts
+        assert ["--files", "all"] == [
+            parts[parts.index("--files")],
+            parts[parts.index("--files") + 1],
+        ]
         assert "--provider" in parts
         idx = parts.index("--provider")
         assert parts[idx + 1] == "chatgpt"
@@ -158,6 +167,25 @@ class TestBuildSelfReviewCmd:
         args = _make_args(provider="lmstudio")
         cmd = agent._build_self_review_cmd(args)
         assert "--provider" not in cmd
+
+    def test_commands_none_mirrored(self):
+        args = _make_args(commands="none")
+        cmd = agent._build_self_review_cmd(args)
+        parts = shlex.split(cmd)
+        idx = parts.index("--commands")
+        assert parts[idx + 1] == "none"
+
+    def test_commands_whitelist_mirrored(self):
+        args = _make_args(commands=["ls", "git"])
+        cmd = agent._build_self_review_cmd(args)
+        parts = shlex.split(cmd)
+        idx = parts.index("--commands")
+        assert parts[idx + 1] == "ls,git"
+
+    def test_commands_all_not_mirrored(self):
+        args = _make_args(commands="all")
+        cmd = agent._build_self_review_cmd(args)
+        assert "--commands" not in cmd
 
 
 # ===========================================================================
@@ -333,13 +361,12 @@ class TestSelfReviewHandoff:
             provider="openrouter",
             model="meta-llama/llama-4",
             api_key="sk-or-secret",
-            yolo=True,
             self_review=True,
             question="do something",
         )
 
         # Build command — should not contain the key
-        cmd = agent._build_self_review_cmd(args)
+        cmd = agent._build_self_review_cmd(args, files_mode="all")
         assert "--api-key" not in cmd
         assert "sk-or-secret" not in cmd
         assert "--reviewer-mode" in cmd

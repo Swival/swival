@@ -90,7 +90,7 @@ def _loop_kwargs(tmp_path, **overrides):
         skills_catalog={},
         skill_read_roots=[],
         extra_write_roots=[],
-        yolo=False,
+        files_mode="some",
         verbose=False,
         llm_kwargs={"provider": "lmstudio", "api_key": None},
         file_tracker=None,
@@ -106,6 +106,8 @@ def _loop_kwargs(tmp_path, **overrides):
 
 
 def _make_main_args(**overrides):
+    from swival.config import _UNSET
+
     defaults = dict(
         question=None,
         repl=False,
@@ -122,6 +124,9 @@ def _make_main_args(**overrides):
         project=False,
         reviewer_mode=False,
         review_prompt=None,
+        files=_UNSET,
+        yolo=_UNSET,
+        commands=_UNSET,
         objective=None,
         verify=None,
     )

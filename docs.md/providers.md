@@ -287,7 +287,7 @@ The `command` provider shells out to an external program instead of calling an A
 
 The conversation transcript is written to the program's stdin, and the program's stdout is read back as the model response. `--model` holds the command string, which is split with `shlex`. `--base-url` and `--api-key` are ignored.
 
-Tool calling is supported when command execution is enabled (the default, or via `--commands` / `--yolo`). The external program can request tool execution by emitting `<swival:call>` XML blocks in its output. Swival parses these, dispatches the tool calls, appends results to the transcript, and re-invokes the command. This loop continues (up to 20 rounds) until the program responds without tool calls. When no commands are whitelisted, the command provider runs without tools.
+Tool calling is supported when command execution is enabled (the default, or via `--commands`). The external program can request tool execution by emitting `<swival:call>` XML blocks in its output. Swival parses these, dispatches the tool calls, appends results to the transcript, and re-invokes the command. This loop continues (up to 20 rounds) until the program responds without tool calls. When no commands are whitelisted, the command provider runs without tools.
 
 ```sh
 swival --provider command --model "codex exec --skip-git-repo-check --full-auto --ephemeral" "task"
@@ -306,14 +306,14 @@ Because the external program handles all model routing, there is no auto-discove
 
 For providers that support explicit cache annotations, Swival automatically marks the system message as cacheable each turn. This avoids re-processing the system prompt and tool schemas on every call, which typically saves 30–60% of input token costs in long sessions.
 
-| Provider                     | Caching mechanism                           | Notes                                                            |
-| ---------------------------- | ------------------------------------------- | ---------------------------------------------------------------- |
-| Anthropic (via OpenRouter)   | Explicit `cache_control` injected by Swival | System message cached; tool schemas not cached in Phase 1        |
-| Google Gemini                | Explicit `cache_control` injected by Swival | Via `openrouter/google/...` or native `google` provider          |
-| AWS Bedrock                  | Explicit `cache_control` injected by Swival | Supported for Anthropic models on Bedrock                        |
-| OpenAI / Deepseek            | Automatic (provider-side)                   | No annotation needed; prompts >1024 tokens cached automatically  |
-| LM Studio                    | None                                        | Local inference, no server-side cache                            |
-| Generic with custom base_url | None                                        | Swival cannot identify the upstream provider from the URL alone   |
+| Provider                     | Caching mechanism                           | Notes                                                           |
+| ---------------------------- | ------------------------------------------- | --------------------------------------------------------------- |
+| Anthropic (via OpenRouter)   | Explicit `cache_control` injected by Swival | System message cached; tool schemas not cached in Phase 1       |
+| Google Gemini                | Explicit `cache_control` injected by Swival | Via `openrouter/google/...` or native `google` provider         |
+| AWS Bedrock                  | Explicit `cache_control` injected by Swival | Supported for Anthropic models on Bedrock                       |
+| OpenAI / Deepseek            | Automatic (provider-side)                   | No annotation needed; prompts >1024 tokens cached automatically |
+| LM Studio                    | None                                        | Local inference, no server-side cache                           |
+| Generic with custom base_url | None                                        | Swival cannot identify the upstream provider from the URL alone |
 
 Cache annotation is applied automatically when the model is known to support it. If the call succeeds with an unexpected provider, the extra annotation is silently ignored.
 

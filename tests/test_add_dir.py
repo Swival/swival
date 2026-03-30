@@ -331,7 +331,7 @@ class TestAddDirCLIValidation:
 
         def fake_run(messages, tools, **kwargs):
             captured["extra_write_roots"] = kwargs.get("extra_write_roots", [])
-            captured["yolo"] = kwargs.get("yolo", False)
+            captured["files_mode"] = kwargs.get("files_mode", "some")
             return "done", False
 
         monkeypatch.setattr(agent, "run_agent_loop", fake_run)
@@ -354,7 +354,7 @@ class TestAddDirCLIValidation:
         )
         agent.main()
 
-        assert captured["yolo"] is True
+        assert captured["files_mode"] == "all"
         assert len(captured["extra_write_roots"]) == 1
 
     def test_add_dir_with_yolo_invalid(self, tmp_path, monkeypatch):
@@ -741,7 +741,7 @@ class TestAddDirRoCLIValidation:
 
         def fake_run(messages, tools, **kwargs):
             captured["skill_read_roots"] = kwargs.get("skill_read_roots", [])
-            captured["yolo"] = kwargs.get("yolo", False)
+            captured["files_mode"] = kwargs.get("files_mode", "some")
             return "done", False
 
         monkeypatch.setattr(agent, "run_agent_loop", fake_run)
@@ -764,7 +764,7 @@ class TestAddDirRoCLIValidation:
         )
         agent.main()
 
-        assert captured["yolo"] is True
+        assert captured["files_mode"] == "all"
         assert ro.resolve() in captured["skill_read_roots"]
 
     def test_add_dir_ro_with_yolo_invalid(self, tmp_path, monkeypatch):

@@ -48,6 +48,7 @@ def _base_args(tmp_path, **overrides):
         api_key=None,
         color=False,
         no_color=False,
+        files="some",
         yolo=False,
         report=None,
         reviewer=None,

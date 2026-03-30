@@ -7,6 +7,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from swival import agent, fmt
+from swival.config import _UNSET
 from swival.report import AgentError
 
 
@@ -50,6 +51,7 @@ def _base_args(tmp_path, **overrides):
         api_key=None,
         color=False,
         no_color=False,
+        files="some",
         yolo=False,
         report=None,
         reviewer=None,
@@ -272,6 +274,9 @@ class TestCLIValidation:
                 review_prompt=None,
                 objective=None,
                 verify=None,
+                files=_UNSET,
+                yolo=_UNSET,
+                commands=_UNSET,
             )
             mock_parser.parse_args.return_value = mock_args
             mock_parser.error.side_effect = SystemExit(2)

@@ -45,6 +45,7 @@ def _make_args(**overrides):
         "no_system_prompt": _UNSET,
         "commands": _UNSET,
         "yolo": _UNSET,
+        "files": _UNSET,
         "add_dir": None,  # append actions use None sentinel
         "add_dir_ro": None,  # append actions use None sentinel
         "sandbox": _UNSET,
@@ -484,7 +485,7 @@ class TestReportSettingsTypes:
             max_turns=10,
             max_output_tokens=1024,
             max_context_tokens=None,
-            yolo=False,
+            files_mode="some",
             commands="ls,git",
         )
         # Reproduce the logic from _report_settings

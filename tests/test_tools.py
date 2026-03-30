@@ -721,7 +721,9 @@ class TestOutlineDispatch:
     def test_outline_dispatch_single_file(self, tmp_path):
         f = tmp_path / "s.py"
         f.write_text("def hello(): pass\n")
-        result = dispatch("outline", {"file_path": str(f)}, str(tmp_path), yolo=True)
+        result = dispatch(
+            "outline", {"file_path": str(f)}, str(tmp_path), files_mode="all"
+        )
         assert "def hello()" in result
 
     def test_outline_dispatch_batch(self, tmp_path):
@@ -733,7 +735,7 @@ class TestOutlineDispatch:
             "outline",
             {"files": [{"file_path": str(a)}, {"file_path": str(b)}]},
             str(tmp_path),
-            yolo=True,
+            files_mode="all",
         )
         assert "=== FILE:" in result
         assert "class A" in result
@@ -744,12 +746,12 @@ class TestOutlineDispatch:
             "outline",
             {"file_path": "x.py", "files": [{"file_path": "x.py"}]},
             str(tmp_path),
-            yolo=True,
+            files_mode="all",
         )
         assert result == "error: set file_path or files, not both"
 
     def test_outline_dispatch_neither_arg(self, tmp_path):
-        result = dispatch("outline", {}, str(tmp_path), yolo=True)
+        result = dispatch("outline", {}, str(tmp_path), files_mode="all")
         assert result == "error: file_path or files is required"
 
     def test_outline_dispatch_files_not_array(self, tmp_path):
@@ -757,7 +759,7 @@ class TestOutlineDispatch:
             "outline",
             {"files": {"file_path": "x.py"}},
             str(tmp_path),
-            yolo=True,
+            files_mode="all",
         )
         assert result == "error: 'files' must be an array"
 
@@ -768,7 +770,7 @@ class TestOutlineDispatch:
             "outline",
             {"files": str(f)},
             str(tmp_path),
-            yolo=True,
+            files_mode="all",
         )
         assert "def t()" in result
         assert "files_succeeded: 1" in result

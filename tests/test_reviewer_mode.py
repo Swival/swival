@@ -635,6 +635,7 @@ class TestConfigIntegration:
             no_system_prompt=_UNSET,
             commands=_UNSET,
             yolo=_UNSET,
+            files=_UNSET,
             add_dir=None,
             add_dir_ro=None,
             no_read_guard=_UNSET,

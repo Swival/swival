@@ -325,6 +325,7 @@ class TestConfigIntegration:
             top_p=1.0,
             seed=None,
             commands=None,
+            files="some",
             yolo=False,
             system_prompt=None,
             no_system_prompt=False,
@@ -366,6 +367,7 @@ class TestConfigIntegration:
         from swival.agent import _build_self_review_cmd
 
         args = types.SimpleNamespace(
+            files="some",
             yolo=False,
             provider="generic",
             model="test-model",

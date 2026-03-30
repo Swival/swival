@@ -690,7 +690,7 @@ def safe_resolve(
     base_dir: str,
     extra_read_roots: list[Path] = (),
     extra_write_roots: list[Path] = (),
-    unrestricted: bool = False,
+    files_mode: str = "some",
 ) -> Path:
     """Resolve a file path, ensuring it stays within allowed roots.
 
@@ -698,10 +698,13 @@ def safe_resolve(
     then checks containment against base_dir first, then each extra_read_roots
     entry. extra_read_roots is only used for read operations.
 
-    When unrestricted is True, resolves the path but skips containment checks.
+    files_mode controls access:
+      "all"  — unrestricted (block filesystem root only)
+      "some" — base_dir + extra roots
+      "none" — .swival/ directory only
 
     Raises:
-        ValueError: If the resolved path escapes all allowed roots (when not unrestricted).
+        ValueError: If the resolved path escapes all allowed roots.
     """
     base = Path(base_dir).resolve()
 
@@ -713,8 +716,7 @@ def safe_resolve(
     else:
         resolved = (base / p).resolve()
 
-    if unrestricted:
-        # Even in unrestricted mode, block the filesystem root
+    if files_mode == "all":
         if resolved == Path(resolved.anchor):
             raise ValueError(
                 f"Path {file_path!r} resolves to the filesystem root, "
@@ -722,16 +724,23 @@ def safe_resolve(
             )
         return resolved
 
-    # Check base_dir first
+    if files_mode == "none":
+        swival_dir = (base / ".swival").resolve()
+        if resolved.is_relative_to(swival_dir):
+            return resolved
+        raise ValueError(
+            f"Path {file_path!r} resolves to {resolved}, "
+            f"which is outside .swival/ (filesystem access is disabled)"
+        )
+
+    # files_mode == "some": check base_dir, then extra roots
     if resolved.is_relative_to(base):
         return resolved
 
-    # Check extra read roots
     for root in extra_read_roots:
         if resolved.is_relative_to(root):
             return resolved
 
-    # Check extra write roots (--add-dir paths, read+write access)
     for root in extra_write_roots:
         if resolved.is_relative_to(root):
             return resolved
@@ -762,20 +771,23 @@ def _check_pattern(pattern: str) -> str | None:
 def _is_within_base(
     path: Path,
     base: Path,
-    unrestricted: bool = False,
+    files_mode: str = "some",
     extra_read_roots: list[Path] = (),
     extra_write_roots: list[Path] = (),
 ) -> bool:
     """Check that a resolved path is within the base directory or extra roots."""
-    if unrestricted:
+    if files_mode == "all":
         return True
     try:
         resolved = path.resolve()
     except (OSError, ValueError):
         return False
+    if files_mode == "none":
+        swival_dir = (base / ".swival").resolve()
+        return resolved.is_relative_to(swival_dir)
+    # files_mode == "some"
     if resolved.is_relative_to(base.resolve()):
         return True
-    # extra roots are already resolved at startup, no need to resolve again
     for root in extra_read_roots:
         if resolved.is_relative_to(root):
             return True
@@ -822,7 +834,7 @@ def _list_files(
     base_dir: str,
     extra_read_roots: list[Path] = (),
     extra_write_roots: list[Path] = (),
-    unrestricted: bool = False,
+    files_mode: str = "some",
 ) -> str:
     """Recursively list files matching a glob pattern."""
     # Expand ~ so ~/src/**/*.py becomes /home/user/src/**/*.py and is
@@ -834,7 +846,7 @@ def _list_files(
 
     # When the pattern is an absolute glob, split it into a root directory
     # and a relative pattern.  safe_resolve() will then authorize the root
-    # against base_dir / extra roots (or skip checks in unrestricted mode).
+    # against base_dir / extra roots (or skip checks in files_mode="all").
     if PurePosixPath(pattern).is_absolute() or PureWindowsPath(pattern).is_absolute():
         path, pattern = _split_absolute_glob(pattern)
     else:
@@ -848,7 +860,7 @@ def _list_files(
             base_dir,
             extra_read_roots=extra_read_roots,
             extra_write_roots=extra_write_roots,
-            unrestricted=unrestricted,
+            files_mode=files_mode,
         )
     except ValueError as exc:
         return f"error: {exc}"
@@ -863,7 +875,7 @@ def _list_files(
         if not _is_within_base(
             root,
             base,
-            unrestricted=unrestricted,
+            files_mode=files_mode,
             extra_read_roots=extra_read_roots,
             extra_write_roots=extra_write_roots,
         ):
@@ -891,7 +903,7 @@ def _list_files(
             if not _is_within_base(
                 filepath,
                 base,
-                unrestricted=unrestricted,
+                files_mode=files_mode,
                 extra_read_roots=extra_read_roots,
                 extra_write_roots=extra_write_roots,
             ):
@@ -941,13 +953,13 @@ def _grep(
     context_lines: int = 0,
     extra_read_roots: list[Path] = (),
     extra_write_roots: list[Path] = (),
-    unrestricted: bool = False,
+    files_mode: str = "some",
 ) -> str:
     """Search file contents for a regex pattern."""
     context_lines = max(0, context_lines)  # defensive clamp
 
     # Validate include pattern — only enforce in sandboxed mode
-    if include is not None and not unrestricted:
+    if include is not None and files_mode != "all":
         err = _check_pattern(include)
         if err:
             return err
@@ -965,7 +977,7 @@ def _grep(
             base_dir,
             extra_read_roots=extra_read_roots,
             extra_write_roots=extra_write_roots,
-            unrestricted=unrestricted,
+            files_mode=files_mode,
         )
     except ValueError as exc:
         return f"error: {exc}"
@@ -994,7 +1006,7 @@ def _grep(
         if not _is_within_base(
             root,
             base,
-            unrestricted=unrestricted,
+            files_mode=files_mode,
             extra_read_roots=extra_read_roots,
             extra_write_roots=extra_write_roots,
         ):
@@ -1039,7 +1051,7 @@ def _grep(
                 if not _is_within_base(
                     filepath,
                     base,
-                    unrestricted=unrestricted,
+                    files_mode=files_mode,
                     extra_read_roots=extra_read_roots,
                     extra_write_roots=extra_write_roots,
                 ):
@@ -1169,7 +1181,7 @@ def _read_file(
     tail: int | None = None,
     extra_read_roots: list[Path] = (),
     extra_write_roots: list[Path] = (),
-    unrestricted: bool = False,
+    files_mode: str = "some",
     tracker=None,
 ) -> str:
     """Read a file or list a directory."""
@@ -1179,7 +1191,7 @@ def _read_file(
             base_dir,
             extra_read_roots=extra_read_roots,
             extra_write_roots=extra_write_roots,
-            unrestricted=unrestricted,
+            files_mode=files_mode,
         )
     except ValueError as exc:
         return f"error: {exc}"
@@ -1344,7 +1356,7 @@ def _view_image(
     question: str | None = None,
     extra_read_roots: list[Path] = (),
     extra_write_roots: list[Path] = (),
-    unrestricted: bool = False,
+    files_mode: str = "some",
 ) -> str:
     """Load an image file and stash it for injection into the message stream."""
     try:
@@ -1353,7 +1365,7 @@ def _view_image(
             base_dir,
             extra_read_roots=extra_read_roots,
             extra_write_roots=extra_write_roots,
-            unrestricted=unrestricted,
+            files_mode=files_mode,
         )
     except ValueError as exc:
         return f"error: {exc}"
@@ -1409,7 +1421,7 @@ def _read_files(
     base_dir: str,
     extra_read_roots: list[Path] = (),
     extra_write_roots: list[Path] = (),
-    unrestricted: bool = False,
+    files_mode: str = "some",
     tracker=None,
 ) -> str:
     """Read multiple files and return results grouped by file."""
@@ -1508,7 +1520,7 @@ def _read_files(
                 base_dir,
                 extra_read_roots=extra_read_roots,
                 extra_write_roots=extra_write_roots,
-                unrestricted=unrestricted,
+                files_mode=files_mode,
             )
             if resolved.exists() and resolved.is_dir():
                 sections.append(
@@ -1532,7 +1544,7 @@ def _read_files(
             tail=tail,
             extra_read_roots=extra_read_roots,
             extra_write_roots=extra_write_roots,
-            unrestricted=unrestricted,
+            files_mode=files_mode,
             tracker=tracker,
         )
 
@@ -1590,7 +1602,7 @@ def _write_file(
     base_dir: str,
     move_from: str | None = None,
     extra_write_roots: list[Path] = (),
-    unrestricted: bool = False,
+    files_mode: str = "some",
     tracker=None,
 ) -> str:
     """Create or overwrite a file, or atomically rename one.
@@ -1614,7 +1626,7 @@ def _write_file(
             file_path,
             base_dir,
             extra_write_roots=extra_write_roots,
-            unrestricted=unrestricted,
+            files_mode=files_mode,
         )
     except ValueError as exc:
         return f"error: {exc}"
@@ -1632,7 +1644,7 @@ def _write_file(
                 move_from,
                 base_dir,
                 extra_write_roots=extra_write_roots,
-                unrestricted=unrestricted,
+                files_mode=files_mode,
             )
         except ValueError as exc:
             return f"error: {exc}"
@@ -1681,7 +1693,7 @@ def _edit_file(
     base_dir: str,
     replace_all: bool = False,
     extra_write_roots: list[Path] = (),
-    unrestricted: bool = False,
+    files_mode: str = "some",
     tracker=None,
     verbose: bool = False,
 ) -> str:
@@ -1693,7 +1705,7 @@ def _edit_file(
             file_path,
             base_dir,
             extra_write_roots=extra_write_roots,
-            unrestricted=unrestricted,
+            files_mode=files_mode,
         )
     except ValueError as exc:
         return f"error: {exc}"
@@ -1854,7 +1866,7 @@ def _delete_file(
     file_path: str,
     base_dir: str,
     extra_write_roots: list[Path] = (),
-    unrestricted: bool = False,
+    files_mode: str = "some",
     tracker=None,
     tool_call_id: str = "",
 ) -> str:
@@ -1867,7 +1879,7 @@ def _delete_file(
             file_path,
             base_dir,
             extra_write_roots=extra_write_roots,
-            unrestricted=unrestricted,
+            files_mode=files_mode,
         )
     except ValueError as exc:
         return f"error: {exc}"
@@ -2467,7 +2479,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
     Raises:
         KeyError: If the tool name is not recognized.
     """
-    yolo = kwargs.get("yolo", False)
+    files_mode = kwargs.get("files_mode", "some")
     extra_write_roots = kwargs.get("extra_write_roots", ())
     skill_read_roots = kwargs.get("skill_read_roots", ())
     file_tracker = kwargs.get("file_tracker")
@@ -2521,7 +2533,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             tail=tail,
             extra_read_roots=skill_read_roots,
             extra_write_roots=extra_write_roots,
-            unrestricted=yolo,
+            files_mode=files_mode,
             tracker=file_tracker,
         )
     elif name == "read_multiple_files":
@@ -2535,7 +2547,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             base_dir=base_dir,
             extra_read_roots=skill_read_roots,
             extra_write_roots=extra_write_roots,
-            unrestricted=yolo,
+            files_mode=files_mode,
             tracker=file_tracker,
         )
     elif name == "write_file":
@@ -2545,7 +2557,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             base_dir=base_dir,
             move_from=args.get("move_from"),
             extra_write_roots=extra_write_roots,
-            unrestricted=yolo,
+            files_mode=files_mode,
             tracker=file_tracker,
         )
     elif name == "edit_file":
@@ -2556,7 +2568,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             base_dir=base_dir,
             replace_all=args.get("replace_all", False),
             extra_write_roots=extra_write_roots,
-            unrestricted=yolo,
+            files_mode=files_mode,
             tracker=file_tracker,
             verbose=kwargs.get("verbose", False),
         )
@@ -2565,7 +2577,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             args["file_path"],
             base_dir,
             extra_write_roots=extra_write_roots,
-            unrestricted=yolo,
+            files_mode=files_mode,
             tracker=file_tracker,
             tool_call_id=kwargs.get("tool_call_id", ""),
         )
@@ -2576,7 +2588,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             base_dir=base_dir,
             extra_read_roots=skill_read_roots,
             extra_write_roots=extra_write_roots,
-            unrestricted=yolo,
+            files_mode=files_mode,
         )
     elif name == "grep":
         return _grep(
@@ -2588,7 +2600,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             context_lines=args.get("context_lines", 0),
             extra_read_roots=skill_read_roots,
             extra_write_roots=extra_write_roots,
-            unrestricted=yolo,
+            files_mode=files_mode,
         )
     elif name == "todo":
         todo_state = kwargs.get("todo_state")
@@ -2622,7 +2634,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
                 default_depth=args.get("depth", 2),
                 extra_read_roots=skill_read_roots,
                 extra_write_roots=extra_write_roots,
-                unrestricted=yolo,
+                files_mode=files_mode,
             )
         if not file_path:
             return "error: file_path or files is required"
@@ -2632,7 +2644,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             depth=args.get("depth", 2),
             extra_read_roots=skill_read_roots,
             extra_write_roots=extra_write_roots,
-            unrestricted=yolo,
+            files_mode=files_mode,
         )
     elif name == "fetch_url":
         from .fetch import fetch_url as _fetch_url
@@ -2657,7 +2669,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             base_dir=base_dir,
             resolved_commands=resolved,
             timeout=args.get("timeout", 30),
-            unrestricted=kwargs.get("commands_unrestricted", False) or yolo,
+            unrestricted=kwargs.get("commands_unrestricted", False),
             scratch_dir=scratch_dir,
         )
     elif name == "view_image":
@@ -2671,7 +2683,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             question=args.get("question"),
             extra_read_roots=skill_read_roots,
             extra_write_roots=extra_write_roots,
-            unrestricted=yolo,
+            files_mode=files_mode,
         )
     elif name == "spawn_subagent":
         manager = kwargs.get("subagent_manager")

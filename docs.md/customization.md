@@ -42,7 +42,8 @@ cache = true
 # cache_dir = ".swival"
 # retries = 5              # max provider retries on transient network errors
 # color = true             # true = force color, false = force no-color, absent = auto
-# yolo = false             # disable all sandbox checks (implies commands = "all")
+# files = "some"           # filesystem access: "some" (workspace) | "all" (unrestricted) | "none" (.swival/ only)
+# yolo = false             # shorthand for files = "all" + commands = "all"
 # no_read_guard = false    # disable read-before-write guard
 # no_mcp = false           # disable MCP server connections
 # no_a2a = false           # disable A2A agent connections

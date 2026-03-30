@@ -367,7 +367,7 @@ def _repl_kwargs(tmp_path, **overrides):
         skills_catalog={},
         skill_read_roots=[],
         extra_write_roots=[],
-        yolo=True,
+        files_mode="all",
         verbose=False,
         llm_kwargs={"provider": "lmstudio", "api_key": None},
         no_history=True,
