@@ -25,6 +25,22 @@ _UNSET = object()  # Sentinel for "not set by CLI"
 SANDBOX_MODES = ("builtin", "agentfs")
 REASONING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "default")
 
+PROFILE_KEYS: set[str] = {
+    "provider",
+    "model",
+    "api_key",
+    "base_url",
+    "aws_profile",
+    "max_output_tokens",
+    "max_context_tokens",
+    "temperature",
+    "top_p",
+    "seed",
+    "extra_body",
+    "reasoning_effort",
+    "sanitize_thinking",
+}
+
 CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "provider": str,
     "model": str,
@@ -331,16 +347,65 @@ def _resolve_paths(config: dict, config_dir: Path, source: str = "") -> None:
                 config[key] = str(config_dir / config[key])
 
 
+def _validate_profiles(profiles: dict, source: str) -> None:
+    """Validate the [profiles.*] tables from a config file.
+
+    Each profile must be a table containing only PROFILE_KEYS.
+    """
+    if not isinstance(profiles, dict):
+        raise ConfigError(f"{source}: 'profiles' must be a table of tables")
+    for name, body in profiles.items():
+        if not isinstance(body, dict):
+            raise ConfigError(
+                f"{source}: profiles.{name} must be a table, got {type(body).__name__}"
+            )
+        for key, value in body.items():
+            if key not in PROFILE_KEYS:
+                allowed = ", ".join(sorted(PROFILE_KEYS))
+                raise ConfigError(
+                    f"{source}: profiles.{name}: '{key}' is not allowed in a profile. "
+                    f"Profiles only support LLM-related keys: {allowed}"
+                )
+            expected = CONFIG_KEYS[key]
+            if isinstance(value, bool) and expected is not bool:
+                raise ConfigError(
+                    f"{source}: profiles.{name}.{key} expected "
+                    f"{_type_name(expected)}, got bool"
+                )
+            if not isinstance(value, expected):
+                raise ConfigError(
+                    f"{source}: profiles.{name}.{key} expected "
+                    f"{_type_name(expected)}, got {type(value).__name__}"
+                )
+        if (
+            "reasoning_effort" in body
+            and body["reasoning_effort"] not in REASONING_LEVELS
+        ):
+            raise ConfigError(
+                f"{source}: profiles.{name}.reasoning_effort must be one of "
+                f"{REASONING_LEVELS!r}, got {body['reasoning_effort']!r}"
+            )
+
+
 def _check_api_key_in_git(config: dict, config_path: Path) -> None:
-    """Warn if api_key is set in a project config inside a git repo."""
-    if "api_key" not in config:
+    """Warn if api_key is set in a project config (or its profiles) inside a git repo."""
+    has_top_level = "api_key" in config
+    has_in_profile = any(
+        "api_key" in body
+        for body in config.get("profiles", {}).values()
+        if isinstance(body, dict)
+    )
+    if not has_top_level and not has_in_profile:
         return
     # Walk up from config file looking for .git
     parent = config_path.parent
     while parent != parent.parent:
         if (parent / ".git").exists():
+            where = "api_key"
+            if has_in_profile and not has_top_level:
+                where = "api_key in a profile"
             print(
-                f"warning: {config_path}: 'api_key' in a git-tracked project config "
+                f"warning: {config_path}: '{where}' in a git-tracked project config "
                 f"may be committed accidentally. Consider using an environment variable.",
                 file=sys.stderr,
             )
@@ -358,12 +423,13 @@ def _load_single(path: Path, label: str) -> dict:
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"{label}: invalid TOML: {e}") from e
 
-    # Extract mcp_servers, a2a_servers, serve_skills, encrypt_secrets_patterns
-    # before validation (nested tables)
+    # Extract nested tables before flat-key validation
     mcp_servers = config.pop("mcp_servers", None)
     a2a_servers = config.pop("a2a_servers", None)
     serve_skills = config.pop("serve_skills", None)
     encrypt_patterns = config.pop("encrypt_secrets_patterns", None)
+    profiles = config.pop("profiles", None)
+    active_profile = config.pop("active_profile", None)
 
     # Strip unknown keys after warning (keep only known ones for downstream)
     _validate_config(config, label)
@@ -406,6 +472,20 @@ def _load_single(path: Path, label: str) -> dict:
                     f"{label}: encrypt_secrets_patterns[{i}]: missing required key 'name'"
                 )
         known["encrypt_secrets_patterns"] = encrypt_patterns
+
+    # Re-attach profiles if present
+    if profiles is not None:
+        _validate_profiles(profiles, label)
+        known["profiles"] = profiles
+
+    # Re-attach active_profile if present
+    if active_profile is not None:
+        if not isinstance(active_profile, str):
+            raise ConfigError(
+                f"{label}: 'active_profile' must be a string, "
+                f"got {type(active_profile).__name__}"
+            )
+        known["active_profile"] = active_profile
 
     return known
 
@@ -669,9 +749,16 @@ def load_config(base_dir: Path) -> dict:
         _resolve_paths(project_config, project_path.parent, str(project_path))
 
     # Merge: project overrides global (shallow)
-    # Handle mcp_servers separately (merge by server name, not overwrite)
+    # Handle nested tables separately before flat merge
     global_mcp = global_config.pop("mcp_servers", None)
     project_mcp = project_config.pop("mcp_servers", None)
+
+    # Handle profiles separately (per-key merge within same-name profiles)
+    global_profiles = global_config.pop("profiles", None)
+    project_profiles = project_config.pop("profiles", None)
+    global_active_profile = global_config.pop("active_profile", None)
+    project_active_profile = project_config.pop("active_profile", None)
+
     merged = {**global_config, **project_config}
 
     mcp_servers = merge_mcp_configs(project_mcp, global_mcp)
@@ -711,6 +798,35 @@ def load_config(base_dir: Path) -> dict:
     else:
         merged.pop("encrypt_secrets_patterns", None)
 
+    # Merge profiles: per-key merge within same-name profiles (project wins)
+    profiles_merged: dict[str, dict] = {}
+    if global_profiles:
+        for name, body in global_profiles.items():
+            profiles_merged[name] = dict(body)
+    if project_profiles:
+        for name, body in project_profiles.items():
+            if name in profiles_merged:
+                profiles_merged[name].update(body)
+            else:
+                profiles_merged[name] = dict(body)
+    if profiles_merged:
+        for name, body in profiles_merged.items():
+            if "provider" not in body:
+                raise ConfigError(
+                    f"profiles.{name}: 'provider' is required "
+                    f"(after merging global and project config)"
+                )
+        merged["profiles"] = profiles_merged
+
+    # active_profile: project wins over global
+    active_profile = project_active_profile or global_active_profile
+    if active_profile is not None:
+        merged["active_profile"] = active_profile
+        if project_active_profile:
+            merged["_active_profile_source"] = "via project config"
+        else:
+            merged["_active_profile_source"] = "via global config"
+
     # Re-validate mutual exclusion on merged result (could conflict across files)
     if merged.get("system_prompt") and merged.get("no_system_prompt"):
         raise ConfigError(
@@ -722,6 +838,40 @@ def load_config(base_dir: Path) -> dict:
     merged["config_dir"] = config_dir
 
     return merged
+
+
+def resolve_profile_config(args: argparse.Namespace, config: dict) -> str | None:
+    """Resolve the active profile and overlay it onto *config* in place.
+
+    Selection precedence: ``--profile`` CLI flag > project ``active_profile``
+    > global ``active_profile``.
+
+    Returns the profile name if one was activated, or None.
+    Removes ``profiles``, ``active_profile``, and ``_active_profile_source``
+    from *config* so downstream code sees only flat LLM keys.
+    """
+    profiles = config.pop("profiles", None) or {}
+    cfg_active = config.pop("active_profile", None)
+    config.pop("_active_profile_source", None)
+
+    cli_profile = getattr(args, "profile", None)
+    name = cli_profile or cfg_active
+
+    if name is None:
+        return None
+
+    if name not in profiles:
+        known = ", ".join(sorted(profiles)) if profiles else "(none defined)"
+        raise ConfigError(
+            f"profile {name!r} not found. Known profiles: {known}. "
+            f"Use --list-profiles to see available profiles."
+        )
+
+    # Overlay profile values onto config (config values win only if not in profile)
+    for key, value in profiles[name].items():
+        config[key] = value
+
+    return name
 
 
 def apply_config_to_args(args: argparse.Namespace, config: dict) -> None:
@@ -1032,6 +1182,21 @@ def generate_config(project: bool = False) -> str:
         "# lifecycle_timeout = 300          # seconds before hook is killed",
         "# lifecycle_fail_closed = false     # true = abort run on hook failure",
         "# no_lifecycle = false              # disable hooks entirely",
+        "",
+        "# --- Profiles ---",
+        "# Named LLM profiles for quick switching with --profile NAME.",
+        "# Set active_profile to use one by default.",
+        "#",
+        '# active_profile = "fast-local"',
+        "#",
+        "# [profiles.fast-local]",
+        '# provider = "lmstudio"',
+        '# model = "qwen3-coder-next"',
+        "#",
+        "# [profiles.gpt5]",
+        '# provider = "chatgpt"',
+        '# model = "gpt-5.4"',
+        '# reasoning_effort = "high"',
         "",
         "# --- A2A serve ---",
         '# serve_name = "My Agent"',

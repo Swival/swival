@@ -86,11 +86,76 @@ Relative paths in `allowed_dirs`, `allowed_dirs_ro`, `skills_dir`, `cache_dir`, 
 
 The `reviewer`, `llm_filter`, and `lifecycle_command` values are shell-split; only path-like first tokens (`./`, `../`, `~`, `/`) are resolved against the config directory, while bare command names like `swival` are left for PATH lookup at runtime. The same resolution applies to `model` when `provider = "command"`.
 
-If a project config contains `api_key` inside a git repository, Swival prints a warning because the key could be committed accidentally. Prefer environment variables for credentials.
+If a project config contains `api_key` — at the top level or inside a profile — inside a git repository, Swival prints a warning because the key could be committed accidentally. Prefer environment variables for credentials.
 
 The `--system-prompt` and `no_system_prompt` settings are mutually exclusive in config files, just as they are on the command line.
 
 The library API (`Session` class) does not auto-load config files. If you want config file support in library code, call `load_config()` and `config_to_session_kwargs()` explicitly.
+
+## Profiles
+
+If you switch between multiple model setups — a local LM Studio model for quick tasks, a ChatGPT model for hard problems, an OpenRouter model for long-context work — profiles let you define each setup once and switch with a single flag.
+
+```toml
+active_profile = "fast-local"
+
+[profiles.fast-local]
+provider = "lmstudio"
+model = "qwen3-coder-next"
+max_context_tokens = 65536
+
+[profiles.gpt5]
+provider = "chatgpt"
+model = "gpt-5.4"
+reasoning_effort = "high"
+
+[profiles.router-main]
+provider = "openrouter"
+model = "z-ai/glm-5"
+max_context_tokens = 131072
+
+[profiles.ollama]
+provider = "generic"
+base_url = "http://127.0.0.1:11434"
+model = "qwen3:32b"
+```
+
+Switch with `--profile`:
+
+```sh
+swival --profile gpt5 "review this patch"
+swival --profile fast-local "write tests"
+```
+
+Set `active_profile` in config to pick a default without typing `--profile` every time. Project config overrides global config, and `--profile` on the CLI overrides both.
+
+List available profiles with `--list-profiles`:
+
+```sh
+swival --list-profiles
+```
+
+Each profile requires `provider`. The allowed keys are: `provider`, `model`, `api_key`, `base_url`, `aws_profile`, `max_output_tokens`, `max_context_tokens`, `temperature`, `top_p`, `seed`, `extra_body`, `reasoning_effort`, and `sanitize_thinking`. Keys outside this set — like `files`, `commands`, or `reviewer` — are rejected with an error listing the allowed keys. Profiles are for choosing a model stack, not for changing agent behavior.
+
+If `--profile` is combined with explicit flags like `--provider` or `--reasoning-effort`, the explicit flags win on a per-key basis, just like CLI flags override config everywhere else in Swival.
+
+```sh
+swival --profile gpt5 --reasoning-effort medium "task"
+```
+
+Profiles defined in global config and project config merge per-key for the same profile name. A project can refine a global profile by overriding just one or two keys without copying the whole table.
+
+```toml
+# In global config: defines the base profile
+[profiles.shared]
+provider = "openrouter"
+model = "z-ai/glm-5"
+max_context_tokens = 131072
+
+# In project swival.toml: overrides just the model
+[profiles.shared]
+model = "z-ai/glm-5-mini"
+```
 
 ## Instruction Files
 

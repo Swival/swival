@@ -1842,3 +1842,140 @@ class TestPickBestChoice:
 
         with pytest.raises(AgentError, match="empty choices"):
             _pick_best_choice([])
+
+
+# ---------------------------------------------------------------------------
+# Profile → provider integration
+# ---------------------------------------------------------------------------
+
+
+class TestProfileProviderIntegration:
+    """Verify that profiles resolve into the correct provider/model/args."""
+
+    @staticmethod
+    def _make_args(**overrides):
+        import argparse
+        from swival.config import _UNSET
+
+        defaults = {
+            "profile": None,
+            "provider": _UNSET,
+            "model": _UNSET,
+            "api_key": _UNSET,
+            "base_url": _UNSET,
+            "aws_profile": _UNSET,
+            "max_output_tokens": _UNSET,
+            "max_context_tokens": _UNSET,
+            "temperature": _UNSET,
+            "top_p": _UNSET,
+            "seed": _UNSET,
+            "max_turns": _UNSET,
+            "system_prompt": _UNSET,
+            "no_system_prompt": _UNSET,
+            "commands": _UNSET,
+            "yolo": _UNSET,
+            "files": _UNSET,
+            "add_dir": None,
+            "add_dir_ro": None,
+            "sandbox": _UNSET,
+            "sandbox_session": _UNSET,
+            "no_read_guard": _UNSET,
+            "no_instructions": _UNSET,
+            "no_skills": _UNSET,
+            "skills_dir": None,
+            "no_history": _UNSET,
+            "color": _UNSET,
+            "no_color": _UNSET,
+            "quiet": _UNSET,
+            "reviewer": _UNSET,
+            "review_prompt": _UNSET,
+            "objective": _UNSET,
+            "verify": _UNSET,
+            "max_review_rounds": _UNSET,
+            "cache": _UNSET,
+            "cache_dir": _UNSET,
+            "extra_body": _UNSET,
+            "reasoning_effort": _UNSET,
+            "sanitize_thinking": _UNSET,
+            "retries": _UNSET,
+            "prompt_cache": _UNSET,
+        }
+        defaults.update(overrides)
+        return argparse.Namespace(**defaults)
+
+    def _resolve_via_profile(self, profile_name, profiles, base_config=None):
+        """Helper: resolve a profile through the config pipeline and return args."""
+        from swival.config import resolve_profile_config, apply_config_to_args
+
+        config = dict(base_config or {})
+        config["profiles"] = profiles
+        if profile_name:
+            config["active_profile"] = profile_name
+
+        args = self._make_args(profile=profile_name)
+        resolve_profile_config(args, config)
+        apply_config_to_args(args, config)
+        return args
+
+    def test_lmstudio_profile(self):
+        profiles = {
+            "local": {"provider": "lmstudio", "model": "qwen3-coder"},
+        }
+        args = self._resolve_via_profile("local", profiles)
+        assert args.provider == "lmstudio"
+        assert args.model == "qwen3-coder"
+
+    def test_generic_with_base_url(self):
+        profiles = {
+            "ollama": {
+                "provider": "generic",
+                "base_url": "http://127.0.0.1:11434",
+                "model": "qwen3:32b",
+            },
+        }
+        args = self._resolve_via_profile("ollama", profiles)
+        assert args.provider == "generic"
+        assert args.base_url == "http://127.0.0.1:11434"
+        assert args.model == "qwen3:32b"
+
+    def test_chatgpt_with_reasoning_effort(self):
+        profiles = {
+            "gpt5": {
+                "provider": "chatgpt",
+                "model": "gpt-5.4",
+                "reasoning_effort": "high",
+            },
+        }
+        args = self._resolve_via_profile("gpt5", profiles)
+        assert args.provider == "chatgpt"
+        assert args.model == "gpt-5.4"
+        assert args.reasoning_effort == "high"
+
+    def test_bedrock_with_aws_profile(self):
+        profiles = {
+            "bedrock-prod": {
+                "provider": "bedrock",
+                "model": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+                "aws_profile": "prod",
+                "base_url": "us-west-2",
+            },
+        }
+        args = self._resolve_via_profile("bedrock-prod", profiles)
+        assert args.provider == "bedrock"
+        assert args.aws_profile == "prod"
+        assert args.base_url == "us-west-2"
+
+    def test_cli_flag_overrides_profile_provider(self):
+        """Explicit --provider on CLI overrides the profile's provider."""
+        from swival.config import resolve_profile_config, apply_config_to_args
+
+        config = {
+            "profiles": {
+                "fast": {"provider": "lmstudio", "model": "qwen3"},
+            },
+        }
+        args = self._make_args(profile="fast", provider="generic")
+        resolve_profile_config(args, config)
+        apply_config_to_args(args, config)
+        assert args.provider == "generic"
+        assert args.model == "qwen3"

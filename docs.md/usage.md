@@ -93,6 +93,14 @@ The REPL is built on `prompt-toolkit`, so it supports input history, history sea
 
 ### Model And Provider Flags
 
+`--profile NAME` selects a named LLM profile from config. Profiles bundle provider, model, and related settings under a short name so you can switch setups without retyping flags. See [Profiles](customization.md#profiles) for how to define them.
+
+```sh
+swival --profile gpt5 "review this patch"
+```
+
+`--list-profiles` prints available profiles and exits. The active profile is marked with an arrow and shows which layer selected it (CLI flag, project config, or global config).
+
 `--provider` chooses the backend provider and defaults to `lmstudio`. Valid values are `lmstudio`, `huggingface`, `openrouter`, `generic`, `google`, `chatgpt` (for ChatGPT Plus/Pro subscriptions), and `command` (shells out to an external program).
 
 `--model` overrides auto-discovery with a fixed model identifier.
@@ -100,6 +108,8 @@ The REPL is built on `prompt-toolkit`, so it supports input history, history sea
 `--base-url` sets a custom API base URL. For LM Studio, the default base URL is `http://127.0.0.1:1234` when `--base-url` is not set.
 
 `--api-key` provides a key directly on the command line and takes precedence over provider environment variables (`HF_TOKEN` for huggingface, `OPENROUTER_API_KEY` for openrouter, `OPENAI_API_KEY` for generic, `GEMINI_API_KEY` for google, or `CHATGPT_API_KEY` for chatgpt).
+
+When `--profile` is combined with explicit flags like `--provider` or `--model`, the explicit flags win on a per-key basis.
 
 ### Behavior Tuning Flags
 

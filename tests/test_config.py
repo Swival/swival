@@ -15,6 +15,7 @@ from swival.config import (
     config_to_session_kwargs,
     generate_config,
     load_config,
+    resolve_profile_config,
 )
 
 
@@ -125,11 +126,13 @@ class TestLoadConfig:
 
     def test_generate_config_is_valid_toml(self):
         content = generate_config()
-        # Extract only the commented-out key=value lines (skip header comments)
+        # Extract commented-out key=value lines and table headers
         lines = []
         for line in content.splitlines():
             stripped = line.lstrip("# ").strip()
-            if "=" in stripped and not stripped.startswith("--"):
+            if stripped.startswith("[") and stripped.endswith("]"):
+                lines.append(stripped)
+            elif "=" in stripped and not stripped.startswith("--"):
                 lines.append(stripped)
         # Should parse without error
         tomllib.loads("\n".join(lines))
@@ -1260,3 +1263,294 @@ class TestServeSkills:
         _write_toml(tmp_path / "swival.toml", 'serve_skills = "nope"\n')
         with pytest.raises(ConfigError, match="must be an array"):
             load_config(tmp_path)
+
+
+# ===========================================================================
+# Profiles
+# ===========================================================================
+
+
+class TestProfiles:
+    def test_load_active_profile(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(
+            tmp_path / "swival.toml",
+            'active_profile = "fast"\n'
+            "[profiles.fast]\n"
+            'provider = "lmstudio"\n'
+            'model = "qwen3"\n',
+        )
+        result = load_config(tmp_path)
+        assert result["active_profile"] == "fast"
+        assert result["profiles"]["fast"]["provider"] == "lmstudio"
+
+    def test_active_profile_must_be_string(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(tmp_path / "swival.toml", "active_profile = 42\n")
+        with pytest.raises(ConfigError, match="active_profile.*must be a string"):
+            load_config(tmp_path)
+
+    def test_profiles_must_be_table_of_tables(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(
+            tmp_path / "swival.toml",
+            "[profiles]\nfast = 42\n",
+        )
+        with pytest.raises(ConfigError, match="profiles.fast must be a table"):
+            load_config(tmp_path)
+
+    def test_disallowed_key_in_profile(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(
+            tmp_path / "swival.toml",
+            '[profiles.bad]\nprovider = "lmstudio"\nfiles = "all"\n',
+        )
+        with pytest.raises(
+            ConfigError,
+            match="profiles.bad.*'files' is not allowed.*Profiles only support LLM-related keys",
+        ):
+            load_config(tmp_path)
+
+    def test_profile_type_validation(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(
+            tmp_path / "swival.toml",
+            '[profiles.bad]\nprovider = "lmstudio"\nmax_output_tokens = "big"\n',
+        )
+        with pytest.raises(
+            ConfigError, match="profiles.bad.max_output_tokens.*expected int.*got str"
+        ):
+            load_config(tmp_path)
+
+    def test_profile_reasoning_effort_validation(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(
+            tmp_path / "swival.toml",
+            '[profiles.bad]\nprovider = "chatgpt"\nreasoning_effort = "super"\n',
+        )
+        with pytest.raises(ConfigError, match="profiles.bad.reasoning_effort"):
+            load_config(tmp_path)
+
+    def test_merge_global_and_project_profiles_per_key(self, tmp_path, monkeypatch):
+        global_dir = tmp_path / "global"
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(global_dir))
+        _write_toml(
+            global_dir / "swival" / "config.toml",
+            "[profiles.shared]\n"
+            'provider = "openrouter"\n'
+            'model = "global-model"\n'
+            "max_context_tokens = 65536\n",
+        )
+        _write_toml(
+            tmp_path / "swival.toml",
+            '[profiles.shared]\nmodel = "project-model"\n',
+        )
+        result = load_config(tmp_path)
+        shared = result["profiles"]["shared"]
+        assert shared["provider"] == "openrouter"
+        assert shared["model"] == "project-model"
+        assert shared["max_context_tokens"] == 65536
+
+    def test_project_active_profile_overrides_global(self, tmp_path, monkeypatch):
+        global_dir = tmp_path / "global"
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(global_dir))
+        _write_toml(
+            global_dir / "swival" / "config.toml",
+            'active_profile = "global-default"\n'
+            "[profiles.global-default]\n"
+            'provider = "lmstudio"\n',
+        )
+        _write_toml(
+            tmp_path / "swival.toml",
+            'active_profile = "project-default"\n'
+            "[profiles.project-default]\n"
+            'provider = "chatgpt"\n',
+        )
+        result = load_config(tmp_path)
+        assert result["active_profile"] == "project-default"
+
+    def test_global_only_profiles(self, tmp_path, monkeypatch):
+        global_dir = tmp_path / "global"
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(global_dir))
+        _write_toml(
+            global_dir / "swival" / "config.toml",
+            '[profiles.remote]\nprovider = "openrouter"\nmodel = "big-model"\n',
+        )
+        result = load_config(tmp_path)
+        assert "remote" in result["profiles"]
+
+    def test_project_only_profiles(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(
+            tmp_path / "swival.toml",
+            '[profiles.local]\nprovider = "lmstudio"\n',
+        )
+        result = load_config(tmp_path)
+        assert "local" in result["profiles"]
+
+    def test_profile_missing_provider_raises(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(
+            tmp_path / "swival.toml",
+            '[profiles.fast]\nmodel = "gpt-5.4"\n',
+        )
+        with pytest.raises(ConfigError, match="profiles.fast.*'provider' is required"):
+            load_config(tmp_path)
+
+    def test_active_profile_source_from_project(self, tmp_path, monkeypatch):
+        global_dir = tmp_path / "global"
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(global_dir))
+        _write_toml(
+            global_dir / "swival" / "config.toml",
+            '[profiles.shared]\nprovider = "openrouter"\n',
+        )
+        _write_toml(
+            tmp_path / "swival.toml",
+            'active_profile = "shared"\n',
+        )
+        result = load_config(tmp_path)
+        assert result["_active_profile_source"] == "via project config"
+
+    def test_active_profile_source_from_global(self, tmp_path, monkeypatch):
+        global_dir = tmp_path / "global"
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(global_dir))
+        _write_toml(
+            global_dir / "swival" / "config.toml",
+            'active_profile = "shared"\n[profiles.shared]\nprovider = "openrouter"\n',
+        )
+        result = load_config(tmp_path)
+        assert result["_active_profile_source"] == "via global config"
+
+
+class TestResolveProfileConfig:
+    def test_no_profile_returns_none(self):
+        args = argparse.Namespace(profile=None)
+        config = {"provider": "lmstudio"}
+        result = resolve_profile_config(args, config)
+        assert result is None
+
+    def test_cli_profile_overlays_config(self):
+        args = argparse.Namespace(profile="fast")
+        config = {
+            "provider": "openrouter",
+            "model": "old-model",
+            "profiles": {
+                "fast": {"provider": "lmstudio", "model": "qwen3"},
+            },
+        }
+        result = resolve_profile_config(args, config)
+        assert result == "fast"
+        assert config["provider"] == "lmstudio"
+        assert config["model"] == "qwen3"
+        assert "profiles" not in config
+
+    def test_active_profile_from_config(self):
+        args = argparse.Namespace(profile=None)
+        config = {
+            "active_profile": "remote",
+            "profiles": {
+                "remote": {"provider": "openrouter", "model": "big"},
+            },
+        }
+        result = resolve_profile_config(args, config)
+        assert result == "remote"
+        assert config["provider"] == "openrouter"
+
+    def test_cli_profile_overrides_config_active(self):
+        args = argparse.Namespace(profile="local")
+        config = {
+            "active_profile": "remote",
+            "profiles": {
+                "remote": {"provider": "openrouter"},
+                "local": {"provider": "lmstudio"},
+            },
+        }
+        result = resolve_profile_config(args, config)
+        assert result == "local"
+        assert config["provider"] == "lmstudio"
+
+    def test_unknown_profile_raises(self):
+        args = argparse.Namespace(profile="nonexistent")
+        config = {
+            "profiles": {"fast": {"provider": "lmstudio"}},
+        }
+        with pytest.raises(ConfigError, match="profile 'nonexistent' not found.*fast"):
+            resolve_profile_config(args, config)
+
+    def test_unknown_profile_no_profiles_defined(self):
+        args = argparse.Namespace(profile="ghost")
+        config = {}
+        with pytest.raises(
+            ConfigError, match="profile 'ghost' not found.*none defined"
+        ):
+            resolve_profile_config(args, config)
+
+    def test_explicit_cli_flags_override_profile(self):
+        args = _make_args(provider="generic")
+        args.profile = "fast"
+        config = {
+            "profiles": {
+                "fast": {"provider": "lmstudio", "model": "qwen3"},
+            },
+        }
+        resolve_profile_config(args, config)
+        apply_config_to_args(args, config)
+        assert args.provider == "generic"
+        assert args.model == "qwen3"
+
+    def test_profile_cleans_up_internal_keys(self):
+        args = argparse.Namespace(profile="fast")
+        config = {
+            "active_profile": "fast",
+            "profiles": {"fast": {"provider": "lmstudio"}},
+        }
+        resolve_profile_config(args, config)
+        assert "profiles" not in config
+        assert "active_profile" not in config
+
+    def test_list_profiles_shows_source_via_cli(self, capsys):
+        from swival.agent import _handle_list_profiles
+
+        config = {
+            "profiles": {"fast": {"provider": "lmstudio", "model": "qwen3"}},
+        }
+        args = argparse.Namespace(profile="fast")
+        _handle_list_profiles(config, args)
+        out = capsys.readouterr().out
+        assert "active via --profile" in out
+
+    def test_list_profiles_shows_source_via_project(self, capsys):
+        from swival.agent import _handle_list_profiles
+
+        config = {
+            "active_profile": "fast",
+            "_active_profile_source": "via project config",
+            "profiles": {"fast": {"provider": "lmstudio", "model": "qwen3"}},
+        }
+        args = argparse.Namespace(profile=None)
+        _handle_list_profiles(config, args)
+        out = capsys.readouterr().out
+        assert "active via project config" in out
+
+    def test_list_profiles_shows_source_via_global(self, capsys):
+        from swival.agent import _handle_list_profiles
+
+        config = {
+            "active_profile": "fast",
+            "_active_profile_source": "via global config",
+            "profiles": {"fast": {"provider": "lmstudio", "model": "qwen3"}},
+        }
+        args = argparse.Namespace(profile=None)
+        _handle_list_profiles(config, args)
+        out = capsys.readouterr().out
+        assert "active via global config" in out
+
+    def test_api_key_in_profile_warns_in_git(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        (tmp_path / ".git").mkdir()
+        _write_toml(
+            tmp_path / "swival.toml",
+            '[profiles.secret]\nprovider = "openrouter"\napi_key = "sk-secret"\n',
+        )
+        load_config(tmp_path)
+        assert "api_key" in capsys.readouterr().err

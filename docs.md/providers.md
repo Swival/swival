@@ -11,6 +11,30 @@ Swival supports local, hosted, and API-based model providers:
 - [AWS Bedrock](#aws-bedrock) — models hosted on AWS
 - [Command (External Program)](#command-external-program) — shell out to an external program
 
+## Switching Between Providers
+
+If you use more than one provider regularly, define named profiles in your config instead of retyping flags each time. See [Profiles](customization.md#profiles) for the full syntax.
+
+```toml
+[profiles.local]
+provider = "lmstudio"
+model = "qwen3-coder-next"
+
+[profiles.gpt5]
+provider = "chatgpt"
+model = "gpt-5.4"
+reasoning_effort = "high"
+```
+
+Then switch with `--profile`:
+
+```sh
+swival --profile local "quick task"
+swival --profile gpt5 "hard task"
+```
+
+The sections below document each provider's flags, authentication, and behavior in detail.
+
 ## LM Studio
 
 LM Studio is the default provider and usually requires no flags when the local server is already running with a loaded model.

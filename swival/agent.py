@@ -3293,6 +3293,19 @@ def build_parser():
         help="With --init-config, write to <base-dir>/swival.toml instead of global config.",
     )
     provider_group.add_argument(
+        "--profile",
+        type=str,
+        default=None,
+        metavar="NAME",
+        help="Select a named LLM profile from config (defined in [profiles.NAME]).",
+    )
+    output_group.add_argument(
+        "--list-profiles",
+        action="store_true",
+        default=False,
+        help="Print available profiles and exit.",
+    )
+    provider_group.add_argument(
         "--provider",
         choices=[
             "lmstudio",
@@ -3482,6 +3495,53 @@ def _handle_init_config(args):
     print(f"Created {dest}")
 
 
+def _handle_list_profiles(config: dict, args) -> None:
+    """Print available profiles and exit."""
+    profiles = config.get("profiles", {})
+    cli_profile = getattr(args, "profile", None)
+    cfg_active = config.get("active_profile")
+
+    active_name = cli_profile or cfg_active
+    if cli_profile:
+        active_source = "via --profile"
+    elif cfg_active:
+        active_source = config.get("_active_profile_source", "via config")
+    else:
+        active_source = ""
+
+    if not profiles:
+        print(
+            "No profiles defined. Add [profiles.NAME] sections to your config.",
+            file=sys.stderr,
+        )
+        return
+
+    for name in sorted(profiles):
+        body = profiles[name]
+        provider = body.get("provider", "?")
+        model = body.get("model", "(auto)")
+        extras = []
+        if "base_url" in body:
+            extras.append(f"base={body['base_url']}")
+        if "reasoning_effort" in body:
+            extras.append(f"reasoning={body['reasoning_effort']}")
+        if "max_context_tokens" in body:
+            extras.append(f"ctx={body['max_context_tokens']}")
+
+        if name == active_name:
+            marker = "\u2192 "
+            suffix = f"  (active {active_source})" if active_source else "  (active)"
+        else:
+            marker = "  "
+            suffix = ""
+
+        line = f"{marker}{name:<16} {provider:<12} / {model}"
+        if extras:
+            line += f"  {', '.join(extras)}"
+        line += suffix
+        print(line)
+
+
 def main():
     import signal
 
@@ -3508,7 +3568,7 @@ def main():
         sys.exit(0)
 
     # Load config files, apply to args, resolve sentinels to defaults
-    from .config import load_config, apply_config_to_args
+    from .config import load_config, apply_config_to_args, resolve_profile_config
     from .config import ConfigError as _ConfigError
 
     # --- Reviewer mode: reinterpret positional arg as base_dir ---
@@ -3525,6 +3585,10 @@ def main():
         base_dir = Path(args.question).resolve()
         try:
             file_config = load_config(base_dir)
+        except _ConfigError as e:
+            parser.error(str(e))
+        try:
+            resolve_profile_config(args, file_config)
         except _ConfigError as e:
             parser.error(str(e))
         apply_config_to_args(args, file_config)
@@ -3550,6 +3614,18 @@ def main():
         file_config = load_config(base_dir)
     except _ConfigError as e:
         parser.error(str(e))
+
+    # Handle --list-profiles before profile resolution
+    if getattr(args, "list_profiles", False):
+        _handle_list_profiles(file_config, args)
+        sys.exit(0)
+
+    # Resolve selected profile into flat config before apply_config_to_args
+    try:
+        active_profile_name = resolve_profile_config(args, file_config)
+    except _ConfigError as e:
+        parser.error(str(e))
+    args._active_profile = active_profile_name
 
     # Stash MCP servers from TOML config before apply_config_to_args strips them
     args._mcp_servers_toml = file_config.pop("mcp_servers", None)
@@ -4505,6 +4581,8 @@ def _run_main(args, report, _write_report, parser):
     if args.verbose:
         provider_name = llm_kwargs.get("provider", args.provider)
         parts = [f"provider={provider_name}", f"model={model_id}"]
+        if getattr(args, "_active_profile", None):
+            parts.append(f"profile={args._active_profile}")
         if context_length is not None:
             parts.append(f"context={context_length:,}")
         if provider_name != "command":
