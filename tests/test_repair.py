@@ -196,14 +196,16 @@ class TestCoerceTypes:
         assert result["replace_all"] == 2
 
 
-class TestShapeRepair:
-    def test_wrap_object_in_array(self):
+class TestShapesLeftAlone:
+    def test_dict_for_array_left_alone(self):
+        """Dict passed for an array field is left as-is for the tool to handle."""
         args = {"files": {"file_path": "a.py"}}
         result, repairs = repair_tool_args(args, SCHEMA_READ_MULTIPLE)
-        assert result["files"] == [{"file_path": "a.py"}]
-        assert any(r["type"] == "wrap_in_array" for r in repairs)
+        assert result["files"] == {"file_path": "a.py"}
+        assert not repairs
 
-    def test_unwrap_single_item_list(self):
+    def test_list_for_object_left_alone(self):
+        """List passed for an object field is left as-is for the tool to handle."""
         schema = {
             "type": "object",
             "properties": {"config": {"type": "object"}},
@@ -211,26 +213,15 @@ class TestShapeRepair:
         }
         args = {"config": [{"key": "value"}]}
         result, repairs = repair_tool_args(args, schema)
-        assert result["config"] == {"key": "value"}
-        assert any(r["type"] == "unwrap_single_item" for r in repairs)
-
-    def test_no_unwrap_multi_item_list(self):
-        schema = {
-            "type": "object",
-            "properties": {"config": {"type": "object"}},
-            "required": ["config"],
-        }
-        args = {"config": [{"a": 1}, {"b": 2}]}
-        result, repairs = repair_tool_args(args, schema)
-        assert result["config"] == [{"a": 1}, {"b": 2}]
-        assert not any(r["type"] == "unwrap_single_item" for r in repairs)
+        assert result["config"] == [{"key": "value"}]
+        assert not repairs
 
     def test_string_for_array_left_alone(self):
         """String passed for an array[string] field is left as-is for the tool to handle."""
         args = {"command": "ls -la"}
         result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
         assert result["command"] == "ls -la"
-        assert not any(r["type"] == "wrap_string_in_array" for r in repairs)
+        assert not any(r["type"].startswith("wrap") for r in repairs)
 
 
 class TestNearMissFields:

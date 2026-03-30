@@ -48,7 +48,6 @@ def repair_tool_args(
 
     _repair_near_miss_fields(result, properties, repairs)
     _repair_types(result, properties, repairs)
-    _repair_shapes(result, properties, repairs)
     _fill_defaults(result, schema, repairs)
     _strip_unknown(result, properties, repairs)
 
@@ -144,29 +143,6 @@ def _coerce_scalar(value: Any, expected: str) -> Any:
         return int(value)
 
     return _SKIP
-
-
-def _repair_shapes(
-    result: dict[str, Any],
-    properties: dict[str, Any],
-    repairs: list[dict[str, Any]],
-) -> None:
-    """Fix array-vs-object shape mismatches."""
-    for field, prop in properties.items():
-        if field not in result:
-            continue
-        value = result[field]
-        expected = prop.get("type")
-        if expected is None:
-            continue
-
-        if expected == "array" and isinstance(value, dict):
-            result[field] = [value]
-            repairs.append({"type": "wrap_in_array", "field": field})
-        elif expected == "object" and isinstance(value, list):
-            if len(value) == 1 and isinstance(value[0], dict):
-                result[field] = value[0]
-                repairs.append({"type": "unwrap_single_item", "field": field})
 
 
 def _fill_defaults(
