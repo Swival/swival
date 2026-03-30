@@ -264,30 +264,35 @@ def outline_files(
         total_bytes += section_bytes
         return True
 
+    def _record_section(title: str, status: str, body: str, index: int) -> bool:
+        nonlocal files_succeeded, files_with_errors, skipped_files
+        section = _build_outline_section(title, status, body)
+        if not _try_append(section):
+            skipped_files = len(files) - index
+            return False
+        if status == "error":
+            files_with_errors += 1
+        else:
+            files_succeeded += 1
+        return True
+
     for i, spec in enumerate(files):
         if isinstance(spec, str):
             spec = {"file_path": spec}
         if not isinstance(spec, dict):
-            section = _build_outline_section(
+            if not _record_section(
                 f"file {i + 1}",
                 "error",
                 f"error: expected object or string, got {type(spec).__name__}",
-            )
-            if _try_append(section):
-                files_with_errors += 1
-            else:
-                skipped_files = len(files) - i
+                i,
+            ):
                 break
             continue
 
         file_path = spec.get("file_path")
         title = file_path or f"file {i + 1}"
         if not file_path:
-            section = _build_outline_section(title, "error", "error: missing file_path")
-            if _try_append(section):
-                files_with_errors += 1
-            else:
-                skipped_files = len(files) - i
+            if not _record_section(title, "error", "error: missing file_path", i):
                 break
             continue
 
@@ -301,20 +306,9 @@ def outline_files(
             files_mode=files_mode,
         )
 
-        is_error = result.startswith("error:")
-        section = _build_outline_section(
-            title,
-            "error" if is_error else "ok",
-            result,
-        )
-
-        if _try_append(section):
-            if is_error:
-                files_with_errors += 1
-            else:
-                files_succeeded += 1
-        else:
-            skipped_files = len(files) - i
+        if not _record_section(
+            title, "error" if result.startswith("error:") else "ok", result, i
+        ):
             break
 
     header = "\n".join(
