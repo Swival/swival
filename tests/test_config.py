@@ -143,6 +143,98 @@ class TestLoadConfig:
         content_global = generate_config(project=False)
         assert "Global config" in content_global
 
+    def test_generate_config_section_order(self):
+        content = generate_config()
+        headings = [
+            line.removeprefix("# --- ").removesuffix(" ---")
+            for line in content.splitlines()
+            if line.startswith("# --- ")
+        ]
+        assert headings == [
+            "Provider / model",
+            "Generation parameters",
+            "Agent behaviour",
+            "Sandbox / security",
+            "Features",
+            "UI",
+            "Cache",
+            "MCP",
+            "Profiles",
+            "External",
+            "Lifecycle hooks",
+            "Secret encryption",
+            "A2A serve",
+            "Profile examples",
+            "MCP server examples",
+        ]
+
+    def test_generate_config_no_scalars_after_table_header(self):
+        """Top-level scalar keys must not appear after a [table] header.
+
+        In TOML, bare keys after [table] are scoped into that table.
+        The template splits table-bearing sections into a scalar
+        preamble (in the scalar zone) and a trailing example-only
+        section.
+        """
+        table_example_sections = {"Profile examples", "MCP server examples"}
+
+        content = generate_config()
+        lines = content.splitlines()
+
+        first_table_lineno = None
+        for i, line in enumerate(lines):
+            stripped = line.lstrip("# ").strip()
+            if (
+                stripped.startswith("[")
+                and "=" not in stripped
+                and "---" not in stripped
+            ):
+                first_table_lineno = i
+                break
+        assert first_table_lineno is not None, "Expected at least one [table] header"
+
+        first_table_section = None
+        first_table_section_lineno = None
+        for i in range(first_table_lineno, -1, -1):
+            if lines[i].startswith("# --- "):
+                first_table_section = (
+                    lines[i].removeprefix("# --- ").removesuffix(" ---")
+                )
+                first_table_section_lineno = i
+                break
+        assert first_table_section in table_example_sections, (
+            f"First [table] header is in section '{first_table_section}', "
+            f"which is not a known table-example section."
+        )
+
+        in_section = None
+        seen_table_in_section = False
+        for i in range(first_table_section_lineno, len(lines)):
+            line = lines[i]
+            stripped = line.lstrip("# ").strip()
+            if line.startswith("# --- "):
+                name = line.removeprefix("# --- ").removesuffix(" ---")
+                assert name in table_example_sections, (
+                    f"Section '{name}' (line {i + 1}) appears after the "
+                    f"table-example zone starts. Move it above "
+                    f"'{first_table_section}'."
+                )
+                in_section = name
+                seen_table_in_section = False
+                continue
+            if not stripped:
+                continue
+            is_table = stripped.startswith("[") and "=" not in stripped
+            if is_table:
+                seen_table_in_section = True
+                continue
+            if "=" in stripped and not seen_table_in_section:
+                pytest.fail(
+                    f"Scalar key '{stripped}' in section '{in_section}' "
+                    f"(line {i + 1}) appears before any [table] header. "
+                    f"Move it to the scalar preamble section."
+                )
+
 
 # ===========================================================================
 # Type validation
