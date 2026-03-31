@@ -2,6 +2,17 @@
 
 All notable user-facing changes to Swival.
 
+## 0.10.6
+
+- Special tokens in user, system, and tool messages are now escaped by inserting
+  zero-width spaces at token boundaries, preventing the tokenizer from
+  misinterpreting literal text as control tokens.
+- Tool descriptions have been removed from the system prompt, freeing up context
+  space (models already receive tool schemas via the function-calling API).
+- Internal litellm fields and `reasoning_content` are now stripped from assistant
+  messages before they are sent back to the provider, fixing compatibility
+  issues.
+
 ## 0.10.5
 
 - `/status` REPL command has been added to show the current session state
