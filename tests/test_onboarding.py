@@ -7,6 +7,15 @@ from swival.onboarding import (
     run_onboarding,
     render_minimal_config,
     _mask_secret,
+    _prompt_text_required,
+    _ask_api_key,
+    _ask_huggingface,
+    _ask_command,
+    _ask_lmstudio,
+    _ask_openrouter,
+    _ask_google,
+    _ask_generic,
+    _ask_bedrock,
 )
 from swival.agent import _should_try_onboarding
 from swival.config import _UNSET, _toml_escape
@@ -175,26 +184,27 @@ class TestHelpers:
         assert _toml_escape("a\nb") == "a\\nb"
 
 
+def _patch_prompt_sequence(monkeypatch, responses):
+    """Patch _session.prompt to return values from a list in order."""
+    call_idx = {"i": 0}
+
+    def fake_prompt(*args, **kwargs):
+        if call_idx["i"] < len(responses):
+            val = responses[call_idx["i"]]
+            call_idx["i"] += 1
+            if val is KeyboardInterrupt:
+                raise KeyboardInterrupt
+            return val
+        return ""
+
+    monkeypatch.setattr("swival.onboarding._session.prompt", fake_prompt)
+
+
 class TestRunOnboarding:
-    def _patch_prompts(self, monkeypatch, responses):
-        """Patch _session.prompt to return values from a list in order."""
-        call_idx = {"i": 0}
-
-        def fake_prompt(*args, **kwargs):
-            if call_idx["i"] < len(responses):
-                val = responses[call_idx["i"]]
-                call_idx["i"] += 1
-                if val is KeyboardInterrupt:
-                    raise KeyboardInterrupt
-                return val
-            return ""
-
-        monkeypatch.setattr("swival.onboarding._session.prompt", fake_prompt)
-
     def test_not_right_now_no_skip_marker(self, tmp_path, monkeypatch):
         cfg_dir = tmp_path / "cfg"
         monkeypatch.setattr("swival.onboarding.global_config_dir", lambda: cfg_dir)
-        self._patch_prompts(monkeypatch, ["3"])
+        _patch_prompt_sequence(monkeypatch, ["3"])
         result = run_onboarding()
         assert result is None
         assert not (cfg_dir / "config.toml").exists()
@@ -203,7 +213,7 @@ class TestRunOnboarding:
     def test_dont_show_again_writes_skip_marker(self, tmp_path, monkeypatch):
         cfg_dir = tmp_path / "cfg"
         monkeypatch.setattr("swival.onboarding.global_config_dir", lambda: cfg_dir)
-        self._patch_prompts(monkeypatch, ["4"])
+        _patch_prompt_sequence(monkeypatch, ["4"])
         result = run_onboarding()
         assert result is None
         assert not (cfg_dir / "config.toml").exists()
@@ -212,7 +222,7 @@ class TestRunOnboarding:
     def test_ctrl_c_exits_cleanly_no_skip_marker(self, tmp_path, monkeypatch):
         cfg_dir = tmp_path / "cfg"
         monkeypatch.setattr("swival.onboarding.global_config_dir", lambda: cfg_dir)
-        self._patch_prompts(monkeypatch, ["2", KeyboardInterrupt])
+        _patch_prompt_sequence(monkeypatch, ["2", KeyboardInterrupt])
         result = run_onboarding()
         assert result is None
         assert not (cfg_dir / "config.toml").exists()
@@ -222,7 +232,7 @@ class TestRunOnboarding:
         cfg_dir = tmp_path / "cfg"
         monkeypatch.setattr("swival.onboarding.global_config_dir", lambda: cfg_dir)
         buf = _capture_stderr(monkeypatch)
-        self._patch_prompts(
+        _patch_prompt_sequence(
             monkeypatch,
             [
                 "2",  # Quick setup
@@ -245,7 +255,7 @@ class TestRunOnboarding:
         cfg_dir = tmp_path / "cfg"
         monkeypatch.setattr("swival.onboarding.global_config_dir", lambda: cfg_dir)
         buf = _capture_stderr(monkeypatch)
-        self._patch_prompts(
+        _patch_prompt_sequence(
             monkeypatch,
             [
                 "1",  # Guided tour + setup
@@ -269,7 +279,7 @@ class TestRunOnboarding:
         cfg_dir = tmp_path / "cfg"
         monkeypatch.setattr("swival.onboarding.global_config_dir", lambda: cfg_dir)
         buf = _capture_stderr(monkeypatch)
-        self._patch_prompts(
+        _patch_prompt_sequence(
             monkeypatch,
             [
                 "1",  # Guided tour
@@ -292,7 +302,7 @@ class TestRunOnboarding:
         cfg_dir = tmp_path / "cfg"
         monkeypatch.setattr("swival.onboarding.global_config_dir", lambda: cfg_dir)
         buf = _capture_stderr(monkeypatch)
-        self._patch_prompts(
+        _patch_prompt_sequence(
             monkeypatch,
             [
                 "2",  # Quick setup
@@ -333,7 +343,7 @@ class TestRunOnboarding:
     def test_successful_openrouter_with_env_var(self, tmp_path, monkeypatch):
         cfg_dir = tmp_path / "cfg"
         monkeypatch.setattr("swival.onboarding.global_config_dir", lambda: cfg_dir)
-        self._patch_prompts(
+        _patch_prompt_sequence(
             monkeypatch,
             [
                 "2",  # Quick setup
@@ -354,7 +364,7 @@ class TestRunOnboarding:
     def test_successful_generic_with_api_key(self, tmp_path, monkeypatch):
         cfg_dir = tmp_path / "cfg"
         monkeypatch.setattr("swival.onboarding.global_config_dir", lambda: cfg_dir)
-        self._patch_prompts(
+        _patch_prompt_sequence(
             monkeypatch,
             [
                 "2",  # Quick setup
@@ -378,7 +388,7 @@ class TestRunOnboarding:
     def test_cancel_at_confirmation_no_skip_marker(self, tmp_path, monkeypatch):
         cfg_dir = tmp_path / "cfg"
         monkeypatch.setattr("swival.onboarding.global_config_dir", lambda: cfg_dir)
-        self._patch_prompts(
+        _patch_prompt_sequence(
             monkeypatch,
             [
                 "2",  # Quick setup
@@ -396,7 +406,7 @@ class TestRunOnboarding:
     def test_start_over_loops_back(self, tmp_path, monkeypatch):
         cfg_dir = tmp_path / "cfg"
         monkeypatch.setattr("swival.onboarding.global_config_dir", lambda: cfg_dir)
-        self._patch_prompts(
+        _patch_prompt_sequence(
             monkeypatch,
             [
                 "2",  # Quick setup
@@ -422,7 +432,7 @@ class TestRunOnboarding:
         existing = cfg_dir / "config.toml"
         existing.write_text('provider = "lmstudio"\n')
         monkeypatch.setattr("swival.onboarding.global_config_dir", lambda: cfg_dir)
-        self._patch_prompts(
+        _patch_prompt_sequence(
             monkeypatch,
             [
                 "2",  # Quick setup
@@ -440,7 +450,7 @@ class TestRunOnboarding:
         cfg_dir = tmp_path / "cfg"
         monkeypatch.setattr("swival.onboarding.global_config_dir", lambda: cfg_dir)
         buf = _capture_stderr(monkeypatch)
-        self._patch_prompts(
+        _patch_prompt_sequence(
             monkeypatch,
             [
                 "2",  # Quick setup
@@ -458,7 +468,7 @@ class TestRunOnboarding:
         cfg_dir = tmp_path / "cfg"
         monkeypatch.setattr("swival.onboarding.global_config_dir", lambda: cfg_dir)
         buf = _capture_stderr(monkeypatch)
-        self._patch_prompts(
+        _patch_prompt_sequence(
             monkeypatch,
             [
                 "2",  # Quick setup
@@ -476,7 +486,7 @@ class TestRunOnboarding:
         cfg_dir = tmp_path / "cfg"
         monkeypatch.setattr("swival.onboarding.global_config_dir", lambda: cfg_dir)
         _capture_stderr(monkeypatch)
-        self._patch_prompts(
+        _patch_prompt_sequence(
             monkeypatch,
             [
                 "1",  # Guided tour
@@ -490,3 +500,178 @@ class TestRunOnboarding:
         run_onboarding()
         captured = capsys.readouterr()
         assert captured.out == ""
+
+
+class TestRequiredFieldValidation:
+    def test_prompt_text_required_reprompts_on_blank(self, monkeypatch):
+        buf = _capture_stderr(monkeypatch)
+        _patch_prompt_sequence(monkeypatch, ["", "", "real-value"])
+        result = _prompt_text_required("Model")
+        assert result == "real-value"
+        assert "is required" in buf.getvalue()
+
+    def test_prompt_text_required_accepts_first_nonempty(self, monkeypatch):
+        _capture_stderr(monkeypatch)
+        _patch_prompt_sequence(monkeypatch, ["good-value"])
+        result = _prompt_text_required("Model")
+        assert result == "good-value"
+
+    def test_ask_api_key_reprompts_on_blank(self, monkeypatch):
+        buf = _capture_stderr(monkeypatch)
+        _patch_prompt_sequence(
+            monkeypatch,
+            [
+                "2",  # "Enter it now"
+                "",  # blank first attempt
+                "sk-abc",  # valid second attempt
+            ],
+        )
+        s = {}
+        _ask_api_key(s, env_var="TEST_KEY")
+        assert s["api_key"] == "sk-abc"
+        assert "is required" in buf.getvalue()
+
+    def test_ask_api_key_env_var_skips_prompt(self, monkeypatch):
+        _capture_stderr(monkeypatch)
+        _patch_prompt_sequence(monkeypatch, ["1"])  # "I'll set ENV myself"
+        s = {}
+        _ask_api_key(s, env_var="TEST_KEY")
+        assert "api_key" not in s
+
+    def test_ask_huggingface_rejects_bare_model(self, monkeypatch):
+        buf = _capture_stderr(monkeypatch)
+        _patch_prompt_sequence(
+            monkeypatch,
+            [
+                "bare-model",  # no slash
+                "org/model",  # valid
+                "1",  # "I'll set HF_TOKEN myself"
+                "",  # skip endpoint
+            ],
+        )
+        s = {}
+        _ask_huggingface(s)
+        assert s["model"] == "org/model"
+        assert "org/model format" in buf.getvalue()
+
+    def test_ask_command_rejects_nonexistent(self, monkeypatch):
+        buf = _capture_stderr(monkeypatch)
+        _patch_prompt_sequence(
+            monkeypatch,
+            [
+                "definitely_not_a_real_command_xyz",
+                "echo",  # exists on PATH
+            ],
+        )
+        s = {}
+        _ask_command(s)
+        assert s["model"] == "echo"
+        assert "Command not found" in buf.getvalue()
+
+    def test_ask_command_rejects_bad_quoting(self, monkeypatch):
+        buf = _capture_stderr(monkeypatch)
+        _patch_prompt_sequence(
+            monkeypatch,
+            [
+                "echo 'unclosed",  # bad quoting
+                "echo",  # valid
+            ],
+        )
+        s = {}
+        _ask_command(s)
+        assert s["model"] == "echo"
+        assert "Invalid command syntax" in buf.getvalue()
+
+    def test_ask_lmstudio_allows_blank_model(self, monkeypatch):
+        _capture_stderr(monkeypatch)
+        _patch_prompt_sequence(
+            monkeypatch,
+            [
+                "y",  # use default server
+                "",  # blank model
+            ],
+        )
+        s = {}
+        _ask_lmstudio(s)
+        assert "model" not in s
+
+    def test_ask_openrouter_requires_model(self, monkeypatch):
+        buf = _capture_stderr(monkeypatch)
+        _patch_prompt_sequence(
+            monkeypatch,
+            [
+                "",  # blank model
+                "openai/gpt-5.4",  # valid model
+                "1",  # "I'll set OPENROUTER_API_KEY myself"
+                "",  # skip context tokens
+            ],
+        )
+        s = {}
+        _ask_openrouter(s)
+        assert s["model"] == "openai/gpt-5.4"
+        assert "is required" in buf.getvalue()
+
+    def test_ask_google_requires_model(self, monkeypatch):
+        buf = _capture_stderr(monkeypatch)
+        _patch_prompt_sequence(
+            monkeypatch,
+            [
+                "",  # blank model
+                "gemini-2.5-flash",  # valid
+                "1",  # "I'll set env var myself"
+            ],
+        )
+        s = {}
+        _ask_google(s)
+        assert s["model"] == "gemini-2.5-flash"
+        assert "is required" in buf.getvalue()
+
+    def test_ask_generic_requires_base_url_and_model(self, monkeypatch):
+        buf = _capture_stderr(monkeypatch)
+        _patch_prompt_sequence(
+            monkeypatch,
+            [
+                "",  # blank base_url
+                "http://localhost:11434",  # valid base_url
+                "",  # blank model
+                "llama3",  # valid model
+                "1",  # "I'll set OPENAI_API_KEY myself"
+                "",  # skip context tokens
+            ],
+        )
+        s = {}
+        _ask_generic(s)
+        assert s["base_url"] == "http://localhost:11434"
+        assert s["model"] == "llama3"
+        assert buf.getvalue().count("is required") == 2
+
+    def test_ask_bedrock_requires_model(self, monkeypatch):
+        buf = _capture_stderr(monkeypatch)
+        _patch_prompt_sequence(
+            monkeypatch,
+            [
+                "",  # blank
+                "global.anthropic.claude-opus-4-6-v1",  # valid
+                "",  # skip region
+                "",  # skip profile
+            ],
+        )
+        s = {}
+        _ask_bedrock(s)
+        assert s["model"] == "global.anthropic.claude-opus-4-6-v1"
+        assert "is required" in buf.getvalue()
+
+    def test_google_onboarding_mentions_both_env_vars(self, monkeypatch):
+        buf = _capture_stderr(monkeypatch)
+        _patch_prompt_sequence(
+            monkeypatch,
+            [
+                "gemini-2.5-flash",
+                "1",  # "I'll set env var myself"
+            ],
+        )
+        s = {}
+        _ask_google(s)
+        output = buf.getvalue()
+        assert "GEMINI_API_KEY" in output
+        assert "OPENAI_API_KEY" in output

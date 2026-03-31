@@ -4,6 +4,8 @@ Guides the user through provider selection and config creation on first run.
 All output goes to stderr via Rich. Never writes to stdout.
 """
 
+import shlex
+import shutil
 import sys
 from pathlib import Path
 
@@ -482,9 +484,7 @@ def _ask_chatgpt(s: dict) -> None:
 
 
 def _ask_openrouter(s: dict) -> None:
-    model = _prompt_text("Model (e.g. openai/gpt-5.4)", default="")
-    if model:
-        s["model"] = model
+    s["model"] = _prompt_text_required("Model (e.g. openai/gpt-5.4)")
 
     _ask_api_key(s, env_var="OPENROUTER_API_KEY")
 
@@ -494,21 +494,14 @@ def _ask_openrouter(s: dict) -> None:
 
 
 def _ask_google(s: dict) -> None:
-    model = _prompt_text("Model (e.g. gemini-2.5-flash)", default="")
-    if model:
-        s["model"] = model
+    s["model"] = _prompt_text_required("Model (e.g. gemini-2.5-flash)")
 
-    _ask_api_key(s, env_var="GEMINI_API_KEY")
+    _ask_api_key(s, env_var="GEMINI_API_KEY or OPENAI_API_KEY")
 
 
 def _ask_generic(s: dict) -> None:
-    url = _prompt_text("Base URL (e.g. http://127.0.0.1:11434)", default="")
-    if url:
-        s["base_url"] = url
-
-    model = _prompt_text("Model name", default="")
-    if model:
-        s["model"] = model
+    s["base_url"] = _prompt_text_required("Base URL (e.g. http://127.0.0.1:11434)")
+    s["model"] = _prompt_text_required("Model name")
 
     _ask_api_key(s, env_var="OPENAI_API_KEY")
 
@@ -518,9 +511,12 @@ def _ask_generic(s: dict) -> None:
 
 
 def _ask_huggingface(s: dict) -> None:
-    model = _prompt_text("Model (org/model, e.g. zai-org/GLM-5)", default="")
-    if model:
-        s["model"] = model
+    while True:
+        model = _prompt_text_required("Model (org/model, e.g. zai-org/GLM-5)")
+        if "/" in model:
+            break
+        _console.print(Text("  Must be in org/model format.", style="red"))
+    s["model"] = model
 
     _ask_api_key(s, env_var="HF_TOKEN", label="HuggingFace token")
 
@@ -530,9 +526,9 @@ def _ask_huggingface(s: dict) -> None:
 
 
 def _ask_bedrock(s: dict) -> None:
-    model = _prompt_text("Model (e.g. global.anthropic.claude-opus-4-6-v1)", default="")
-    if model:
-        s["model"] = model
+    s["model"] = _prompt_text_required(
+        "Model (e.g. global.anthropic.claude-opus-4-6-v1)"
+    )
 
     region = _prompt_text("AWS region (blank for default)", default="")
     if region:
@@ -553,9 +549,24 @@ def _ask_command(s: dict) -> None:
     )
     _console.print()
 
-    cmd = _prompt_text("Command to run as the backend", default="")
-    if cmd:
-        s["model"] = cmd
+    while True:
+        cmd = _prompt_text_required("Command to run as the backend")
+        try:
+            parts = shlex.split(cmd)
+        except ValueError:
+            _console.print(
+                Text("  Invalid command syntax (check quoting).", style="red")
+            )
+            continue
+        if parts and shutil.which(parts[0]):
+            break
+        _console.print(
+            Text(
+                f"  Command not found: {parts[0] if parts else cmd}",
+                style="red",
+            )
+        )
+    s["model"] = cmd
 
 
 def _ask_api_key(s: dict, *, env_var: str, label: str = "API key") -> None:
@@ -565,9 +576,7 @@ def _ask_api_key(s: dict, *, env_var: str, label: str = "API key") -> None:
         [f"I'll set {env_var} myself", "Enter it now (stored in config)"],
     )
     if idx == 1:
-        key = _prompt_text(label, default="", secret=True)
-        if key:
-            s["api_key"] = key
+        s["api_key"] = _prompt_text_required(label, secret=True)
 
 
 def render_minimal_config(settings: dict) -> str:
@@ -643,6 +652,15 @@ def _prompt_text(label: str, *, default: str = "", secret: bool = False) -> str:
         HTML(f"<b>{label}</b>: "),
         is_password=secret,
     ).strip()
+
+
+def _prompt_text_required(label: str, *, secret: bool = False) -> str:
+    """Like _prompt_text but repeats until non-empty."""
+    while True:
+        val = _prompt_text(label, secret=secret)
+        if val:
+            return val
+        _console.print(Text(f"  {label} is required.", style="red"))
 
 
 def _prompt_int(label: str, *, default: int | None = None) -> int | None:
