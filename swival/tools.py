@@ -155,6 +155,7 @@ TOOLS = [
             "name": "edit_file",
             "description": (
                 "Make a targeted edit to an existing file by replacing old_string with new_string. "
+                "Prefer this over write_file for modifications. "
                 "For creating new files, use write_file instead."
             ),
             "parameters": {
@@ -348,7 +349,8 @@ TOOLS = [
             "name": "todo",
             "description": (
                 "Manage a persistent checklist. Use this to track work items as you "
-                "discover them and mark them done as you complete them. Every action "
+                "discover them and mark them done as you complete them. Prefer this "
+                "over mental checklists for multi-step work. Every action "
                 "returns the current list. The list survives context compaction."
             ),
             "parameters": {
