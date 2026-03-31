@@ -382,6 +382,7 @@ _ORPHANED_TOOL_CALL_RE = re.compile(
     re.IGNORECASE,
 )
 
+
 _TRANSIENT_PATTERNS = re.compile(
     r"Connection reset by peer|Connection refused|timed out"
     r"|RemoteDisconnected|Temporary failure in name resolution"
