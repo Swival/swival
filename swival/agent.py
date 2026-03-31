@@ -596,6 +596,25 @@ def _sanitize_assistant_message(msg) -> None:
         _set_msg_content(msg, _sanitize_assistant_content(content))
 
 
+_LITELLM_INTERNAL_KEYS = {"provider_specific_fields", "annotations"}
+
+
+def _msg_to_dict(msg) -> dict:
+    """Convert a litellm Message to a plain dict safe for re-submission.
+
+    Strips litellm-internal fields (e.g. provider_specific_fields) that some
+    providers reject as extra inputs.
+    """
+    d = (
+        msg.model_dump(exclude_none=True)
+        if hasattr(msg, "model_dump")
+        else dict(vars(msg))
+    )
+    for key in _LITELLM_INTERNAL_KEYS:
+        d.pop(key, None)
+    return d
+
+
 def _safe_subpath(base_dir: str, target: Path, label: str) -> Path:
     """Verify *target* resolves inside *base_dir* and return it."""
     base = Path(base_dir).resolve()
@@ -5909,11 +5928,7 @@ def run_agent_loop(
                 fmt.warning("LLM returned empty response, requesting continuation...")
             # Give the message minimal content so it's valid in history
             msg.content = ""
-            messages.append(
-                msg.model_dump(exclude_none=True)
-                if hasattr(msg, "model_dump")
-                else vars(msg)
-            )
+            messages.append(_msg_to_dict(msg))
             messages.append(
                 {
                     "role": "user",
@@ -5925,11 +5940,7 @@ def run_agent_loop(
             )
             continue
 
-        messages.append(
-            msg.model_dump(exclude_none=True)
-            if hasattr(msg, "model_dump")
-            else vars(msg)
-        )
+        messages.append(_msg_to_dict(msg))
 
         # Emit events for streaming consumers: text_chunk for final answers only,
         # status_update for intermediate reasoning (before tool calls).
