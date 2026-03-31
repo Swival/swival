@@ -2,6 +2,15 @@
 
 All notable user-facing changes to Swival.
 
+## 0.10.5
+
+- `/status` REPL command has been added to show the current session state
+  (provider, model, profile, token usage, active tools, and configuration).
+- Bedrock provider now suggests the `aws sso login` command when authentication
+  fails.
+- LM Studio provider now sets `LITELLM_LOCAL_MODEL_COST_MAP` to avoid
+  unnecessary remote lookups for model pricing.
+
 ## 0.10.4
 
 - Onboarding has been improved.
