@@ -596,7 +596,11 @@ def _sanitize_assistant_message(msg) -> None:
         _set_msg_content(msg, _sanitize_assistant_content(content))
 
 
-_LITELLM_INTERNAL_KEYS = {"provider_specific_fields", "annotations"}
+_LITELLM_INTERNAL_KEYS = {
+    "provider_specific_fields",
+    "annotations",
+    "reasoning_content",
+}
 
 
 def _msg_to_dict(msg) -> dict:
