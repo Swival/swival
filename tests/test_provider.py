@@ -1979,3 +1979,107 @@ class TestProfileProviderIntegration:
         apply_config_to_args(args, config)
         assert args.provider == "generic"
         assert args.model == "qwen3"
+
+
+# ---------------------------------------------------------------------------
+# Special token escaping for user/system messages
+# ---------------------------------------------------------------------------
+
+
+class TestSpecialTokenEscaping:
+    """Verify special tokens in user/system messages are escaped to prevent tokenizer interruption."""
+
+    def test_escape_special_tokens_inserts_zero_width_spaces(self):
+        from swival.agent import _escape_special_tokens, _ZWSP
+
+        # Basic case
+        result = _escape_special_tokens("<|eot_id|>")
+        assert _ZWSP in result
+        assert "<|" not in result  # Pattern is broken
+        assert result.replace(_ZWSP, "") == "<|eot_id|>"  # Visually same when ZWSP removed
+
+    def test_escape_preserves_text_without_special_tokens(self):
+        from swival.agent import _escape_special_tokens
+
+        assert _escape_special_tokens("Hello world") == "Hello world"
+        assert _escape_special_tokens("") == ""
+
+    def test_escape_handles_multiple_tokens(self):
+        from swival.agent import _escape_special_tokens, _ZWSP
+
+        result = _escape_special_tokens("Use <|eot_id|> and <|start_header_id|> here")
+        assert result.count(_ZWSP) > 0
+        assert "and" in result
+        assert "here" in result
+
+    def test_escape_special_tokens_in_messages_user_only(self):
+        from swival.agent import _escape_special_tokens_in_messages, _ZWSP
+
+        messages = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "What is <|eot_id|>?"},
+            {"role": "assistant", "content": "<|eot_id|> is a token."},
+        ]
+        _escape_special_tokens_in_messages(messages)
+
+        assert _ZWSP in messages[1]["content"]
+        assert messages[0]["content"] == "You are helpful."
+        assert messages[2]["content"] == "<|eot_id|> is a token."
+
+    def test_escape_special_tokens_in_messages_system(self):
+        from swival.agent import _escape_special_tokens_in_messages, _ZWSP
+
+        messages = [
+            {"role": "system", "content": "Never output <|eot_id|>"},
+        ]
+        _escape_special_tokens_in_messages(messages)
+        assert _ZWSP in messages[0]["content"]
+
+    def test_escape_special_tokens_in_messages_tool(self):
+        """Tool messages (e.g., file contents) should also be escaped."""
+        from swival.agent import _escape_special_tokens_in_messages, _ZWSP
+
+        messages = [
+            {
+                "role": "tool",
+                "tool_call_id": "call_123",
+                "content": "File content with <|eot_id|> token",
+            },
+        ]
+        _escape_special_tokens_in_messages(messages)
+        assert _ZWSP in messages[0]["content"]
+
+    def test_escape_special_tokens_in_multipart_content(self):
+        """Multi-part content (text + image) should have text parts escaped."""
+        from swival.agent import _escape_special_tokens_in_messages, _ZWSP
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is <|eot_id|>?"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}},
+                ],
+            },
+        ]
+        _escape_special_tokens_in_messages(messages)
+
+        assert _ZWSP in messages[0]["content"][0]["text"]
+        assert messages[0]["content"][1] == {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}}
+
+    def test_escape_special_tokens_in_multipart_no_special_tokens(self):
+        """Multi-part content without special tokens should be unchanged."""
+        from swival.agent import _escape_special_tokens_in_messages
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hello world"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}},
+                ],
+            },
+        ]
+        _escape_special_tokens_in_messages(messages)
+
+        assert messages[0]["content"][0]["text"] == "Hello world"

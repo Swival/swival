@@ -440,6 +440,50 @@ def _raise_with_retries(exc):
 # stripping standalone think markers over preserving literal tag discussions,
 # because leaked reasoning is far more common in practice.
 _SPECIAL_TOKEN_RE = re.compile(r"<\|[^|]+\|>")
+_ZWSP = "\u200b"  # zero-width space, breaks tokenizer pattern matching
+
+
+def _escape_special_tokens(text: str) -> str:
+    """Escape special tokens like <|eot_id|> so the tokenizer treats them as literal text.
+
+    Inserts zero-width spaces at the pattern boundaries to break matching:
+    <|eot_id|> → <<Z>|eot_id|<Z>>
+
+    This breaks both the opening <| and closing |> patterns while keeping the token
+    visually identical when rendered (ZWSP is invisible).
+    """
+    if not text or "<|" not in text:
+        return text
+
+    def escape_match(m):
+        s = m.group(0)
+        return s[0] + _ZWSP + s[1:-1] + _ZWSP + s[-1]
+
+    return _SPECIAL_TOKEN_RE.sub(escape_match, text)
+
+
+def _escape_special_tokens_in_messages(messages: list) -> None:
+    """Escape special tokens in user/system/tool messages in-place.
+
+    This prevents the tokenizer from interpreting <|...|> patterns as control tokens.
+    Tool messages are included because they can contain file contents with special tokens.
+    Handles both string content and multi-part content (list of text/image blocks).
+    """
+    for msg in messages:
+        role = _msg_role(msg)
+        if role not in ("user", "system", "tool"):
+            continue
+        content = _msg_get(msg, "content")
+        if isinstance(content, str) and "<|" in content:
+            _set_msg_content(msg, _escape_special_tokens(content))
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    text = part.get("text", "")
+                    if "<|" in text:
+                        part["text"] = _escape_special_tokens(text)
+
+
 _THINK_BLOCK_PREFIX_RE = re.compile(
     r"^\s*<think>.*?</think>\s*", re.IGNORECASE | re.DOTALL
 )
@@ -2661,6 +2705,9 @@ def call_llm(
             )
         msg, stop = _call_command(model_id, messages, verbose, max_output_tokens)
         return msg, stop, [], 0, (0, 0)
+
+    # --- Outbound: escape special tokens in user/system messages ---
+    _escape_special_tokens_in_messages(messages)
 
     # --- Outbound: encrypt secrets ---
     if secret_shield is not None:
