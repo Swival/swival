@@ -360,8 +360,6 @@ class TestBuildSystemPrompt:
             no_instructions=True,
             no_memory=True,
             skills_catalog={},
-            commands_unrestricted=False,
-            resolved_commands={},
             verbose=False,
         )
         assert "Resume the auth fix" in prompt
@@ -383,8 +381,6 @@ class TestBuildSystemPrompt:
             no_instructions=True,
             no_memory=True,
             skills_catalog={},
-            commands_unrestricted=False,
-            resolved_commands={},
             verbose=False,
         )
 
@@ -409,8 +405,6 @@ class TestBuildSystemPrompt:
             no_instructions=True,
             no_memory=True,
             skills_catalog={},
-            commands_unrestricted=False,
-            resolved_commands={},
             verbose=False,
         )
         assert "custom bot" in prompt
@@ -430,8 +424,6 @@ class TestBuildSystemPrompt:
             no_instructions=True,
             no_memory=True,
             skills_catalog={},
-            commands_unrestricted=False,
-            resolved_commands={},
             verbose=False,
             no_continue=True,
         )

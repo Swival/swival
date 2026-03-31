@@ -389,8 +389,6 @@ class Session:
             no_instructions=self.no_instructions,
             no_memory=True,
             skills_catalog=self._skills_catalog,
-            commands_unrestricted=self._commands_unrestricted,
-            resolved_commands=self._resolved_commands,
             verbose=self.verbose,
             config_dir=self.config_dir,
             mcp_tool_info=mcp_tool_info,

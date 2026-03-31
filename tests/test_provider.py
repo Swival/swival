@@ -1996,7 +1996,9 @@ class TestSpecialTokenEscaping:
         result = _escape_special_tokens("<|eot_id|>")
         assert _ZWSP in result
         assert "<|" not in result  # Pattern is broken
-        assert result.replace(_ZWSP, "") == "<|eot_id|>"  # Visually same when ZWSP removed
+        assert (
+            result.replace(_ZWSP, "") == "<|eot_id|>"
+        )  # Visually same when ZWSP removed
 
     def test_escape_preserves_text_without_special_tokens(self):
         from swival.agent import _escape_special_tokens
@@ -2058,14 +2060,20 @@ class TestSpecialTokenEscaping:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "What is <|eot_id|>?"},
-                    {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/img.png"},
+                    },
                 ],
             },
         ]
         _escape_special_tokens_in_messages(messages)
 
         assert _ZWSP in messages[0]["content"][0]["text"]
-        assert messages[0]["content"][1] == {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}}
+        assert messages[0]["content"][1] == {
+            "type": "image_url",
+            "image_url": {"url": "https://example.com/img.png"},
+        }
 
     def test_escape_special_tokens_in_multipart_no_special_tokens(self):
         """Multi-part content without special tokens should be unchanged."""
@@ -2076,7 +2084,10 @@ class TestSpecialTokenEscaping:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "Hello world"},
-                    {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/img.png"},
+                    },
                 ],
             },
         ]

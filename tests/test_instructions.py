@@ -259,10 +259,11 @@ class TestIntegration:
 
         (tmp_path / "CLAUDE.md").write_text("Should not appear.", encoding="utf-8")
 
-        captured_messages = {}
+        captured = {}
 
         def fake_call_llm(*args, **kwargs):
-            captured_messages["messages"] = args[2]
+            captured["messages"] = args[2]
+            captured["tools"] = args[7]
             return _make_message(content="Done."), "stop"
 
         monkeypatch.setattr(agent, "call_llm", fake_call_llm)
@@ -290,12 +291,13 @@ class TestIntegration:
 
         agent.main()
 
-        msgs = captured_messages["messages"]
+        # run_command tool is present in the tool list
+        tool_names = [t["function"]["name"] for t in captured["tools"]]
+        assert "run_command" in tool_names
+        # But CLAUDE.md instructions are NOT appended to the system prompt
+        msgs = captured["messages"]
         system_msg = msgs[0]
         assert system_msg["role"] == "system"
-        # run_command section is appended even with custom prompt
-        assert "run_command" in system_msg["content"]
-        # But CLAUDE.md instructions are NOT appended
         assert "project-instructions" not in system_msg["content"]
         assert "Should not appear" not in system_msg["content"]
 
@@ -414,8 +416,6 @@ class TestUserLevelAgentsMd:
             no_instructions=True,
             no_memory=True,
             skills_catalog={},
-            commands_unrestricted=False,
-            resolved_commands={},
             verbose=False,
             config_dir=config_dir,
         )
@@ -651,8 +651,6 @@ class TestGlobalAgentsMd:
             no_instructions=True,
             no_memory=True,
             skills_catalog={},
-            commands_unrestricted=False,
-            resolved_commands={},
             verbose=False,
             config_dir=None,
         )

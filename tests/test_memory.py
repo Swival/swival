@@ -275,8 +275,6 @@ class TestBuildSystemPrompt:
             no_instructions=True,
             no_memory=False,
             skills_catalog={},
-            commands_unrestricted=False,
-            resolved_commands={},
             verbose=False,
         )
         defaults.update(kwargs)

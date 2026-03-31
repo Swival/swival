@@ -4573,8 +4573,6 @@ def build_system_prompt(
     no_instructions: bool,
     no_memory: bool,
     skills_catalog: dict,
-    commands_unrestricted: bool,
-    resolved_commands: dict[str, str],
     verbose: bool,
     config_dir: "Path | None" = None,
     mcp_tool_info: dict | None = None,
@@ -4662,24 +4660,6 @@ def build_system_prompt(
             catalog_text = format_skill_catalog(skills_catalog)
             if catalog_text:
                 system_content += "\n\n" + catalog_text
-        if commands_unrestricted:
-            system_content += (
-                "\n\n**Command execution tool:**\n"
-                "- `run_command`: Run any command and return its output. "
-                'Pass a shell string (e.g. `"ls -la | grep foo"`) or an array (e.g. `["ls", "-la"]`). '
-                "Shell strings support pipes, redirects, `&&`, etc. "
-                "Optional `timeout` (1-120s, default 30)."
-            )
-        elif resolved_commands:
-            cmd_list = ", ".join(sorted(resolved_commands))
-            system_content += (
-                "\n\n**Command execution tool:**\n"
-                f"- `run_command`: Run a whitelisted command and return its output. "
-                f'Pass the command and arguments as a list (e.g. `["ls", "-la"]`). '
-                f"Optional `timeout` (1-120s, default 30). "
-                f"Allowed commands: {cmd_list}."
-            )
-
         if mcp_tool_info and not system_prompt:
             system_content += "\n\n" + _format_mcp_tool_info(mcp_tool_info)
 
@@ -5034,8 +5014,6 @@ def _run_main(args, report, _write_report, parser):
         no_memory=getattr(args, "no_memory", False),
         memory_full=getattr(args, "memory_full", False),
         skills_catalog=skills_catalog,
-        commands_unrestricted=commands_unrestricted,
-        resolved_commands=resolved_commands,
         verbose=args.verbose,
         config_dir=getattr(args, "config_dir", None),
         mcp_tool_info=mcp_tool_info,

@@ -540,13 +540,14 @@ class TestAgentYolo:
         assert "Allowed" not in rc_tool["function"]["description"]
 
     def test_yolo_system_prompt_text(self, tmp_path, monkeypatch):
-        """Yolo mode appends unrestricted command blurb to system prompt."""
+        """Yolo mode adds unrestricted run_command tool to tool list."""
         from swival import agent
 
         captured = {}
 
         def fake_call_llm(*args, **kwargs):
             captured["messages"] = args[2]
+            captured["tools"] = args[7]
             return _make_message(content="Done."), "stop"
 
         monkeypatch.setattr(agent, "call_llm", fake_call_llm)
@@ -566,11 +567,12 @@ class TestAgentYolo:
 
         agent.main()
 
-        system_msg = captured["messages"][0]
-        assert system_msg["role"] == "system"
-        assert "Run any command" in system_msg["content"]
-        assert "Allowed commands" not in system_msg["content"]
-        assert "whitelisted" not in system_msg["content"]
+        tool_by_name = {t["function"]["name"]: t for t in captured["tools"]}
+        assert "run_command" in tool_by_name
+        desc = tool_by_name["run_command"]["function"]["description"]
+        assert "Run any command" in desc
+        assert "Allowed commands" not in desc
+        assert "whitelisted" not in desc
 
 
 # ---------------------------------------------------------------------------
@@ -750,13 +752,14 @@ class TestYoloSchema:
         assert "array" in types
 
     def test_yolo_system_prompt_mentions_shell(self, tmp_path, monkeypatch):
-        """Yolo system prompt mentions shell strings."""
+        """Yolo run_command tool schema mentions shell strings."""
         from swival import agent
 
         captured = {}
 
         def fake_call_llm(*args, **kwargs):
             captured["messages"] = args[2]
+            captured["tools"] = args[7]
             return _make_message(content="Done."), "stop"
 
         monkeypatch.setattr(agent, "call_llm", fake_call_llm)
@@ -776,11 +779,10 @@ class TestYoloSchema:
 
         agent.main()
 
-        system_msg = captured["messages"][0]
-        assert (
-            "shell string" in system_msg["content"].lower()
-            or "pipes" in system_msg["content"].lower()
-        )
+        tool_by_name = {t["function"]["name"]: t for t in captured["tools"]}
+        cmd_props = tool_by_name["run_command"]["function"]["parameters"]["properties"]
+        cmd_desc = cmd_props["command"]["description"].lower()
+        assert "shell" in cmd_desc or "pipes" in cmd_desc
 
 
 # ---------------------------------------------------------------------------
