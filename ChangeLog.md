@@ -2,14 +2,18 @@
 
 All notable user-facing changes to Swival.
 
+## 0.10.4
+
+- Onboarding has been improved.
+- Subagents are now auto-enabled when the context window is 100K tokens or
+  larger.
+
 ## 0.10.3
 
 - An interactive onboarding wizard has been added: on first run with no config
   file, Swival guides the user through provider selection, API key entry, and
   config file creation. Re-running onboarding merges new provider settings into
   an existing config file instead of overwriting it.
-- Subagents are now auto-enabled when the context window is 100K tokens or
-  larger.
 - Common malformed tool calls from weaker models are now automatically repaired
   before reaching dispatch: orphaned tool-call references, missing required
   fields, and broken JSON are patched up so the agent loop can continue.
