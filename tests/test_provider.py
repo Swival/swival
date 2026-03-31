@@ -2012,7 +2012,7 @@ class TestSpecialTokenEscaping:
         assert "and" in result
         assert "here" in result
 
-    def test_escape_special_tokens_in_messages_user_only(self):
+    def test_escape_special_tokens_in_messages_skips_assistant(self):
         from swival.agent import _escape_special_tokens_in_messages, _ZWSP
 
         messages = [

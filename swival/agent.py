@@ -455,7 +455,7 @@ def _escape_special_tokens(text: str) -> str:
     """Escape special tokens like <|eot_id|> so the tokenizer treats them as literal text.
 
     Inserts zero-width spaces at the pattern boundaries to break matching:
-    <|eot_id|> → <<Z>|eot_id|<Z>>
+    <|eot_id|> → <{ZWSP}|eot_id|{ZWSP}>
 
     This breaks both the opening <| and closing |> patterns while keeping the token
     visually identical when rendered (ZWSP is invisible).
