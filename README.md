@@ -18,8 +18,7 @@ It connects to [LM Studio](https://lmstudio.ai/),
 llama.cpp, mlx_lm.server, vLLM, etc.), or any external command
 (`codex exec`, custom wrappers, etc.), sends your task, and runs an autonomous tool loop until
 it produces an answer. With LM Studio it auto-discovers your
-loaded model, so there's nothing to configure. A few thousand lines of Python,
-no framework.
+loaded model, so there's nothing to configure. Pure Python, no framework.
 
 ## Quickstart
 
@@ -180,10 +179,12 @@ success/failure counts, context compaction events, and guardrail interventions.
 Useful for comparing models, settings, skills, and MCP servers systematically
 on real coding tasks.
 
-**Secrets stay on your machine.** Swival automatically detects API keys and
+**Secrets stay on your machine.** Swival transparently detects API keys and
 credential tokens in LLM messages and encrypts them before they leave your
-machine. The LLM never sees the real values. Decryption happens locally when
-the response comes back, so tools still work normally. No configuration needed.
+machine when you enable secret encryption with `--encrypt-secrets`. The LLM
+never sees the real values. Decryption happens locally when the response comes
+back, so tools still work normally. See [Secret Encryption](docs.md/secrets.md)
+for details.
 
 **Cross-session memory.** The agent remembers things across sessions. It stores
 notes in a local memory file and retrieves the most relevant entries for each
@@ -204,9 +205,8 @@ rate limiting, and bearer auth are built in.
 reusable workflows, connect to external tools via the Model Context Protocol,
 and talk to remote agents via the Agent-to-Agent (A2A) protocol.
 
-**Small enough to read and hack.** A few thousand lines of Python across a
-handful of files, with no framework underneath. Read the whole agent in an
-afternoon. If something doesn't work the way you want, change it.
+**Small enough to read and hack.** A compact Python codebase with no framework
+underneath. If something doesn't work the way you want, change it.
 
 **CLI-native.** stdout is exclusively the final answer. All diagnostics go to
 stderr. Pipe Swival's output straight into another command or a file.
