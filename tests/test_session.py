@@ -372,6 +372,51 @@ class TestSessionAllowedDirsRo:
         assert captured_roots[0] is not captured_roots[1]
 
 
+class TestSessionApprovedBuckets:
+    def test_ask_mode_with_approved_buckets(self, tmp_path, monkeypatch):
+        """approved_buckets are forwarded to CommandPolicy in ask mode."""
+        monkeypatch.setattr(agent, "call_llm", _simple_llm)
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+        s = Session(
+            base_dir=str(tmp_path),
+            commands="ask",
+            approved_buckets={"git", "ls"},
+            history=False,
+        )
+        s._setup()
+        assert s._command_policy.mode == "ask"
+        assert s._command_policy.approved_buckets == {"git", "ls"}
+
+    def test_ask_mode_without_approved_buckets(self, tmp_path, monkeypatch):
+        """ask mode with no approved_buckets starts with empty set."""
+        monkeypatch.setattr(agent, "call_llm", _simple_llm)
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+        s = Session(
+            base_dir=str(tmp_path),
+            commands="ask",
+            history=False,
+        )
+        s._setup()
+        assert s._command_policy.mode == "ask"
+        assert s._command_policy.approved_buckets == set()
+
+    def test_approved_bucket_allows_command(self, tmp_path, monkeypatch):
+        """A pre-approved bucket should pass check() without prompting."""
+        monkeypatch.setattr(agent, "call_llm", _simple_llm)
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+        s = Session(
+            base_dir=str(tmp_path),
+            commands="ask",
+            approved_buckets={"git"},
+            history=False,
+        )
+        s._setup()
+        assert s._command_policy.check(["git", "status"]) is None
+
+
 class TestConvenienceRun:
     def test_run_returns_string(self, tmp_path, monkeypatch):
         monkeypatch.setattr(agent, "call_llm", _simple_llm)

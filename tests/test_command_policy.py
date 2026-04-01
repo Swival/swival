@@ -5,6 +5,7 @@ from swival.command_policy import (
     normalize_bucket,
     is_high_risk,
     persist_approved_bucket,
+    load_persisted_buckets,
     _SHELL_BUCKET,
 )
 
@@ -460,37 +461,61 @@ class TestCheckCommandPolicyHelper:
 
 
 class TestPersistApprovedBucket:
-    def test_creates_toml_if_missing(self, tmp_path):
+    def test_creates_file_if_missing(self, tmp_path):
         persist_approved_bucket("ls", str(tmp_path))
-        toml_path = tmp_path / "swival.toml"
-        assert toml_path.exists()
-        content = toml_path.read_text()
-        assert "'ls'" in content
-        assert "approved_buckets" in content
+        path = tmp_path / ".swival" / "approved_buckets"
+        assert path.exists()
+        assert "ls\n" == path.read_text()
 
     def test_appends_to_existing(self, tmp_path):
-        toml_path = tmp_path / "swival.toml"
-        toml_path.write_text('model = "test"\n')
-        persist_approved_bucket("git push", str(tmp_path))
-        content = toml_path.read_text()
-        assert "'git push'" in content
-        assert 'model = "test"' in content
-
-    def test_appends_to_existing_list_no_double_comma(self, tmp_path):
-        toml_path = tmp_path / "swival.toml"
-        toml_path.write_text("approved_buckets = [\n    'git',\n]\n")
+        d = tmp_path / ".swival"
+        d.mkdir()
+        (d / "approved_buckets").write_text("git\n")
         persist_approved_bucket("<shell>", str(tmp_path))
-        content = toml_path.read_text()
-        assert ",," not in content
-        assert "'<shell>'" in content
-        assert "'git'" in content
-        import tomllib
-
-        parsed = tomllib.loads(content)
-        assert parsed["approved_buckets"] == ["git", "<shell>"]
+        content = (d / "approved_buckets").read_text()
+        assert content == "git\n<shell>\n"
 
     def test_no_duplicate(self, tmp_path):
         persist_approved_bucket("ls", str(tmp_path))
         persist_approved_bucket("ls", str(tmp_path))
-        content = (tmp_path / "swival.toml").read_text()
-        assert content.count("'ls'") == 1
+        content = (tmp_path / ".swival" / "approved_buckets").read_text()
+        assert content.count("ls") == 1
+
+    def test_does_not_touch_swival_toml(self, tmp_path):
+        toml_path = tmp_path / "swival.toml"
+        toml_path.write_text('model = "test"\n')
+        persist_approved_bucket("git", str(tmp_path))
+        assert toml_path.read_text() == 'model = "test"\n'
+
+
+class TestLoadPersistedBuckets:
+    def test_missing_file(self, tmp_path):
+        assert load_persisted_buckets(str(tmp_path)) == set()
+
+    def test_basic(self, tmp_path):
+        d = tmp_path / ".swival"
+        d.mkdir()
+        (d / "approved_buckets").write_text("git\n<shell>\nnpm install\n")
+        result = load_persisted_buckets(str(tmp_path))
+        assert result == {"git", "<shell>", "npm install"}
+
+    def test_blank_lines_and_comments(self, tmp_path):
+        d = tmp_path / ".swival"
+        d.mkdir()
+        (d / "approved_buckets").write_text("git\n\n# a comment\n  \nls\n")
+        result = load_persisted_buckets(str(tmp_path))
+        assert result == {"git", "ls"}
+
+    def test_deduplicates(self, tmp_path):
+        d = tmp_path / ".swival"
+        d.mkdir()
+        (d / "approved_buckets").write_text("git\ngit\nls\n")
+        result = load_persisted_buckets(str(tmp_path))
+        assert result == {"git", "ls"}
+
+    def test_strips_whitespace(self, tmp_path):
+        d = tmp_path / ".swival"
+        d.mkdir()
+        (d / "approved_buckets").write_text("  git  \n  ls\n")
+        result = load_persisted_buckets(str(tmp_path))
+        assert result == {"git", "ls"}

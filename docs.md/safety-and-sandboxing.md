@@ -106,13 +106,14 @@ Approval options:
 - `Enter` — allow (non-high-risk) or deny (high-risk)
 - `y` — allow this bucket for the rest of the session
 - `n` — deny this bucket for the rest of the session
-- `p` — allow and persist the approval to `swival.toml`
+- `p` — allow and persist the approval to `.swival/approved_buckets`
 - `o` — allow this one invocation only
 - `a` — always re-prompt for this bucket
 
-Subagents cannot prompt interactively. In ask mode, subagents can only run commands in buckets that are pre-approved via `approved_buckets` in config.
+Subagents cannot prompt interactively. In ask mode, subagents can only run commands in buckets that are already approved — either pre-approved via `approved_buckets` in config, or runtime-persisted in `.swival/approved_buckets` from earlier interactive sessions.
 
 ```toml
+# swival.toml — intentional pre-approvals (version-controllable)
 commands = "ask"
 approved_buckets = ["ls", "git status", "python3 -m pytest"]
 ```

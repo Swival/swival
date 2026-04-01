@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import re
 import sys
-import tomllib
 
 from rich.console import Console
 from rich.text import Text
@@ -235,35 +234,35 @@ def prompt_approval(bucket: str, high_risk: bool = False) -> str:
     return "deny" if high_risk else "allow"
 
 
+def load_persisted_buckets(base_dir: str) -> set[str]:
+    """Load runtime-persisted approved buckets from .swival/approved_buckets."""
+    path = os.path.join(base_dir, ".swival", "approved_buckets")
+    if not os.path.isfile(path):
+        return set()
+    with open(path) as f:
+        return {
+            line.strip()
+            for line in f
+            if line.strip() and not line.strip().startswith("#")
+        }
+
+
 def persist_approved_bucket(bucket: str, base_dir: str) -> None:
-    toml_path = os.path.join(base_dir, "swival.toml")
+    dir_path = os.path.join(base_dir, ".swival")
+    os.makedirs(dir_path, exist_ok=True)
+    file_path = os.path.join(dir_path, "approved_buckets")
 
-    existing = ""
-    if os.path.isfile(toml_path):
-        with open(toml_path, "r") as f:
-            existing = f.read()
+    existing = set()
+    if os.path.isfile(file_path):
+        with open(file_path) as f:
+            existing = {
+                line.strip()
+                for line in f
+                if line.strip() and not line.strip().startswith("#")
+            }
 
-    try:
-        data = tomllib.loads(existing)
-    except Exception:
-        data = {}
-
-    current = data.get("approved_buckets", [])
-    if bucket in current:
+    if bucket in existing:
         return
 
-    if "approved_buckets" in data:
-        idx = existing.rfind("]", existing.index("approved_buckets"))
-        before = existing[:idx].rstrip().rstrip(",")
-        after = existing[idx:]
-        if before.endswith("["):
-            new_content = before + f"\n    {bucket!r},\n" + after
-        else:
-            new_content = before + f",\n    {bucket!r},\n" + after
-    else:
-        if existing and not existing.endswith("\n"):
-            existing += "\n"
-        new_content = existing + f"\napproved_buckets = [\n    {bucket!r},\n]\n"
-
-    with open(toml_path, "w") as f:
-        f.write(new_content)
+    with open(file_path, "a") as f:
+        f.write(bucket + "\n")

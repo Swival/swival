@@ -31,7 +31,7 @@ max_turns = 250
 # top_p = 0.9
 # seed = 42
 commands = ["ls", "git", "python3"]    # also accepts "all", "none", or "ask"
-# approved_buckets = ["ls", "git push", "python3 -m pytest"]  # pre-approved command buckets for ask mode
+# approved_buckets = ["ls", "git push", "python3 -m pytest"]  # explicit pre-approvals for ask mode (runtime approvals go to .swival/approved_buckets)
 allowed_dirs = ["/tmp"]
 allowed_dirs_ro = ["/opt/zig/lib/std"]
 proactive_summaries = true
@@ -91,7 +91,7 @@ If a project config contains `api_key` — at the top level or inside a profile 
 
 The `--system-prompt` and `no_system_prompt` settings are mutually exclusive in config files, just as they are on the command line.
 
-The library API (`Session` class) does not auto-load config files. If you want config file support in library code, call `load_config()` and `config_to_session_kwargs()` explicitly.
+The library API (`Session` class) does not auto-load config files. If you want config file support in library code, call `load_config()` and `config_to_session_kwargs()` explicitly. Note that `config_to_session_kwargs()` drops `approved_buckets` — for `commands="ask"`, pass `approved_buckets` to `Session` directly, optionally using `load_persisted_buckets()` from `swival.command_policy` to include runtime-persisted approvals.
 
 ## Profiles
 

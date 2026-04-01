@@ -104,6 +104,7 @@ class Session:
         lifecycle_fail_closed: bool = False,
         lifecycle_enabled: bool = True,
         aws_profile: str | None = None,
+        approved_buckets: set[str] | None = None,
     ):
         self.base_dir = base_dir
         self.scratch_dir = scratch_dir
@@ -166,6 +167,7 @@ class Session:
         self.lifecycle_fail_closed = lifecycle_fail_closed
         self.lifecycle_enabled = lifecycle_enabled
         self.aws_profile = aws_profile
+        self.approved_buckets = approved_buckets
 
         # Streaming / cancellation hooks (set externally, e.g. by A2A server).
         # event_callback receives (kind, data) where kind is one of the
@@ -284,7 +286,9 @@ class Session:
         elif cmds == "ask":
             self._resolved_commands = {}
             self._commands_unrestricted = True
-            self._command_policy = CommandPolicy("ask")
+            self._command_policy = CommandPolicy(
+                "ask", approved_buckets=self.approved_buckets or set()
+            )
         elif isinstance(cmds, list):
             self._resolved_commands = resolve_commands(cmds, self.base_dir)
             self._commands_unrestricted = False

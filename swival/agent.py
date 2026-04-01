@@ -4878,7 +4878,11 @@ def _run_main(args, report, _write_report, parser):
     if args.yolo and not args._commands_explicit:
         cmds = "all"
 
-    approved_buckets = getattr(args, "approved_buckets", None) or []
+    config_buckets = getattr(args, "approved_buckets", None) or []
+    from .command_policy import load_persisted_buckets
+
+    persisted_buckets = load_persisted_buckets(str(base_dir))
+    all_approved = set(config_buckets) | persisted_buckets
 
     if cmds is None or cmds == "all":
         resolved_commands = {}
@@ -4891,7 +4895,7 @@ def _run_main(args, report, _write_report, parser):
     elif cmds == "ask":
         resolved_commands = {}
         commands_unrestricted = True
-        command_policy = CommandPolicy("ask", approved_buckets=set(approved_buckets))
+        command_policy = CommandPolicy("ask", approved_buckets=all_approved)
     elif isinstance(cmds, list):
         resolved_commands = resolve_commands(cmds, base_dir)
         commands_unrestricted = False

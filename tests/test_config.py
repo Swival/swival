@@ -1539,6 +1539,15 @@ class TestServeSkills:
         assert "serve_skills" not in kwargs
         assert kwargs["provider"] == "lmstudio"
 
+    def test_config_to_session_kwargs_drops_approved_buckets(self):
+        config = {
+            "approved_buckets": ["git", "ls"],
+            "provider": "lmstudio",
+        }
+        kwargs = config_to_session_kwargs(config)
+        assert "approved_buckets" not in kwargs
+        assert kwargs["provider"] == "lmstudio"
+
     def test_serve_skills_not_a_list_in_config(self, tmp_path, monkeypatch):
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
         _write_toml(tmp_path / "swival.toml", 'serve_skills = "nope"\n')

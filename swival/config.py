@@ -1065,6 +1065,7 @@ def config_to_session_kwargs(config: dict) -> dict:
         "serve_name",
         "serve_description",
         "serve_skills",
+        "approved_buckets",
     }
     _INVERT_KEYS = {
         "no_read_guard": "read_guard",
