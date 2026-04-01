@@ -63,8 +63,7 @@ class ReportCollector:
         self.total_llm_time += duration
         self.total_cached_tokens += cached_tokens
         self.total_cache_write_tokens += cache_write_tokens
-        if turn > self.max_turn_seen:
-            self.max_turn_seen = turn
+        self.max_turn_seen = max(self.max_turn_seen, turn)
         event = {
             "turn": turn,
             "type": "llm_call",
