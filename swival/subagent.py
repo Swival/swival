@@ -194,7 +194,11 @@ class SubagentManager:
                     k: v for k, v in self._handles.items() if not v.done.is_set()
                 }
             if running >= _MAX_CONCURRENT:
-                return f"error: max {_MAX_CONCURRENT} concurrent subagents"
+                return (
+                    f"error: max {_MAX_CONCURRENT} concurrent subagents; "
+                    "try again after one finishes "
+                    "(use check_subagents to poll or collect a result)"
+                )
             self._counter += 1
             sid = f"sub_{self._counter}"
 
