@@ -2,6 +2,22 @@
 
 All notable user-facing changes to Swival.
 
+## 0.10.7
+
+- Interactive command approval mode has been added: `--commands ask` prompts the
+  user before every shell command execution. Approvals can be scoped per command
+  bucket and persisted to `.swival/approved_buckets`, denied, or allowed once.
+  High-risk commands and inline code execution (`bash -c`, `python -c`,
+  `node -e`, etc.) are flagged with extra warnings.
+- Untrusted external content labeling has been added: output from `fetch_url`,
+  MCP servers, and A2A agents is now wrapped with a deterministic
+  `[UNTRUSTED EXTERNAL CONTENT]` header before the model sees it, instructing
+  the model to treat it as data only. The label is baked into spill files so it
+  survives later `read_file` access.
+- JSON reports now include a `security` section that tracks command policy
+  blocks, approvals, and untrusted input ingestion events.
+- Bedrock provider now forwards the AWS profile to the reviewer session.
+
 ## 0.10.6
 
 - Special tokens in user, system, and tool messages are now escaped by inserting
