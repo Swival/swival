@@ -126,12 +126,13 @@ swival --commands none &quot;task&quot;
 <li><code>Enter</code> — allow (non-high-risk) or deny (high-risk)</li>
 <li><code>y</code> — allow this bucket for the rest of the session</li>
 <li><code>n</code> — deny this bucket for the rest of the session</li>
-<li><code>p</code> — allow and persist the approval to <code>swival.toml</code></li>
+<li><code>p</code> — allow and persist the approval to <code>.swival/approved_buckets</code></li>
 <li><code>o</code> — allow this one invocation only</li>
 <li><code>a</code> — always re-prompt for this bucket</li>
 </ul>
-<p>Subagents cannot prompt interactively. In ask mode, subagents can only run commands in buckets that are pre-approved via <code>approved_buckets</code> in config.</p>
-<pre><code class="language-toml">commands = &quot;ask&quot;
+<p>Subagents cannot prompt interactively. In ask mode, subagents can only run commands in buckets that are already approved — either pre-approved via <code>approved_buckets</code> in config, or runtime-persisted in <code>.swival/approved_buckets</code> from earlier interactive sessions.</p>
+<pre><code class="language-toml"># swival.toml — intentional pre-approvals (version-controllable)
+commands = &quot;ask&quot;
 approved_buckets = [&quot;ls&quot;, &quot;git status&quot;, &quot;python3 -m pytest&quot;]
 </code></pre>
 <h2 id="untrusted-content-labels">Untrusted Content Labels</h2>

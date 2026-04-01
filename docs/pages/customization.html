@@ -90,7 +90,7 @@ max_turns = 250
 # top_p = 0.9
 # seed = 42
 commands = [&quot;ls&quot;, &quot;git&quot;, &quot;python3&quot;]    # also accepts &quot;all&quot;, &quot;none&quot;, or &quot;ask&quot;
-# approved_buckets = [&quot;ls&quot;, &quot;git push&quot;, &quot;python3 -m pytest&quot;]  # pre-approved command buckets for ask mode
+# approved_buckets = [&quot;ls&quot;, &quot;git push&quot;, &quot;python3 -m pytest&quot;]  # explicit pre-approvals for ask mode (runtime approvals go to .swival/approved_buckets)
 allowed_dirs = [&quot;/tmp&quot;]
 allowed_dirs_ro = [&quot;/opt/zig/lib/std&quot;]
 proactive_summaries = true
@@ -142,7 +142,7 @@ model = &quot;gpt-5.4&quot;
 <p>The <code>reviewer</code>, <code>llm_filter</code>, and <code>lifecycle_command</code> values are shell-split; only path-like first tokens (<code>./</code>, <code>../</code>, <code>~</code>, <code>/</code>) are resolved against the config directory, while bare command names like <code>swival</code> are left for PATH lookup at runtime. The same resolution applies to <code>model</code> when <code>provider = "command"</code>.</p>
 <p>If a project config contains <code>api_key</code> — at the top level or inside a profile — inside a git repository, Swival prints a warning because the key could be committed accidentally. Prefer environment variables for credentials.</p>
 <p>The <code>--system-prompt</code> and <code>no_system_prompt</code> settings are mutually exclusive in config files, just as they are on the command line.</p>
-<p>The library API (<code>Session</code> class) does not auto-load config files. If you want config file support in library code, call <code>load_config()</code> and <code>config_to_session_kwargs()</code> explicitly.</p>
+<p>The library API (<code>Session</code> class) does not auto-load config files. If you want config file support in library code, call <code>load_config()</code> and <code>config_to_session_kwargs()</code> explicitly. Note that <code>config_to_session_kwargs()</code> drops <code>approved_buckets</code> — for <code>commands="ask"</code>, pass <code>approved_buckets</code> to <code>Session</code> directly, optionally using <code>load_persisted_buckets()</code> from <code>swival.command_policy</code> to include runtime-persisted approvals.</p>
 <h2 id="profiles">Profiles</h2>
 <p>If you switch between multiple model setups — a local LM Studio model for quick tasks, a ChatGPT model for hard problems, an OpenRouter model for long-context work — profiles let you define each setup once and switch with a single flag.</p>
 <pre><code class="language-toml">active_profile = &quot;fast-local&quot;
