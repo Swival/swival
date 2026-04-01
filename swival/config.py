@@ -117,6 +117,18 @@ _CONFIG_TO_ARGPARSE: dict[str, str] = {
     "allowed_dirs_ro": "add_dir_ro",
 }
 
+# Boolean keys that are negated when mapping CLI/config to Session kwargs.
+# Shared by args_to_session_kwargs() and config_to_session_kwargs().
+_INVERT_BOOL_KEYS: dict[str, str] = {
+    "no_read_guard": "read_guard",
+    "no_history": "history",
+    "no_memory": "memory",
+    "no_continue": "continue_here",
+    "no_sandbox_auto_session": "sandbox_auto_session",
+    "no_lifecycle": "lifecycle_enabled",
+    "quiet": "verbose",
+}
+
 # Argparse dest -> hardcoded default
 _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "provider": "lmstudio",
@@ -529,13 +541,8 @@ def _validate_mcp_server_configs(servers: dict, source: str) -> None:
         for field, expected in _MCP_SERVER_FIELD_TYPES.items():
             if field in cfg:
                 if not isinstance(cfg[field], expected):
-                    exp_name = (
-                        expected.__name__
-                        if isinstance(expected, type)
-                        else " or ".join(t.__name__ for t in expected)
-                    )
                     raise ConfigError(
-                        f"{prefix}.{field}: expected {exp_name}, "
+                        f"{prefix}.{field}: expected {_type_name(expected)}, "
                         f"got {type(cfg[field]).__name__}"
                     )
 
@@ -941,15 +948,6 @@ def args_to_session_kwargs(args, base_dir: str) -> dict:
         "add_dir": "allowed_dirs",
         "add_dir_ro": "allowed_dirs_ro",
     }
-    _INVERT = {
-        "no_read_guard": "read_guard",
-        "no_history": "history",
-        "no_memory": "memory",
-        "no_continue": "continue_here",
-        "no_sandbox_auto_session": "sandbox_auto_session",
-        "no_lifecycle": "lifecycle_enabled",
-        "quiet": "verbose",
-    }
     # Argparse dests that map directly to Session kwargs
     _DIRECT = [
         "provider",
@@ -1002,7 +1000,7 @@ def args_to_session_kwargs(args, base_dir: str) -> dict:
         val = getattr(args, dest, None) or []
         kwargs[kwarg] = val
 
-    for dest, kwarg in _INVERT.items():
+    for dest, kwarg in _INVERT_BOOL_KEYS.items():
         val = getattr(args, dest, False)
         kwargs[kwarg] = not val
 
@@ -1033,7 +1031,7 @@ def args_to_session_kwargs(args, base_dir: str) -> dict:
     if skills_dir is not None:
         kwargs["skills_dir"] = skills_dir
 
-    # verbose is derived from quiet (already handled by _INVERT)
+    # verbose is derived from quiet (already handled by _INVERT_BOOL_KEYS)
     # but args.verbose may have been set directly
     if hasattr(args, "verbose") and "verbose" not in kwargs:
         kwargs["verbose"] = args.verbose
@@ -1067,21 +1065,11 @@ def config_to_session_kwargs(config: dict) -> dict:
         "serve_skills",
         "approved_buckets",
     }
-    _INVERT_KEYS = {
-        "no_read_guard": "read_guard",
-        "no_history": "history",
-        "no_memory": "memory",
-        "no_continue": "continue_here",
-        "no_sandbox_auto_session": "sandbox_auto_session",
-        "no_lifecycle": "lifecycle_enabled",
-        "quiet": "verbose",
-    }
-
     for key, value in config.items():
         if key in _DROP_KEYS:
             continue
-        if key in _INVERT_KEYS:
-            kwargs[_INVERT_KEYS[key]] = not value
+        if key in _INVERT_BOOL_KEYS:
+            kwargs[_INVERT_BOOL_KEYS[key]] = not value
         else:
             kwargs[key] = value
 

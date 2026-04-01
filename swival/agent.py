@@ -804,8 +804,7 @@ def estimate_tokens(messages: list, tools: list | None = None) -> int:
                     fn = tc.get("function", {})
                     content += fn.get("name", "") + (fn.get("arguments", "") or "")
         total += len(_encoder.encode(content))
-    if tools:
-        total += len(_encoder.encode(json.dumps(tools)))
+    total += _estimate_tool_tokens(tools)
     # Per-message overhead (role, separators) — ~4 tokens each
     total += 4 * len(messages)
     return total
@@ -1149,7 +1148,8 @@ def score_turn(turn: list) -> int:
     for msg in turn:
         content = _msg_content(msg)
         # Errors are important — the agent learned something
-        if "error" in content.lower() or "failed" in content.lower():
+        content_lower = content.lower()
+        if "error" in content_lower or "failed" in content_lower:
             score += 3
         # File writes/edits are important — the agent took action
         tool_calls = _msg_tool_calls(msg)
@@ -2310,9 +2310,7 @@ def _render_transcript(messages):
             tool_call_id = _msg_tool_call_id(m)
             msg_name = _msg_get(m, "name", "")
             if msg_name and (
-                msg_name.startswith("mcp__")
-                or msg_name.startswith("a2a__")
-                or msg_name == "use_skill"
+                msg_name.startswith(("mcp__", "a2a__")) or msg_name == "use_skill"
             ):
                 lines.append(
                     f'[swival_result id="{tool_call_id}" name="{msg_name}"]\n{content}'
@@ -4261,6 +4259,17 @@ def main():
             sys.exit(1)
 
 
+def _litellm_context_length(model_str: str) -> int | None:
+    """Query litellm for max_input_tokens, returning None on any failure."""
+    try:
+        import litellm
+
+        info = litellm.get_model_info(model_str)
+        return info.get("max_input_tokens")
+    except Exception:
+        return None
+
+
 def resolve_provider(
     provider: str,
     model: str | None,
@@ -4367,15 +4376,8 @@ def resolve_provider(
             )
         context_length = max_context_tokens
         if context_length is None:
-            try:
-                import litellm
-
-                _bare = model_id.removeprefix("gemini/")
-                _model_str = f"gemini/{_bare}"
-                info = litellm.get_model_info(_model_str)
-                context_length = info.get("max_input_tokens")
-            except Exception:
-                pass
+            _bare = model_id.removeprefix("gemini/")
+            context_length = _litellm_context_length(f"gemini/{_bare}")
 
     elif provider == "chatgpt":
         if not model:
@@ -4388,15 +4390,8 @@ def resolve_provider(
         resolved_key = api_key or os.environ.get("CHATGPT_API_KEY")
         context_length = max_context_tokens
         if context_length is None:
-            try:
-                import litellm
-
-                _bare = model_id.removeprefix("chatgpt/").removeprefix("chatgpt/")
-                _model_str = f"chatgpt/{_bare}"
-                info = litellm.get_model_info(_model_str)
-                context_length = info.get("max_input_tokens")
-            except Exception:
-                pass
+            _bare = model_id.removeprefix("chatgpt/").removeprefix("chatgpt/")
+            context_length = _litellm_context_length(f"chatgpt/{_bare}")
 
     elif provider == "bedrock":
         if not model:

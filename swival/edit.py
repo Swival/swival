@@ -36,13 +36,22 @@ def _normalize_unicode(s: str) -> str:
 
 def _prepare_fuzzy(
     content: str, old_string: str, normalize=None
-) -> tuple[list[str], list[str], int]:
+) -> tuple[list[str], list[str], int, object]:
     """Shared prep for fuzzy matching: split lines, apply normalize + strip."""
     content_lines = content.split("\n")
     old_lines = old_string.split("\n")
     prep = normalize or (lambda s: s)
     prepped_old = [prep(line.strip()) for line in old_lines]
-    return content_lines, prepped_old, len(old_lines)
+    return content_lines, prepped_old, len(old_lines), prep
+
+
+def _fuzzy_match_indices(content_lines, prepped_old, old_len, prep):
+    """Yield starting line indices where old_string fuzzy-matches."""
+    for i in range(len(content_lines) - old_len + 1):
+        if all(
+            prep(content_lines[i + j].strip()) == prepped_old[j] for j in range(old_len)
+        ):
+            yield i
 
 
 def _find_fuzzy(
@@ -55,40 +64,31 @@ def _find_fuzzy(
 
     Returns (start_index, end_index) into content, or None.
     """
-    content_lines, prepped_old, old_len = _prepare_fuzzy(content, old_string, normalize)
+    content_lines, prepped_old, old_len, prep = _prepare_fuzzy(
+        content, old_string, normalize
+    )
 
     if old_len == 0:
         return None
 
-    prep = normalize or (lambda s: s)
-
-    for i in range(len(content_lines) - old_len + 1):
-        if all(
-            prep(content_lines[i + j].strip()) == prepped_old[j] for j in range(old_len)
-        ):
-            start = sum(len(content_lines[k]) + 1 for k in range(i))
-            end = start + sum(len(content_lines[i + k]) + 1 for k in range(old_len))
-            if not old_string.endswith("\n") and end > 0 and end <= len(content) + 1:
-                end -= 1
-            return (start, end)
+    for i in _fuzzy_match_indices(content_lines, prepped_old, old_len, prep):
+        start = sum(len(content_lines[k]) + 1 for k in range(i))
+        end = start + sum(len(content_lines[i + k]) + 1 for k in range(old_len))
+        if not old_string.endswith("\n") and end > 0 and end <= len(content) + 1:
+            end -= 1
+        return (start, end)
 
     return None
 
 
 def _count_fuzzy_matches(content: str, old_string: str, normalize=None) -> int:
     """Count how many times old_string fuzzy-matches in content."""
-    content_lines, prepped_old, old_len = _prepare_fuzzy(content, old_string, normalize)
-    count = 0
-
-    prep = normalize or (lambda s: s)
-
-    for i in range(len(content_lines) - old_len + 1):
-        if all(
-            prep(content_lines[i + j].strip()) == prepped_old[j] for j in range(old_len)
-        ):
-            count += 1
-
-    return count
+    content_lines, prepped_old, old_len, prep = _prepare_fuzzy(
+        content, old_string, normalize
+    )
+    return sum(
+        1 for _ in _fuzzy_match_indices(content_lines, prepped_old, old_len, prep)
+    )
 
 
 # ---------------------------------------------------------------------------

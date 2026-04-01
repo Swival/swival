@@ -134,19 +134,21 @@ class SnapshotState:
         self.stats["saves"] += 1
         return None
 
+    def _save_response(self, label: str) -> str:
+        """Verbose log + JSON response shared by both save paths."""
+        if self.verbose:
+            fmt.info(f"snapshot: checkpoint saved — {label}")
+        return json.dumps(
+            {"action": "save", "label": label, "status": "checkpoint_set"}
+        )
+
     def _save(self, label: str, tool_call_id: str | None) -> str:
         err = self._save_common(label)
         if err:
             return err
 
         self.explicit_begin_tool_call_id = tool_call_id
-
-        if self.verbose:
-            fmt.info(f"snapshot: checkpoint saved — {label}")
-
-        return json.dumps(
-            {"action": "save", "label": label, "status": "checkpoint_set"}
-        )
+        return self._save_response(label)
 
     def save_at_index(self, label: str, index: int) -> str:
         err = self._save_common(label)
@@ -155,13 +157,7 @@ class SnapshotState:
 
         self.explicit_begin_index = index
         self._save_generation = self._generation
-
-        if self.verbose:
-            fmt.info(f"snapshot: checkpoint saved — {label}")
-
-        return json.dumps(
-            {"action": "save", "label": label, "status": "checkpoint_set"}
-        )
+        return self._save_response(label)
 
     def _restore(
         self,
