@@ -2266,8 +2266,6 @@ def _resolve_model_str(provider: str, model_id: str) -> str:
         return f"chatgpt/{bare}"
     elif provider == "bedrock":
         return f"bedrock/{model_id.removeprefix('bedrock/')}"
-    elif provider == "command":
-        return model_id
     else:
         return model_id
 

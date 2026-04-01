@@ -139,7 +139,7 @@ class McpManager:
     def list_tools(self) -> list[dict]:
         """Return all MCP tools in OpenAI function-calling format."""
         tools = []
-        for server_name, schemas in self._tool_schemas.items():
+        for schemas in self._tool_schemas.values():
             tools.extend(schemas)
         return tools
 
