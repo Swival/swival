@@ -176,6 +176,7 @@ def run_as_reviewer(args, base_dir: str) -> int:
             provider=llm_kwargs.get("provider", args.provider),
             api_key=api_key,
             max_retries=getattr(args, "retries", 5),
+            aws_profile=llm_kwargs.get("aws_profile"),
             **extra_kwargs,
         )
         msg = _llm_result[0]

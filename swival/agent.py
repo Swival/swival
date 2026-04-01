@@ -3072,6 +3072,8 @@ def _build_self_review_cmd(
         parts.append("--encrypt-secrets")
     if getattr(args, "retries", 5) != 5:
         parts.extend(["--retries", str(args.retries)])
+    if getattr(args, "aws_profile", None):
+        parts.extend(["--aws-profile", args.aws_profile])
 
     return shlex.join(parts)
 
