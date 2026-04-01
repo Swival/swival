@@ -1,6 +1,6 @@
 # Tools
 
-Swival gives the model a fixed set of tools at runtime. Most tools are always available. `run_command` is included by default (commands default to `"all"`); pass `--commands none` to remove it. `use_skill` appears only when skills are discovered, MCP tools appear when external MCP servers are configured, and A2A tools appear when remote A2A agents are configured.
+Swival gives the model a fixed set of tools at runtime. Most tools are always available. `run_command` is included by default (commands default to `"all"`); pass `--commands none` to remove it or `--commands ask` for interactive approval. `use_skill` appears only when skills are discovered, MCP tools appear when external MCP servers are configured, and A2A tools appear when remote A2A agents are configured.
 
 ## `read_file`
 
@@ -88,6 +88,8 @@ This tool is only available when the model supports vision. Swival checks vision
 
 Raw response bodies are capped at 5 MB, and inline output is capped at 50 KB. Larger converted outputs are saved under `.swival/` so the agent can page through them with `read_file`.
 
+All `fetch_url` output is wrapped with an `[UNTRUSTED EXTERNAL CONTENT]` header before the model sees it. This label is also baked into spill files so it survives when the agent reads large results back via `read_file`. Failed fetches (errors) are not wrapped or counted.
+
 SSRF protections are built in. Swival resolves every URL in the redirect chain and blocks private, loopback, link-local, and reserved addresses.
 
 ## `run_command`
@@ -96,9 +98,12 @@ SSRF protections are built in. Swival resolves every URL in the redirect chain a
 
 ```sh
 swival --commands ls,git,python3 "Run the tests"
+swival --commands ask "Run the tests"
 ```
 
-`--commands` accepts `"all"` (unrestricted, the default), `"none"` (disabled), or a comma-separated whitelist like `ls,git,python3`. In whitelist mode, the command must be passed as an array of arguments, not as a shell string. Swival resolves each whitelisted command to an absolute path at startup and rejects commands that resolve inside the base directory, so the model cannot edit and execute workspace scripts in one loop.
+`--commands` accepts `"all"` (unrestricted, the default), `"none"` (disabled), `"ask"` (interactive approval per command bucket), or a comma-separated whitelist like `ls,git,python3`. In whitelist mode, the command must be passed as an array of arguments, not as a shell string. Swival resolves each whitelisted command to an absolute path at startup and rejects commands that resolve inside the base directory, so the model cannot edit and execute workspace scripts in one loop.
+
+In ask mode, Swival prompts before each new command bucket. Shell strings with metacharacters (`&&`, `|`, `;`, etc.) are classified under a `<shell>` bucket that is always high-risk. Interpreter inline-code flags (`bash -c`, `python3 -c`, `node -e`, `bun -e`) are classified as separate high-risk buckets distinct from the plain interpreter name, so approving `bash` to run scripts does not also approve `bash -c` for arbitrary code. See [Safety and Sandboxing](safety-and-sandboxing.md#ask-mode) for details.
 
 Timeout defaults to 30 seconds and is clamped to a maximum of 120 seconds. Inline command output is capped at 10 KB. Larger output is written to `.swival/cmd_output_*.txt` and hard-capped at 1 MB before writing to disk. Those files are cleaned up automatically after roughly ten minutes.
 
@@ -180,12 +185,12 @@ This tool is only available when subagent support is enabled.
 
 ## MCP Tools
 
-Swival can connect to external tool servers via the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP). MCP tools are discovered at startup and exposed alongside built-in tools. MCP tool output is size-guarded: results up to 20 KB are returned inline, larger results are saved to `.swival/` for paginated reads via `read_file`, and output is hard-capped at 10 MB.
+Swival can connect to external tool servers via the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP). MCP tools are discovered at startup and exposed alongside built-in tools. MCP tool output is size-guarded: results up to 20 KB are returned inline, larger results are saved to `.swival/` for paginated reads via `read_file`, and output is hard-capped at 10 MB. All MCP output is wrapped with an `[UNTRUSTED EXTERNAL CONTENT]` header, including spill files.
 
 See [MCP](mcp.md) for configuration and details.
 
 ## A2A Tools
 
-Swival can connect to remote agents via the [Agent-to-Agent (A2A) protocol](https://google.github.io/A2A/). A2A tools are discovered at startup and exposed alongside built-in tools. Unlike MCP tools, A2A tools always accept a natural-language `message` plus optional `context_id` and `task_id` for multi-turn conversations. A2A tool output is size-guarded the same way as MCP output, with continuation metadata preserved across size limits and context compaction.
+Swival can connect to remote agents via the [Agent-to-Agent (A2A) protocol](https://google.github.io/A2A/). A2A tools are discovered at startup and exposed alongside built-in tools. Unlike MCP tools, A2A tools always accept a natural-language `message` plus optional `context_id` and `task_id` for multi-turn conversations. A2A tool output is size-guarded the same way as MCP output, with continuation metadata preserved across size limits and context compaction. All A2A output is wrapped with an `[UNTRUSTED EXTERNAL CONTENT]` header, including spill files.
 
 See [A2A](a2a.md) for configuration and details.

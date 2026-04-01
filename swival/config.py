@@ -101,12 +101,14 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "lifecycle_fail_closed": bool,
     "no_lifecycle": bool,
     "subagents": bool,
+    "approved_buckets": list,
 }
 
 _LIST_OF_STR_KEYS = {
     "allowed_dirs",
     "allowed_dirs_ro",
     "skills_dir",
+    "approved_buckets",
 }
 
 # Config key -> argparse dest (only where they differ)
@@ -179,6 +181,7 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "lifecycle_fail_closed": False,
     "no_lifecycle": False,
     "aws_profile": None,
+    "approved_buckets": [],
 }
 
 
@@ -230,9 +233,9 @@ def _validate_config(config: dict, source: str) -> None:
                     f"{source}: 'files' must be 'none', 'some', or 'all', got {value!r}"
                 )
         if key == "commands":
-            if isinstance(value, str) and value not in ("all", "none"):
+            if isinstance(value, str) and value not in ("all", "none", "ask"):
                 raise ConfigError(
-                    f"{source}: 'commands' must be 'all', 'none', or a list of command names, "
+                    f"{source}: 'commands' must be 'all', 'none', 'ask', or a list of command names, "
                     f"got {value!r}"
                 )
             if isinstance(value, list):
@@ -1214,7 +1217,7 @@ def generate_config(
         "# sandbox_strict_read = false",
         "# sandbox_auto_session = true",
         '# files = "some"                  # "some" (default, workspace) | "all" (unrestricted) | "none" (.swival/ only)',
-        '# commands = "all"                # "all" (default) | "none" | ["ls", "git", "python3"]',
+        '# commands = "all"                # "all" (default) | "none" | "ask" | ["ls", "git", "python3"]',
         "# yolo = false                    # shorthand for files = all + commands = all",
         '# allowed_dirs = ["../shared-lib", "/data/assets"]',
         '# allowed_dirs_ro = ["/reference/docs", "~/datasets"]',

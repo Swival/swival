@@ -294,7 +294,13 @@ def fetch_url(
     if len(encoded) > MAX_OUTPUT_BYTES and base_dir:
         from .tools import _save_large_output
 
-        return _save_large_output(output, base_dir, scratch_dir=scratch_dir)
+        return _save_large_output(
+            output,
+            base_dir,
+            scratch_dir=scratch_dir,
+            untrusted_source="fetch_url",
+            untrusted_origin=url,
+        )
     elif len(encoded) > MAX_OUTPUT_BYTES:
         total = len(encoded)
         truncated = encoded[:MAX_OUTPUT_BYTES].decode("utf-8", errors="ignore")

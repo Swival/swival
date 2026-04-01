@@ -270,19 +270,30 @@ class Session:
         )
 
         # Resolve commands
+        from .command_policy import CommandPolicy
+
         cmds = self.commands
         if cmds is None or cmds == "all":
             self._resolved_commands = {}
             self._commands_unrestricted = True
+            self._command_policy = CommandPolicy("full")
         elif cmds == "none":
             self._resolved_commands = {}
             self._commands_unrestricted = False
+            self._command_policy = CommandPolicy("none")
+        elif cmds == "ask":
+            self._resolved_commands = {}
+            self._commands_unrestricted = True
+            self._command_policy = CommandPolicy("ask")
         elif isinstance(cmds, list):
             self._resolved_commands = resolve_commands(cmds, self.base_dir)
             self._commands_unrestricted = False
+            self._command_policy = CommandPolicy(
+                "allowlist", allowed_basenames=set(self._resolved_commands)
+            )
         else:
             raise ConfigError(
-                f"'commands' must be 'all', 'none', or a list of command names, "
+                f"'commands' must be 'all', 'none', 'ask', or a list of command names, "
                 f"got {cmds!r}"
             )
 
@@ -489,6 +500,7 @@ class Session:
             file_tracker=state["file_tracker"],
             continue_here=self.continue_here,
             cache=self._llm_cache,
+            command_policy=self._command_policy,
         )
         if state.get("compaction_state") is not None:
             kwargs["compaction_state"] = state["compaction_state"]

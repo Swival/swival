@@ -361,6 +361,7 @@ def _subagent_thread_fn(
             compaction_state=None,
             turn_offset=0,
             cache=None,
+            is_subagent=True,
         )
 
         cancel_before = composite_cancel.is_set()

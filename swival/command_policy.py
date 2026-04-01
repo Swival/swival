@@ -24,9 +24,36 @@ _WRAPPER_PATTERNS: list[tuple[list[str], int | None]] = [
     (["git", "clean"], None),
 ]
 
-_INTERPRETERS = {"python3", "python", "bash", "sh", "node", "ruby", "perl"}
+_INTERPRETERS = {"python3", "python", "bash", "sh", "node", "bun", "ruby", "perl"}
 
 _TEMP_SCRIPT_RE = re.compile(r"(/tmp/swival-|\.swival/tmp/|/tmp/)")
+
+# Flags that make an interpreter execute inline code, in priority order.
+# -c: bash, sh, python, python3, ruby, perl
+# -e: node, bun, ruby, perl
+# Tuple, not set — iteration order must be deterministic so that combined
+# flags like -ec always resolve to the same bucket regardless of hash seed.
+_INLINE_CODE_FLAGS = ("c", "e")
+
+
+def _has_inline_code_flag(argv: list[str]) -> str | None:
+    """Return the highest-priority inline-code flag letter found in *argv*.
+
+    Handles combined short flags like ``-lc`` or ``-ec``.
+    Only inspects arguments before the first non-flag argument.
+    Priority follows ``_INLINE_CODE_FLAGS`` order (c before e).
+    """
+    for arg in argv[1:]:
+        if not arg.startswith("-") or arg == "--":
+            break
+        stripped = arg.lstrip("-")
+        if not stripped:
+            continue
+        for ch in _INLINE_CODE_FLAGS:
+            if ch in stripped:
+                return ch
+    return None
+
 
 HIGH_RISK_BUCKETS = {
     "rm",
@@ -40,7 +67,22 @@ HIGH_RISK_BUCKETS = {
     "npm install",
     "pip install",
     "uv pip install",
+    "uv run -c",
+    "<shell>",
+    "bash -c",
+    "sh -c",
+    "python3 -c",
+    "python -c",
+    "node -e",
+    "bun -e",
+    "ruby -e",
+    "ruby -c",
+    "perl -e",
+    "perl -c",
 }
+
+
+_SHELL_BUCKET = "<shell>"
 
 
 def normalize_bucket(argv: list[str]) -> str:
@@ -54,16 +96,40 @@ def normalize_bucket(argv: list[str]) -> str:
                 return " ".join(prefix + argv[plen : plen + extra_count])
             return " ".join(prefix)
 
-    basename = os.path.basename(argv[0])
+    cmd = argv[0]
+    is_path = "/" in cmd or "\\" in cmd
+    basename = os.path.basename(cmd)
+    # The bucket prefix is the full path for path-invoked commands, so that
+    # approving "ls" does not also approve "/tmp/ls" or "./ls".
+    prefix = cmd if is_path else basename
+
+    # Interpreter inline-code detection applies regardless of path form,
+    # so that /bin/bash -c and bash -c get equivalent treatment.
     if basename in _INTERPRETERS and len(argv) >= 2:
         if _TEMP_SCRIPT_RE.search(argv[1]):
-            return f"{basename} <temp-script>"
+            return f"{prefix} <temp-script>"
+        flag = _has_inline_code_flag(argv)
+        if flag is not None:
+            return f"{prefix} -{flag}"
 
-    return basename
+    return prefix
 
 
 def is_high_risk(bucket: str) -> bool:
-    return bucket in HIGH_RISK_BUCKETS
+    if bucket in HIGH_RISK_BUCKETS:
+        return True
+    # Path-prefixed buckets like "/bin/bash -c" should match "bash -c".
+    if "/" in bucket or "\\" in bucket:
+        # Split into command part and suffix (e.g. "/bin/bash -c" -> "bash -c")
+        parts = bucket.split(None, 1)  # split on first space
+        basename_form = os.path.basename(parts[0])
+        if len(parts) > 1:
+            basename_form += " " + parts[1]
+        return basename_form in HIGH_RISK_BUCKETS
+    return False
+
+
+_VALID_MODES = frozenset({"full", "none", "allowlist", "ask"})
 
 
 class CommandPolicy:
@@ -73,6 +139,11 @@ class CommandPolicy:
         allowed_basenames: set[str] | None = None,
         approved_buckets: set[str] | None = None,
     ):
+        if mode not in _VALID_MODES:
+            raise ValueError(
+                f"invalid CommandPolicy mode {mode!r}, "
+                f"expected one of {sorted(_VALID_MODES)}"
+            )
         self.mode = mode
         self.allowed_basenames = allowed_basenames or set()
         self.approved_buckets = set(approved_buckets or ())
@@ -93,6 +164,7 @@ class CommandPolicy:
                 f"Allowed: {', '.join(sorted(self.allowed_basenames))}."
             )
 
+        # mode == "ask": every command requires approval via bucket
         bucket = normalize_bucket(argv)
 
         if bucket in self.denied_buckets:

@@ -677,7 +677,8 @@ class TestDispatchRouting:
             "/tmp",
             a2a_manager=FakeManager(),
         )
-        assert result == "result for hello"
+        assert "[UNTRUSTED EXTERNAL CONTENT]" in result
+        assert "result for hello" in result
 
     def test_dispatch_a2a_error(self, monkeypatch):
         from swival.tools import dispatch

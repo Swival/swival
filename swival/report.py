@@ -40,6 +40,11 @@ class ReportCollector:
         self.memory_stats: dict | None = None
         self.lifecycle_events: list[dict] = []
         self._last_report: dict | None = None
+        self.security_stats: dict[str, int] = {
+            "command_policy_blocks": 0,
+            "command_policy_approvals": 0,
+            "untrusted_inputs": 0,
+        }
 
     def record_llm_call(
         self,
@@ -187,6 +192,23 @@ class ReportCollector:
             event["stderr"] = stderr
         self.events.append(event)
 
+    def record_command_policy(self, bucket: str, decision: str):
+        """Record a command policy decision."""
+        if decision in ("deny", "block"):
+            self.security_stats["command_policy_blocks"] += 1
+        else:
+            self.security_stats["command_policy_approvals"] += 1
+        self.events.append(
+            {"type": "command_policy", "bucket": bucket, "decision": decision}
+        )
+
+    def record_untrusted_input(self, source: str, origin: str = ""):
+        """Record ingestion of untrusted external content."""
+        self.security_stats["untrusted_inputs"] += 1
+        self.events.append(
+            {"type": "untrusted_input", "source": source, "origin": origin}
+        )
+
     def build_report(
         self,
         *,
@@ -269,6 +291,11 @@ class ReportCollector:
                 **(
                     {"lifecycle": self.lifecycle_events}
                     if self.lifecycle_events
+                    else {}
+                ),
+                **(
+                    {"security": dict(self.security_stats)}
+                    if any(self.security_stats.values())
                     else {}
                 ),
             },

@@ -39,7 +39,7 @@ Session(
     temperature: float | None = None,
     top_p: float = 1.0,
     seed: int | None = None,
-    commands: list[str] | str | None = "all",
+    commands: list[str] | str | None = "all",  # "all", "none", "ask", or list
     files: str = "some",
     yolo: bool = False,
     verbose: bool = False,

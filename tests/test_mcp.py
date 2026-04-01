@@ -524,7 +524,8 @@ class TestDispatch:
             "/base",
             mcp_manager=manager,
         )
-        assert result == "tool result"
+        assert "[UNTRUSTED EXTERNAL CONTENT]" in result
+        assert "tool result" in result
         manager.call_tool.assert_called_once_with("mcp__server__tool", {"arg": "val"})
 
     def test_mcp_prefix_no_manager(self):
@@ -593,7 +594,10 @@ class TestMcpOutputGuard:
         assert swival_dir.exists()
         files = list(swival_dir.glob("cmd_output_*.txt"))
         assert len(files) == 1
-        assert files[0].read_text() == payload
+        file_content = files[0].read_text()
+        # File should contain the untrusted header followed by the payload
+        assert file_content.startswith("[UNTRUSTED EXTERNAL CONTENT]")
+        assert payload in file_content
 
     def test_pointer_message_wording(self, tmp_path):
         from swival.tools import _guard_mcp_output, MCP_INLINE_LIMIT
@@ -610,12 +614,16 @@ class TestMcpOutputGuard:
         payload = "z" * (MCP_FILE_LIMIT + 1000)
         result = _guard_mcp_output(payload, str(tmp_path), "mcp__s__t")
         assert "possibly truncated" in result.lower()
-        # File should be capped at MCP_FILE_LIMIT bytes
+        # File should be capped at MCP_FILE_LIMIT + small untrusted header
         swival_dir = tmp_path / ".swival"
         files = list(swival_dir.glob("cmd_output_*.txt"))
         assert len(files) == 1
-        written_bytes = len(files[0].read_bytes())
-        assert written_bytes <= MCP_FILE_LIMIT
+        file_content = files[0].read_text()
+        # The payload portion must be truncated to MCP_FILE_LIMIT;
+        # the file also contains the untrusted-content header (~160 bytes).
+        header_end = file_content.index("\n\n") + 2
+        payload_bytes = len(file_content[header_end:].encode("utf-8"))
+        assert payload_bytes <= MCP_FILE_LIMIT
 
     def test_error_small_passthrough(self, tmp_path):
         """Small error results pass through unchanged."""

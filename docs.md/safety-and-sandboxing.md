@@ -83,15 +83,45 @@ Each allowed directory must already exist, must be a directory, and cannot be th
 
 Command execution is unrestricted by default (`--commands all`). You can restrict or disable it.
 
-In whitelist mode, you pass a comma-separated set of command basenames. Pass `"none"` to disable commands entirely.
+In whitelist mode, you pass a comma-separated set of command basenames. Pass `"none"` to disable commands entirely. Pass `"ask"` to require interactive approval for every command bucket.
 
 ```sh
 swival --commands ls,git,python3 "task"
+swival --commands ask "task"
+swival --commands none "task"
 ```
 
 At startup, each basename is resolved to an absolute path using `which`. If a command cannot be found, Swival exits with an error. If a command resolves inside your base directory, Swival rejects it so the agent cannot modify and execute workspace binaries in one session.
 
 At runtime in whitelist mode, commands must be passed as argument arrays, not shell strings. This removes shell interpolation and injection risk from ordinary command calls.
+
+### Ask Mode
+
+In ask mode (`--commands ask`), Swival prompts you before running each new command category. Commands are grouped into buckets by their base name (e.g. `ls`, `git push`, `python3 -m pytest`). Once you approve a bucket, subsequent commands in the same bucket run without asking again.
+
+High-risk buckets (`rm`, `git push`, `docker`, `curl`, shell strings, interpreter inline-code like `bash -c` or `python3 -c`) default to deny — you must explicitly type `y` to allow them. Non-high-risk buckets default to allow on Enter.
+
+Approval options:
+
+- `Enter` — allow (non-high-risk) or deny (high-risk)
+- `y` — allow this bucket for the rest of the session
+- `n` — deny this bucket for the rest of the session
+- `p` — allow and persist the approval to `swival.toml`
+- `o` — allow this one invocation only
+- `a` — always re-prompt for this bucket
+
+Subagents cannot prompt interactively. In ask mode, subagents can only run commands in buckets that are pre-approved via `approved_buckets` in config.
+
+```toml
+commands = "ask"
+approved_buckets = ["ls", "git status", "python3 -m pytest"]
+```
+
+## Untrusted Content Labels
+
+Output from external sources — `fetch_url`, MCP tools, and A2A tools — is wrapped with a deterministic `[UNTRUSTED EXTERNAL CONTENT]` header before the model sees it. This header instructs the model to treat the content as data, not instructions, and to avoid changing tool-selection behavior based on it.
+
+The label is baked into spill files too. When an external tool produces output too large for inline context (over 20 KB for MCP/A2A, over 50 KB for fetch_url), the content is saved to a temp file under `.swival/`. The untrusted header is prepended to the file contents, so the label survives when the agent reads the file back via `read_file`.
 
 ## Filesystem Access Policy
 

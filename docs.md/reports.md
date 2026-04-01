@@ -72,7 +72,7 @@ The JSON below is from a verified local run using `--model dummy-model --max-tur
 
 `temperature` stores the sampling temperature or `null` when omitted. `top_p` stores nucleus sampling. `seed` stores the random seed or `null`. `max_turns` and `max_output_tokens` store turn and output-token limits. `context_length` stores effective context length after provider resolution. `files` records the filesystem access policy: `"some"` (workspace only, the default), `"all"` (unrestricted), or `"none"` (`.swival/` only).
 
-`commands` records the configured command policy: `"all"` (unrestricted, the default), `"none"` (disabled), or a sorted list of whitelisted basenames. `max_review_rounds` records the reviewer retry limit. `skills_discovered` records skill names discovered at startup. `instructions_loaded` records loaded instruction files as absolute paths (e.g. the user-level `AGENTS.md` from `~/.config/swival/`, the cross-agent `~/.agents/AGENTS.md`, and the project-level files).
+`commands` records the configured command policy: `"all"` (unrestricted, the default), `"none"` (disabled), `"ask"` (interactive approval per bucket), or a sorted list of whitelisted basenames. `max_review_rounds` records the reviewer retry limit. `skills_discovered` records skill names discovered at startup. `instructions_loaded` records loaded instruction files as absolute paths (e.g. the user-level `AGENTS.md` from `~/.config/swival/`, the cross-agent `~/.agents/AGENTS.md`, and the project-level files).
 
 ### `sandbox`
 
@@ -96,6 +96,8 @@ A `success` outcome means the model produced a final non-tool response. An `exha
 
 `prompt_cache` appears when at least one LLM call in the run returned cache stats. It is an object with `cached_tokens` (tokens served from the provider's prompt cache across the whole run) and `cache_write_tokens` (tokens written to the cache, i.e. the first-call population cost). Both fields are integers. Absent means no cache activity was reported by the provider.
 
+`security` appears when at least one security-relevant event occurred during the run. It is an object with `command_policy_blocks` (commands denied by policy or by user), `command_policy_approvals` (commands approved by user or config), and `untrusted_inputs` (external content ingested from `fetch_url`, MCP, or A2A). All fields are integers. Absent when all counters are zero.
+
 ### `timeline`
 
 `timeline` is an ordered array of event objects. Each event includes `type`, and most include `turn` (the turn number when the event occurred). Review events are an exception — they include `round` instead of `turn` since they occur between agent loop iterations.
@@ -113,6 +115,10 @@ For `review`, fields include `round`, `exit_code`, and `feedback` (reviewer stan
 For `truncated_response`, the event marks that an LLM response ended because of output token limits.
 
 For `lifecycle`, fields include `event` (`startup` or `exit`), `exit_code`, `duration_s`, and optionally `error`. Lifecycle events appear when `--lifecycle-command` is configured. See [Lifecycle Hooks](lifecycle-hooks.md) for details.
+
+For `command_policy`, fields include `bucket` (the normalized command bucket) and `decision` (`allow`, `persist`, `once`, `always_ask`, `deny`, or `block`). These events are emitted when `--commands ask` is active.
+
+For `untrusted_input`, fields include `source` (the tool name, e.g. `fetch_url` or `mcp__server__tool`) and `origin` (the URL or empty string). These events are emitted when external content is successfully ingested.
 
 ## Benchmarking Workflow
 

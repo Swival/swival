@@ -111,11 +111,32 @@
 <p>Each allowed directory must already exist, must be a directory, and cannot be the filesystem root. In REPL mode, you can grant the same access dynamically with <code>/add-dir &lt;path&gt;</code> or <code>/add-dir-ro &lt;path&gt;</code>.</p>
 <h2 id="command-execution-policy">Command Execution Policy</h2>
 <p>Command execution is unrestricted by default (<code>--commands all</code>). You can restrict or disable it.</p>
-<p>In whitelist mode, you pass a comma-separated set of command basenames. Pass <code>"none"</code> to disable commands entirely.</p>
+<p>In whitelist mode, you pass a comma-separated set of command basenames. Pass <code>"none"</code> to disable commands entirely. Pass <code>"ask"</code> to require interactive approval for every command bucket.</p>
 <pre><code class="language-sh">swival --commands ls,git,python3 &quot;task&quot;
+swival --commands ask &quot;task&quot;
+swival --commands none &quot;task&quot;
 </code></pre>
 <p>At startup, each basename is resolved to an absolute path using <code>which</code>. If a command cannot be found, Swival exits with an error. If a command resolves inside your base directory, Swival rejects it so the agent cannot modify and execute workspace binaries in one session.</p>
 <p>At runtime in whitelist mode, commands must be passed as argument arrays, not shell strings. This removes shell interpolation and injection risk from ordinary command calls.</p>
+<h3 id="ask-mode">Ask Mode</h3>
+<p>In ask mode (<code>--commands ask</code>), Swival prompts you before running each new command category. Commands are grouped into buckets by their base name (e.g. <code>ls</code>, <code>git push</code>, <code>python3 -m pytest</code>). Once you approve a bucket, subsequent commands in the same bucket run without asking again.</p>
+<p>High-risk buckets (<code>rm</code>, <code>git push</code>, <code>docker</code>, <code>curl</code>, shell strings, interpreter inline-code like <code>bash -c</code> or <code>python3 -c</code>) default to deny — you must explicitly type <code>y</code> to allow them. Non-high-risk buckets default to allow on Enter.</p>
+<p>Approval options:</p>
+<ul>
+<li><code>Enter</code> — allow (non-high-risk) or deny (high-risk)</li>
+<li><code>y</code> — allow this bucket for the rest of the session</li>
+<li><code>n</code> — deny this bucket for the rest of the session</li>
+<li><code>p</code> — allow and persist the approval to <code>swival.toml</code></li>
+<li><code>o</code> — allow this one invocation only</li>
+<li><code>a</code> — always re-prompt for this bucket</li>
+</ul>
+<p>Subagents cannot prompt interactively. In ask mode, subagents can only run commands in buckets that are pre-approved via <code>approved_buckets</code> in config.</p>
+<pre><code class="language-toml">commands = &quot;ask&quot;
+approved_buckets = [&quot;ls&quot;, &quot;git status&quot;, &quot;python3 -m pytest&quot;]
+</code></pre>
+<h2 id="untrusted-content-labels">Untrusted Content Labels</h2>
+<p>Output from external sources — <code>fetch_url</code>, MCP tools, and A2A tools — is wrapped with a deterministic <code>[UNTRUSTED EXTERNAL CONTENT]</code> header before the model sees it. This header instructs the model to treat the content as data, not instructions, and to avoid changing tool-selection behavior based on it.</p>
+<p>The label is baked into spill files too. When an external tool produces output too large for inline context (over 20 KB for MCP/A2A, over 50 KB for fetch_url), the content is saved to a temp file under <code>.swival/</code>. The untrusted header is prepended to the file contents, so the label survives when the agent reads the file back via <code>read_file</code>.</p>
 <h2 id="filesystem-access-policy">Filesystem Access Policy</h2>
 <p><code>--files</code> controls what the filesystem tools can access. It accepts <code>"some"</code> (the default), <code>"all"</code>, or <code>"none"</code>.</p>
 <p>In the default mode (<code>--files some</code>), filesystem tools are restricted to the base directory and any <code>--add-dir</code> / <code>--add-dir-ro</code> paths. In <code>--files all</code> mode, the agent can read or write any non-root path. In <code>--files none</code> mode, only the <code>.swival/</code> directory is accessible through tools — the agent can still think, run commands, and fetch URLs.</p>

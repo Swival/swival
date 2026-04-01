@@ -2048,6 +2048,9 @@ def handle_tool_call(
     image_stash=None,
     scratch_dir=None,
     subagent_manager=None,
+    command_policy=None,
+    is_subagent=False,
+    report=None,
 ):
     """Execute a single tool call and return (tool_msg, metadata).
 
@@ -2110,6 +2113,9 @@ def handle_tool_call(
             image_stash=image_stash,
             scratch_dir=scratch_dir,
             subagent_manager=subagent_manager,
+            command_policy=command_policy,
+            is_subagent=is_subagent,
+            report=report,
         )
     except McpShutdownError:
         result = "error: MCP server is shutting down"
@@ -3176,7 +3182,7 @@ def build_parser():
         "--commands",
         type=str,
         default=_UNSET,
-        help='Command execution mode: "all" (default, unrestricted), "none" (disabled), or comma-separated whitelist (e.g. "ls,git,python3").',
+        help='Command execution mode: "all" (default, unrestricted), "none" (disabled), "ask" (approve each command bucket interactively), or comma-separated whitelist (e.g. "ls,git,python3").',
     )
     provider_group.add_argument(
         "--api-key",
@@ -4866,27 +4872,45 @@ def _run_main(args, report, _write_report, parser):
     files_mode = args._resolved_files_mode
 
     # Resolve commands mode (yolo upgrades default but not explicit --commands)
+    from .command_policy import CommandPolicy
+
     cmds = args.commands
     if args.yolo and not args._commands_explicit:
         cmds = "all"
+
+    approved_buckets = getattr(args, "approved_buckets", None) or []
+
     if cmds is None or cmds == "all":
         resolved_commands = {}
         commands_unrestricted = True
+        command_policy = CommandPolicy("full")
     elif cmds == "none":
         resolved_commands = {}
         commands_unrestricted = False
+        command_policy = CommandPolicy("none")
+    elif cmds == "ask":
+        resolved_commands = {}
+        commands_unrestricted = True
+        command_policy = CommandPolicy("ask", approved_buckets=set(approved_buckets))
     elif isinstance(cmds, list):
         resolved_commands = resolve_commands(cmds, base_dir)
         commands_unrestricted = False
+        command_policy = CommandPolicy(
+            "allowlist", allowed_basenames=set(resolved_commands)
+        )
     else:
         # CLI comma-separated string
         cmd_list = sorted(c.strip() for c in cmds.split(",") if c.strip())
         if cmd_list:
             resolved_commands = resolve_commands(cmd_list, base_dir)
             commands_unrestricted = False
+            command_policy = CommandPolicy(
+                "allowlist", allowed_basenames=set(resolved_commands)
+            )
         else:
             resolved_commands = {}
             commands_unrestricted = True
+            command_policy = CommandPolicy("full")
 
     # Discover skills
     from .skills import discover_skills
@@ -5099,6 +5123,7 @@ def _run_main(args, report, _write_report, parser):
         a2a_manager=a2a_manager,
         cache=llm_cache,
         secret_shield=secret_shield,
+        command_policy=command_policy,
     )
 
     # Validate and thread llm_filter
@@ -5375,6 +5400,8 @@ def run_agent_loop(
     event_callback: "Callable[[str, dict], None] | None" = None,
     cancel_flag: "threading.Event | None" = None,
     turn_state: dict | None = None,
+    command_policy=None,
+    is_subagent: bool = False,
 ) -> tuple[str | None, bool]:
     """Run the tool-calling loop until a final answer or max turns.
 
@@ -5473,6 +5500,9 @@ def run_agent_loop(
             messages=None,  # inner loop manages its own transcript
             image_stash=None,
             scratch_dir=scratch_dir,
+            command_policy=command_policy,
+            is_subagent=is_subagent,
+            report=report,
         )
         llm_kwargs = {
             **llm_kwargs,
@@ -6038,6 +6068,9 @@ def run_agent_loop(
                 image_stash=image_stash,
                 scratch_dir=scratch_dir,
                 subagent_manager=subagent_manager,
+                command_policy=command_policy,
+                is_subagent=is_subagent,
+                report=report,
             )
             messages.append(tool_msg)
 
@@ -6800,6 +6833,8 @@ def repl_loop(
     continue_here: bool = True,
     cache=None,
     secret_shield=None,
+    command_policy=None,
+    is_subagent: bool = False,
     _subagent_holder: list | None = None,
 ):
     """Interactive read-eval-print loop."""
@@ -6864,6 +6899,7 @@ def repl_loop(
         subagent_manager=subagent_manager,
         cache=cache,
         secret_shield=secret_shield,
+        command_policy=command_policy,
         turn_state=turn_state,
     )
 
