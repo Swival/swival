@@ -166,13 +166,21 @@ def _init_prompt() -> str:
         "Look at: naming schemes, file/directory structure, error handling, return "
         "value formats, test organisation, API design. Read source files, tests, "
         "docs, and config. Use think to separate genuine project-wide patterns "
-        "(appear in many independent places) from one-off choices."
+        "(appear in many independent places) from one-off choices.\n"
+        "\n"
+        "C) COMMIT & PR STYLE — run `git log --oneline -20` to see recent commit "
+        "subjects. Note the tense (imperative? past?), typical length, whether "
+        "prefixes or scopes are used, and give 2-3 real examples. Also check for "
+        "a PR template (.github/PULL_REQUEST_TEMPLATE.md or similar). Summarise "
+        "the project's commit and pull-request conventions so an agent can match "
+        "them."
     )
 
 
 INIT_ENRICH_PROMPT = (
     "Review your findings. Never cut workflow commands (build, test, lint, "
-    "format, type-check, debug, after-every-edit). These are always actionable.\n"
+    "format, type-check, debug, after-every-edit). These are always actionable. "
+    "Never cut commit & PR style findings — they are always actionable.\n"
     "\n"
     "For conventions, cut anything that: (1) only appears in one file or module, "
     "(2) is standard practice any competent agent already knows, or (3) would not "
@@ -203,9 +211,18 @@ INIT_WRITE_PROMPT = (
     "\n"
     "- <terse convention bullets, 2 sentences max each>\n"
     "\n"
+    "## Commit & Pull Request Guidelines\n"
+    "\n"
+    "One short paragraph on commit style derived from git log: tense, length, "
+    "scope conventions, with 2-3 real example subjects in backticks.\n"
+    "\n"
+    "One short paragraph on pull request expectations: what the description "
+    "should cover, whether to link issues, include examples, etc.\n"
+    "\n"
     "Rules:\n"
     f"- Total output must not exceed {_INIT_AGENTS_MD_BUDGET} characters. "
-    "Workflow section takes priority. Cut convention bullets before workflow lines.\n"
+    "Workflow section takes priority. Cut convention bullets before workflow "
+    "lines, and cut commit/PR guidelines before conventions.\n"
     "- ## Workflow must be the first section.\n"
     "- Every command must be exact and copy-pasteable. No descriptions of what "
     "commands do.\n"
@@ -215,7 +232,8 @@ INIT_WRITE_PROMPT = (
 INIT_RETRY_PROMPT = (
     "The previous write failed validation: {reason}. "
     "Rewrite AGENTS.md with ## Workflow as the first section, followed by "
-    "## Conventions. Follow the exact structure from the previous instructions."
+    "## Conventions, then ## Commit & Pull Request Guidelines. "
+    "Follow the exact structure from the previous instructions."
 )
 
 _WORKFLOW_HEADING_RE = re.compile(r"^## Workflow\s*$", re.MULTILINE)

@@ -1791,6 +1791,15 @@ class TestInitPromptContract:
         assert "ci" in lower
         assert "local" in lower
 
+    def test_commit_pr_keywords_in_init_prompt(self):
+        lower = _init_prompt().lower()
+        assert "git log" in lower
+        assert "commit" in lower
+        assert "pr" in lower or "pull" in lower
+
+    def test_commit_pr_section_in_write_prompt(self):
+        assert "## Commit & Pull Request Guidelines" in INIT_WRITE_PROMPT
+
     def test_budget_target_in_write_prompt(self):
         assert str(_INIT_AGENTS_MD_BUDGET) in INIT_WRITE_PROMPT
 
