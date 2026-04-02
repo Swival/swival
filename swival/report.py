@@ -16,6 +16,10 @@ class ContextOverflowError(AgentError):
     """Raised when the LLM call fails due to context window overflow."""
 
 
+class ToolsNotSupportedError(AgentError):
+    """Raised when the model/provider does not support function calling."""
+
+
 class LifecycleError(AgentError):
     """Raised when a lifecycle hook fails in fail-closed mode."""
 

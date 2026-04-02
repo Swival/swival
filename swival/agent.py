@@ -36,7 +36,13 @@ from ._msg import (
     _set_msg_content,
 )
 from .config import _UNSET
-from .report import AgentError, ConfigError, ContextOverflowError, ReportCollector
+from .report import (
+    AgentError,
+    ConfigError,
+    ContextOverflowError,
+    ReportCollector,
+    ToolsNotSupportedError,
+)
 from .snapshot import (
     SNAPSHOT_HISTORY_SENTINEL,
     SNAPSHOT_RECAP_PREFIX,
@@ -401,6 +407,16 @@ _ORPHANED_TOOL_CALL_RE = re.compile(
 )
 
 
+_TOOLS_NOT_SUPPORTED_RE = re.compile(
+    r"function calling not support"
+    r"|does not support (function calling|tools)"
+    r"|tool.use.{0,10}not.{0,10}support"
+    r"|function.calling.{0,10}not.{0,10}(available|enabled|support)"
+    r"|tools?.{0,10}not.{0,10}(available|enabled|support)"
+    r"|does not support the 'tools' parameter",
+    re.IGNORECASE,
+)
+
 _TRANSIENT_PATTERNS = re.compile(
     r"Connection reset by peer|Connection refused|timed out"
     r"|RemoteDisconnected|Temporary failure in name resolution"
@@ -619,6 +635,17 @@ _LITELLM_INTERNAL_KEYS = {
     "annotations",
     "reasoning_content",
 }
+
+
+def _promote_reasoning_content(msg) -> None:
+    """If content is empty but reasoning_content has text, promote it."""
+    content = getattr(msg, "content", None)
+    if content:
+        return
+    reasoning = getattr(msg, "reasoning_content", None)
+    if reasoning:
+        msg.content = _sanitize_assistant_content(reasoning)
+        msg.reasoning_content = None
 
 
 def _msg_to_dict(msg) -> dict:
@@ -2952,18 +2979,26 @@ def call_llm(
                     raise
                 except Exception as e2:
                     combined = first_retries + _retries_from_exc(e2)
-                    if _CONTEXT_OVERFLOW_RE.search(str(e2)):
+                    msg2 = str(e2)
+                    if _CONTEXT_OVERFLOW_RE.search(msg2):
                         coe = ContextOverflowError(
                             f"context window exceeded (inferred, post-sanitization): {e2}"
                         )
                         coe._provider_retries = combined
                         raise coe
+                    if tools is not None and _TOOLS_NOT_SUPPORTED_RE.search(msg2):
+                        tne = ToolsNotSupportedError(
+                            f"model does not support function calling: {e2}"
+                        )
+                        tne._provider_retries = combined
+                        raise tne
                     ae = AgentError(f"LLM call failed after message sanitization: {e2}")
                     ae._provider_retries = combined
                     _raise_with_retries(ae)
                 retries += first_retries
                 cache_stats = _log_cache_stats(response, verbose)
                 choice = _pick_best_choice(response.choices)
+                _promote_reasoning_content(choice.message)
                 if sanitize_thinking:
                     _sanitize_assistant_message(choice.message)
                 _cache_store(choice)
@@ -2992,12 +3027,19 @@ def call_llm(
                     raise
                 except Exception as e2:
                     combined = first_retries + _retries_from_exc(e2)
-                    if _CONTEXT_OVERFLOW_RE.search(str(e2)):
+                    msg2 = str(e2)
+                    if _CONTEXT_OVERFLOW_RE.search(msg2):
                         coe = ContextOverflowError(
                             f"context window exceeded (inferred, post-orphan-fix): {e2}"
                         )
                         coe._provider_retries = combined
                         raise coe
+                    if tools is not None and _TOOLS_NOT_SUPPORTED_RE.search(msg2):
+                        tne = ToolsNotSupportedError(
+                            f"model does not support function calling: {e2}"
+                        )
+                        tne._provider_retries = combined
+                        raise tne
                     ae = AgentError(
                         f"LLM call failed after orphaned-tool-call fix: {e2}"
                     )
@@ -3006,6 +3048,7 @@ def call_llm(
                 retries += first_retries
                 cache_stats = _log_cache_stats(response, verbose)
                 choice = _pick_best_choice(response.choices)
+                _promote_reasoning_content(choice.message)
                 if sanitize_thinking:
                     _sanitize_assistant_message(choice.message)
                 _cache_store(choice)
@@ -3016,9 +3059,17 @@ def call_llm(
                     retries,
                     cache_stats,
                 )
+        if tools is not None and _TOOLS_NOT_SUPPORTED_RE.search(msg_text):
+            tne = ToolsNotSupportedError(
+                f"model does not support function calling: {e}"
+            )
+            tne._provider_retries = _retries_from_exc(e)
+            raise tne
         ae = AgentError(f"LLM call failed: {e}")
         ae._provider_retries = _retries_from_exc(e)
         _raise_with_retries(ae)
+    except ToolsNotSupportedError:
+        raise
     except Exception as e:
         msg = f"LLM call failed (model: {model_id}): {e}"
         if provider == "bedrock" and _SSO_TOKEN_ERROR_RE.search(str(e)):
@@ -3042,6 +3093,7 @@ def call_llm(
 
     cache_stats = _log_cache_stats(response, verbose)
     choice = _pick_best_choice(response.choices)
+    _promote_reasoning_content(choice.message)
     if sanitize_thinking:
         _sanitize_assistant_message(choice.message)
     _cache_store(choice)
@@ -4576,6 +4628,14 @@ _COMMAND_PROVIDER_SYSTEM_PROMPT = (
     "You are a helpful assistant. Answer the user's question directly and concisely."
 )
 
+
+def _tools_retry_kwargs(is_tools_retry: bool) -> dict:
+    """Return extra kwargs for record_llm_call when retrying after tools drop."""
+    if is_tools_retry:
+        return {"is_retry": True, "retry_reason": "drop_tools_unsupported"}
+    return {}
+
+
 # ---------------------------------------------------------------------------
 # Interaction-policy directives
 # ---------------------------------------------------------------------------
@@ -5634,6 +5694,26 @@ def run_agent_loop(
                         names = [n for n, _ in activations]
                         fmt.info(f"Auto-activated skill(s): {', '.join(names)}")
 
+    def _drop_tools(exc, elapsed_time, tokens):
+        """Handle ToolsNotSupportedError: record, warn, drop tools."""
+        nonlocal effective_tools, _is_tools_retry, turns
+        if report:
+            report.record_llm_call(
+                turns + turn_offset,
+                elapsed_time,
+                tokens,
+                "tools_not_supported",
+                provider_retries=getattr(exc, "_provider_retries", 0),
+            )
+        fmt.warning(
+            "model does not support function calling \u2014 "
+            "dropping tools and retrying as plain chat"
+        )
+        effective_tools = None
+        _is_tools_retry = True
+        turns -= 1
+
+    _is_tools_retry = False
     while turns < max_turns:
         turns += 1
 
@@ -5718,6 +5798,7 @@ def run_agent_loop(
                     token_est,
                     "context_overflow",
                     provider_retries=getattr(_coe, "_provider_retries", 0),
+                    **_tools_retry_kwargs(_is_tools_retry),
                 )
 
             # --- Graduated compaction levels ---
@@ -5752,6 +5833,7 @@ def run_agent_loop(
                 ),
             ]
 
+            _tne_pending = None
             for level_name, level_desc, compact_fn in compaction_levels:
                 if verbose:
                     fmt.warning(f"context window exceeded, {level_desc}")
@@ -5835,6 +5917,9 @@ def run_agent_loop(
                         )
                     continue  # try next level
                 except AgentError as _ae:
+                    if isinstance(_ae, ToolsNotSupportedError):
+                        _tne_pending = _ae
+                        break
                     elapsed = time.monotonic() - t0
                     if report:
                         report.record_llm_call(
@@ -5973,7 +6058,14 @@ def run_agent_loop(
                         "context window exceeded even after compaction"
                     )
 
+            if _tne_pending is not None:
+                _drop_tools(_tne_pending, time.monotonic() - t0, token_est)
+                continue
+
         except AgentError as e:
+            if isinstance(e, ToolsNotSupportedError):
+                _drop_tools(e, time.monotonic() - t0, token_est)
+                continue
             if _vision_pending and _is_vision_rejection(e):
                 _vision_pending = False
                 _replace_last_image_message(
@@ -5995,6 +6087,7 @@ def run_agent_loop(
                     token_est,
                     "error",
                     provider_retries=getattr(e, "_provider_retries", 0),
+                    **_tools_retry_kwargs(_is_tools_retry),
                 )
             raise
         else:
@@ -6011,7 +6104,9 @@ def run_agent_loop(
                     provider_retries=_provider_retries,
                     cached_tokens=_cache_stats[0],
                     cache_write_tokens=_cache_stats[1],
+                    **_tools_retry_kwargs(_is_tools_retry),
                 )
+            _is_tools_retry = False
         # Handle empty assistant response (no content, no tool_calls).
         # Some providers return these occasionally; appending them as-is
         # would poison the history and cause BadRequestError on the next call.
@@ -6027,6 +6122,8 @@ def run_agent_loop(
                     "content": (
                         "Your response was empty. Please continue working on "
                         "the task using the available tools."
+                        if effective_tools is not None
+                        else "Your response was empty. Please answer the question directly."
                     ),
                 }
             )

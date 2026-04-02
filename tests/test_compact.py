@@ -857,6 +857,443 @@ class TestContextOverflowClassifier:
 
 
 # ---------------------------------------------------------------------------
+# ToolsNotSupportedError
+# ---------------------------------------------------------------------------
+
+_DUMMY_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "dummy",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+]
+
+
+class TestToolsNotSupported:
+    """Tests for ToolsNotSupportedError detection in call_llm."""
+
+    def test_hf_function_calling_not_supported_raises(self):
+        """call_llm raises ToolsNotSupportedError for HuggingFace models that
+        reject function calling."""
+        import litellm
+        from swival.report import ToolsNotSupportedError
+
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.side_effect = litellm.BadRequestError(
+                message=(
+                    'HuggingfaceException - {"code":400,'
+                    '"reason":"INVALID_REQUEST_BODY",'
+                    '"message":"model features function calling not support",'
+                    '"metadata":{}}'
+                ),
+                model="huggingface/google/gemma-4-31B-it",
+                llm_provider="huggingface",
+            )
+            with pytest.raises(ToolsNotSupportedError):
+                call_llm(
+                    "http://localhost",
+                    "model",
+                    [{"role": "user", "content": "hi"}],
+                    100,
+                    0.1,
+                    1.0,
+                    None,
+                    _DUMMY_TOOLS,
+                    False,
+                    max_retries=1,
+                )
+
+    def test_tools_not_supported_not_raised_when_tools_none(self):
+        """When tools=None, a matching BadRequestError should NOT raise
+        ToolsNotSupportedError (it's a different problem)."""
+        import litellm
+
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.side_effect = litellm.BadRequestError(
+                message="model features function calling not support",
+                model="test",
+                llm_provider="huggingface",
+            )
+            with pytest.raises(AgentError) as exc_info:
+                call_llm(
+                    "http://localhost",
+                    "model",
+                    [{"role": "user", "content": "hi"}],
+                    100,
+                    0.1,
+                    1.0,
+                    None,
+                    None,
+                    False,
+                    max_retries=1,
+                )
+            from swival.report import ToolsNotSupportedError
+
+            assert not isinstance(exc_info.value, ToolsNotSupportedError)
+
+    def test_generic_does_not_support_tools(self):
+        """call_llm raises ToolsNotSupportedError for 'does not support tools'."""
+        import litellm
+        from swival.report import ToolsNotSupportedError
+
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.side_effect = litellm.BadRequestError(
+                message="This model does not support tools",
+                model="test",
+                llm_provider="openai",
+            )
+            with pytest.raises(ToolsNotSupportedError):
+                call_llm(
+                    "http://localhost",
+                    "model",
+                    [{"role": "user", "content": "hi"}],
+                    100,
+                    0.1,
+                    1.0,
+                    None,
+                    _DUMMY_TOOLS,
+                    False,
+                    max_retries=1,
+                )
+
+
+# ---------------------------------------------------------------------------
+# ToolsNotSupportedError — run_agent_loop integration
+# ---------------------------------------------------------------------------
+
+
+class TestToolsNotSupportedLoop:
+    """Integration tests: ToolsNotSupportedError fallback in run_agent_loop."""
+
+    @staticmethod
+    def _loop_kwargs(tmp_path, **overrides):
+        from swival.thinking import ThinkingState
+        from swival.todo import TodoState
+
+        defaults = dict(
+            api_base="http://127.0.0.1:1234",
+            model_id="test-model",
+            max_turns=1,
+            max_output_tokens=1024,
+            temperature=0.5,
+            top_p=1.0,
+            seed=None,
+            context_length=None,
+            base_dir=str(tmp_path),
+            thinking_state=ThinkingState(verbose=False),
+            resolved_commands={},
+            skills_catalog={},
+            skill_read_roots=[],
+            extra_write_roots=[],
+            files_mode="some",
+            verbose=False,
+            llm_kwargs={"provider": "lmstudio", "api_key": None},
+            file_tracker=None,
+            todo_state=TodoState(verbose=False),
+        )
+        defaults.update(overrides)
+        return defaults
+
+    def test_max_turns_1_retries_without_tools(self, tmp_path):
+        """With max_turns=1 the plain-chat retry must still fire after
+        ToolsNotSupportedError — the failed tool-enabled call should NOT
+        consume the only turn."""
+        from swival.agent import run_agent_loop
+        from swival.report import ToolsNotSupportedError as _TNS
+
+        call_count = 0
+
+        def fake_call_llm(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            # First call: has tools → raise
+            tools_arg = args[7] if len(args) > 7 else kwargs.get("tools")
+            if tools_arg is not None:
+                tne = _TNS("function calling not support")
+                tne._provider_retries = 0
+                raise tne
+            # Second call: no tools → succeed
+            return (
+                SimpleNamespace(
+                    content="plain answer", tool_calls=None, role="assistant"
+                ),
+                "stop",
+                [],
+                0,
+                (0, 0),
+            )
+
+        messages = [_sys("system"), _user("hello")]
+        with patch("swival.agent.call_llm", side_effect=fake_call_llm):
+            answer, exhausted = run_agent_loop(
+                messages,
+                _DUMMY_TOOLS,
+                **self._loop_kwargs(tmp_path, max_turns=1),
+            )
+
+        assert answer == "plain answer"
+        assert exhausted is False
+        assert call_count == 2
+
+    def test_report_records_both_calls(self, tmp_path):
+        """The failed tool-enabled call and the successful plain-chat retry
+        must both appear in the report."""
+        from swival.agent import run_agent_loop
+        from swival.report import ReportCollector, ToolsNotSupportedError as _TNS
+
+        def fake_call_llm(*args, **kwargs):
+            tools_arg = args[7] if len(args) > 7 else kwargs.get("tools")
+            if tools_arg is not None:
+                tne = _TNS("function calling not support")
+                tne._provider_retries = 0
+                raise tne
+            return (
+                SimpleNamespace(content="ok", tool_calls=None, role="assistant"),
+                "stop",
+                [],
+                0,
+                (0, 0),
+            )
+
+        report = ReportCollector()
+        messages = [_sys("system"), _user("hello")]
+        with patch("swival.agent.call_llm", side_effect=fake_call_llm):
+            run_agent_loop(
+                messages,
+                _DUMMY_TOOLS,
+                **self._loop_kwargs(tmp_path, max_turns=3, report=report),
+            )
+
+        llm_events = [e for e in report.events if e["type"] == "llm_call"]
+        assert len(llm_events) == 2
+        assert llm_events[0]["finish_reason"] == "tools_not_supported"
+        assert llm_events[1]["finish_reason"] == "stop"
+        # The successful retry must be tagged as a retry
+        assert llm_events[1].get("is_retry") is True
+        assert llm_events[1].get("retry_reason") == "drop_tools_unsupported"
+
+    def test_overflow_then_tools_not_supported_recovers(self, tmp_path):
+        """ToolsNotSupportedError discovered during a compaction retry must
+        still trigger the tools-drop fallback and eventually succeed."""
+        from swival.agent import run_agent_loop, ContextOverflowError
+        from swival.report import (
+            ReportCollector,
+            ToolsNotSupportedError as _TNS,
+        )
+
+        call_count = 0
+
+        def fake_call_llm(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            tools_arg = args[7] if len(args) > 7 else kwargs.get("tools")
+            if call_count == 1:
+                # First call: context overflow (triggers compaction)
+                raise ContextOverflowError("context length exceeded")
+            if call_count == 2 and tools_arg is not None:
+                # Second call (compaction retry, still has tools): tools
+                # not supported
+                tne = _TNS("function calling not support")
+                tne._provider_retries = 0
+                raise tne
+            # Third call: no tools → succeed
+            return (
+                SimpleNamespace(content="recovered", tool_calls=None, role="assistant"),
+                "stop",
+                [],
+                0,
+                (0, 0),
+            )
+
+        report = ReportCollector()
+        messages = [_sys("system"), _user("hello")]
+        with patch("swival.agent.call_llm", side_effect=fake_call_llm):
+            answer, exhausted = run_agent_loop(
+                messages,
+                _DUMMY_TOOLS,
+                **self._loop_kwargs(tmp_path, max_turns=2, report=report),
+            )
+
+        assert answer == "recovered"
+        assert exhausted is False
+        assert call_count == 3
+
+        llm_events = [e for e in report.events if e["type"] == "llm_call"]
+        # Three events: overflow, tools_not_supported, success
+        assert len(llm_events) == 3
+        assert llm_events[0]["finish_reason"] == "context_overflow"
+        assert llm_events[1]["finish_reason"] == "tools_not_supported"
+        assert llm_events[2]["finish_reason"] == "stop"
+        assert llm_events[2].get("is_retry") is True
+
+    def test_tools_not_supported_then_overflow_uses_compaction_result(self, tmp_path):
+        """When tools_not_supported fires first and the no-tools retry
+        overflows, the compaction-retry result must be used — the
+        _is_tools_retry flag must NOT discard a successful compaction."""
+        from swival.agent import run_agent_loop, ContextOverflowError
+        from swival.report import (
+            ReportCollector,
+            ToolsNotSupportedError as _TNS,
+        )
+
+        call_count = 0
+
+        def fake_call_llm(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            tools_arg = args[7] if len(args) > 7 else kwargs.get("tools")
+            if call_count == 1:
+                # First call: tools not supported
+                tne = _TNS("function calling not support")
+                tne._provider_retries = 0
+                raise tne
+            if call_count == 2:
+                # Second call (no-tools retry): context overflow
+                assert tools_arg is None
+                raise ContextOverflowError("context length exceeded")
+            if call_count == 3:
+                # Third call (compaction retry, no tools): succeed
+                assert tools_arg is None
+                return (
+                    SimpleNamespace(
+                        content="compaction result",
+                        tool_calls=None,
+                        role="assistant",
+                    ),
+                    "stop",
+                    [],
+                    0,
+                    (0, 0),
+                )
+            # Should not reach here
+            return (
+                SimpleNamespace(
+                    content=f"extra call {call_count}",
+                    tool_calls=None,
+                    role="assistant",
+                ),
+                "stop",
+                [],
+                0,
+                (0, 0),
+            )
+
+        report = ReportCollector()
+        messages = [_sys("system"), _user("hello")]
+        with patch("swival.agent.call_llm", side_effect=fake_call_llm):
+            answer, exhausted = run_agent_loop(
+                messages,
+                _DUMMY_TOOLS,
+                **self._loop_kwargs(tmp_path, max_turns=2, report=report),
+            )
+
+        assert answer == "compaction result"
+        assert exhausted is False
+        assert call_count == 3  # no spurious fourth call
+
+        llm_events = [e for e in report.events if e["type"] == "llm_call"]
+        assert len(llm_events) == 3
+        assert llm_events[0]["finish_reason"] == "tools_not_supported"
+        # The overflow event should be tagged as a retry (it was the
+        # no-tools fallback attempt)
+        assert llm_events[1]["finish_reason"] == "context_overflow"
+        assert llm_events[1].get("is_retry") is True
+        assert llm_events[2]["finish_reason"] == "stop"
+
+    def test_tools_not_supported_then_agent_error_tagged_as_retry(self, tmp_path):
+        """When the no-tools retry raises a generic AgentError, the error
+        event must be tagged is_retry=True."""
+        from swival.agent import run_agent_loop
+        from swival.report import (
+            AgentError as _AE,
+            ReportCollector,
+            ToolsNotSupportedError as _TNS,
+        )
+
+        call_count = 0
+
+        def fake_call_llm(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            tools_arg = args[7] if len(args) > 7 else kwargs.get("tools")
+            if call_count == 1:
+                tne = _TNS("function calling not support")
+                tne._provider_retries = 0
+                raise tne
+            # Second call (no-tools retry): fatal error
+            assert tools_arg is None
+            raise _AE("something else broke")
+
+        report = ReportCollector()
+        messages = [_sys("system"), _user("hello")]
+        with pytest.raises(_AE, match="something else broke"):
+            with patch("swival.agent.call_llm", side_effect=fake_call_llm):
+                run_agent_loop(
+                    messages,
+                    _DUMMY_TOOLS,
+                    **self._loop_kwargs(tmp_path, max_turns=2, report=report),
+                )
+
+        llm_events = [e for e in report.events if e["type"] == "llm_call"]
+        assert len(llm_events) == 2
+        assert llm_events[0]["finish_reason"] == "tools_not_supported"
+        assert llm_events[1]["finish_reason"] == "error"
+        assert llm_events[1].get("is_retry") is True
+        assert llm_events[1].get("retry_reason") == "drop_tools_unsupported"
+
+    def test_empty_response_message_no_tools(self, tmp_path):
+        """After tools fallback, the empty-response continuation must not
+        say 'available tools'."""
+        from swival.agent import run_agent_loop
+        from swival.report import ToolsNotSupportedError as _TNS
+
+        call_count = 0
+
+        def fake_call_llm(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                tne = _TNS("function calling not support")
+                tne._provider_retries = 0
+                raise tne
+            if call_count == 2:
+                # Return empty response to trigger continuation
+                return (
+                    SimpleNamespace(content="", tool_calls=None, role="assistant"),
+                    "stop",
+                    [],
+                    0,
+                    (0, 0),
+                )
+            return (
+                SimpleNamespace(
+                    content="final answer", tool_calls=None, role="assistant"
+                ),
+                "stop",
+                [],
+                0,
+                (0, 0),
+            )
+
+        messages = [_sys("system"), _user("hello")]
+        with patch("swival.agent.call_llm", side_effect=fake_call_llm):
+            answer, _ = run_agent_loop(
+                messages,
+                _DUMMY_TOOLS,
+                **self._loop_kwargs(tmp_path, max_turns=5),
+            )
+
+        assert answer == "final answer"
+        # The empty-response continuation should not reference tools
+        user_msgs = [m for m in messages if m.get("role") == "user"]
+        continuation = user_msgs[-1]["content"]
+        assert "available tools" not in continuation
+        assert "answer the question directly" in continuation
+
+
+# ---------------------------------------------------------------------------
 # summarize_turns
 # ---------------------------------------------------------------------------
 
