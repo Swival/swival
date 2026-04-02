@@ -284,6 +284,8 @@ def fetch_url(
                 output = convert(body)
             except Exception as e:
                 return f"error: failed to convert HTML to markdown: {e}"
+            if not isinstance(output, str):
+                return f"error: html-to-markdown returned {type(output).__name__}, expected str"
             # Strip data-URI images (huge base64 blobs waste tokens)
             output = re.sub(
                 r"!\[([^\]]*)\]\(data:[^)]+\)", r"![image: \1](data: omitted)", output
