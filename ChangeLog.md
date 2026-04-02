@@ -2,6 +2,17 @@
 
 All notable user-facing changes to Swival.
 
+## 0.10.9
+
+- REPL `/profile` switching now correctly inherits top-level config values:
+  profiles that omit keys like `api_key` pick them up from the config file
+  rather than from the previously active profile.
+- Malformed tool-call repair now handles file path parameters: glob
+  metacharacters (`*`, `?`, `[]`) are stripped from path and directory fields
+  whose schema description does not indicate a glob or pattern value, and
+  common field-name aliases (`path`, `file`, `filename`) are mapped to the
+  correct schema name. That helps small models.
+
 ## 0.10.8
 
 - A new `/profile` REPL command can list available profiles, switch to a different

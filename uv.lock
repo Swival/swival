@@ -3,7 +3,7 @@ revision = 3
 requires-python = ">=3.13"
 
 [options]
-exclude-newer = "2026-04-01T16:26:16.369779Z"
+exclude-newer = "2026-04-01T17:53:10.101156Z"
 exclude-newer-span = "P1D"
 
 [manifest]
@@ -1658,7 +1658,7 @@ wheels = [
 
 [[package]]
 name = "swival"
-version = "0.10.8"
+version = "0.10.9"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
