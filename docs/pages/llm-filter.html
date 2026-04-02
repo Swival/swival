@@ -53,6 +53,7 @@
 <li><a href="a2a.html">A2A</a></li>
 <li><a href="lifecycle-hooks.html">Lifecycle Hooks</a></li>
 <li><a href="custom-commands.html">Custom Commands</a></li>
+<li><a href="semantic-routing.html">Semantic Routing</a></li>
 <li><a href="customization.html">Customization</a></li>
 <li><a href="providers.html">Providers</a></li>
 <li><a href="reports.html">Reports</a></li>
@@ -98,7 +99,7 @@ result = session.run(&quot;task&quot;)
   &quot;tools&quot;: [...]
 }
 </code></pre>
-<p><code>messages</code> is the exact message list about to be sent. <code>tools</code> is included as read-only context so the filter can make informed decisions. <code>call_kind</code> is <code>"agent"</code> for normal turns and <code>"summary"</code> for compaction summaries.</p>
+<p><code>messages</code> is the exact message list about to be sent. <code>tools</code> is included as read-only context so the filter can make informed decisions. <code>call_kind</code> is <code>"agent"</code> for normal turns, <code>"summary"</code> for compaction summaries, and <code>"router"</code> for <a href="semantic-routing.html">semantic routing</a> decisions.</p>
 <p>The script writes a JSON object to stdout. Two response shapes are supported:</p>
 <p><strong>Allow (with optional modifications):</strong></p>
 <pre><code class="language-json">{&quot;messages&quot;: [...]}

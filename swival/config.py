@@ -39,7 +39,11 @@ PROFILE_KEYS: set[str] = {
     "extra_body",
     "reasoning_effort",
     "sanitize_thinking",
+    "description",
 }
+
+# Keys that are profile metadata, not runtime provider arguments.
+_PROFILE_METADATA_KEYS: set[str] = {"description"}
 
 CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "provider": str,
@@ -102,6 +106,9 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "no_lifecycle": bool,
     "subagents": bool,
     "approved_buckets": list,
+    "routing_enabled": bool,
+    "semantic_routing_profile": str,
+    "routing_strict": bool,
 }
 
 _LIST_OF_STR_KEYS = {
@@ -381,6 +388,13 @@ def _validate_profiles(profiles: dict, source: str) -> None:
                     f"{source}: profiles.{name}: '{key}' is not allowed in a profile. "
                     f"Profiles only support LLM-related keys: {allowed}"
                 )
+            if key in _PROFILE_METADATA_KEYS:
+                if not isinstance(value, str):
+                    raise ConfigError(
+                        f"{source}: profiles.{name}.{key} expected str, "
+                        f"got {type(value).__name__}"
+                    )
+                continue
             expected = CONFIG_KEYS[key]
             if isinstance(value, bool) and expected is not bool:
                 raise ConfigError(
@@ -730,6 +744,30 @@ def _validate_serve_skills(skills: list, source: str) -> None:
             )
 
 
+# --- Routing config helpers ---
+
+
+def _validate_routing_config(config: dict) -> None:
+    """Validate routing configuration after merge."""
+    if not config.get("routing_enabled"):
+        return  # routing is off — no further checks
+
+    router_name = config.get("semantic_routing_profile")
+    if not router_name:
+        raise ConfigError(
+            "routing_enabled = true requires 'semantic_routing_profile' "
+            "to name the router profile"
+        )
+
+    all_profiles = config.get("profiles", {})
+    if router_name not in all_profiles:
+        known = ", ".join(sorted(all_profiles)) if all_profiles else "(none defined)"
+        raise ConfigError(
+            f"semantic_routing_profile {router_name!r} not found in profiles. "
+            f"Known profiles: {known}"
+        )
+
+
 # --- Public API ---
 
 
@@ -844,28 +882,41 @@ def load_config(base_dir: Path) -> dict:
             "(set across global and project config)"
         )
 
+    # --- Routing config validation ---
+    _validate_routing_config(merged)
+
     # Attach resolved config directory so callers don't re-derive it.
     merged["config_dir"] = config_dir
 
     return merged
 
 
-def resolve_profile_config(args: argparse.Namespace, config: dict) -> str | None:
+def resolve_profile_config(
+    args: argparse.Namespace,
+    config: dict,
+    selected_name: str | None = None,
+) -> str | None:
     """Resolve the active profile and overlay it onto *config* in place.
 
-    Selection precedence: ``--profile`` CLI flag > project ``active_profile``
-    > global ``active_profile``.
+    If *selected_name* is given it is used directly; otherwise falls back to
+    ``--profile`` CLI flag or ``active_profile`` from config.
 
     Returns the profile name if one was activated, or None.
-    Removes ``profiles``, ``active_profile``, and ``_active_profile_source``
-    from *config* so downstream code sees only flat LLM keys.
+    Removes ``profiles``, ``active_profile``, routing keys, and
+    ``_active_profile_source`` from *config* so downstream code sees
+    only flat LLM keys.
     """
     profiles = config.pop("profiles", None) or {}
     cfg_active = config.pop("active_profile", None)
     config.pop("_active_profile_source", None)
+    for _rk in _ROUTING_CONFIG_KEYS:
+        config.pop(_rk, None)
 
-    cli_profile = getattr(args, "profile", None)
-    name = cli_profile or cfg_active
+    if selected_name is not None:
+        name = selected_name
+    else:
+        cli_profile = getattr(args, "profile", None)
+        name = cli_profile or cfg_active
 
     if name is None:
         return None
@@ -877,9 +928,10 @@ def resolve_profile_config(args: argparse.Namespace, config: dict) -> str | None
             f"Use --list-profiles to see available profiles."
         )
 
-    # Overlay profile values onto config (config values win only if not in profile)
+    # Overlay profile values onto config (metadata keys like description excluded)
     for key, value in profiles[name].items():
-        config[key] = value
+        if key not in _PROFILE_METADATA_KEYS:
+            config[key] = value
 
     return name
 
@@ -1064,7 +1116,7 @@ def config_to_session_kwargs(config: dict) -> dict:
         "serve_description",
         "serve_skills",
         "approved_buckets",
-    }
+    } | _ROUTING_CONFIG_KEYS
     for key, value in config.items():
         if key in _DROP_KEYS:
             continue
@@ -1086,7 +1138,20 @@ _NESTED_KEYS = frozenset(
     }
 )
 
-_KNOWN_SPECIAL_KEYS = _NESTED_KEYS | {"active_profile", "_active_profile_source"}
+_ROUTING_CONFIG_KEYS = {
+    "routing_enabled",
+    "semantic_routing_profile",
+    "routing_strict",
+}
+
+_KNOWN_SPECIAL_KEYS = (
+    _NESTED_KEYS
+    | {
+        "active_profile",
+        "_active_profile_source",
+    }
+    | _ROUTING_CONFIG_KEYS
+)
 
 
 def _toml_escape(s: str) -> str:
@@ -1245,24 +1310,30 @@ def generate_config(
         "#",
         '# active_profile = "fast-local"',
         "",
+        "# --- Routing ---",
+        "# Automatically select a profile based on the task.",
+        "# routing_enabled = false",
+        '# semantic_routing_profile = "router"  # profile used to make the routing decision',
+        "# routing_strict = false               # true = abort on routing failure instead of fallback",
+        "",
         "# --- External ---",
         "# max_review_rounds = 15",
         '# llm_filter = "./filter.py"    # outbound message filter script (stdin/stdout JSON)',
         '# reviewer = "./review.sh"',
-        "# self_review = false              # use self as reviewer (mirrors provider/model flags)",
+        "# self_review = false           # use self as reviewer (mirrors provider/model flags)",
         '# review_prompt = "Focus on correctness"',
         '# objective = "objective.md"',
         '# verify = "verification/working.md"',
         "",
         "# --- Lifecycle hooks ---",
         '# lifecycle_command = "./scripts/swival-sync"  # command invoked as: <command> startup|exit <base_dir>',
-        "# lifecycle_timeout = 300          # seconds before hook is killed",
-        "# lifecycle_fail_closed = false     # true = abort run on hook failure",
-        "# no_lifecycle = false              # disable hooks entirely",
+        "# lifecycle_timeout = 300        # seconds before hook is killed",
+        "# lifecycle_fail_closed = false  # true = abort run on hook failure",
+        "# no_lifecycle = false           # disable hooks entirely",
         "",
         "# --- Secret encryption ---",
-        "# encrypt_secrets = false         # encrypt credential tokens before sending to LLM provider",
-        '# encrypt_secrets_key = "hex..."  # optional persistent 32-byte key (hex-encoded)',
+        "# encrypt_secrets = false        # encrypt credential tokens before sending to LLM provider",
+        '# encrypt_secrets_key = "hex..." # optional persistent 32-byte key (hex-encoded)',
         "",
         "# --- A2A serve ---",
         '# serve_name = "My Agent"',
@@ -1270,14 +1341,22 @@ def generate_config(
         '# serve_skills = [{id = "ask", name = "Ask", description = "Send a question"}]',
         "",
         "# --- Profile examples ---",
+        "# The router profile does not need a description unless you want it",
+        "# to also be selectable as an execution target.",
+        "# [profiles.router]",
+        '# provider = "lmstudio"',
+        '# model = "qwen3.5-0.8b-mlx"',
+        "#",
         "# [profiles.fast-local]",
         '# provider = "lmstudio"',
         '# model = "qwen3-coder-next"',
+        '# description = "Fast local edits, tests, and routine coding."',
         "#",
         "# [profiles.gpt5]",
         '# provider = "chatgpt"',
         '# model = "gpt-5.4"',
         '# reasoning_effort = "high"',
+        '# description = "Hard debugging, design work, and complex reasoning."',
         "",
         "# --- MCP server examples ---",
         "# [mcp_servers.brave-search]",

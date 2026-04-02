@@ -99,7 +99,9 @@ The REPL is built on `prompt-toolkit`, so it supports input history, history sea
 swival --profile gpt5 "review this patch"
 ```
 
-`--list-profiles` prints available profiles and exits. The active profile is marked with an arrow and shows which layer selected it (CLI flag, project config, or global config).
+When [semantic routing](semantic-routing.md) is enabled, `--profile` bypasses it entirely — the router is not consulted.
+
+`--list-profiles` prints available profiles and exits. The active profile is marked with an arrow and shows which layer selected it (CLI flag, project config, or global config). When routing is enabled, profiles are tagged as `(routing)` or `(routable)` to show their role.
 
 `--provider` chooses the backend provider and defaults to `lmstudio`. Valid values are `lmstudio`, `huggingface`, `openrouter`, `generic`, `google`, `chatgpt` (for ChatGPT Plus/Pro subscriptions), and `command` (shells out to an external program).
 

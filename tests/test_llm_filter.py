@@ -170,6 +170,25 @@ json.dump({"messages": payload["messages"]}, sys.stdout)
             call_kind="summary",
         )
 
+    def test_payload_includes_router_call_kind(self, tmp_path):
+        """Filter receives call_kind='router' for semantic routing calls."""
+        script = _make_script(
+            tmp_path,
+            "router_kind.py",
+            """
+payload = json.load(sys.stdin)
+assert payload["call_kind"] == "router"
+json.dump({"messages": payload["messages"]}, sys.stdout)
+""",
+        )
+        run_llm_filter(
+            script,
+            _msgs(),
+            "glm-5",
+            "openrouter",
+            call_kind="router",
+        )
+
     def test_namespace_messages(self, tmp_path):
         """Filter handles namespace (non-dict) messages."""
         script = _make_script(

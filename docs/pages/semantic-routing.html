@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Semantic Routing — Swival</title>
+    <meta name="description" content="Semantic Routing — Swival documentation">
+    <meta property="og:type" content="article">
+    <meta property="og:title" content="Semantic Routing — Swival">
+    <meta property="og:description" content="Semantic Routing — Swival documentation">
+    <meta property="og:image" content="https://swival.dev/img/logo.png">
+    <meta property="og:url" content="https://swival.dev/pages/semantic-routing.html">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="Semantic Routing — Swival">
+    <meta name="twitter:description" content="Semantic Routing — Swival documentation">
+    <meta name="twitter:image" content="https://swival.dev/img/logo.png">
+    <link rel="icon" href="../favicon.ico">
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../" class="header-logo">
+                <img src="../img/logo.png" alt="Swival">
+            </a>
+            <nav class="header-nav">
+                <a href="./">Docs</a>
+                <a href="https://github.com/swival/swival">GitHub</a>
+            </nav>
+        </div>
+    </header>
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <div class="sidebar-section">
+<h4>Basics</h4>
+<ul>
+<li><a href="getting-started.html">Getting Started</a></li>
+<li><a href="usage.html">Usage</a></li>
+<li><a href="tools.html">Tools</a></li>
+<li><a href="context-management.html">Context Management</a></li>
+<li><a href="open-models.html">Not Just for Frontier Models</a></li>
+</ul>
+</div>
+<div class="sidebar-section">
+<h4>Configuration & Deployment</h4>
+<ul>
+<li><a href="safety-and-sandboxing.html">Safety & Sandboxing</a></li>
+<li><a href="secrets.html">Secret Encryption</a></li>
+<li><a href="llm-filter.html">Outbound LLM Filter</a></li>
+<li><a href="skills.html">Skills</a></li>
+<li><a href="web-browsing.html">Web Browsing</a></li>
+<li><a href="mcp.html">MCP</a></li>
+<li><a href="a2a.html">A2A</a></li>
+<li><a href="lifecycle-hooks.html">Lifecycle Hooks</a></li>
+<li><a href="custom-commands.html">Custom Commands</a></li>
+<li><a href="semantic-routing.html" class="active">Semantic Routing</a></li>
+<li><a href="customization.html">Customization</a></li>
+<li><a href="providers.html">Providers</a></li>
+<li><a href="reports.html">Reports</a></li>
+<li><a href="reviews.html">Reviews</a></li>
+<li><a href="agentfs.html">AgentFS</a></li>
+</ul>
+</div>
+<div class="sidebar-section">
+<h4>Reference</h4>
+<ul>
+<li><a href="python-api.html">Python API</a></li>
+</ul>
+</div>
+        </aside>
+        <article class="docs-content">
+            <h1 id="semantic-routing">Semantic Routing</h1>
+<p>Semantic routing automatically selects the best profile for a given task. Instead of picking a model yourself, a lightweight router model reads your task and chooses from your configured profiles.</p>
+<p>This is useful when you have profiles with very different strengths — a fast local model for quick edits, a large reasoning model for hard problems — and want the right one picked without thinking about it every time.</p>
+<h2 id="quick-setup">Quick Setup</h2>
+<pre><code class="language-toml">routing_enabled = true
+semantic_routing_profile = &quot;router&quot;
+
+[profiles.router]
+provider = &quot;lmstudio&quot;
+model = &quot;qwen3.5-0.8b-mlx&quot;
+
+[profiles.fast]
+provider = &quot;lmstudio&quot;
+model = &quot;qwen3-coder-next&quot;
+description = &quot;Fast local edits, tests, and routine coding.&quot;
+
+[profiles.heavy]
+provider = &quot;chatgpt&quot;
+model = &quot;gpt-5.4&quot;
+reasoning_effort = &quot;high&quot;
+description = &quot;Hard debugging, design work, and complex reasoning.&quot;
+</code></pre>
+<p>With this config, every single-shot run asks the router model which profile fits best, then runs the task with that profile.</p>
+<h2 id="how-it-works">How It Works</h2>
+<ol>
+<li>You run <code>swival "fix the off-by-one in parse.py"</code>.</li>
+<li>Before anything else, Swival sends your task text to the router profile's model with the list of candidate profiles and their descriptions.</li>
+<li>The router responds with a profile name and a short reason.</li>
+<li>Swival selects that profile and continues as if you had typed <code>--profile &lt;name&gt;</code>.</li>
+</ol>
+<p>The router call is cheap — small input, capped at 256 output tokens, temperature 0, no tools. It adds one fast LLM round-trip before the main run.</p>
+<h2 id="config-keys">Config Keys</h2>
+<h3 id="top-level">Top-Level</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>routing_enabled</code></td>
+<td>bool</td>
+<td><code>false</code></td>
+<td>Feature switch. Must be <code>true</code> for routing to run.</td>
+</tr>
+<tr>
+<td><code>semantic_routing_profile</code></td>
+<td>string</td>
+<td>—</td>
+<td>Name of the profile used to make routing decisions.</td>
+</tr>
+<tr>
+<td><code>routing_strict</code></td>
+<td>bool</td>
+<td><code>false</code></td>
+<td><code>true</code> = abort on routing failure. <code>false</code> = warn and fall back to <code>active_profile</code>.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="profile-level">Profile-Level</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>description</code></td>
+<td>string</td>
+<td>Human-readable label. Profiles with a description are routing candidates. Also shown by <code>--list-profiles</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>A profile without <code>description</code> is not a routing candidate. It can still be used via <code>--profile</code> or <code>active_profile</code>, but the router will never select it.</p>
+<h2 id="precedence">Precedence</h2>
+<p>Profile selection follows this order:</p>
+<ol>
+<li><code>--profile NAME</code> (strongest — skips routing entirely)</li>
+<li>Routing result (when <code>routing_enabled = true</code>)</li>
+<li><code>active_profile</code> from config</li>
+<li>No profile</li>
+</ol>
+<p>Routing behaves like a dynamic default. It never overrides an explicit <code>--profile</code> flag.</p>
+<h2 id="router-vs-target-profiles">Router vs Target Profiles</h2>
+<p>The <code>router profile</code> is the model that makes the decision. It does not need a <code>description</code> unless you want the router to also be selectable as an execution target. A small, fast model works well here — routing is a classification task, not a coding task.</p>
+<p><code>Target profiles</code> are profiles with a <code>description</code>. The router chooses among these based on the task text and descriptions. If only one target exists, Swival selects it directly without making a router call.</p>
+<p>The router profile can select itself if it has a <code>description</code>. This is intentional — if the router doubles as a general-purpose model, give it a description that says so.</p>
+<h2 id="failure-handling">Failure Handling</h2>
+<p>When the router model returns an unparseable or invalid response:</p>
+<ol>
+<li>Try lenient parsing: accept bare profile names, extract names from short prose.</li>
+<li>Retry once with a corrective prompt.</li>
+<li>If still invalid:</li>
+<li><code>routing_strict = false</code> (default): warn and fall back to <code>active_profile</code>, or the router profile if no <code>active_profile</code> is set.</li>
+<li><code>routing_strict = true</code>: abort with an error.</li>
+</ol>
+<p>If the router profile's provider is unreachable, the same strict/fallback logic applies.</p>
+<p>Fallback events are visible in verbose output and in <code>--report</code> JSON.</p>
+<h2 id="verbose-output">Verbose Output</h2>
+<p>In verbose mode (the default unless <code>--quiet</code> is set), routing logs a status line:</p>
+<pre><code class="language-text">Routing: mode=semantic router=router selected=heavy duration=0.8s parse=json reason=Task needs stronger reasoning.
+</code></pre>
+<p>The provider info line also shows the routing decision:</p>
+<pre><code class="language-text">provider=chatgpt  model=gpt-5.4  profile=heavy  routed (via router)  context=1,050,000
+</code></pre>
+<h2 id="short-circuit">Short-Circuit</h2>
+<p>If only one profile has a <code>description</code>, routing selects it directly without calling the router model:</p>
+<pre><code class="language-text">Routing: single target fast, skipping router call
+</code></pre>
+<p>This avoids paying for a router call when there is no actual choice to make.</p>
+<h2 id="reports">Reports</h2>
+<p>When <code>--report</code> is used, the report JSON includes a <code>semantic_routing</code> block in <code>settings</code>:</p>
+<pre><code class="language-json">{
+  &quot;semantic_routing&quot;: {
+    &quot;router_profile&quot;: &quot;router&quot;,
+    &quot;selected_profile&quot;: &quot;heavy&quot;,
+    &quot;reason&quot;: &quot;Task needs stronger reasoning.&quot;,
+    &quot;fallback_used&quot;: false,
+    &quot;parse_mode&quot;: &quot;json&quot;
+  }
+}
+</code></pre>
+<h2 id="outbound-protections">Outbound Protections</h2>
+<p>The router call goes through the same outbound protections as normal agent calls:</p>
+<ul>
+<li><code>LLM filter</code> (<code>llm_filter</code>): the filter script receives the router call with <code>call_kind</code> set to <code>"router"</code>. You can use this to apply different filtering rules for routing calls vs normal agent calls.</li>
+<li><code>Secret encryption</code> (<code>encrypt_secrets</code>): if encryption is enabled, the router call is encrypted the same way.</li>
+</ul>
+<h2 id="scope">Scope</h2>
+<p>Semantic routing currently runs for:</p>
+<ul>
+<li>CLI single-shot runs</li>
+<li>Piped stdin tasks</li>
+<li><code>--objective</code> mode (routes once at startup, pins the profile for the full run)</li>
+</ul>
+<p>It does not yet run for REPL sessions, <code>Session.run()</code> / <code>Session.ask()</code>, or <code>--serve</code> / A2A contexts. These are planned for a future release.</p>
+        </article>
+    </div>
+    <footer class="site-footer">
+        MIT License &middot;
+        <a href="https://github.com/swival/swival">GitHub</a>
+    </footer>
+</body>
+</html>

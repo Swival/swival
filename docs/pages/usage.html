@@ -53,6 +53,7 @@
 <li><a href="a2a.html">A2A</a></li>
 <li><a href="lifecycle-hooks.html">Lifecycle Hooks</a></li>
 <li><a href="custom-commands.html">Custom Commands</a></li>
+<li><a href="semantic-routing.html">Semantic Routing</a></li>
 <li><a href="customization.html">Customization</a></li>
 <li><a href="providers.html">Providers</a></li>
 <li><a href="reports.html">Reports</a></li>
@@ -120,7 +121,8 @@ cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5
 <p><code>--profile NAME</code> selects a named LLM profile from config. Profiles bundle provider, model, and related settings under a short name so you can switch setups without retyping flags. See <a href="customization.html#profiles">Profiles</a> for how to define them.</p>
 <pre><code class="language-sh">swival --profile gpt5 &quot;review this patch&quot;
 </code></pre>
-<p><code>--list-profiles</code> prints available profiles and exits. The active profile is marked with an arrow and shows which layer selected it (CLI flag, project config, or global config).</p>
+<p>When <a href="semantic-routing.html">semantic routing</a> is enabled, <code>--profile</code> bypasses it entirely — the router is not consulted.</p>
+<p><code>--list-profiles</code> prints available profiles and exits. The active profile is marked with an arrow and shows which layer selected it (CLI flag, project config, or global config). When routing is enabled, profiles are tagged as <code>(routing)</code> or <code>(routable)</code> to show their role.</p>
 <p><code>--provider</code> chooses the backend provider and defaults to <code>lmstudio</code>. Valid values are <code>lmstudio</code>, <code>huggingface</code>, <code>openrouter</code>, <code>generic</code>, <code>google</code>, <code>chatgpt</code> (for ChatGPT Plus/Pro subscriptions), and <code>command</code> (shells out to an external program).</p>
 <p><code>--model</code> overrides auto-discovery with a fixed model identifier.</p>
 <p><code>--base-url</code> sets a custom API base URL. For LM Studio, the default base URL is <code>http://127.0.0.1:1234</code> when <code>--base-url</code> is not set.</p>

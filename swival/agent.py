@@ -3779,6 +3779,8 @@ def _handle_list_profiles(config: dict, args) -> None:
     profiles = config.get("profiles", {})
     cli_profile = getattr(args, "profile", None)
     cfg_active = config.get("active_profile")
+    router_name = config.get("semantic_routing_profile")
+    routing_on = config.get("routing_enabled", False)
 
     active_name = cli_profile or cfg_active
     if cli_profile:
@@ -3807,18 +3809,120 @@ def _handle_list_profiles(config: dict, args) -> None:
         if "max_context_tokens" in body:
             extras.append(f"ctx={body['max_context_tokens']}")
 
+        tags = []
         if name == active_name:
             marker = "\u2192 "
-            suffix = f"  (active {active_source})" if active_source else "  (active)"
+            tags.append(f"active {active_source}" if active_source else "active")
         else:
             marker = "  "
-            suffix = ""
+        if routing_on and name == router_name:
+            tags.append("routing")
+        if routing_on and body.get("description"):
+            tags.append("routable")
+
+        suffix = f"  ({', '.join(tags)})" if tags else ""
 
         line = f"{marker}{name:<16} {provider:<12} / {model}"
         if extras:
             line += f"  {', '.join(extras)}"
         line += suffix
         print(line)
+
+        description = body.get("description")
+        if description:
+            print(f"      {description}")
+
+
+def _try_semantic_routing(args, file_config, base_dir: str):
+    """Attempt semantic routing before profile resolution.
+
+    Returns a RoutingResult or None.  Raises AgentError on strict failures.
+    """
+    cli_profile = getattr(args, "profile", None)
+    if cli_profile is not None:
+        return None
+    if not file_config.get("routing_enabled"):
+        return None
+    if not args.question:
+        return None
+
+    from .semantic_router import route_task
+
+    # Helper: read a CLI arg, treating _UNSET as absent.
+    # At this point apply_config_to_args() has not yet run, so args
+    # still carries _UNSET for values the user did not pass on the CLI.
+    def _cli(name, default=None):
+        v = getattr(args, name, _UNSET)
+        return default if v is _UNSET else v
+
+    verbose = not _cli("quiet", False)
+
+    cli_overrides: dict = {}
+    for key in (
+        "api_key",
+        "base_url",
+        "aws_profile",
+        "extra_body",
+        "reasoning_effort",
+        "sanitize_thinking",
+        "retries",
+    ):
+        val = _cli(key)
+        if val is not None:
+            cli_overrides[key] = val
+
+    # Resolve llm_filter from CLI or file config so the router call
+    # receives the same outbound filter protection as normal calls.
+    llm_filter = _cli("llm_filter") or file_config.get("llm_filter")
+
+    # Build SecretShield early if encryption is configured, so the
+    # router call gets the same outbound encryption as normal calls.
+    from .secrets import SecretShield, ENCRYPT_KEY_ENV
+
+    shield = None
+    enc_decided = False
+    enc_enabled = False
+    cli_enc = _cli("encrypt_secrets")
+    cli_no_enc = _cli("no_encrypt_secrets")
+    if cli_enc:
+        enc_enabled = True
+        enc_decided = True
+    elif cli_no_enc:
+        enc_decided = True
+    elif file_config.get("encrypt_secrets"):
+        enc_enabled = True
+        enc_decided = True
+    elif "encrypt_secrets" in file_config:
+        enc_decided = True
+    env_key = os.environ.get(ENCRYPT_KEY_ENV)
+    if not enc_decided and env_key:
+        enc_enabled = True
+    if enc_enabled:
+        shield = SecretShield.from_config(
+            key_hex=(
+                _cli("encrypt_secrets_key")
+                or file_config.get("encrypt_secrets_key")
+                or env_key
+            ),
+            tweak_str=_cli("encrypt_secrets_tweak")
+            or file_config.get("encrypt_secrets_tweak"),
+            extra_patterns=file_config.get("encrypt_secrets_patterns"),
+        )
+
+    try:
+        return route_task(
+            args.question,
+            file_config,
+            verbose=verbose,
+            base_dir_name=Path(base_dir).name,
+            is_objective=bool(file_config.get("objective")),
+            cli_overrides=cli_overrides or None,
+            llm_filter=llm_filter,
+            secret_shield=shield,
+        )
+    finally:
+        if shield is not None:
+            shield.destroy()
 
 
 def main():
@@ -3911,12 +4015,38 @@ def main():
         _handle_list_profiles(file_config, args)
         sys.exit(0)
 
+    # --- A2A serve mode ---
+    _is_serve = getattr(args, "serve", False)
+
+    # Read question from stdin early so it's available for semantic routing
+    if (
+        not args.repl
+        and not _is_serve
+        and args.question is None
+        and not sys.stdin.isatty()
+    ):
+        args.question = sys.stdin.read().strip()
+        if not args.question:
+            parser.error("question is required (stdin was empty)")
+
+    # --- Semantic routing ---
+    try:
+        _routing_result = _try_semantic_routing(args, file_config, base_dir)
+    except AgentError as e:
+        parser.error(str(e))
+    _selected_profile_name = (
+        _routing_result.selected_profile if _routing_result else None
+    )
+
     # Resolve selected profile into flat config before apply_config_to_args
     try:
-        active_profile_name = resolve_profile_config(args, file_config)
+        active_profile_name = resolve_profile_config(
+            args, file_config, selected_name=_selected_profile_name
+        )
     except _ConfigError as e:
         parser.error(str(e))
     args._active_profile = active_profile_name
+    args._routing_result = _routing_result
 
     # Stash MCP servers from TOML config before apply_config_to_args strips them
     args._mcp_servers_toml = file_config.pop("mcp_servers", None)
@@ -3930,10 +4060,12 @@ def main():
     # Capture explicitness before apply_config_to_args sweeps _UNSET → defaults
     _files_explicit = args.files is not _UNSET
     _commands_explicit = args.commands is not _UNSET
+    _encrypt_explicit = getattr(args, "encrypt_secrets", _UNSET) is not _UNSET
     apply_config_to_args(args, file_config)
     # Config may have set them explicitly too
     args._files_explicit = _files_explicit or "files" in file_config
     args._commands_explicit = _commands_explicit or "commands" in file_config
+    args._encrypt_explicit = _encrypt_explicit or "encrypt_secrets" in file_config
 
     # Resolve files_mode: --yolo upgrades defaults but doesn't override explicit
     files_mode = args.files
@@ -3949,20 +4081,6 @@ def main():
         if args.reviewer:
             parser.error("--self-review and --reviewer cannot be used together")
         args.reviewer = _build_self_review_cmd(args, files_mode=files_mode)
-
-    # --- A2A serve mode ---
-    _is_serve = getattr(args, "serve", False)
-
-    # Read question from stdin if not provided and stdin is piped
-    if (
-        not args.repl
-        and not _is_serve
-        and args.question is None
-        and not sys.stdin.isatty()
-    ):
-        args.question = sys.stdin.read().strip()
-        if not args.question:
-            parser.error("question is required (stdin was empty)")
 
     if not args.repl and not _is_serve and args.question is None:
         if args.self_review:
@@ -4083,7 +4201,7 @@ def main():
     def _report_settings(
         model_id="unknown", skills_catalog=None, instructions_loaded=None
     ):
-        return {
+        settings = {
             "temperature": args.temperature,
             "top_p": args.top_p,
             "seed": args.seed,
@@ -4106,6 +4224,16 @@ def main():
             "skills_discovered": sorted(skills_catalog or {}),
             "instructions_loaded": instructions_loaded or [],
         }
+        _rr = getattr(args, "_routing_result", None)
+        if _rr is not None:
+            settings["semantic_routing"] = {
+                "router_profile": _rr.router_profile,
+                "selected_profile": _rr.selected_profile,
+                "reason": _rr.reason,
+                "fallback_used": _rr.fallback_used,
+                "parse_mode": _rr.parse_mode,
+            }
+        return settings
 
     def _write_report(
         outcome,
@@ -4852,6 +4980,13 @@ def _run_main(args, report, _write_report, parser):
         parts = [f"provider={provider_name}", f"model={model_id}"]
         if getattr(args, "_active_profile", None):
             parts.append(f"profile={args._active_profile}")
+        _rr = getattr(args, "_routing_result", None)
+        if (
+            _rr is not None
+            and not _rr.fallback_used
+            and _rr.parse_mode != "short_circuit"
+        ):
+            parts.append(f"routed (via {_rr.router_profile})")
         if context_length is not None:
             parts.append(f"context={context_length:,}")
         if provider_name != "command":
@@ -5001,12 +5136,27 @@ def _run_main(args, report, _write_report, parser):
     args._a2a_manager = a2a_manager
 
     # --- Secret encryption lifecycle ---
+    # By this point apply_config_to_args() has resolved the CLI/config pair.
+    # The env var only enables encryption when no explicit decision was made
+    # (CLI flag or config key counts as explicit).
     secret_shield = None
-    if getattr(args, "encrypt_secrets", False):
+    _encrypt = getattr(args, "encrypt_secrets", False)
+    _no_encrypt = getattr(args, "no_encrypt_secrets", False)
+    from .secrets import ENCRYPT_KEY_ENV as _EKE
+
+    _main_env_key = os.environ.get(_EKE)
+    if (
+        not _encrypt
+        and not _no_encrypt
+        and not getattr(args, "_encrypt_explicit", False)
+        and _main_env_key
+    ):
+        _encrypt = True
+    if _encrypt:
         from .secrets import SecretShield
 
         secret_shield = SecretShield.from_config(
-            key_hex=getattr(args, "encrypt_secrets_key", None),
+            key_hex=getattr(args, "encrypt_secrets_key", None) or _main_env_key,
             tweak_str=getattr(args, "encrypt_secrets_tweak", None),
             extra_patterns=getattr(args, "encrypt_secrets_patterns", None),
         )

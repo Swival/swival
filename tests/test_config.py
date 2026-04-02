@@ -160,6 +160,7 @@ class TestLoadConfig:
             "Cache",
             "MCP",
             "Profiles",
+            "Routing",
             "External",
             "Lifecycle hooks",
             "Secret encryption",
@@ -1844,3 +1845,196 @@ class TestResolveProfileConfig:
         )
         load_config(tmp_path)
         assert "api_key" in capsys.readouterr().err
+
+
+class TestRoutingConfig:
+    """Tests for routing config schema, validation, and legacy migration."""
+
+    # --- Basic schema ---
+
+    def test_description_accepted_in_profile(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(
+            tmp_path / "swival.toml",
+            '[profiles.fast]\nprovider = "lmstudio"\n'
+            'description = "Fast local edits."\n',
+        )
+        result = load_config(tmp_path)
+        assert result["profiles"]["fast"]["description"] == "Fast local edits."
+
+    def test_description_must_be_string(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(
+            tmp_path / "swival.toml",
+            '[profiles.bad]\nprovider = "lmstudio"\ndescription = 42\n',
+        )
+        with pytest.raises(ConfigError, match="description.*expected str.*got int"):
+            load_config(tmp_path)
+
+    def test_routing_enabled_loads(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(
+            tmp_path / "swival.toml",
+            "routing_enabled = true\n"
+            'semantic_routing_profile = "router"\n'
+            '[profiles.router]\nprovider = "openrouter"\n'
+            'description = "Router."\n'
+            '[profiles.fast]\nprovider = "lmstudio"\n'
+            'description = "Fast."\n',
+        )
+        result = load_config(tmp_path)
+        assert result["routing_enabled"] is True
+        assert result["semantic_routing_profile"] == "router"
+
+    def test_routing_disabled_skips_validation(self, tmp_path, monkeypatch):
+        """When routing_enabled = false, missing routing_profile is fine."""
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(
+            tmp_path / "swival.toml",
+            "routing_enabled = false\n",
+        )
+        result = load_config(tmp_path)
+        assert result.get("routing_enabled") is False
+
+    def test_routing_profile_must_exist(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(
+            tmp_path / "swival.toml",
+            "routing_enabled = true\n"
+            'semantic_routing_profile = "ghost"\n'
+            '[profiles.fast]\nprovider = "lmstudio"\n',
+        )
+        with pytest.raises(
+            ConfigError, match="semantic_routing_profile.*ghost.*not found"
+        ):
+            load_config(tmp_path)
+
+    def test_routing_enabled_requires_profile(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(
+            tmp_path / "swival.toml",
+            'routing_enabled = true\n[profiles.fast]\nprovider = "lmstudio"\n',
+        )
+        with pytest.raises(ConfigError, match="requires.*semantic_routing_profile"):
+            load_config(tmp_path)
+
+    def test_routing_strict_loads(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(
+            tmp_path / "swival.toml",
+            "routing_enabled = true\n"
+            "routing_strict = true\n"
+            'semantic_routing_profile = "r"\n'
+            '[profiles.r]\nprovider = "openrouter"\n'
+            'description = "Router."\n'
+            '[profiles.f]\nprovider = "lmstudio"\n'
+            'description = "Fast."\n',
+        )
+        result = load_config(tmp_path)
+        assert result["routing_strict"] is True
+
+    # --- Legacy key migration ---
+
+    # --- resolve_profile_config ---
+
+    def test_resolve_profile_strips_routing_keys(self):
+        args = argparse.Namespace(profile="fast")
+        config = {
+            "profiles": {"fast": {"provider": "lmstudio", "description": "Fast."}},
+            "routing_enabled": True,
+            "semantic_routing_profile": "fast",
+            "routing_strict": True,
+        }
+        resolve_profile_config(args, config)
+        assert "routing_enabled" not in config
+        assert "semantic_routing_profile" not in config
+        assert "routing_strict" not in config
+
+    def test_resolve_profile_excludes_description(self):
+        args = argparse.Namespace(profile="fast")
+        config = {
+            "profiles": {"fast": {"provider": "lmstudio", "description": "Fast."}},
+        }
+        resolve_profile_config(args, config)
+        assert config["provider"] == "lmstudio"
+        assert "description" not in config
+
+    def test_resolve_with_selected_name(self):
+        args = argparse.Namespace(profile=None)
+        config = {
+            "profiles": {
+                "a": {"provider": "lmstudio"},
+                "b": {"provider": "openrouter"},
+            },
+        }
+        result = resolve_profile_config(args, config, selected_name="b")
+        assert result == "b"
+        assert config["provider"] == "openrouter"
+
+    # --- generate_config ---
+
+    def test_generate_config_includes_routing_keys(self):
+        output = generate_config()
+        assert "semantic_routing_profile" in output
+        assert "routing_strict" in output
+        assert "routing_enabled" in output
+        assert 'description = "' in output
+
+    # --- --list-profiles ---
+
+    def test_list_profiles_shows_routing_marker(self, capsys):
+        from swival.agent import _handle_list_profiles
+
+        config = {
+            "routing_enabled": True,
+            "semantic_routing_profile": "router",
+            "profiles": {
+                "fast": {
+                    "provider": "lmstudio",
+                    "model": "q3",
+                    "description": "Fast.",
+                },
+                "router": {
+                    "provider": "openrouter",
+                    "model": "glm-5",
+                    "description": "General purpose.",
+                },
+            },
+        }
+        args = argparse.Namespace(profile=None)
+        _handle_list_profiles(config, args)
+        out = capsys.readouterr().out
+        assert "routing" in out
+        assert "routable" in out
+        assert "General purpose." in out
+
+    def test_list_profiles_shows_description(self, capsys):
+        from swival.agent import _handle_list_profiles
+
+        config = {
+            "profiles": {
+                "fast": {
+                    "provider": "lmstudio",
+                    "model": "q3",
+                    "description": "Quick edits.",
+                },
+            },
+        }
+        args = argparse.Namespace(profile=None)
+        _handle_list_profiles(config, args)
+        out = capsys.readouterr().out
+        assert "Quick edits." in out
+
+    # --- config_to_session_kwargs ---
+
+    def test_config_to_session_kwargs_drops_routing_keys(self):
+        config = {
+            "provider": "lmstudio",
+            "routing_enabled": True,
+            "semantic_routing_profile": "r",
+            "routing_strict": True,
+        }
+        kwargs = config_to_session_kwargs(config)
+        for k in ("routing_enabled", "semantic_routing_profile", "routing_strict"):
+            assert k not in kwargs
+        assert kwargs["provider"] == "lmstudio"

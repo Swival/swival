@@ -74,6 +74,8 @@ The JSON below is from a verified local run using `--model dummy-model --max-tur
 
 `commands` records the configured command policy: `"all"` (unrestricted, the default), `"none"` (disabled), `"ask"` (interactive approval per bucket), or a sorted list of whitelisted basenames. `max_review_rounds` records the reviewer retry limit. `skills_discovered` records skill names discovered at startup. `instructions_loaded` records loaded instruction files as absolute paths (e.g. the user-level `AGENTS.md` from `~/.config/swival/`, the cross-agent `~/.agents/AGENTS.md`, and the project-level files).
 
+`semantic_routing` appears when [semantic routing](semantic-routing.md) ran during the task. It is an object with `router_profile` (the profile that made the decision), `selected_profile` (the profile chosen for execution), `reason` (short explanation from the router model, or `null`), `fallback_used` (whether the selection fell back due to a routing failure), and `parse_mode` (how the router response was parsed: `"json"`, `"bare_name"`, `"embedded_name"`, `"short_circuit"`, or `"fallback"`).
+
 ### `sandbox`
 
 `mode` is always present and is `builtin` (application-layer path guards) or `agentfs` (OS-enforced write isolation). `session` appears when an AgentFS session ID is active. When `mode` is `agentfs`, `strict_read` is always present (whether strict read isolation is enabled). Additional fields may also appear: `agentfs_version` (the AgentFS binary version) and `diff_hint` (a hint for reviewing changes).

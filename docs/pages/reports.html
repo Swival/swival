@@ -53,6 +53,7 @@
 <li><a href="a2a.html">A2A</a></li>
 <li><a href="lifecycle-hooks.html">Lifecycle Hooks</a></li>
 <li><a href="custom-commands.html">Custom Commands</a></li>
+<li><a href="semantic-routing.html">Semantic Routing</a></li>
 <li><a href="customization.html">Customization</a></li>
 <li><a href="providers.html">Providers</a></li>
 <li><a href="reports.html" class="active">Reports</a></li>
@@ -128,6 +129,7 @@
 <h3 id="settings"><code>settings</code></h3>
 <p><code>temperature</code> stores the sampling temperature or <code>null</code> when omitted. <code>top_p</code> stores nucleus sampling. <code>seed</code> stores the random seed or <code>null</code>. <code>max_turns</code> and <code>max_output_tokens</code> store turn and output-token limits. <code>context_length</code> stores effective context length after provider resolution. <code>files</code> records the filesystem access policy: <code>"some"</code> (workspace only, the default), <code>"all"</code> (unrestricted), or <code>"none"</code> (<code>.swival/</code> only).</p>
 <p><code>commands</code> records the configured command policy: <code>"all"</code> (unrestricted, the default), <code>"none"</code> (disabled), <code>"ask"</code> (interactive approval per bucket), or a sorted list of whitelisted basenames. <code>max_review_rounds</code> records the reviewer retry limit. <code>skills_discovered</code> records skill names discovered at startup. <code>instructions_loaded</code> records loaded instruction files as absolute paths (e.g. the user-level <code>AGENTS.md</code> from <code>~/.config/swival/</code>, the cross-agent <code>~/.agents/AGENTS.md</code>, and the project-level files).</p>
+<p><code>semantic_routing</code> appears when <a href="semantic-routing.html">semantic routing</a> ran during the task. It is an object with <code>router_profile</code> (the profile that made the decision), <code>selected_profile</code> (the profile chosen for execution), <code>reason</code> (short explanation from the router model, or <code>null</code>), <code>fallback_used</code> (whether the selection fell back due to a routing failure), and <code>parse_mode</code> (how the router response was parsed: <code>"json"</code>, <code>"bare_name"</code>, <code>"embedded_name"</code>, <code>"short_circuit"</code>, or <code>"fallback"</code>).</p>
 <h3 id="sandbox"><code>sandbox</code></h3>
 <p><code>mode</code> is always present and is <code>builtin</code> (application-layer path guards) or <code>agentfs</code> (OS-enforced write isolation). <code>session</code> appears when an AgentFS session ID is active. When <code>mode</code> is <code>agentfs</code>, <code>strict_read</code> is always present (whether strict read isolation is enabled). Additional fields may also appear: <code>agentfs_version</code> (the AgentFS binary version) and <code>diff_hint</code> (a hint for reviewing changes).</p>
 <h3 id="result"><code>result</code></h3>

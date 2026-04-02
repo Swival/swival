@@ -53,6 +53,7 @@
 <li><a href="a2a.html">A2A</a></li>
 <li><a href="lifecycle-hooks.html">Lifecycle Hooks</a></li>
 <li><a href="custom-commands.html">Custom Commands</a></li>
+<li><a href="semantic-routing.html">Semantic Routing</a></li>
 <li><a href="customization.html" class="active">Customization</a></li>
 <li><a href="providers.html">Providers</a></li>
 <li><a href="reports.html">Reports</a></li>
@@ -175,7 +176,8 @@ swival --profile fast-local &quot;write tests&quot;
 <p>List available profiles with <code>--list-profiles</code>:</p>
 <pre><code class="language-sh">swival --list-profiles
 </code></pre>
-<p>Each profile requires <code>provider</code>. The allowed keys are: <code>provider</code>, <code>model</code>, <code>api_key</code>, <code>base_url</code>, <code>aws_profile</code>, <code>max_output_tokens</code>, <code>max_context_tokens</code>, <code>temperature</code>, <code>top_p</code>, <code>seed</code>, <code>extra_body</code>, <code>reasoning_effort</code>, and <code>sanitize_thinking</code>. Keys outside this set — like <code>files</code>, <code>commands</code>, or <code>reviewer</code> — are rejected with an error listing the allowed keys. Profiles are for choosing a model stack, not for changing agent behavior.</p>
+<p>Each profile requires <code>provider</code>. The allowed keys are: <code>provider</code>, <code>model</code>, <code>api_key</code>, <code>base_url</code>, <code>aws_profile</code>, <code>max_output_tokens</code>, <code>max_context_tokens</code>, <code>temperature</code>, <code>top_p</code>, <code>seed</code>, <code>extra_body</code>, <code>reasoning_effort</code>, <code>sanitize_thinking</code>, and <code>description</code>. Keys outside this set — like <code>files</code>, <code>commands</code>, or <code>reviewer</code> — are rejected with an error listing the allowed keys. Profiles are for choosing a model stack, not for changing agent behavior.</p>
+<p>The <code>description</code> field is a human-readable label shown by <code>--list-profiles</code>. When <a href="semantic-routing.html">semantic routing</a> is enabled, profiles with a <code>description</code> become routing candidates — the router model reads these descriptions to decide which profile fits a given task.</p>
 <p>If <code>--profile</code> is combined with explicit flags like <code>--provider</code> or <code>--model</code>, the explicit flags win on a per-key basis, just like CLI flags override config everywhere else in Swival.</p>
 <pre><code class="language-sh">swival --profile gpt5 --reasoning-effort medium &quot;task&quot;
 </code></pre>
@@ -201,6 +203,8 @@ max_context_tokens = 131072
 [profiles.shared]
 model = &quot;z-ai/glm-5-mini&quot;
 </code></pre>
+<h2 id="semantic-routing">Semantic Routing</h2>
+<p>If you have multiple profiles, Swival can automatically pick the right one for each task. A small router model reads the task text and profile descriptions, then selects the best fit. See <a href="semantic-routing.html">Semantic Routing</a> for the full documentation, including config keys, failure behavior, and scope.</p>
 <h2 id="instruction-files">Instruction Files</h2>
 <p>Swival loads instruction files during startup and appends them to the system prompt. <code>CLAUDE.md</code> provides project rules (<code>&lt;project-instructions&gt;</code>), while <code>AGENTS.md</code> provides agent workflow commands and conventions (<code>&lt;agent-instructions&gt;</code>). Use <code>/init</code> in the REPL to auto-generate a project-level <code>AGENTS.md</code>, or <code>/remember &lt;text&gt;</code> to add individual facts to its <code>## Conventions</code> section.</p>
 <h3 id="claudemd">CLAUDE.md</h3>

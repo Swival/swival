@@ -24,3 +24,13 @@ def _isolate_global_agents_md(monkeypatch):
         "swival.agent._global_agents_md_path",
         lambda: Path("/nonexistent/.agents/AGENTS.md"),
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_global_config(monkeypatch, tmp_path):
+    """Prevent tests from picking up the user's real ~/.config/swival/config.toml.
+
+    Tests that need a specific global config should set XDG_CONFIG_HOME
+    explicitly via monkeypatch, which will override this fixture.
+    """
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "_empty_xdg"))

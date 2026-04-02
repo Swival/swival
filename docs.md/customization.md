@@ -136,7 +136,9 @@ List available profiles with `--list-profiles`:
 swival --list-profiles
 ```
 
-Each profile requires `provider`. The allowed keys are: `provider`, `model`, `api_key`, `base_url`, `aws_profile`, `max_output_tokens`, `max_context_tokens`, `temperature`, `top_p`, `seed`, `extra_body`, `reasoning_effort`, and `sanitize_thinking`. Keys outside this set — like `files`, `commands`, or `reviewer` — are rejected with an error listing the allowed keys. Profiles are for choosing a model stack, not for changing agent behavior.
+Each profile requires `provider`. The allowed keys are: `provider`, `model`, `api_key`, `base_url`, `aws_profile`, `max_output_tokens`, `max_context_tokens`, `temperature`, `top_p`, `seed`, `extra_body`, `reasoning_effort`, `sanitize_thinking`, and `description`. Keys outside this set — like `files`, `commands`, or `reviewer` — are rejected with an error listing the allowed keys. Profiles are for choosing a model stack, not for changing agent behavior.
+
+The `description` field is a human-readable label shown by `--list-profiles`. When [semantic routing](semantic-routing.md) is enabled, profiles with a `description` become routing candidates — the router model reads these descriptions to decide which profile fits a given task.
 
 If `--profile` is combined with explicit flags like `--provider` or `--model`, the explicit flags win on a per-key basis, just like CLI flags override config everywhere else in Swival.
 
@@ -175,6 +177,10 @@ max_context_tokens = 131072
 [profiles.shared]
 model = "z-ai/glm-5-mini"
 ```
+
+## Semantic Routing
+
+If you have multiple profiles, Swival can automatically pick the right one for each task. A small router model reads the task text and profile descriptions, then selects the best fit. See [Semantic Routing](semantic-routing.md) for the full documentation, including config keys, failure behavior, and scope.
 
 ## Instruction Files
 

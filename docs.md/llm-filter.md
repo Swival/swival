@@ -46,7 +46,7 @@ Swival sends a JSON object to the script's stdin:
 }
 ```
 
-`messages` is the exact message list about to be sent. `tools` is included as read-only context so the filter can make informed decisions. `call_kind` is `"agent"` for normal turns and `"summary"` for compaction summaries.
+`messages` is the exact message list about to be sent. `tools` is included as read-only context so the filter can make informed decisions. `call_kind` is `"agent"` for normal turns, `"summary"` for compaction summaries, and `"router"` for [semantic routing](semantic-routing.md) decisions.
 
 The script writes a JSON object to stdout. Two response shapes are supported:
 

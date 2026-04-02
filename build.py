@@ -100,6 +100,11 @@ NAV = [
                 "Run external scripts from the REPL and inject their output into the conversation",
             ),
             (
+                "semantic-routing",
+                "Semantic Routing",
+                "Automatic profile selection based on task content",
+            ),
+            (
                 "customization",
                 "Customization",
                 "Config files, project instructions, system prompt overrides, tuning parameters",
