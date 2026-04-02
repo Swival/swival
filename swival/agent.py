@@ -3922,6 +3922,16 @@ def main():
     # Stash profiles before resolve_profile_config pops them
     args._all_profiles = dict(file_config.get("profiles", {}))
 
+    # Snapshot LLM-relevant top-level config BEFORE profile overlay so REPL
+    # /profile switches can start from the same base as startup resolution.
+    from .config import PROFILE_KEYS, _PROFILE_METADATA_KEYS
+
+    args._pre_profile_baseline = {
+        k: file_config[k]
+        for k in PROFILE_KEYS - _PROFILE_METADATA_KEYS
+        if k in file_config
+    }
+
     # Resolve selected profile into flat config before apply_config_to_args
     try:
         active_profile_name = resolve_profile_config(args, file_config)
@@ -5401,6 +5411,7 @@ def _run_main(args, report, _write_report, parser):
             profiles=getattr(args, "_all_profiles", None),
             startup_profile=getattr(args, "_active_profile", None),
             raw_llm_baseline=getattr(args, "_raw_llm_baseline", None),
+            pre_profile_baseline=getattr(args, "_pre_profile_baseline", None),
         )
     finally:
         if _sa_holder[0] is not None:
@@ -6580,12 +6591,16 @@ def _repl_profile(
     startup_profile: str | None,
     current_profile: str | None,
     raw_baseline: dict,
-    repl_kwargs: dict,
-    subagent_manager,
-    verbose: bool,
+    pre_profile_baseline: dict | None = None,
+    repl_kwargs: dict | None = None,
+    subagent_manager=None,
+    verbose: bool = False,
 ) -> str | None:
     """Handle /profile command. Returns the new current profile name."""
     from .config import _PROFILE_METADATA_KEYS
+
+    if repl_kwargs is None:
+        repl_kwargs = {}
 
     name = cmd_arg.strip()
 
@@ -6611,24 +6626,17 @@ def _repl_profile(
         profile_body = profiles[name]
         new_name = name
 
-    merged = dict(raw_baseline)
     if profile_body is not None:
-        # Clear provider-identity keys so they don't leak from the baseline
-        # when the profile sets a different provider without specifying them.
-        for k in (
-            "provider",
-            "model",
-            "api_key",
-            "base_url",
-            "aws_profile",
-            "extra_body",
-            "reasoning_effort",
-            "sanitize_thinking",
-        ):
-            merged.pop(k, None)
+        # Match startup semantics: overlay the profile onto the pre-profile
+        # top-level config, so profiles that omit e.g. api_key inherit it
+        # from top-level config, not from the previous profile.
+        merged = dict(pre_profile_baseline or {})
         for k, v in profile_body.items():
             if k not in _PROFILE_METADATA_KEYS:
                 merged[k] = v
+    else:
+        # /profile - : revert to startup-resolved state
+        merged = dict(raw_baseline)
 
     try:
         model_id, api_base, resolved_key, context_length, llm_kwargs = resolve_provider(
@@ -7056,6 +7064,7 @@ def repl_loop(
     profiles: dict | None = None,
     startup_profile: str | None = None,
     raw_llm_baseline: dict | None = None,
+    pre_profile_baseline: dict | None = None,
 ):
     """Interactive read-eval-print loop."""
     from prompt_toolkit import PromptSession
@@ -7489,6 +7498,7 @@ def repl_loop(
                 startup_profile=startup_profile,
                 current_profile=_current_profile,
                 raw_baseline=raw_llm_baseline or {},
+                pre_profile_baseline=pre_profile_baseline or {},
                 repl_kwargs=_repl_loop_kwargs,
                 subagent_manager=subagent_manager,
                 verbose=verbose,

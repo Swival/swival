@@ -74,6 +74,7 @@ def _call_profile(
     startup_profile=None,
     current_profile=None,
     raw_baseline=None,
+    pre_profile_baseline=None,
     repl_kwargs=None,
     subagent_manager=None,
     resolve_return=None,
@@ -82,6 +83,8 @@ def _call_profile(
         profiles = PROFILES
     if raw_baseline is None:
         raw_baseline = dict(BASELINE)
+    if pre_profile_baseline is None:
+        pre_profile_baseline = dict(BASELINE)
     if repl_kwargs is None:
         repl_kwargs = _make_repl_kwargs()
     if resolve_return is None:
@@ -94,6 +97,7 @@ def _call_profile(
             startup_profile=startup_profile,
             current_profile=current_profile,
             raw_baseline=raw_baseline,
+            pre_profile_baseline=pre_profile_baseline,
             repl_kwargs=repl_kwargs,
             subagent_manager=subagent_manager,
             verbose=False,
@@ -227,9 +231,14 @@ class TestProfileRevert:
         assert call_kw.kwargs["provider"] == BASELINE["provider"]
 
     def test_minimal_profile_no_baseline_leak(self):
-        """A profile that only sets provider must NOT inherit model from baseline."""
+        """A profile that only sets provider must NOT inherit model from the
+        startup profile.  The pre-profile baseline has no model (it came from
+        the startup profile, not top-level config)."""
         profiles = {"local": {"provider": "lmstudio"}}
-        baseline = dict(BASELINE)  # has model="meta-llama/llama-4-scout"
+        # raw_baseline has model from the startup profile
+        baseline = dict(BASELINE)
+        # pre-profile baseline has NO model (top-level config didn't set one)
+        pre_profile = {k: v for k, v in BASELINE.items() if k != "model"}
         kw = _make_repl_kwargs()
 
         ret = (
@@ -240,10 +249,47 @@ class TestProfileRevert:
             {"provider": "lmstudio"},
         )
         with patch("swival.agent.resolve_provider", return_value=ret) as mock_rp:
-            _repl_profile("local", profiles, None, None, baseline, kw, None, False)
+            _repl_profile(
+                "local",
+                profiles,
+                None,
+                None,
+                baseline,
+                pre_profile_baseline=pre_profile,
+                repl_kwargs=kw,
+            )
 
         call_kw = mock_rp.call_args
         assert call_kw.kwargs["model"] is None  # must not be baseline's model
+
+    def test_profile_inherits_top_level_api_key(self):
+        """A profile that doesn't set api_key should inherit it from top-level config."""
+        profiles = {"remote": {"provider": "openrouter", "model": "test-model"}}
+        # Top-level config has api_key
+        pre_profile = {"provider": "openrouter", "api_key": "sk-top-level"}
+        baseline = dict(BASELINE)
+        kw = _make_repl_kwargs()
+
+        ret = (
+            "test-model",
+            "http://api",
+            "sk-top-level",
+            128000,
+            {"provider": "openrouter", "api_key": "sk-top-level"},
+        )
+        with patch("swival.agent.resolve_provider", return_value=ret) as mock_rp:
+            _repl_profile(
+                "remote",
+                profiles,
+                None,
+                None,
+                baseline,
+                pre_profile_baseline=pre_profile,
+                repl_kwargs=kw,
+            )
+
+        call_kw = mock_rp.call_args
+        assert call_kw.kwargs["api_key"] == "sk-top-level"
 
     def test_reasoning_effort_not_carried_across_profiles(self):
         """Switching from a profile with reasoning_effort to one without must drop it."""
@@ -257,6 +303,10 @@ class TestProfileRevert:
         }
         kw = _make_repl_kwargs()
         baseline = dict(BASELINE)
+        # pre-profile baseline has no reasoning_effort (it came from the profile)
+        pre_profile = {
+            k: v for k, v in BASELINE.items() if k not in ("model", "reasoning_effort")
+        }
 
         ret_high = (
             "gpt-5.4",
@@ -266,7 +316,15 @@ class TestProfileRevert:
             {"provider": "chatgpt", "api_key": "sk"},
         )
         with patch("swival.agent.resolve_provider", return_value=ret_high):
-            _repl_profile("high", profiles, None, None, baseline, kw, None, False)
+            _repl_profile(
+                "high",
+                profiles,
+                None,
+                None,
+                baseline,
+                pre_profile_baseline=pre_profile,
+                repl_kwargs=kw,
+            )
         assert kw["llm_kwargs"].get("reasoning_effort") == "high"
 
         ret_local = (
@@ -277,7 +335,15 @@ class TestProfileRevert:
             {"provider": "lmstudio"},
         )
         with patch("swival.agent.resolve_provider", return_value=ret_local):
-            _repl_profile("local", profiles, None, "high", baseline, kw, None, False)
+            _repl_profile(
+                "local",
+                profiles,
+                None,
+                "high",
+                baseline,
+                pre_profile_baseline=pre_profile,
+                repl_kwargs=kw,
+            )
         assert "reasoning_effort" not in kw["llm_kwargs"]
 
     def test_double_switch(self):
@@ -289,10 +355,10 @@ class TestProfileRevert:
         ret_big = ("claude", "http://or", "sk-big", 200000, {"provider": "openrouter"})
 
         with patch("swival.agent.resolve_provider", return_value=ret_fast):
-            _repl_profile("fast", PROFILES, None, None, baseline, kw, None, False)
+            _repl_profile("fast", PROFILES, None, None, baseline, repl_kwargs=kw)
 
         with patch("swival.agent.resolve_provider", return_value=ret_big) as mock_rp:
-            _repl_profile("big", PROFILES, None, "fast", baseline, kw, None, False)
+            _repl_profile("big", PROFILES, None, "fast", baseline, repl_kwargs=kw)
 
         call_kw = mock_rp.call_args
         assert call_kw.kwargs["provider"] == "openrouter"
@@ -412,7 +478,7 @@ class TestProfileMetadataValidation:
         with patch(
             "swival.agent.resolve_provider", return_value=_resolve_return()
         ) as mock_rp:
-            _repl_profile("test", profiles, None, None, baseline, kw, None, False)
+            _repl_profile("test", profiles, None, None, baseline, repl_kwargs=kw)
 
         call_kw = mock_rp.call_args
         assert "description" not in call_kw.kwargs
@@ -429,7 +495,7 @@ class TestProfileLocalsCoherence:
         original_model = kw["model_id"]
 
         with patch("swival.agent.resolve_provider", side_effect=ConfigError("fail")):
-            _repl_profile("fast", PROFILES, None, None, dict(BASELINE), kw, None, False)
+            _repl_profile("fast", PROFILES, None, None, dict(BASELINE), repl_kwargs=kw)
 
         assert kw["model_id"] == original_model
 
