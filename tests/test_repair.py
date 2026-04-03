@@ -392,6 +392,210 @@ class TestFieldAliases:
         )
 
 
+class TestUnwrapNested:
+    def test_unwrap_nested_dict(self):
+        """{"command": {"command": "ls -R"}} → {"command": "ls -R"}."""
+        args = {"command": {"command": "ls -R"}}
+        result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
+        assert result == {"command": "ls -R"}
+        assert any(r["type"] == "unwrap_nested" for r in repairs)
+
+    def test_unwrap_nested_with_extra_fields(self):
+        """{"command": {"command": ["ls"], "timeout": 10}} → flat."""
+        args = {"command": {"command": ["ls", "-R"], "timeout": 10}}
+        result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
+        assert result == {"command": ["ls", "-R"], "timeout": 10}
+        assert any(r["type"] == "unwrap_nested" for r in repairs)
+
+    def test_unwrap_tool_name_as_key(self):
+        """{"run_command": {"command": ["ls"]}} → {"command": ["ls"]}."""
+        args = {"run_command": {"command": ["ls"]}}
+        result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
+        assert result == {"command": ["ls"]}
+        types = [r["type"] for r in repairs]
+        assert "unwrap_nested" in types
+        assert "strip_unknown" not in types  # should not strip "command"
+
+    def test_unwrap_json_string_value(self):
+        """Value is a JSON string containing the real args."""
+        import json
+
+        inner = {"command": ["grep", "FAIL", "file.txt"]}
+        args = {"command": json.dumps(inner)}
+        result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
+        assert result == inner
+        assert any(
+            r["type"] == "unwrap_nested" and r["was_json_string"] for r in repairs
+        )
+
+    def test_unwrap_with_alias_inner_key(self):
+        """{"command": {"cmd": "ls -R"}} — inner key uses alias."""
+        args = {"command": {"cmd": "ls -R"}}
+        result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
+        # After unwrap: {"cmd": "ls -R"}, then alias: {"command": "ls -R"}
+        assert result == {"command": "ls -R"}
+        types = [r["type"] for r in repairs]
+        assert "unwrap_nested" in types
+        assert "rename_field" in types
+
+    def test_no_unwrap_multi_key(self):
+        """Multiple keys → no unwrap attempt."""
+        args = {"command": ["ls"], "timeout": 30}
+        result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
+        assert result["command"] == ["ls"]
+        assert result["timeout"] == 30
+        assert not any(r["type"] == "unwrap_nested" for r in repairs)
+
+    def test_no_unwrap_object_type(self):
+        """When schema expects object type for the key, don't unwrap."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "config": {"type": "object"},
+                "name": {"type": "string"},
+            },
+        }
+        args = {"config": {"name": "test"}}
+        result, repairs = repair_tool_args(args, schema)
+        assert result["config"] == {"name": "test"}
+        assert not any(r["type"] == "unwrap_nested" for r in repairs)
+
+    def test_no_unwrap_when_inner_has_no_affinity(self):
+        """Inner dict keys don't match schema at all → no unwrap."""
+        args = {"command": {"xyz": 123, "abc": 456}}
+        result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
+        assert not any(r["type"] == "unwrap_nested" for r in repairs)
+
+    def test_unwrap_double_encoded_string(self):
+        """Entire args is a JSON string that parses to a dict."""
+        import json
+
+        inner = {"file_path": "test.py", "offset": 10}
+        result, repairs = repair_tool_args(json.dumps(inner), SCHEMA_READ_FILE)
+        assert result == inner
+        assert any(r["type"] == "unwrap_json_string" for r in repairs)
+
+    def test_unwrap_double_encoded_string_no_schema(self):
+        """Double-encoded string still unwraps without a schema."""
+        import json
+
+        inner = {"file_path": "test.py"}
+        result, repairs = repair_tool_args(json.dumps(inner), None)
+        assert result == inner
+        assert any(r["type"] == "unwrap_json_string" for r in repairs)
+
+    def test_input_not_mutated_on_unwrap(self):
+        original = {"command": {"command": "ls"}}
+        copy = {"command": dict(original["command"])}
+        repair_tool_args(original, SCHEMA_RUN_COMMAND)
+        assert original == copy
+
+
+class TestCmdAlias:
+    def test_cmd_renamed_to_command(self):
+        args = {"cmd": ["ls", "-la"]}
+        result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
+        assert "command" in result
+        assert result["command"] == ["ls", "-la"]
+        assert "cmd" not in result
+        assert any(r["type"] == "rename_field" and r["from"] == "cmd" for r in repairs)
+
+    def test_cmd_not_renamed_when_command_exists(self):
+        args = {"command": ["ls"], "cmd": ["echo"]}
+        result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
+        assert result["command"] == ["ls"]
+        assert "cmd" not in result
+        assert any(
+            r["type"] == "strip_unknown" and r["field"] == "cmd" for r in repairs
+        )
+
+
+class TestRepairFeedback:
+    def test_feedback_on_unwrap(self):
+        import json
+
+        from swival.repair import format_repair_feedback
+
+        repairs = [
+            {"type": "unwrap_nested", "outer_key": "command", "was_json_string": False}
+        ]
+        feedback = format_repair_feedback(
+            "run_command",
+            json.dumps({"command": {"command": "ls -R"}}),
+            {"command": "ls -R"},
+            repairs,
+            SCHEMA_RUN_COMMAND,
+        )
+        assert "[Syntax correction]" in feedback
+        assert "Corrected:" in feedback
+        assert "flat key-value" in feedback
+
+    def test_feedback_shows_array_hint(self):
+        import json
+
+        from swival.repair import format_repair_feedback
+
+        repairs = [
+            {"type": "unwrap_nested", "outer_key": "command", "was_json_string": False}
+        ]
+        feedback = format_repair_feedback(
+            "run_command",
+            json.dumps({"command": {"command": "ls -R"}}),
+            {"command": "ls -R"},
+            repairs,
+            SCHEMA_RUN_COMMAND,
+        )
+        # Corrected line should show the array form
+        assert '["ls", "-R"]' in feedback
+        # And the explicit array hint
+        assert "must be a JSON array" in feedback
+
+    def test_feedback_on_rename(self):
+        import json
+
+        from swival.repair import format_repair_feedback
+
+        repairs = [{"type": "rename_field", "field": "command", "from": "cmd"}]
+        feedback = format_repair_feedback(
+            "run_command",
+            json.dumps({"cmd": ["ls"]}),
+            {"command": ["ls"]},
+            repairs,
+            SCHEMA_RUN_COMMAND,
+        )
+        assert '"command"' in feedback
+        assert '"cmd"' in feedback
+
+    def test_no_feedback_for_coerce_only(self):
+        import json
+
+        from swival.repair import format_repair_feedback
+
+        repairs = [
+            {
+                "type": "coerce_type",
+                "field": "offset",
+                "from": "'10'",
+                "to": "10",
+                "expected_type": "integer",
+            }
+        ]
+        feedback = format_repair_feedback(
+            "read_file",
+            json.dumps({"file_path": "f.py", "offset": "10"}),
+            {"file_path": "f.py", "offset": 10},
+            repairs,
+            SCHEMA_READ_FILE,
+        )
+        assert feedback == ""
+
+    def test_feedback_empty_when_no_repairs(self):
+        from swival.repair import format_repair_feedback
+
+        feedback = format_repair_feedback("read_file", "{}", {}, [], SCHEMA_READ_FILE)
+        assert feedback == ""
+
+
 class TestCombinedRepairs:
     def test_rename_then_coerce(self):
         args = {"file_paht": "f.py", "offset": "10"}

@@ -70,7 +70,7 @@ from .tools import (
     cleanup_old_cmd_outputs,
     get_tool_schema,
 )
-from .repair import repair_tool_args
+from .repair import format_repair_feedback, repair_tool_args
 
 DEFAULT_SYSTEM_PROMPT_FILE = Path(__file__).parent / "system_prompt.txt"
 MAX_ARG_LOG = 1000
@@ -2177,6 +2177,13 @@ def handle_tool_call(
             fmt.tool_error(name, result)
         else:
             fmt.tool_result(name, elapsed, result[:500])
+
+    # Append corrective feedback for structural repairs so the LLM sees
+    # what it got wrong and what the correct syntax looks like.
+    if repairs:
+        feedback = format_repair_feedback(name, raw_args, parsed_args, repairs, schema)
+        if feedback:
+            result = result + feedback
 
     return (
         {
