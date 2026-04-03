@@ -2,6 +2,18 @@
 
 All notable user-facing changes to Swival.
 
+## 0.10.10
+
+- Swival now automatically falls back to plain chat when a provider or model
+  does not support function calling, including OpenRouter's tool-unsupported
+  responses.
+- Command execution has been split into two tools: `run_command` now takes an
+  argv array, while `run_shell_command` takes a shell string and is only
+  exposed in unrestricted command modes. This avoids the old union-type schema
+  that weaker models often mangled.
+- Tool-call repair has been tightened for small models, making malformed
+  arguments more likely to be repaired into valid tool calls.
+
 ## 0.10.9
 
 - REPL `/profile` switching now correctly inherits top-level config values:
