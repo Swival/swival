@@ -665,31 +665,6 @@ def _msg_to_dict(msg) -> dict:
     return d
 
 
-def _patch_tool_call_args(
-    assistant_msg: dict, call_id: str, repaired_args: dict
-) -> None:
-    """Overwrite a tool_call's arguments in an already-serialized message dict.
-
-    This ensures the model sees repaired (not broken) arguments when the
-    message history is re-sent on subsequent turns, preventing the model from
-    learning to reproduce malformed argument patterns.
-    """
-    for tc in assistant_msg.get("tool_calls", []):
-        if isinstance(tc, dict):
-            tc_id = tc.get("id")
-            fn = tc.get("function", {})
-        else:
-            tc_id = getattr(tc, "id", None)
-            fn = getattr(tc, "function", None)
-        if tc_id == call_id:
-            new_args = json.dumps(repaired_args)
-            if isinstance(fn, dict):
-                fn["arguments"] = new_args
-            elif fn is not None:
-                fn.arguments = new_args
-            break
-
-
 def _safe_subpath(base_dir: str, target: Path, label: str) -> Path:
     """Verify *target* resolves inside *base_dir* and return it."""
     base = Path(base_dir).resolve()
@@ -1083,7 +1058,7 @@ def compact_tool_result(name: str, args: dict | None, content: str) -> str:
         return f"[list_files: '{pattern}' in {path}, ~{count} entries — compacted]"
 
     if name == "run_command":
-        cmd = args.get("cmd") or args.get("command") or ["?"]
+        cmd = args.get("command", ["?"])
         if isinstance(cmd, list):
             cmd = " ".join(cmd)
         head = content[:200]
@@ -4629,7 +4604,7 @@ def build_tools(
     if commands_unrestricted:
         tool = copy.deepcopy(RUN_COMMAND_TOOL)
         tool["function"]["description"] = "Run any command and return its output."
-        tool["function"]["parameters"]["properties"]["cmd"] = {
+        tool["function"]["parameters"]["properties"]["command"] = {
             "oneOf": [
                 {
                     "type": "string",
@@ -4641,7 +4616,7 @@ def build_tools(
                     "description": "Command as array of strings. Each argument is a separate element.",
                 },
             ],
-            "description": 'Command to run. Pass a shell string (e.g. "ls -la | head") or an array (e.g. ["ls", "-la"]).',
+            "description": 'Command to run. Can be a shell string (e.g. "ls -la | head") or an array of strings (e.g. ["ls", "-la"]).',
         }
         tools.append(tool)
     elif resolved_commands:
@@ -6224,7 +6199,6 @@ def run_agent_loop(
         interventions: list[str] = []
         all_tools_readonly = True
         image_stash: list[dict] = []
-        assistant_msg_idx = len(messages) - 1  # index of the dict we just appended
         for tool_call in msg.tool_calls:
             # Check cancellation before each tool call
             if cancel_flag is not None and cancel_flag.is_set():
@@ -6262,16 +6236,6 @@ def run_agent_loop(
                 report=report,
             )
             messages.append(tool_msg)
-
-            # If repair changed the arguments, patch the assistant message
-            # already in the history so the model sees corrected args on
-            # subsequent turns — not its own broken version.
-            if tool_meta.get("repairs"):
-                _patch_tool_call_args(
-                    messages[assistant_msg_idx],
-                    tool_call.id,
-                    tool_meta["arguments"],
-                )
 
             bk_interventions = _post_tool_bookkeeping(
                 tool_msg,

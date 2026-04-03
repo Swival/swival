@@ -243,14 +243,16 @@ class TestCompactToolResult:
 
     def test_run_command(self):
         content = "output " * 200  # >1000 chars
-        result = compact_tool_result("run_command", {"cmd": ["pytest", "-v"]}, content)
+        result = compact_tool_result(
+            "run_command", {"command": ["pytest", "-v"]}, content
+        )
         assert "[run_command: `pytest -v`" in result
         assert "first 200 chars" in result
         assert "last 200 chars" in result
 
     def test_run_command_string_cmd(self):
         content = "x" * 2000
-        result = compact_tool_result("run_command", {"cmd": "ls -la"}, content)
+        result = compact_tool_result("run_command", {"command": "ls -la"}, content)
         assert "`ls -la`" in result
 
     def test_fetch_url(self):

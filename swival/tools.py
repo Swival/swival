@@ -629,10 +629,10 @@ RUN_COMMAND_TOOL = {
         "parameters": {
             "type": "object",
             "properties": {
-                "cmd": {
+                "command": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": 'Command as an array of strings. Each argument is a separate element. Example: ["git", "log", "--oneline", "-5"]. Do NOT pass a single string, and do NOT wrap this in another JSON object.',
+                    "description": 'Command as an array of strings (NOT a single string). Each argument is a separate element. Correct: ["ls", "-la", "src/"]. Wrong: "ls -la src/".',
                 },
                 "timeout": {
                     "type": "integer",
@@ -640,7 +640,7 @@ RUN_COMMAND_TOOL = {
                     "default": 30,
                 },
             },
-            "required": ["cmd"],
+            "required": ["command"],
         },
     },
 }
@@ -2410,7 +2410,7 @@ def _run_command(
         )
 
     if not isinstance(command, (str, list)):
-        return f'error: "cmd" must be an array of strings, got {type(command).__name__}'
+        return f'error: "command" must be an array of strings, got {type(command).__name__}'
 
     if isinstance(command, str):
         repaired_command = None
@@ -2431,10 +2431,10 @@ def _run_command(
                 repaired_command = command.split()
             else:
                 return (
-                    'error: "cmd" must be a JSON array of strings, '
+                    'error: "command" must be a JSON array of strings, '
                     "not a single string.\n"
-                    'Wrong: "cmd": "grep -n pattern file.py"\n'
-                    'Right: "cmd": ["grep", "-n", "pattern", "file.py"]\n'
+                    'Wrong: "command": "grep -n pattern file.py"\n'
+                    'Right: "command": ["grep", "-n", "pattern", "file.py"]\n'
                     "Each argument must be a separate element in the array.\n"
                     "Shell syntax (&&, |, >, 2>&1, etc.) is not supported — "
                     "run one command at a time."
@@ -2546,7 +2546,7 @@ def _check_command_policy(
     if isinstance(command, list):
         argv = command
     elif not isinstance(command, str):
-        return f'error: "cmd" must be an array of strings, got {type(command).__name__}'
+        return f'error: "command" must be an array of strings, got {type(command).__name__}'
     elif _SHELL_CHARS & set(command):
         argv = [_SHELL_BUCKET]
     else:
@@ -2810,10 +2810,9 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
         return activate_skill(args["name"], catalog, read_roots)
     elif name == "run_command":
         command_policy = kwargs.get("command_policy")
-        cmd = args.get("cmd") or args.get("command")
         if command_policy is not None:
             rejection = _check_command_policy(
-                cmd,
+                args["command"],
                 command_policy,
                 base_dir,
                 is_subagent=kwargs.get("is_subagent", False),
@@ -2823,7 +2822,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
                 return rejection
         resolved = kwargs.get("resolved_commands", {})
         return _run_command(
-            command=cmd,
+            command=args["command"],
             base_dir=base_dir,
             resolved_commands=resolved,
             timeout=args.get("timeout", 30),

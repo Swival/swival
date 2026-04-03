@@ -89,9 +89,9 @@ def test_empty_command_list(tmp_base):
 def test_string_with_shell_chars_requires_array(tmp_base):
     result = _run_command("grep -n pattern file.py | head", tmp_base, {})
     assert result.startswith(
-        'error: "cmd" must be a JSON array of strings, not a single string.'
+        'error: "command" must be a JSON array of strings, not a single string.'
     )
-    assert 'Right: "cmd": ["grep", "-n", "pattern", "file.py"]' in result
+    assert 'Right: "command": ["grep", "-n", "pattern", "file.py"]' in result
     assert "Each argument must be a separate element in the array." in result
 
 
@@ -506,7 +506,7 @@ def test_dispatch_run_command(tmp_base):
     resolved = {"echo": echo_path}
     result = dispatch(
         "run_command",
-        {"cmd": ["echo", "hello_dispatch"]},
+        {"command": ["echo", "hello_dispatch"]},
         tmp_base,
         resolved_commands=resolved,
     )

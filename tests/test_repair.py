@@ -58,13 +58,13 @@ SCHEMA_READ_MULTIPLE = {
 SCHEMA_RUN_COMMAND = {
     "type": "object",
     "properties": {
-        "cmd": {
+        "command": {
             "type": "array",
             "items": {"type": "string"},
         },
         "timeout": {"type": "integer", "default": 30},
     },
-    "required": ["cmd"],
+    "required": ["command"],
 }
 
 
@@ -218,97 +218,40 @@ class TestShapesLeftAlone:
 
     def test_string_for_array_left_alone(self):
         """String passed for an array[string] field is left as-is for the tool to handle."""
-        args = {"cmd": "ls -la"}
+        args = {"command": "ls -la"}
         result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
-        assert result["cmd"] == "ls -la"
+        assert result["command"] == "ls -la"
         assert not any(r["type"].startswith("wrap") for r in repairs)
 
 
-class TestStringifiedJsonArgs:
-    def test_stringified_cmd_parsed_and_unwrapped(self):
-        """Model sends {"cmd": '{"cmd":"ls -la"}'} — parse then unwrap."""
-        import json
-
-        args = {"cmd": json.dumps({"cmd": "fastly service list"})}
-        result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
-        assert result["cmd"] == "fastly service list"
-        types = [r["type"] for r in repairs]
-        assert "parse_stringified_json" in types
-        assert "unwrap_nested" in types
-
-    def test_stringified_with_multiple_keys(self):
-        """Stringified JSON with multiple schema keys."""
-        import json
-
-        args = {"cmd": json.dumps({"cmd": ["ls", "-la"], "timeout": 10})}
-        result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
-        assert result["cmd"] == ["ls", "-la"]
-        assert result["timeout"] == 10
-        types = [r["type"] for r in repairs]
-        assert "parse_stringified_json" in types
-
-    def test_non_json_string_left_alone(self):
-        args = {"cmd": "just a plain command"}
-        result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
-        assert result["cmd"] == "just a plain command"
-        assert not any(r["type"] == "parse_stringified_json" for r in repairs)
-
-    def test_json_with_unknown_keys_left_alone(self):
-        """Don't parse if the inner keys don't match the schema."""
-        import json
-
-        args = {"cmd": json.dumps({"argv": "ls", "flags": "-la"})}
-        result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
-        # Value should still be the original string
-        assert isinstance(result["cmd"], str)
-        assert not any(r["type"] == "parse_stringified_json" for r in repairs)
-
-    def test_json_array_string_left_alone(self):
-        """Don't parse JSON arrays, only dicts."""
-        import json
-
-        args = {"cmd": json.dumps(["ls", "-la"])}
-        result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
-        assert isinstance(result["cmd"], str)
-        assert not any(r["type"] == "parse_stringified_json" for r in repairs)
-
-
 class TestUnwrapNested:
-    def test_unwrap_cmd_dict(self):
-        """Model sends {"cmd": {"cmd": "ls"}} — unwrap to {"cmd": "ls"}."""
-        args = {"cmd": {"cmd": "fastly service list"}}
+    def test_unwrap_command_dict(self):
+        """Model sends {"command": {"command": "ls"}} — unwrap to {"command": "ls"}."""
+        args = {"command": {"command": "fastly service list"}}
         result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
-        assert result["cmd"] == "fastly service list"
+        assert result["command"] == "fastly service list"
         assert any(r["type"] == "unwrap_nested" for r in repairs)
 
     def test_unwrap_with_multiple_inner_keys(self):
         """Inner dict has multiple schema-valid keys — hoist all."""
-        args = {"cmd": {"cmd": ["ls", "-la"], "timeout": 10}}
+        args = {"command": {"command": ["ls", "-la"], "timeout": 10}}
         result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
-        assert result["cmd"] == ["ls", "-la"]
+        assert result["command"] == ["ls", "-la"]
         assert result["timeout"] == 10
         assert any(r["type"] == "unwrap_nested" for r in repairs)
 
     def test_no_unwrap_when_inner_keys_not_in_schema(self):
         """Inner dict keys don't match schema — leave alone."""
-        args = {"cmd": {"argv": "ls", "flags": "-la"}}
+        args = {"command": {"cmd": "ls", "flags": "-la"}}
         result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
-        assert result["cmd"] == {"argv": "ls", "flags": "-la"}
+        assert result["command"] == {"cmd": "ls", "flags": "-la"}
         assert not any(r["type"] == "unwrap_nested" for r in repairs)
 
     def test_no_unwrap_for_empty_inner_dict(self):
-        args = {"cmd": {}}
+        args = {"command": {}}
         result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
-        assert result["cmd"] == {}
+        assert result["command"] == {}
         assert not any(r["type"] == "unwrap_nested" for r in repairs)
-
-    def test_legacy_command_renamed_to_cmd(self):
-        """Model still sends 'command' — repair alias renames it to 'cmd'."""
-        args = {"command": ["ls", "-la"]}
-        result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
-        assert result["cmd"] == ["ls", "-la"]
-        assert "command" not in result
-        assert any(r["type"] == "rename_field" for r in repairs)
 
 
 class TestNearMissFields:

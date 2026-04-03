@@ -230,7 +230,7 @@ class TestDispatch:
         """run_command uses commands_unrestricted, not files_mode."""
         result = dispatch(
             "run_command",
-            {"cmd": ["echo", "hi"]},
+            {"command": ["echo", "hi"]},
             str(tmp_path),
             files_mode="none",
             commands_unrestricted=True,

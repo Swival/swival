@@ -465,7 +465,7 @@ class TestDispatchYolo:
     def test_dispatch_run_command_yolo(self, tmp_path):
         result = dispatch(
             "run_command",
-            {"cmd": ["echo", "dispatch-yolo"]},
+            {"command": ["echo", "dispatch-yolo"]},
             str(tmp_path),
             files_mode="all",
             commands_unrestricted=True,
@@ -699,7 +699,7 @@ class TestShellStringCompat:
             resolved_commands={},
             unrestricted=False,
         )
-        assert result.startswith('error: "cmd" must be a JSON array')
+        assert result.startswith('error: "command" must be a JSON array')
 
     @_unix_only
     def test_array_still_works_in_yolo(self, tmp_path):
@@ -745,7 +745,7 @@ class TestYoloSchema:
         rc_tool = next(
             t for t in captured["tools"] if t["function"]["name"] == "run_command"
         )
-        cmd_prop = rc_tool["function"]["parameters"]["properties"]["cmd"]
+        cmd_prop = rc_tool["function"]["parameters"]["properties"]["command"]
         assert "oneOf" in cmd_prop
         types = [s.get("type") for s in cmd_prop["oneOf"]]
         assert "string" in types
@@ -781,7 +781,7 @@ class TestYoloSchema:
 
         tool_by_name = {t["function"]["name"]: t for t in captured["tools"]}
         cmd_props = tool_by_name["run_command"]["function"]["parameters"]["properties"]
-        cmd_desc = cmd_props["cmd"]["description"].lower()
+        cmd_desc = cmd_props["command"]["description"].lower()
         assert "shell" in cmd_desc or "pipes" in cmd_desc
 
 
@@ -929,7 +929,7 @@ class TestAutoSplitStringCommand:
             resolved_commands={},
             unrestricted=False,
         )
-        assert result.startswith('error: "cmd" must be a JSON array')
+        assert result.startswith('error: "command" must be a JSON array')
         assert "(auto-corrected:" not in result
 
     def test_whitespace_only_empty(self, tmp_path):
@@ -975,7 +975,7 @@ class TestAutoSplitStringCommand:
             resolved_commands={},
             unrestricted=False,
         )
-        assert result.startswith('error: "cmd" must be a JSON array')
+        assert result.startswith('error: "command" must be a JSON array')
 
     def test_newline_rejected(self, tmp_path):
         """Newlines in command string are rejected as shell metacharacters."""
@@ -985,7 +985,7 @@ class TestAutoSplitStringCommand:
             resolved_commands={},
             unrestricted=False,
         )
-        assert result.startswith('error: "cmd" must be a JSON array')
+        assert result.startswith('error: "command" must be a JSON array')
 
     def test_carriage_return_rejected(self, tmp_path):
         """CR in command string is rejected as a shell metacharacter."""
@@ -995,7 +995,7 @@ class TestAutoSplitStringCommand:
             resolved_commands={},
             unrestricted=False,
         )
-        assert result.startswith('error: "cmd" must be a JSON array')
+        assert result.startswith('error: "command" must be a JSON array')
 
     @_unix_only
     def test_yolo_string_still_uses_shell(self, tmp_path):

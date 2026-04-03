@@ -47,7 +47,6 @@ def repair_tool_args(
     repairs: list[dict[str, Any]] = []
     result = dict(args)
 
-    _repair_stringified_json_args(result, properties, repairs)
     _repair_wrapped_args(result, properties, repairs)
     _repair_near_miss_fields(result, properties, repairs)
     _repair_types(result, properties, repairs)
@@ -55,39 +54,6 @@ def repair_tool_args(
     _strip_unknown(result, properties, repairs)
 
     return result, repairs
-
-
-def _repair_stringified_json_args(
-    result: dict[str, Any],
-    properties: dict[str, Any],
-    repairs: list[dict[str, Any]],
-) -> None:
-    """Parse string values that are actually JSON-encoded dicts.
-
-    Some models produce ``{"cmd": "{\\\"cmd\\\":\\\"ls -la\\\"}"}`` — the inner
-    value is a JSON string instead of a dict.  When a field's string value
-    parses as a dict whose keys are a subset of the schema properties,
-    replace the string with the parsed dict so that ``_repair_wrapped_args``
-    can then hoist the inner values.
-    """
-    import json
-
-    known = set(properties)
-    for field in list(result):
-        value = result[field]
-        if not isinstance(value, str):
-            continue
-        if not value.startswith("{"):
-            continue
-        try:
-            parsed = json.loads(value)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if not isinstance(parsed, dict) or not parsed:
-            continue
-        if set(parsed) <= known:
-            result[field] = parsed
-            repairs.append({"type": "parse_stringified_json", "field": field})
 
 
 def _repair_wrapped_args(
@@ -123,7 +89,6 @@ _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "file": ("file_path",),
     "filename": ("file_path",),
     "filepath": ("file_path",),
-    "command": ("cmd",),
 }
 
 

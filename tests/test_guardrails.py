@@ -253,7 +253,7 @@ def test_repaired_run_command_error_still_triggers_guardrail(tmp_path, monkeypat
         if call_count <= 2:
             tc = _make_tool_call(
                 "run_command",
-                json.dumps({"cmd": '["not_allowed_cmd_xyz"]'}),
+                json.dumps({"command": '["not_allowed_cmd_xyz"]'}),
                 call_id=f"call_{call_count}",
             )
             return _make_message(tool_calls=[tc]), "tool_calls"
@@ -305,7 +305,7 @@ def test_multiple_tool_interventions_are_combined_into_one_user_message(
             )
             tc2 = _make_tool_call(
                 "run_command",
-                json.dumps({"cmd": ["not_allowed_cmd_xyz"]}),
+                json.dumps({"command": ["not_allowed_cmd_xyz"]}),
                 call_id=f"run_{call_count}",
             )
             return _make_message(tool_calls=[tc1, tc2]), "tool_calls"
