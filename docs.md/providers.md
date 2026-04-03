@@ -162,8 +162,31 @@ swival --provider generic \
     "task"
 ```
 
+### llama.cpp
+
+[llama.cpp](https://github.com/ggml-org/llama.cpp) runs GGUF models locally through `llama-server`, which exposes an OpenAI-compatible API. Start the server first, then point Swival at it.
+
+Start `llama-server` with a model from HuggingFace:
+
 ```sh
-# llama.cpp server
+llama-server \
+    --reasoning auto \
+    --fit on \
+    -hf unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL \
+    --temp 1.0 --top-p 0.95 --top-k 64
+```
+
+`--reasoning auto` lets the model use chain-of-thought when it helps. `--fit on` automatically sizes the context window and batch parameters to fit in available memory. The `-hf` flag downloads the model directly from HuggingFace on first run and caches it locally.
+
+Once the server is listening (default port 8080), connect Swival:
+
+```sh
+swival --provider generic --base-url http://127.0.0.1:8080 "task"
+```
+
+Swival auto-detects the model name from the server, so `--model` is not required. If you want to set it explicitly:
+
+```sh
 swival --provider generic \
     --base-url http://127.0.0.1:8080 \
     --model default \

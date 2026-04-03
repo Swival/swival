@@ -91,9 +91,11 @@ provider = &quot;chatgpt&quot;
 model = &quot;gpt-5.4&quot;
 reasoning_effort = &quot;high&quot;
 </code></pre>
-<p>Then switch with <code>--profile</code>:</p>
+<p>Then switch with <code>--profile</code> at startup, or <code>/profile</code> mid-session:</p>
 <pre><code class="language-sh">swival --profile local &quot;quick task&quot;
 swival --profile gpt5 &quot;hard task&quot;
+</code></pre>
+<pre><code>swival&gt; /profile gpt5
 </code></pre>
 <p>The sections below document each provider's flags, authentication, and behavior in detail.</p>
 <h2 id="lm-studio">LM Studio</h2>
@@ -168,8 +170,21 @@ swival --provider generic \
     --model qwen3:32b \
     &quot;task&quot;
 </code></pre>
-<pre><code class="language-sh"># llama.cpp server
-swival --provider generic \
+<h3 id="llamacpp">llama.cpp</h3>
+<p><a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> runs GGUF models locally through <code>llama-server</code>, which exposes an OpenAI-compatible API. Start the server first, then point Swival at it.</p>
+<p>Start <code>llama-server</code> with a model from HuggingFace:</p>
+<pre><code class="language-sh">llama-server \
+    --reasoning auto \
+    --fit on \
+    -hf unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL \
+    --temp 1.0 --top-p 0.95 --top-k 64
+</code></pre>
+<p><code>--reasoning auto</code> lets the model use chain-of-thought when it helps. <code>--fit on</code> automatically sizes the context window and batch parameters to fit in available memory. The <code>-hf</code> flag downloads the model directly from HuggingFace on first run and caches it locally.</p>
+<p>Once the server is listening (default port 8080), connect Swival:</p>
+<pre><code class="language-sh">swival --provider generic --base-url http://127.0.0.1:8080 &quot;task&quot;
+</code></pre>
+<p>Swival auto-detects the model name from the server, so <code>--model</code> is not required. If you want to set it explicitly:</p>
+<pre><code class="language-sh">swival --provider generic \
     --base-url http://127.0.0.1:8080 \
     --model default \
     &quot;task&quot;

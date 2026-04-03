@@ -175,7 +175,7 @@ swival --profile fast-local &quot;write tests&quot;
 <p>List available profiles with <code>--list-profiles</code>:</p>
 <pre><code class="language-sh">swival --list-profiles
 </code></pre>
-<p>Each profile requires <code>provider</code>. The allowed keys are: <code>provider</code>, <code>model</code>, <code>api_key</code>, <code>base_url</code>, <code>aws_profile</code>, <code>max_output_tokens</code>, <code>max_context_tokens</code>, <code>temperature</code>, <code>top_p</code>, <code>seed</code>, <code>extra_body</code>, <code>reasoning_effort</code>, and <code>sanitize_thinking</code>. Keys outside this set — like <code>files</code>, <code>commands</code>, or <code>reviewer</code> — are rejected with an error listing the allowed keys. Profiles are for choosing a model stack, not for changing agent behavior.</p>
+<p>Each profile requires <code>provider</code>. The allowed keys are: <code>provider</code>, <code>model</code>, <code>api_key</code>, <code>base_url</code>, <code>aws_profile</code>, <code>max_output_tokens</code>, <code>max_context_tokens</code>, <code>temperature</code>, <code>top_p</code>, <code>seed</code>, <code>extra_body</code>, <code>reasoning_effort</code>, <code>sanitize_thinking</code>, and <code>description</code>. Keys outside this set — like <code>files</code>, <code>commands</code>, or <code>reviewer</code> — are rejected with an error listing the allowed keys. Profiles are for choosing a model stack, not for changing agent behavior. The <code>description</code> key is metadata — it appears in profile listings but is not passed to the provider.</p>
 <p>If <code>--profile</code> is combined with explicit flags like <code>--provider</code> or <code>--model</code>, the explicit flags win on a per-key basis, just like CLI flags override config everywhere else in Swival.</p>
 <pre><code class="language-sh">swival --profile gpt5 --reasoning-effort medium &quot;task&quot;
 </code></pre>
@@ -190,6 +190,12 @@ provider = &quot;huggingface&quot;
 swival --model &quot;Qwen/Qwen3-Coder&quot; &quot;task needing a different model&quot;
 </code></pre>
 <p>Any model supported by the inference endpoint works — no extra profile needed.</p>
+<p>You can also switch profiles mid-session from the REPL without restarting:</p>
+<pre><code>swival&gt; /profile              # list profiles, active one marked with →
+swival&gt; /profile fast-local   # switch to the &quot;fast-local&quot; profile
+swival&gt; /profile -            # revert to the profile active at session start
+</code></pre>
+<p>Switching only changes LLM settings — conversation history, tools, files, and all other state are preserved. New subagents spawned after the switch use the new profile; existing running subagents are unaffected.</p>
 <p>Profiles defined in global config and project config merge per-key for the same profile name. A project can refine a global profile by overriding just one or two keys without copying the whole table.</p>
 <pre><code class="language-toml"># In global config: defines the base profile
 [profiles.shared]
