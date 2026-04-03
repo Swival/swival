@@ -2409,6 +2409,9 @@ def _run_command(
             "(auto-corrected: command was passed as a string, converted to array)"
         )
 
+    if not isinstance(command, (str, list)):
+        return f'error: "command" must be an array of strings, got {type(command).__name__}'
+
     if isinstance(command, str):
         repaired_command = None
         try:
@@ -2542,6 +2545,8 @@ def _check_command_policy(
 
     if isinstance(command, list):
         argv = command
+    elif not isinstance(command, str):
+        return f'error: "command" must be an array of strings, got {type(command).__name__}'
     elif _SHELL_CHARS & set(command):
         argv = [_SHELL_BUCKET]
     else:

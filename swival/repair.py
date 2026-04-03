@@ -47,12 +47,41 @@ def repair_tool_args(
     repairs: list[dict[str, Any]] = []
     result = dict(args)
 
+    _repair_wrapped_args(result, properties, repairs)
     _repair_near_miss_fields(result, properties, repairs)
     _repair_types(result, properties, repairs)
     _repair_path_globs(result, properties, repairs)
     _strip_unknown(result, properties, repairs)
 
     return result, repairs
+
+
+def _repair_wrapped_args(
+    result: dict[str, Any],
+    properties: dict[str, Any],
+    repairs: list[dict[str, Any]],
+) -> None:
+    """Unwrap arguments the model accidentally nested inside themselves.
+
+    Some models produce ``{"command": {"command": "ls -la"}}`` instead of
+    ``{"command": "ls -la"}``.  When a field's value is a dict whose keys
+    are a subset of the top-level schema properties, hoist the inner values
+    up to the top level.
+    """
+    known = set(properties)
+    for field in list(result):
+        value = result[field]
+        if not isinstance(value, dict):
+            continue
+        # Only unwrap when every key in the inner dict is a known schema field
+        if not value or not (set(value) <= known):
+            continue
+        # Hoist the inner dict's entries to the top level
+        for k, v in value.items():
+            result[k] = v
+        if field not in value:
+            del result[field]
+        repairs.append({"type": "unwrap_nested", "field": field})
 
 
 _FIELD_ALIASES: dict[str, tuple[str, ...]] = {

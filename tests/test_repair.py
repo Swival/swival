@@ -224,6 +224,36 @@ class TestShapesLeftAlone:
         assert not any(r["type"].startswith("wrap") for r in repairs)
 
 
+class TestUnwrapNested:
+    def test_unwrap_command_dict(self):
+        """Model sends {"command": {"command": "ls"}} — unwrap to {"command": "ls"}."""
+        args = {"command": {"command": "fastly service list"}}
+        result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
+        assert result["command"] == "fastly service list"
+        assert any(r["type"] == "unwrap_nested" for r in repairs)
+
+    def test_unwrap_with_multiple_inner_keys(self):
+        """Inner dict has multiple schema-valid keys — hoist all."""
+        args = {"command": {"command": ["ls", "-la"], "timeout": 10}}
+        result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
+        assert result["command"] == ["ls", "-la"]
+        assert result["timeout"] == 10
+        assert any(r["type"] == "unwrap_nested" for r in repairs)
+
+    def test_no_unwrap_when_inner_keys_not_in_schema(self):
+        """Inner dict keys don't match schema — leave alone."""
+        args = {"command": {"cmd": "ls", "flags": "-la"}}
+        result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
+        assert result["command"] == {"cmd": "ls", "flags": "-la"}
+        assert not any(r["type"] == "unwrap_nested" for r in repairs)
+
+    def test_no_unwrap_for_empty_inner_dict(self):
+        args = {"command": {}}
+        result, repairs = repair_tool_args(args, SCHEMA_RUN_COMMAND)
+        assert result["command"] == {}
+        assert not any(r["type"] == "unwrap_nested" for r in repairs)
+
+
 class TestNearMissFields:
     def test_close_field_name(self):
         args = {"file_paht": "f.py"}
