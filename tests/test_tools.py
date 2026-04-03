@@ -469,10 +469,43 @@ class TestErrorHandling:
         with pytest.raises(KeyError, match="Available tools:.*run_command"):
             dispatch("no_such_tool", {}, str(tmp_path))
 
-    def test_dispatch_hallucinated_tool_suggests_alias(self, tmp_path):
-        """Hallucinated tool names get a 'did you mean' suggestion."""
+    def test_dispatch_hallucinated_shell_suggests_run_command_restricted(
+        self, tmp_path
+    ):
+        """In restricted mode, shell-ish aliases downgrade to run_command."""
         with pytest.raises(KeyError, match="Did you mean 'run_command'"):
-            dispatch("run_shell_command", {}, str(tmp_path))
+            dispatch("execute_shell_command", {}, str(tmp_path))
+
+    def test_dispatch_hallucinated_shell_suggests_run_shell_command_unrestricted(
+        self, tmp_path
+    ):
+        """In unrestricted mode, shell-ish aliases suggest run_shell_command."""
+        with pytest.raises(KeyError, match="Did you mean 'run_shell_command'"):
+            dispatch("bash", {}, str(tmp_path), commands_unrestricted=True)
+
+    def test_dispatch_unknown_tool_lists_run_shell_command_unrestricted(self, tmp_path):
+        """In unrestricted mode, available-tools list includes run_shell_command."""
+        with pytest.raises(KeyError, match="run_shell_command") as exc_info:
+            dispatch("no_such_tool_xyz", {}, str(tmp_path), commands_unrestricted=True)
+        assert "Available tools:" in str(exc_info.value)
+
+    def test_dispatch_unknown_tool_omits_run_shell_command_restricted(self, tmp_path):
+        """In restricted mode, available-tools list omits run_shell_command."""
+        with pytest.raises(KeyError) as exc_info:
+            dispatch("no_such_tool_xyz", {}, str(tmp_path))
+        assert "run_shell_command" not in str(exc_info.value)
+
+    def test_dispatch_run_shell_command_blocked_without_unrestricted(self, tmp_path):
+        """run_shell_command is a real tool now but needs commands_unrestricted."""
+        result = dispatch(
+            "run_shell_command",
+            {"command": "echo hello"},
+            str(tmp_path),
+            commands_unrestricted=False,
+            resolved_commands={},
+        )
+        assert result.startswith("error:")
+        assert "not available" in result
 
     def test_dispatch_hallucinated_search_suggests_grep(self, tmp_path):
         """Hallucinated 'search' suggests 'grep'."""

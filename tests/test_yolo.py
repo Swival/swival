@@ -1,7 +1,6 @@
 """Tests for --yolo (files_mode) mode."""
 
 import os
-import shutil
 import subprocess
 import sys
 import types
@@ -10,6 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from conftest import run_command as _run_command, which_or_skip as _which
 from swival.tools import (
     safe_resolve,
     _is_within_base,
@@ -19,7 +19,7 @@ from swival.tools import (
     _edit_file,
     _list_files,
     _grep,
-    _run_command,
+    _execute_command_call,
     _run_shell_command,
     _kill_process_tree,
     _split_absolute_glob,
@@ -368,13 +368,6 @@ class TestAbsolutePatternAddDir:
 # ---------------------------------------------------------------------------
 
 
-def _which(name: str) -> str:
-    path = shutil.which(name)
-    if path is None:
-        pytest.skip(f"{name!r} not found on PATH")
-    return str(Path(path).resolve())
-
-
 class TestRunCommandUnrestricted:
     def test_run_any_command(self, tmp_path):
         """Unrestricted mode runs commands not in resolved_commands."""
@@ -536,7 +529,7 @@ class TestAgentYolo:
         rc_tool = next(
             t for t in captured["tools"] if t["function"]["name"] == "run_command"
         )
-        assert "any command" in rc_tool["function"]["description"].lower()
+        assert "run_shell_command" in rc_tool["function"]["description"]
         assert "Allowed" not in rc_tool["function"]["description"]
 
     def test_yolo_system_prompt_text(self, tmp_path, monkeypatch):
@@ -569,8 +562,9 @@ class TestAgentYolo:
 
         tool_by_name = {t["function"]["name"]: t for t in captured["tools"]}
         assert "run_command" in tool_by_name
+        assert "run_shell_command" in tool_by_name
         desc = tool_by_name["run_command"]["function"]["description"]
-        assert "Run any command" in desc
+        assert "run_shell_command" in desc
         assert "Allowed commands" not in desc
         assert "whitelisted" not in desc
 
@@ -629,9 +623,11 @@ class TestShellStringExecution:
 
     @_unix_only
     def test_shell_string_nonzero_exit(self, tmp_path):
-        result = _run_command(
+        """Shell builtins like 'exit' require run_shell_command."""
+        result = _execute_command_call(
             "exit 42",
-            str(tmp_path),
+            prefer_shell=True,
+            base_dir=str(tmp_path),
             resolved_commands={},
             unrestricted=True,
         )
@@ -715,8 +711,7 @@ class TestShellStringCompat:
 
 
 class TestYoloSchema:
-    def test_yolo_schema_has_oneof(self, tmp_path, monkeypatch):
-        """With yolo=True, the tool schema uses oneOf for command."""
+    def _capture_tools(self, tmp_path, monkeypatch):
         from swival import agent
 
         captured = {}
@@ -741,48 +736,38 @@ class TestYoloSchema:
         )
 
         agent.main()
+        return captured["tools"]
 
-        rc_tool = next(
-            t for t in captured["tools"] if t["function"]["name"] == "run_command"
-        )
+    def test_yolo_exposes_both_command_tools(self, tmp_path, monkeypatch):
+        """Unrestricted mode exposes both run_command and run_shell_command."""
+        tools = self._capture_tools(tmp_path, monkeypatch)
+        tool_names = [t["function"]["name"] for t in tools]
+        assert "run_command" in tool_names
+        assert "run_shell_command" in tool_names
+
+    def test_run_command_schema_is_array_only(self, tmp_path, monkeypatch):
+        """run_command schema uses array-only command, no oneOf."""
+        tools = self._capture_tools(tmp_path, monkeypatch)
+        rc_tool = next(t for t in tools if t["function"]["name"] == "run_command")
         cmd_prop = rc_tool["function"]["parameters"]["properties"]["command"]
-        assert "oneOf" in cmd_prop
-        types = [s.get("type") for s in cmd_prop["oneOf"]]
-        assert "string" in types
-        assert "array" in types
+        assert "oneOf" not in cmd_prop
+        assert cmd_prop["type"] == "array"
 
-    def test_yolo_system_prompt_mentions_shell(self, tmp_path, monkeypatch):
-        """Yolo run_command tool schema mentions shell strings."""
-        from swival import agent
+    def test_run_shell_command_schema_is_string_only(self, tmp_path, monkeypatch):
+        """run_shell_command schema uses string-only command."""
+        tools = self._capture_tools(tmp_path, monkeypatch)
+        sc_tool = next(t for t in tools if t["function"]["name"] == "run_shell_command")
+        cmd_prop = sc_tool["function"]["parameters"]["properties"]["command"]
+        assert cmd_prop["type"] == "string"
 
-        captured = {}
-
-        def fake_call_llm(*args, **kwargs):
-            captured["messages"] = args[2]
-            captured["tools"] = args[7]
-            return _make_message(content="Done."), "stop"
-
-        monkeypatch.setattr(agent, "call_llm", fake_call_llm)
-        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                "agent",
-                "hello",
-                "--base-dir",
-                str(tmp_path),
-                "--yolo",
-                "--no-instructions",
-            ],
-        )
-
-        agent.main()
-
-        tool_by_name = {t["function"]["name"]: t for t in captured["tools"]}
-        cmd_props = tool_by_name["run_command"]["function"]["parameters"]["properties"]
-        cmd_desc = cmd_props["command"]["description"].lower()
-        assert "shell" in cmd_desc or "pipes" in cmd_desc
+    def test_run_command_description_mentions_run_shell_command(
+        self, tmp_path, monkeypatch
+    ):
+        """run_command description directs users to run_shell_command for shell syntax."""
+        tools = self._capture_tools(tmp_path, monkeypatch)
+        rc_tool = next(t for t in tools if t["function"]["name"] == "run_command")
+        desc = rc_tool["function"]["description"]
+        assert "run_shell_command" in desc
 
 
 # ---------------------------------------------------------------------------
@@ -998,8 +983,8 @@ class TestAutoSplitStringCommand:
         assert result.startswith('error: "command" must be a JSON array')
 
     @_unix_only
-    def test_yolo_string_still_uses_shell(self, tmp_path):
-        """In yolo mode, plain strings still go through shell execution."""
+    def test_yolo_shell_string_has_repair_note(self, tmp_path):
+        """In yolo mode, shell strings via run_command get a repair note."""
         result = _run_command(
             "echo hello && echo world",
             str(tmp_path),
@@ -1008,7 +993,8 @@ class TestAutoSplitStringCommand:
         )
         assert "hello" in result
         assert "world" in result
-        assert "(auto-corrected:" not in result
+        assert "(auto-corrected:" in result
+        assert "run_shell_command semantics" in result
 
 
 class TestKillProcessTreeWindows:
@@ -1055,3 +1041,75 @@ class TestKillProcessTreeWindows:
         assert not taskkill_called
         assert len(killpg_called) == 1
         assert killpg_called[0][0] == 99999
+
+
+# ---------------------------------------------------------------------------
+# run_shell_command dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestRunShellCommandDispatch:
+    @_unix_only
+    def test_shell_command_string_executes(self, tmp_path):
+        result = dispatch(
+            "run_shell_command",
+            {"command": "echo hello && echo world"},
+            str(tmp_path),
+            commands_unrestricted=True,
+            resolved_commands={},
+        )
+        assert "hello" in result
+        assert "world" in result
+        assert not result.startswith("error:")
+
+    @_unix_only
+    def test_shell_command_pipe(self, tmp_path):
+        result = dispatch(
+            "run_shell_command",
+            {"command": "echo abc | tr a-z A-Z"},
+            str(tmp_path),
+            commands_unrestricted=True,
+            resolved_commands={},
+        )
+        assert "ABC" in result
+
+    @_unix_only
+    def test_shell_command_array_repairs(self, tmp_path):
+        """run_shell_command recovers from an array by using argv path."""
+        result = dispatch(
+            "run_shell_command",
+            {"command": ["echo", "repaired"]},
+            str(tmp_path),
+            commands_unrestricted=True,
+            resolved_commands={},
+        )
+        assert "repaired" in result
+        assert "(auto-corrected:" in result
+        assert "run_command semantics" in result
+
+    @_unix_only
+    def test_shell_command_json_array_string_repairs(self, tmp_path):
+        """run_shell_command recovers from a JSON-stringified array."""
+        result = dispatch(
+            "run_shell_command",
+            {"command": '["echo", "json-fix"]'},
+            str(tmp_path),
+            commands_unrestricted=True,
+            resolved_commands={},
+        )
+        assert "json-fix" in result
+        assert "(auto-corrected:" in result
+        assert "JSON-stringified argv array" in result
+
+    def test_shell_command_blocked_in_whitelist_mode(self, tmp_path):
+        """run_shell_command returns explicit error in non-unrestricted mode."""
+        result = dispatch(
+            "run_shell_command",
+            {"command": "echo hello"},
+            str(tmp_path),
+            commands_unrestricted=False,
+            resolved_commands={"echo": "/usr/bin/echo"},
+        )
+        assert result.startswith("error:")
+        assert "not available" in result
+        assert "run_command" in result

@@ -97,7 +97,7 @@ print(answer)
     temperature: float | None = None,
     top_p: float = 1.0,
     seed: int | None = None,
-    commands: list[str] | str | None = &quot;all&quot;,  # &quot;all&quot;, &quot;none&quot;, &quot;ask&quot;, or list
+    commands: list[str] | str | None = &quot;all&quot;,  # &quot;all&quot;, &quot;none&quot;, &quot;ask&quot;, or list (whitelist = run_command only)
     files: str = &quot;some&quot;,
     yolo: bool = False,
     verbose: bool = False,
@@ -192,7 +192,7 @@ print(answer)
 </tr>
 <tr>
 <td><code>commands</code></td>
-<td>Command execution policy: <code>"all"</code> (unrestricted, the default), <code>"none"</code> (disabled), or a list of whitelisted command names.</td>
+<td>Command execution policy: <code>"all"</code> (unrestricted, the default), <code>"none"</code> (disabled), <code>"ask"</code> (interactive approval), or a list of whitelisted command names. In unrestricted modes (<code>"all"</code>, <code>"ask"</code>), both <code>run_command</code> and <code>run_shell_command</code> are available. A whitelist exposes only <code>run_command</code>.</td>
 </tr>
 <tr>
 <td><code>yolo</code></td>

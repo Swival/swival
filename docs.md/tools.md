@@ -1,6 +1,6 @@
 # Tools
 
-Swival gives the model a fixed set of tools at runtime. Most tools are always available. `run_command` is included by default (commands default to `"all"`); pass `--commands none` to remove it or `--commands ask` for interactive approval. `use_skill` appears only when skills are discovered, MCP tools appear when external MCP servers are configured, and A2A tools appear when remote A2A agents are configured.
+Swival gives the model a fixed set of tools at runtime. Most tools are always available. Command execution tools are included by default (commands default to `"all"`): `run_command` takes an argv array and is available in all command modes, while `run_shell_command` takes a shell string and is only available in unrestricted modes (`--commands all`, `--commands ask`, `--yolo`). Pass `--commands none` to remove both, or `--commands ask` for interactive approval. `use_skill` appears only when skills are discovered, MCP tools appear when external MCP servers are configured, and A2A tools appear when remote A2A agents are configured.
 
 ## `read_file`
 
@@ -94,20 +94,26 @@ SSRF protections are built in. Swival resolves every URL in the redirect chain a
 
 ## `run_command`
 
-`run_command` is enabled by default with unrestricted access. You can restrict it with `--commands`.
+`run_command` executes a command given as an array of strings and returns its output. It is available in all command modes except `--commands none`.
 
 ```sh
 swival --commands ls,git,python3 "Run the tests"
 swival --commands ask "Run the tests"
 ```
 
-`--commands` accepts `"all"` (unrestricted, the default), `"none"` (disabled), `"ask"` (interactive approval per command bucket), or a comma-separated whitelist like `ls,git,python3`. In whitelist mode, the command must be passed as an array of arguments, not as a shell string. Swival resolves each whitelisted command to an absolute path at startup and rejects commands that resolve inside the base directory, so the model cannot edit and execute workspace scripts in one loop.
+`--commands` accepts `"all"` (unrestricted, the default), `"none"` (disabled), `"ask"` (interactive approval per command bucket), or a comma-separated whitelist like `ls,git,python3`. In whitelist mode, Swival resolves each whitelisted command to an absolute path at startup and rejects commands that resolve inside the base directory, so the model cannot edit and execute workspace scripts in one loop.
 
-In ask mode, Swival prompts before each new command bucket. Shell strings with metacharacters (`&&`, `|`, `;`, etc.) are classified under a `<shell>` bucket that is always high-risk. Interpreter inline-code flags (`bash -c`, `python3 -c`, `node -e`, `bun -e`) are classified as separate high-risk buckets distinct from the plain interpreter name, so approving `bash` to run scripts does not also approve `bash -c` for arbitrary code. See [Safety and Sandboxing](safety-and-sandboxing.md#ask-mode) for details.
+In ask mode, Swival prompts before each new command bucket. Interpreter inline-code flags (`bash -c`, `python3 -c`, `node -e`, `bun -e`) are classified as separate high-risk buckets distinct from the plain interpreter name, so approving `bash` to run scripts does not also approve `bash -c` for arbitrary code. See [Safety and Sandboxing](safety-and-sandboxing.md#ask-mode) for details.
 
 Timeout defaults to 30 seconds and is clamped to a maximum of 120 seconds. Inline command output is capped at 10 KB. Larger output is written to `.swival/cmd_output_*.txt` and hard-capped at 1 MB before writing to disk. Those files are cleaned up automatically after roughly ten minutes.
 
-When commands are set to `"all"` (the default), command execution is unrestricted and Swival also accepts shell command strings through `/bin/sh -c` on Unix or `cmd.exe /c` on Windows.
+## `run_shell_command`
+
+`run_shell_command` executes a shell command string and returns its output. It supports pipes, redirects, `&&` chains, and other shell syntax. Commands run through `/bin/sh -c` on Unix or `cmd.exe /c` on Windows.
+
+`run_shell_command` is only available in unrestricted modes (`--commands all`, `--commands ask`, `--yolo`). It does not appear in whitelist mode, since shell strings bypass the whitelist entirely.
+
+In ask mode, shell strings with metacharacters (`&&`, `|`, `;`, etc.) are classified under a `<shell>` bucket that is always high-risk.
 
 ## `use_skill`
 

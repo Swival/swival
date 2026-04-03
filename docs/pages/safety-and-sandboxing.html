@@ -117,10 +117,11 @@ swival --commands ask &quot;task&quot;
 swival --commands none &quot;task&quot;
 </code></pre>
 <p>At startup, each basename is resolved to an absolute path using <code>which</code>. If a command cannot be found, Swival exits with an error. If a command resolves inside your base directory, Swival rejects it so the agent cannot modify and execute workspace binaries in one session.</p>
-<p>At runtime in whitelist mode, commands must be passed as argument arrays, not shell strings. This removes shell interpolation and injection risk from ordinary command calls.</p>
+<p>At runtime in whitelist mode, only <code>run_command</code> is available and commands must be passed as argument arrays. This removes shell interpolation and injection risk from ordinary command calls. <code>run_shell_command</code> is not exposed in whitelist mode since shell strings bypass the whitelist entirely.</p>
+<p>In unrestricted modes (<code>--commands all</code>, <code>--commands ask</code>, <code>--yolo</code>), both <code>run_command</code> and <code>run_shell_command</code> are available. Shell strings go through <code>run_shell_command</code> and map to the same <code>&lt;shell&gt;</code> approval bucket used by ask mode.</p>
 <h3 id="ask-mode">Ask Mode</h3>
-<p>In ask mode (<code>--commands ask</code>), Swival prompts you before running each new command category. Commands are grouped into buckets by their base name (e.g. <code>ls</code>, <code>git push</code>, <code>python3 -m pytest</code>). Once you approve a bucket, subsequent commands in the same bucket run without asking again.</p>
-<p>High-risk buckets (<code>rm</code>, <code>git push</code>, <code>docker</code>, <code>curl</code>, shell strings, interpreter inline-code like <code>bash -c</code> or <code>python3 -c</code>) default to deny — you must explicitly type <code>y</code> to allow them. Non-high-risk buckets default to allow on Enter.</p>
+<p>In ask mode (<code>--commands ask</code>), Swival prompts you before running each new command category. Commands are grouped into buckets by their base name (e.g. <code>ls</code>, <code>git push</code>, <code>python3 -m pytest</code>). Shell strings sent through <code>run_shell_command</code> are classified under a <code>&lt;shell&gt;</code> bucket. Once you approve a bucket, subsequent commands in the same bucket run without asking again.</p>
+<p>High-risk buckets (<code>rm</code>, <code>git push</code>, <code>docker</code>, <code>curl</code>, <code>&lt;shell&gt;</code>, interpreter inline-code like <code>bash -c</code> or <code>python3 -c</code>) default to deny — you must explicitly type <code>y</code> to allow them. Non-high-risk buckets default to allow on Enter.</p>
 <p>Approval options:</p>
 <ul>
 <li><code>Enter</code> — allow (non-high-risk) or deny (high-risk)</li>

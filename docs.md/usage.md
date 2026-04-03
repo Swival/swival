@@ -33,7 +33,7 @@ swival --commands ls,git,python3 \
     "Create a tool that returns a random number between 0 and 42"
 ```
 
-`--commands` accepts `"all"` (unrestricted, the default), `"none"` (disabled), `"ask"` (interactive per-bucket approval), or a comma-separated whitelist. The whitelist changes what the agent can do. If `python3` is available, it can use Python for implementation and verification. Pass `--commands none` to remove `run_command` entirely. Pass `--commands ask` to approve each command category interactively.
+`--commands` accepts `"all"` (unrestricted, the default), `"none"` (disabled), `"ask"` (interactive per-bucket approval), or a comma-separated whitelist. In unrestricted modes (`all`, `ask`, `--yolo`), Swival exposes both `run_command` (array argv) and `run_shell_command` (shell string with pipes, redirects, etc.). In whitelist mode, only `run_command` is available. Pass `--commands none` to remove both tools entirely. Pass `--commands ask` to approve each command category interactively.
 
 A successful run exits with code `0`. A runtime or configuration failure exits with code `1`. A run that reaches the turn limit before finishing exits with code `2`. A run interrupted with Ctrl+C exits with code `130`. A run terminated by SIGTERM exits with code `143`.
 
@@ -149,7 +149,7 @@ Useful for long-running sessions.
 
 `--files` controls filesystem tool access. Accepts `"some"` (the default, workspace only), `"all"` (unrestricted), or `"none"` (`.swival/` directory only). With `--files none`, the agent can still run commands and fetch URLs but cannot read or write project files.
 
-`--commands` controls command execution. Accepts `"all"` (unrestricted, the default), `"none"` (disabled), `"ask"` (interactive approval per command bucket), or a comma-separated whitelist.
+`--commands` controls command execution. Accepts `"all"` (unrestricted, the default), `"none"` (disabled), `"ask"` (interactive approval per command bucket), or a comma-separated whitelist. In unrestricted modes, both `run_command` and `run_shell_command` are exposed. In whitelist mode, only `run_command` is available.
 
 `--add-dir` grants read and write access to additional directories and can be repeated.
 

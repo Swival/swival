@@ -93,13 +93,15 @@ swival --commands none "task"
 
 At startup, each basename is resolved to an absolute path using `which`. If a command cannot be found, Swival exits with an error. If a command resolves inside your base directory, Swival rejects it so the agent cannot modify and execute workspace binaries in one session.
 
-At runtime in whitelist mode, commands must be passed as argument arrays, not shell strings. This removes shell interpolation and injection risk from ordinary command calls.
+At runtime in whitelist mode, only `run_command` is available and commands must be passed as argument arrays. This removes shell interpolation and injection risk from ordinary command calls. `run_shell_command` is not exposed in whitelist mode since shell strings bypass the whitelist entirely.
+
+In unrestricted modes (`--commands all`, `--commands ask`, `--yolo`), both `run_command` and `run_shell_command` are available. Shell strings go through `run_shell_command` and map to the same `<shell>` approval bucket used by ask mode.
 
 ### Ask Mode
 
-In ask mode (`--commands ask`), Swival prompts you before running each new command category. Commands are grouped into buckets by their base name (e.g. `ls`, `git push`, `python3 -m pytest`). Once you approve a bucket, subsequent commands in the same bucket run without asking again.
+In ask mode (`--commands ask`), Swival prompts you before running each new command category. Commands are grouped into buckets by their base name (e.g. `ls`, `git push`, `python3 -m pytest`). Shell strings sent through `run_shell_command` are classified under a `<shell>` bucket. Once you approve a bucket, subsequent commands in the same bucket run without asking again.
 
-High-risk buckets (`rm`, `git push`, `docker`, `curl`, shell strings, interpreter inline-code like `bash -c` or `python3 -c`) default to deny — you must explicitly type `y` to allow them. Non-high-risk buckets default to allow on Enter.
+High-risk buckets (`rm`, `git push`, `docker`, `curl`, `<shell>`, interpreter inline-code like `bash -c` or `python3 -c`) default to deny — you must explicitly type `y` to allow them. Non-high-risk buckets default to allow on Enter.
 
 Approval options:
 

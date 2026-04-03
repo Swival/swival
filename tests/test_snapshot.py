@@ -731,7 +731,13 @@ class TestReadOnlyAllowlist:
         assert expected == READ_ONLY_TOOLS
 
     def test_write_tools_not_in_allowlist(self):
-        for tool in ("write_file", "edit_file", "delete_file", "run_command"):
+        for tool in (
+            "write_file",
+            "edit_file",
+            "delete_file",
+            "run_command",
+            "run_shell_command",
+        ):
             assert tool not in READ_ONLY_TOOLS
 
 

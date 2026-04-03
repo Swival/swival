@@ -12,21 +12,14 @@ from pathlib import Path
 
 import pytest
 
-from swival.tools import _run_command, _read_file, dispatch
+from conftest import run_command as _run_command, which_or_skip as _which
+from swival.tools import _read_file, dispatch
 
 
 @pytest.fixture
 def tmp_base(tmp_path):
     """Provide a temporary base directory."""
     return str(tmp_path)
-
-
-def _which(name: str) -> str:
-    """Resolve a command name to its absolute path, skip test if not found."""
-    path = shutil.which(name)
-    if path is None:
-        pytest.skip(f"{name!r} not found on PATH")
-    return str(Path(path).resolve())
 
 
 # ---------- Test 1: Allowed command runs ----------
@@ -109,9 +102,8 @@ def test_auto_repair_json_string_runs(tmp_base, unrestricted):
         unrestricted=unrestricted,
     )
     assert "json-repaired" in result
-    assert result.rstrip().endswith(
-        "(auto-corrected: command was passed as a string, converted to array)"
-    )
+    assert "(auto-corrected:" in result
+    assert "JSON-stringified argv array" in result
 
 
 # ---------- Test 5d: Auto-repair via shlex only in unrestricted mode ----------
@@ -119,6 +111,7 @@ def test_auto_repair_json_string_runs(tmp_base, unrestricted):
 
 @pytest.mark.skipif(sys.platform == "win32", reason="requires /bin/sh")
 def test_plain_string_runs_as_shell_in_yolo(tmp_base):
+    """Plain string in unrestricted mode executes via shell with repair note."""
     result = _run_command(
         "echo yolo-repaired",
         tmp_base,
@@ -127,7 +120,8 @@ def test_plain_string_runs_as_shell_in_yolo(tmp_base):
     )
     assert "yolo-repaired" in result
     assert not result.startswith("error:")
-    assert "(auto-corrected:" not in result
+    assert "(auto-corrected:" in result
+    assert "run_shell_command semantics" in result
 
 
 def test_auto_repair_plain_string_sandboxed_auto_splits(tmp_base):
@@ -155,7 +149,7 @@ def test_auto_repair_annotation_appended_on_error(tmp_base):
     assert result.startswith("error:")
     assert "not allowed" in result
     assert result.rstrip().endswith(
-        "(auto-corrected: command was passed as a string, converted to array)"
+        "(auto-corrected: run_command received a JSON-stringified argv array; converted to argv array)"
     )
 
 
@@ -170,7 +164,7 @@ def test_auto_repair_annotation_appended_on_timeout(tmp_base):
     )
     assert result.startswith("error: command timed out after 1s")
     assert result.rstrip().endswith(
-        "(auto-corrected: command was passed as a string, converted to array)"
+        "(auto-corrected: run_command received a JSON-stringified argv array; converted to argv array)"
     )
 
 
@@ -184,7 +178,7 @@ def test_repaired_error_keeps_error_prefix_for_loop_detection(tmp_base):
     )
     assert result.startswith("error:")
     assert result.rstrip().endswith(
-        "(auto-corrected: command was passed as a string, converted to array)"
+        "(auto-corrected: run_command received a JSON-stringified argv array; converted to argv array)"
     )
 
 

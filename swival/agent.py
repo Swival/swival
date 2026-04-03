@@ -64,6 +64,7 @@ from .mcp_client import McpShutdownError
 from .tools import (
     TOOLS,
     RUN_COMMAND_TOOL,
+    RUN_SHELL_COMMAND_TOOL,  # noqa: F401 — used in build_tools()
     USE_SKILL_TOOL,
     _memory_path,
     dispatch,
@@ -1057,15 +1058,14 @@ def compact_tool_result(name: str, args: dict | None, content: str) -> str:
         count = content.count("\n")
         return f"[list_files: '{pattern}' in {path}, ~{count} entries — compacted]"
 
-    if name == "run_command":
-        cmd = args.get("command", ["?"])
+    if name in ("run_command", "run_shell_command"):
+        cmd = args.get("command", "?")
         if isinstance(cmd, list):
             cmd = " ".join(cmd)
         head = content[:200]
         tail = content[-200:]
         return (
-            f"[run_command: `{cmd}` — first 200 chars:\n{head}\n"
-            f"... last 200 chars:\n{tail}]"
+            f"[{name}: `{cmd}` — first 200 chars:\n{head}\n... last 200 chars:\n{tail}]"
         )
 
     if name == "fetch_url":
@@ -4610,22 +4610,13 @@ def build_tools(
         tools.append(skill_tool)
     if commands_unrestricted:
         tool = copy.deepcopy(RUN_COMMAND_TOOL)
-        tool["function"]["description"] = "Run any command and return its output."
-        tool["function"]["parameters"]["properties"]["command"] = {
-            "oneOf": [
-                {
-                    "type": "string",
-                    "description": "Shell command string (executed via sh -c). Supports pipes, redirects, &&, etc.",
-                },
-                {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Command as array of strings. Each argument is a separate element.",
-                },
-            ],
-            "description": 'Command to run. Can be a shell string (e.g. "ls -la | head") or an array of strings (e.g. ["ls", "-la"]).',
-        }
+        tool["function"]["description"] = (
+            "Run a command as an array of strings and return its output. "
+            "Use this for direct executable calls without shell syntax. "
+            "For pipes, redirects, or &&, use run_shell_command."
+        )
         tools.append(tool)
+        tools.append(copy.deepcopy(RUN_SHELL_COMMAND_TOOL))
     elif resolved_commands:
         tool = copy.deepcopy(RUN_COMMAND_TOOL)
         tool["function"]["description"] = (

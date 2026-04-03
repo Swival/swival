@@ -255,6 +255,22 @@ class TestCompactToolResult:
         result = compact_tool_result("run_command", {"command": "ls -la"}, content)
         assert "`ls -la`" in result
 
+    def test_run_shell_command(self):
+        content = "output " * 200  # >1000 chars
+        result = compact_tool_result(
+            "run_shell_command", {"command": "ls -la | head"}, content
+        )
+        assert "[run_shell_command: `ls -la | head`" in result
+        assert "first 200 chars" in result
+        assert "last 200 chars" in result
+
+    def test_run_shell_command_array_fallback(self):
+        content = "x" * 2000
+        result = compact_tool_result(
+            "run_shell_command", {"command": ["echo", "hi"]}, content
+        )
+        assert "[run_shell_command: `echo hi`" in result
+
     def test_fetch_url(self):
         content = "page content " * 200
         result = compact_tool_result(

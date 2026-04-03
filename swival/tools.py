@@ -11,7 +11,9 @@ import subprocess
 import sys
 import threading
 import uuid
+from dataclasses import dataclass
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
+from typing import Literal
 
 from .a2a_types import A2A_META_PREFIX
 
@@ -417,13 +419,12 @@ TOOLS = [
 ]
 
 _TOOL_ALIASES = {
-    "run_shell_command": "run_command",
     "execute_command": "run_command",
-    "execute_shell_command": "run_command",
-    "shell_command": "run_command",
-    "shell": "run_command",
-    "bash": "run_command",
     "terminal": "run_command",
+    "execute_shell_command": "run_shell_command",
+    "shell_command": "run_shell_command",
+    "shell": "run_shell_command",
+    "bash": "run_shell_command",
     "search": "grep",
     "search_files": "grep",
     "find_files": "list_files",
@@ -645,6 +646,35 @@ RUN_COMMAND_TOOL = {
     },
 }
 
+RUN_SHELL_COMMAND_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "run_shell_command",
+        "description": (
+            "Run a shell command string and return its output. "
+            "Supports pipes, redirects, &&, and other shell syntax."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": (
+                        "Shell command string. Supports pipes, redirects, "
+                        "&& chains, and other shell syntax."
+                    ),
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Timeout in seconds (1-120). Defaults to 30.",
+                    "default": 30,
+                },
+            },
+            "required": ["command"],
+        },
+    },
+}
+
 _TOOL_NAMES = [t["function"]["name"] for t in TOOLS] + [
     USE_SKILL_TOOL["function"]["name"],
     RUN_COMMAND_TOOL["function"]["name"],
@@ -664,6 +694,9 @@ def _build_schema_index() -> None:
     _TOOL_SCHEMA_INDEX[RUN_COMMAND_TOOL["function"]["name"]] = RUN_COMMAND_TOOL[
         "function"
     ].get("parameters", {})
+    _TOOL_SCHEMA_INDEX[RUN_SHELL_COMMAND_TOOL["function"]["name"]] = (
+        RUN_SHELL_COMMAND_TOOL["function"].get("parameters", {})
+    )
 
 
 _build_schema_index()
@@ -2386,120 +2419,144 @@ def _run_shell_command(
     return _capture_process(proc, timeout, base_dir, scratch_dir=scratch_dir)
 
 
-def _run_command(
+ExecutionMode = Literal["argv", "shell"]
+
+
+@dataclass(frozen=True)
+class NormalizedCommandCall:
+    mode: ExecutionMode
+    command: list[str] | str
+    repair_note: str | None = None
+
+
+def _normalize_command_call(
     command: list[str] | str,
+    *,
+    prefer_shell: bool,
+    unrestricted: bool,
+) -> tuple[NormalizedCommandCall | None, str | None]:
+    """Canonicalize a command call into (normalized, None) or (None, error)."""
+    tool_name = "run_shell_command" if prefer_shell else "run_command"
+
+    # Rule 1: list → argv
+    if isinstance(command, list):
+        if prefer_shell:
+            return NormalizedCommandCall(
+                mode="argv",
+                command=command,
+                repair_note=(
+                    "run_shell_command received an argv array; "
+                    "executed with run_command semantics"
+                ),
+            ), None
+        return NormalizedCommandCall(mode="argv", command=command), None
+
+    # command is a string from here on
+    # Rule 2: JSON-stringified array → argv
+    try:
+        parsed = json.loads(command)
+        if isinstance(parsed, list) and all(isinstance(x, str) for x in parsed):
+            return NormalizedCommandCall(
+                mode="argv",
+                command=parsed,
+                repair_note=(
+                    f"{tool_name} received a JSON-stringified argv array; "
+                    "converted to argv array"
+                ),
+            ), None
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # Rule 3: plain string + prefer_shell → shell (normal path)
+    if prefer_shell:
+        return NormalizedCommandCall(mode="shell", command=command), None
+
+    # Rule 4: plain string + prefer_shell=False
+    if unrestricted:
+        # All strings escalate to shell in unrestricted mode, matching the
+        # old _run_command behavior.  This handles shell builtins (exit, cd,
+        # type) and commands that only work under a shell even when the
+        # string contains no obvious metacharacters.
+        return NormalizedCommandCall(
+            mode="shell",
+            command=command,
+            repair_note=(
+                "run_command received a shell string; "
+                "executed with run_shell_command semantics"
+            ),
+        ), None
+
+    # Restricted mode: conservative split for strings without shell chars
+    has_shell_chars = bool(_SHELL_CHARS & set(command))
+
+    if not has_shell_chars:
+        return NormalizedCommandCall(
+            mode="argv",
+            command=command.split(),
+            repair_note="run_command received a string; converted to argv array",
+        ), None
+
+    # has_shell_chars + restricted → error
+    return None, (
+        'error: "command" must be a JSON array of strings, '
+        "not a single string.\n"
+        'Wrong: "command": "grep -n pattern file.py"\n'
+        'Right: "command": ["grep", "-n", "pattern", "file.py"]\n'
+        "Each argument must be a separate element in the array.\n"
+        "Shell syntax (&&, |, >, 2>&1, etc.) is not supported — "
+        "run one command at a time."
+    )
+
+
+def _run_argv_command(
+    command: list[str],
     base_dir: str,
     resolved_commands: dict[str, str],
     timeout: int = 30,
     unrestricted: bool = False,
     scratch_dir: str | None = None,
 ) -> str:
-    """Execute a command and return its output.
-
-    When unrestricted is False, only whitelisted commands are allowed.
-    When unrestricted is True, any command can be run.
-    """
-    was_repaired = False
-
-    def _finalize(result: str, repaired: bool) -> str:
-        if not repaired:
-            return result
-        return (
-            f"{result}\n"
-            "(auto-corrected: command was passed as a string, converted to array)"
-        )
-
-    if isinstance(command, str):
-        repaired_command = None
-        try:
-            parsed = json.loads(command)
-            if isinstance(parsed, list) and all(isinstance(x, str) for x in parsed):
-                repaired_command = parsed
-        except (json.JSONDecodeError, TypeError):
-            pass
-
-        if repaired_command is None:
-            if unrestricted:
-                return _run_shell_command(
-                    command, base_dir, timeout, scratch_dir=scratch_dir
-                )
-            # No shell metacharacters — safe to split on whitespace.
-            if not (_SHELL_CHARS & set(command)):
-                repaired_command = command.split()
-            else:
-                return (
-                    'error: "command" must be a JSON array of strings, '
-                    "not a single string.\n"
-                    'Wrong: "command": "grep -n pattern file.py"\n'
-                    'Right: "command": ["grep", "-n", "pattern", "file.py"]\n'
-                    "Each argument must be a separate element in the array.\n"
-                    "Shell syntax (&&, |, >, 2>&1, etc.) is not supported — "
-                    "run one command at a time."
-                )
-
-        if repaired_command is not None:
-            command = repaired_command
-            was_repaired = True
-
+    """Execute an argv-form command and return its output."""
     if not command:
         return "error: command list is empty"
 
     if command[0].lower() == "cd":
         target = command[1] if len(command) > 1 else ""
         if _is_root_path(target):
-            return _finalize(
-                _CD_ROOT_ERROR.format(base_dir=base_dir),
-                was_repaired,
-            )
+            return _CD_ROOT_ERROR.format(base_dir=base_dir)
 
     base_path = Path(base_dir)
     if not base_path.exists():
-        return _finalize(
-            f"error: base directory does not exist: {base_dir}", was_repaired
-        )
+        return f"error: base directory does not exist: {base_dir}"
     if not base_path.is_dir():
-        return _finalize(
-            f"error: base directory is not a directory: {base_dir}", was_repaired
-        )
+        return f"error: base directory is not a directory: {base_dir}"
 
     cmd_name = command[0]
 
     if unrestricted:
-        # In unrestricted mode, resolve the command without whitelist checks
         if "/" in cmd_name or "\\" in cmd_name:
-            # Absolute or relative path — resolve against base_dir
             candidate = Path(cmd_name)
             if not candidate.is_absolute():
                 candidate = Path(base_dir) / candidate
             resolved_path = str(candidate.resolve())
         else:
-            # Bare name — look up on PATH
             found = shutil.which(cmd_name)
             if found is None:
-                return _finalize(
-                    f"error: command not found on PATH: {cmd_name!r}", was_repaired
-                )
+                return f"error: command not found on PATH: {cmd_name!r}"
             resolved_path = str(Path(found).resolve())
     else:
-        # Reject paths in command[0]
         if "/" in cmd_name or "\\" in cmd_name:
             allowed = ", ".join(sorted(resolved_commands)) or "(none)"
-            return _finalize(
+            return (
                 f"error: command must be a bare name, not a path: {cmd_name!r}. "
-                f"Allowed commands: {allowed}",
-                was_repaired,
+                f"Allowed commands: {allowed}"
             )
 
-        # Look up pinned path
         resolved_path = resolved_commands.get(cmd_name)
         if resolved_path is None:
             allowed = ", ".join(sorted(resolved_commands)) or "(none)"
-            return _finalize(
-                f"error: command {cmd_name!r} is not allowed. Allowed commands: {allowed}",
-                was_repaired,
-            )
+            return f"error: command {cmd_name!r} is not allowed. Allowed commands: {allowed}"
 
-    # Clamp timeout
     timeout = max(1, min(timeout, MAX_TIMEOUT))
 
     try:
@@ -2514,19 +2571,52 @@ def _run_command(
 
         proc = subprocess.Popen([resolved_path] + command[1:], **popen_kwargs)
     except FileNotFoundError:
-        return _finalize(
-            f"error: command executable not found: {resolved_path}", was_repaired
-        )
+        return f"error: command executable not found: {resolved_path}"
     except PermissionError:
-        return _finalize(
-            f"error: permission denied executing: {resolved_path}", was_repaired
-        )
+        return f"error: permission denied executing: {resolved_path}"
     except OSError as e:
-        return _finalize(f"error: failed to start command: {e}", was_repaired)
+        return f"error: failed to start command: {e}"
 
-    return _finalize(
-        _capture_process(proc, timeout, base_dir, scratch_dir=scratch_dir), was_repaired
+    return _capture_process(proc, timeout, base_dir, scratch_dir=scratch_dir)
+
+
+def _execute_command_call(
+    command: list[str] | str,
+    *,
+    prefer_shell: bool,
+    base_dir: str,
+    resolved_commands: dict[str, str],
+    timeout: int = 30,
+    unrestricted: bool = False,
+    scratch_dir: str | None = None,
+) -> str:
+    """Normalize a command call and dispatch to the appropriate executor."""
+    normalized, error = _normalize_command_call(
+        command,
+        prefer_shell=prefer_shell,
+        unrestricted=unrestricted,
     )
+    if error is not None:
+        return error
+
+    if normalized.mode == "shell":
+        result = _run_shell_command(
+            normalized.command, base_dir, timeout, scratch_dir=scratch_dir
+        )
+    else:
+        result = _run_argv_command(
+            normalized.command,
+            base_dir,
+            resolved_commands,
+            timeout=timeout,
+            unrestricted=unrestricted,
+            scratch_dir=scratch_dir,
+        )
+
+    if normalized.repair_note:
+        result = f"{result}\n(auto-corrected: {normalized.repair_note})"
+
+    return result
 
 
 def _check_command_policy(
@@ -2803,7 +2893,15 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
         catalog = kwargs.get("skills_catalog", {})
         read_roots = kwargs.get("skill_read_roots", [])
         return activate_skill(args["name"], catalog, read_roots)
-    elif name == "run_command":
+    elif name in ("run_command", "run_shell_command"):
+        prefer_shell = name == "run_shell_command"
+        unrestricted = kwargs.get("commands_unrestricted", False)
+        if prefer_shell and not unrestricted:
+            return (
+                "error: run_shell_command is not available in this session. "
+                "Use run_command with an array of strings, "
+                "or enable --commands all/ask."
+            )
         command_policy = kwargs.get("command_policy")
         if command_policy is not None:
             rejection = _check_command_policy(
@@ -2816,12 +2914,13 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             if rejection is not None:
                 return rejection
         resolved = kwargs.get("resolved_commands", {})
-        return _run_command(
+        return _execute_command_call(
             command=args["command"],
+            prefer_shell=prefer_shell,
             base_dir=base_dir,
             resolved_commands=resolved,
             timeout=args.get("timeout", 30),
-            unrestricted=kwargs.get("commands_unrestricted", False),
+            unrestricted=True if prefer_shell else unrestricted,
             scratch_dir=scratch_dir,
         )
     elif name == "view_image":
@@ -2865,9 +2964,17 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             return manager.cancel(sid)
         return f"error: unknown action {action!r}"
     else:
+        unrestricted = kwargs.get("commands_unrestricted", False)
         suggestion = _TOOL_ALIASES.get(name)
         if suggestion:
+            # Downgrade run_shell_command suggestion when the tool is
+            # unavailable in restricted mode.
+            if suggestion == "run_shell_command" and not unrestricted:
+                suggestion = "run_command"
             raise KeyError(f"Unknown tool: {name!r}. Did you mean '{suggestion}'?")
+        available = _TOOL_NAMES
+        if unrestricted:
+            available = [*_TOOL_NAMES, "run_shell_command"]
         raise KeyError(
-            f"Unknown tool: {name!r}. Available tools: {', '.join(_TOOL_NAMES)}"
+            f"Unknown tool: {name!r}. Available tools: {', '.join(available)}"
         )
