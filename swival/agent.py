@@ -413,7 +413,8 @@ _TOOLS_NOT_SUPPORTED_RE = re.compile(
     r"|tool.use.{0,10}not.{0,10}support"
     r"|function.calling.{0,10}not.{0,10}(available|enabled|support)"
     r"|tools?.{0,10}not.{0,10}(available|enabled|support)"
-    r"|does not support the 'tools' parameter",
+    r"|does not support the 'tools' parameter"
+    r"|no endpoints.{0,20}support tool use",
     re.IGNORECASE,
 )
 
@@ -3071,15 +3072,22 @@ def call_llm(
     except ToolsNotSupportedError:
         raise
     except Exception as e:
+        msg_text = str(e)
+        if tools is not None and _TOOLS_NOT_SUPPORTED_RE.search(msg_text):
+            tne = ToolsNotSupportedError(
+                f"model does not support function calling: {e}"
+            )
+            tne._provider_retries = _retries_from_exc(e)
+            raise tne
         msg = f"LLM call failed (model: {model_id}): {e}"
-        if provider == "bedrock" and _SSO_TOKEN_ERROR_RE.search(str(e)):
+        if provider == "bedrock" and _SSO_TOKEN_ERROR_RE.search(msg_text):
             profile = aws_profile or os.environ.get("AWS_PROFILE", "default")
             msg = (
                 "AWS SSO token is missing or expired.\n\n"
                 "Run this command to log in, then re-run swival:\n\n"
                 f"  aws sso login --profile={profile}\n"
             )
-        elif provider == "bedrock" and "credentials" in str(e).lower():
+        elif provider == "bedrock" and "credentials" in msg_text.lower():
             msg += (
                 "\n\nBedrock authentication requires valid AWS credentials. Example:\n"
                 "  swival --provider bedrock \\\n"
