@@ -2,6 +2,10 @@
 
 All notable user-facing changes to Swival.
 
+## 0.10.12
+
+- Add native support for llama.cpp
+
 ## 0.10.11
 
 - Shell-command execution is now only exposed in unrestricted command modes:
