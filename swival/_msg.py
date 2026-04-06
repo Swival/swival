@@ -34,7 +34,7 @@ def _msg_tool_call_id(msg) -> str | None:
 
 
 def _msg_name(msg) -> str:
-    return _msg_get(msg, "name", "") or ""
+    return _msg_get(msg, "name") or ""
 
 
 def _set_msg_content(msg, value: str) -> None:

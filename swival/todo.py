@@ -242,10 +242,10 @@ class TodoState:
         if len(sub) == 1:
             return sub[0]
 
-        if not exact and not prefix and not sub:
+        ambiguous = exact or prefix or sub
+        if not ambiguous:
             return f"error: no task matching '{task}'"
 
-        ambiguous = exact or prefix or sub
         items_str = "; ".join(f"'{i.text}'" for i in ambiguous[:5])
         return f"error: '{task}' matches multiple items — be more specific: {items_str}"
 

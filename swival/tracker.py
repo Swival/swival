@@ -23,9 +23,7 @@ class FileAccessTracker:
 
     def check_write_allowed(self, path: str, exists: bool) -> str | None:
         """Return an error string if the write should be blocked, None if OK."""
-        if not exists:
-            return None
-        if path in self.read_files or path in self.written_files:
+        if not exists or path in self.read_files or path in self.written_files:
             return None
         return (
             "error: cannot write to an existing file that hasn't been read first. "
