@@ -12,6 +12,7 @@ from swival.onboarding import (
     _ask_huggingface,
     _ask_command,
     _ask_lmstudio,
+    _ask_llamacpp,
     _ask_openrouter,
     _ask_google,
     _ask_generic,
@@ -347,7 +348,7 @@ class TestRunOnboarding:
             monkeypatch,
             [
                 "2",  # Quick setup
-                "3",  # OpenRouter
+                "4",  # OpenRouter
                 "openai/gpt-4.1",  # model
                 "1",  # I'll set OPENROUTER_API_KEY myself
                 "",  # skip context window
@@ -361,6 +362,26 @@ class TestRunOnboarding:
         assert 'model = "openai/gpt-4.1"' in content
         assert "api_key" not in content
 
+    def test_successful_llamacpp_with_optional_model(self, tmp_path, monkeypatch):
+        cfg_dir = tmp_path / "cfg"
+        monkeypatch.setattr("swival.onboarding.global_config_dir", lambda: cfg_dir)
+        _patch_prompt_sequence(
+            monkeypatch,
+            [
+                "2",  # Quick setup
+                "2",  # llama.cpp
+                "y",  # Use default server
+                "",  # Model blank (auto-discovery)
+                "1",  # Yes, write config
+            ],
+        )
+        result = run_onboarding()
+        assert result is not None
+        content = result.read_text()
+        assert 'provider = "llamacpp"' in content
+        assert "model" not in content
+        assert "base_url" not in content
+
     def test_successful_generic_with_api_key(self, tmp_path, monkeypatch):
         cfg_dir = tmp_path / "cfg"
         monkeypatch.setattr("swival.onboarding.global_config_dir", lambda: cfg_dir)
@@ -368,7 +389,7 @@ class TestRunOnboarding:
             monkeypatch,
             [
                 "2",  # Quick setup
-                "5",  # Generic OpenAI-compatible
+                "6",  # Generic OpenAI-compatible
                 "http://localhost:11434",  # base URL
                 "qwen3:32b",  # model
                 "2",  # Enter API key now
@@ -414,7 +435,7 @@ class TestRunOnboarding:
                 "y",  # Default server
                 "",  # No model
                 "2",  # Start over
-                "2",  # ChatGPT (second attempt)
+                "3",  # ChatGPT (second attempt)
                 "gpt-4.1",  # model
                 "",  # skip reasoning effort
                 "1",  # Yes, write config
@@ -436,7 +457,7 @@ class TestRunOnboarding:
             monkeypatch,
             [
                 "2",  # Quick setup
-                "2",  # ChatGPT
+                "3",  # ChatGPT
                 "gpt-4.1",
                 "",
                 "1",  # Yes, write config
@@ -594,6 +615,20 @@ class TestRequiredFieldValidation:
         s = {}
         _ask_lmstudio(s)
         assert "model" not in s
+
+    def test_ask_llamacpp_allows_blank_model(self, monkeypatch):
+        _capture_stderr(monkeypatch)
+        _patch_prompt_sequence(
+            monkeypatch,
+            [
+                "y",  # use default server
+                "",  # blank model
+            ],
+        )
+        s = {}
+        _ask_llamacpp(s)
+        assert "model" not in s
+        assert "base_url" not in s
 
     def test_ask_openrouter_requires_model(self, monkeypatch):
         buf = _capture_stderr(monkeypatch)

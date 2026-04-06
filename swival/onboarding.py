@@ -30,6 +30,12 @@ _PROVIDERS = [
         "fast local runs and low-cost experimentation",
     ),
     (
+        "llamacpp",
+        "llama.cpp",
+        "Self-hosted llama-server",
+        "running llama.cpp directly with OpenAI-compatible APIs",
+    ),
+    (
         "chatgpt",
         "ChatGPT",
         "Use your ChatGPT Plus or Pro subscription",
@@ -51,7 +57,7 @@ _PROVIDERS = [
         "generic",
         "OpenAI-compatible",
         "A local or remote server you already run",
-        "ollama, llama.cpp, vLLM, or any OpenAI-compatible server",
+        "Ollama, vLLM, or any other OpenAI-compatible server",
     ),
     (
         "huggingface",
@@ -315,6 +321,8 @@ def _collect_settings() -> dict | None:
 
     if provider_name == "lmstudio":
         _ask_lmstudio(settings)
+    elif provider_name == "llamacpp":
+        _ask_llamacpp(settings)
     elif provider_name == "chatgpt":
         _ask_chatgpt(settings)
     elif provider_name == "openrouter":
@@ -455,6 +463,29 @@ def _ask_lmstudio(s: dict) -> None:
     if not use_default:
         url = _prompt_text("Server URL", default="http://127.0.0.1:1234")
         if url and url != "http://127.0.0.1:1234":
+            s["base_url"] = url
+
+    model = _prompt_text("Model name (blank for auto-discovery)", default="")
+    if model:
+        s["model"] = model
+
+
+def _ask_llamacpp(s: dict) -> None:
+    _console.print(
+        Text(
+            "Nice. Swival can talk directly to llama-server. Leave the model blank\n"
+            "and Swival will try to auto-discover what the server is already serving.",
+            style="dim",
+        )
+    )
+    _console.print()
+
+    use_default = _prompt_confirm(
+        "Use the default server at http://127.0.0.1:8080?", default=True
+    )
+    if not use_default:
+        url = _prompt_text("Server URL", default="http://127.0.0.1:8080")
+        if url and url != "http://127.0.0.1:8080":
             s["base_url"] = url
 
     model = _prompt_text("Model name (blank for auto-discovery)", default="")
