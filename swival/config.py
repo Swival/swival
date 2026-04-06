@@ -1188,7 +1188,7 @@ def generate_config(
         "# CLI flags override these values. Only uncomment what you need.",
         "",
         "# --- Provider / model ---",
-        '# provider = "lmstudio"          # "lmstudio" | "huggingface" | "openrouter" | "google" | "generic" | "chatgpt" | "bedrock" | "command"',
+        '# provider = "lmstudio"          # "lmstudio" | "llamacpp" | "huggingface" | "openrouter" | "generic" | "google" | "chatgpt" | "bedrock" | "command"',
         '# model = "qwen/qwen3-coder-next"',
         '# api_key = "sk-or-..."            # prefer env vars; this is a fallback',
         '# base_url = "https://..."         # server URL; for bedrock: region name or endpoint URL',

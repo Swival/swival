@@ -2231,6 +2231,27 @@ def discover_model(base_url, verbose):
     return None, None
 
 
+def discover_llamacpp_model(base_url, verbose):
+    """Query llama.cpp server's /v1/models endpoint for the loaded model."""
+    url = f"{base_url.rstrip('/')}/v1/models"
+    if verbose:
+        fmt.model_info(f"Querying {url} for loaded model...")
+
+    try:
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.URLError as e:
+        raise AgentError(f"could not connect to llama.cpp server at {base_url}: {e}")
+    except json.JSONDecodeError as e:
+        raise AgentError(f"invalid JSON from {url}: {e}")
+
+    entries = data.get("data") or []
+    if entries:
+        return entries[0].get("id")
+    return None
+
+
 def configure_context(base_url, model_key, requested_context, current_context, verbose):
     """Reload the model with a different context size if needed."""
     if requested_context == current_context:
@@ -2314,7 +2335,7 @@ def _resolve_model_str(provider: str, model_id: str) -> str:
             else model_id
         )
         return f"openrouter/{bare}"
-    elif provider == "generic":
+    elif provider in ("generic", "llamacpp"):
         return f"openai/{model_id}"
     elif provider == "chatgpt":
         bare = model_id.removeprefix("chatgpt/").removeprefix("chatgpt/")
@@ -2835,7 +2856,7 @@ def call_llm(
         }
         if base_url:
             kwargs["api_base"] = base_url
-    elif provider == "generic":
+    elif provider in ("generic", "llamacpp"):
         kwargs = {"api_base": base_url, "api_key": api_key or "none"}
     elif provider == "chatgpt":
         kwargs = {}
@@ -3599,6 +3620,7 @@ def build_parser():
         "--provider",
         choices=[
             "lmstudio",
+            "llamacpp",
             "huggingface",
             "openrouter",
             "generic",
@@ -3608,7 +3630,7 @@ def build_parser():
             "command",
         ],
         default=_UNSET,
-        help="LLM provider: lmstudio (local), huggingface (HF API), openrouter (multi-provider API), generic (any OpenAI-compatible server), google (Gemini via OpenAI-compatible endpoint), chatgpt (ChatGPT Plus/Pro subscription via OAuth), bedrock (AWS Bedrock, auth via AWS credential chain), command (external command as LLM, --model is the command to run).",
+        help="LLM provider: lmstudio (local), llamacpp (llama.cpp server, auto-discovers model), huggingface (HF API), openrouter (multi-provider API), generic (any OpenAI-compatible server), google (Gemini via OpenAI-compatible endpoint), chatgpt (ChatGPT Plus/Pro subscription via OAuth), bedrock (AWS Bedrock, auth via AWS credential chain), command (external command as LLM, --model is the command to run).",
     )
     output_group.add_argument(
         "-q",
@@ -4380,6 +4402,12 @@ def _litellm_context_length(model_str: str) -> int | None:
         return None
 
 
+def _normalize_openai_base(url: str) -> str:
+    """Ensure an OpenAI-compatible base URL ends with /v1."""
+    stripped = url.rstrip("/")
+    return stripped if stripped.endswith("/v1") else f"{stripped}/v1"
+
+
 def resolve_provider(
     provider: str,
     model: str | None,
@@ -4452,6 +4480,21 @@ def resolve_provider(
             raise ConfigError(
                 "--api-key or OPENROUTER_API_KEY env var required for openrouter provider"
             )
+    elif provider == "llamacpp":
+        os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        api_base = _normalize_openai_base(base_url or "http://127.0.0.1:8080")
+        if model:
+            model_id = model
+        else:
+            model_id = discover_llamacpp_model(api_base.removesuffix("/v1"), verbose)
+            if not model_id:
+                raise AgentError(
+                    "no model found on llama.cpp server. "
+                    "Check that llama-server is running or use --model to specify one."
+                )
+        context_length = max_context_tokens
+        resolved_key = None
+
     elif provider == "generic":
         if not model:
             raise ConfigError(f"--model is required when --provider is {provider_name}")
@@ -4459,8 +4502,7 @@ def resolve_provider(
             raise ConfigError(
                 f"--base-url is required when --provider is {provider_name}"
             )
-        stripped = base_url.rstrip("/")
-        api_base = stripped if stripped.endswith("/v1") else f"{stripped}/v1"
+        api_base = _normalize_openai_base(base_url)
         model_id = model
         context_length = max_context_tokens
         resolved_key = api_key or os.environ.get("OPENAI_API_KEY")

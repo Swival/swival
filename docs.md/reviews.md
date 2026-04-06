@@ -59,7 +59,7 @@ swival --provider huggingface --model zai-org/GLM-5 --yolo \
 
 The synthesized reviewer command inherits `--provider`, `--model`, `--base-url`, `--files`, `--skills-dir`, `--max-context-tokens`, and `--max-output-tokens` from the outer invocation. It always adds `--reviewer-mode` and `--quiet`.
 
-API keys are not placed on the reviewer command line to avoid exposing secrets in process listings. If `--api-key` was set on the outer invocation, Swival passes it to the reviewer subprocess via the provider-specific environment variable (`HF_TOKEN`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY` for generic, `GEMINI_API_KEY` for google, or `CHATGPT_API_KEY`). Keys already set via environment variables are inherited automatically.
+API keys are not placed on the reviewer command line to avoid exposing secrets in process listings. If `--api-key` was set on the outer invocation, Swival passes it to the reviewer subprocess via the provider-specific environment variable (`HF_TOKEN`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY` for generic, `GEMINI_API_KEY` for google, `CHATGPT_API_KEY` for chatgpt). Bedrock uses the AWS credential chain and needs no API key. Keys already set via environment variables are inherited automatically.
 
 `--report` and `--cache` are not mirrored because reviewer mode does not initialize report or cache infrastructure.
 

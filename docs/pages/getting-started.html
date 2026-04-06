@@ -107,6 +107,11 @@ brew uninstall swival     # if installed with Homebrew
 <td>none</td>
 </tr>
 <tr>
+<td><code>llamacpp</code></td>
+<td>none</td>
+<td><code>--provider llamacpp</code></td>
+</tr>
+<tr>
 <td><code>huggingface</code></td>
 <td><code>HF_TOKEN</code> or <code>--api-key</code></td>
 <td><code>--provider huggingface --model ORG/MODEL</code></td>
@@ -198,14 +203,17 @@ swival &quot;Hello world&quot; --provider google --model gemini-2.5-flash
 <p>Swival routes this through Google's OpenAI-compatible endpoint and will try to auto-detect the context window when <code>--max-context-tokens</code> is not set.</p>
 <p>For a deeper look at Google-specific options, see <a href="providers.html">Providers</a>.</p>
 <h2 id="running-with-any-openai-compatible-server">Running with Any OpenAI-Compatible Server</h2>
-<p>If you're running ollama, llama.cpp, mlx_lm.server, vLLM, DeepSeek API, or any other server that exposes an OpenAI-compatible API, use the generic provider.</p>
+<p>If you're running llama.cpp, use the <code>llamacpp</code> provider — it auto-discovers the loaded model and defaults to <code>http://127.0.0.1:8080</code>:</p>
+<pre><code class="language-sh">swival --provider llamacpp &quot;Hello world&quot;
+</code></pre>
+<p>For ollama, mlx_lm.server, vLLM, DeepSeek API, or any other server that exposes an OpenAI-compatible API, use the generic provider. Both <code>--model</code> and <code>--base-url</code> are required:</p>
 <pre><code class="language-sh">swival &quot;Hello world&quot; \
     --provider generic \
     --base-url http://127.0.0.1:8080 \
     --model my-model
 </code></pre>
-<p>Both <code>--model</code> and <code>--base-url</code> are required. No API key is needed for most local servers. If your server requires one, pass <code>--api-key</code> or set <code>OPENAI_API_KEY</code>.</p>
-<p>For a deeper look at generic provider options and server-specific examples, see <a href="providers.html">Providers</a>.</p>
+<p>No API key is needed for most local servers. If your server requires one, pass <code>--api-key</code> or set <code>OPENAI_API_KEY</code>.</p>
+<p>For a deeper look at provider options and server-specific examples, see <a href="providers.html">Providers</a>.</p>
 <h2 id="running-with-chatgpt-pluspro">Running with ChatGPT Plus/Pro</h2>
 <p>If you have a ChatGPT Plus or ChatGPT Pro subscription and want to use OpenAI's models without a separate API key, the <code>chatgpt</code> provider authenticates through an OAuth device-code flow using your existing subscription.</p>
 <pre><code class="language-sh">swival &quot;Hello world&quot; --provider chatgpt --model gpt-5.4

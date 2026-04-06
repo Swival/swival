@@ -156,11 +156,11 @@ print(answer)
 </tr>
 <tr>
 <td><code>provider</code></td>
-<td>LLM provider: <code>"lmstudio"</code>, <code>"huggingface"</code>, <code>"openrouter"</code>, <code>"chatgpt"</code>, <code>"google"</code>, <code>"bedrock"</code>, <code>"generic"</code>, <code>"command"</code>, or a command string.</td>
+<td>LLM provider: <code>"lmstudio"</code>, <code>"llamacpp"</code>, <code>"huggingface"</code>, <code>"openrouter"</code>, <code>"chatgpt"</code>, <code>"google"</code>, <code>"bedrock"</code>, <code>"generic"</code>, <code>"command"</code>, or a command string.</td>
 </tr>
 <tr>
 <td><code>model</code></td>
-<td>Model identifier. Required for most providers; LM Studio auto-discovers.</td>
+<td>Model identifier. Required for most providers; LM Studio and llama.cpp auto-discover.</td>
 </tr>
 <tr>
 <td><code>api_key</code></td>
@@ -192,7 +192,7 @@ print(answer)
 </tr>
 <tr>
 <td><code>commands</code></td>
-<td>Command execution policy: <code>"all"</code> (unrestricted, the default), <code>"none"</code> (disabled), <code>"ask"</code> (interactive approval), or a list of whitelisted command names. In unrestricted modes (<code>"all"</code>, <code>"ask"</code>), both <code>run_command</code> and <code>run_shell_command</code> are available. A whitelist exposes only <code>run_command</code>.</td>
+<td>Command execution policy: <code>"all"</code> (unrestricted, the default), <code>"none"</code> (disabled), <code>"ask"</code> (interactive approval), or a list of whitelisted command names. With <code>"all"</code>, both <code>run_command</code> and <code>run_shell_command</code> are available. Ask and whitelist modes expose only <code>run_command</code>.</td>
 </tr>
 <tr>
 <td><code>yolo</code></td>

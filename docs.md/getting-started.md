@@ -47,6 +47,7 @@ brew uninstall swival     # if installed with Homebrew
 | Provider      | Auth                                                | Required flags                                    |
 | ------------- | --------------------------------------------------- | ------------------------------------------------- |
 | `lmstudio`    | none                                                | none                                              |
+| `llamacpp`    | none                                                | `--provider llamacpp`                             |
 | `huggingface` | `HF_TOKEN` or `--api-key`                           | `--provider huggingface --model ORG/MODEL`        |
 | `openrouter`  | `OPENROUTER_API_KEY` or `--api-key`                 | `--provider openrouter --model MODEL`             |
 | `google`      | `--api-key`, `GEMINI_API_KEY`, or `OPENAI_API_KEY`  | `--provider google --model MODEL`                 |
@@ -155,7 +156,13 @@ For a deeper look at Google-specific options, see [Providers](providers.md).
 
 ## Running with Any OpenAI-Compatible Server
 
-If you're running ollama, llama.cpp, mlx_lm.server, vLLM, DeepSeek API, or any other server that exposes an OpenAI-compatible API, use the generic provider.
+If you're running llama.cpp, use the `llamacpp` provider — it auto-discovers the loaded model and defaults to `http://127.0.0.1:8080`:
+
+```sh
+swival --provider llamacpp "Hello world"
+```
+
+For ollama, mlx_lm.server, vLLM, DeepSeek API, or any other server that exposes an OpenAI-compatible API, use the generic provider. Both `--model` and `--base-url` are required:
 
 ```sh
 swival "Hello world" \
@@ -164,9 +171,9 @@ swival "Hello world" \
     --model my-model
 ```
 
-Both `--model` and `--base-url` are required. No API key is needed for most local servers. If your server requires one, pass `--api-key` or set `OPENAI_API_KEY`.
+No API key is needed for most local servers. If your server requires one, pass `--api-key` or set `OPENAI_API_KEY`.
 
-For a deeper look at generic provider options and server-specific examples, see [Providers](providers.md).
+For a deeper look at provider options and server-specific examples, see [Providers](providers.md).
 
 ## Running with ChatGPT Plus/Pro
 

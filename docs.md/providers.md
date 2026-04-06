@@ -3,6 +3,7 @@
 Swival supports local, hosted, and API-based model providers:
 
 - [LM Studio](#lm-studio) — local inference
+- [llama.cpp](#llamacpp) — local llama.cpp server
 - [HuggingFace Inference API](#huggingface-inference-api) — hosted inference
 - [OpenRouter](#openrouter) — multi-provider access through a single API
 - [Generic (OpenAI-compatible)](#generic-openai-compatible) — any OpenAI-compatible server
@@ -140,29 +141,7 @@ swival --provider openrouter --model z-ai/glm-5 \
 
 Pass bare model identifiers like `z-ai/glm-5`. If you accidentally include a provider prefix (e.g. `openrouter/z-ai/glm-5`), Swival detects and corrects the double prefix.
 
-## Generic (OpenAI-compatible)
-
-The generic provider works with any server that exposes an OpenAI-compatible chat completions endpoint. This covers mlx_lm.server, ollama, llama.cpp, vLLM, LocalAI, text-generation-webui, DeepSeek API, and similar tools.
-
-Both `--model` and `--base-url` are required. Pass the server's root URL without `/v1` — Swival appends it automatically. If your URL already ends in `/v1`, that's fine too.
-
-```sh
-# mlx_lm.server
-swival --provider generic \
-    --base-url http://127.0.0.1:8080 \
-    --model mlx-community/Qwen3-Coder-480B-A35B-4bit \
-    "task"
-```
-
-```sh
-# ollama
-swival --provider generic \
-    --base-url http://127.0.0.1:11434 \
-    --model qwen3:32b \
-    "task"
-```
-
-### llama.cpp
+## llama.cpp
 
 [llama.cpp](https://github.com/ggml-org/llama.cpp) runs GGUF models locally through `llama-server`, which exposes an OpenAI-compatible API. Start the server first, then point Swival at it.
 
@@ -181,15 +160,37 @@ llama-server \
 Once the server is listening (default port 8080), connect Swival:
 
 ```sh
-swival --provider generic --base-url http://127.0.0.1:8080 "task"
+swival --provider llamacpp "task"
 ```
 
-Swival auto-detects the model name from the server, so `--model` is not required. If you want to set it explicitly:
+Swival auto-detects the model name from the server, so `--model` is not required. The default base URL is `http://127.0.0.1:8080`. To override either:
 
 ```sh
+swival --provider llamacpp \
+    --base-url http://192.168.1.10:9090 \
+    --model my-model \
+    "task"
+```
+
+## Generic (OpenAI-compatible)
+
+The generic provider works with any server that exposes an OpenAI-compatible chat completions endpoint. This covers mlx_lm.server, ollama, vLLM, LocalAI, text-generation-webui, DeepSeek API, and similar tools.
+
+Both `--model` and `--base-url` are required. Pass the server's root URL without `/v1` — Swival appends it automatically. If your URL already ends in `/v1`, that's fine too.
+
+```sh
+# mlx_lm.server
 swival --provider generic \
     --base-url http://127.0.0.1:8080 \
-    --model default \
+    --model mlx-community/Qwen3-Coder-480B-A35B-4bit \
+    "task"
+```
+
+```sh
+# ollama
+swival --provider generic \
+    --base-url http://127.0.0.1:11434 \
+    --model qwen3:32b \
     "task"
 ```
 

@@ -2094,3 +2094,214 @@ class TestSpecialTokenEscaping:
         _escape_special_tokens_in_messages(messages)
 
         assert messages[0]["content"][0]["text"] == "Hello world"
+
+
+# ---------------------------------------------------------------------------
+# llama.cpp provider
+# ---------------------------------------------------------------------------
+
+
+class TestLlamacppProviderRouting:
+    """Verify resolve_provider and call_llm routing for the llamacpp provider."""
+
+    def test_default_base_url(self):
+        with patch("swival.agent.discover_llamacpp_model", return_value="test-model"):
+            model_id, api_base, key, ctx, kwargs = resolve_provider(
+                "llamacpp", None, None, None, None, False
+            )
+        assert api_base == "http://127.0.0.1:8080/v1"
+        assert model_id == "test-model"
+        assert key is None
+
+    def test_custom_base_url(self):
+        with patch("swival.agent.discover_llamacpp_model", return_value="m"):
+            _, api_base, _, _, _ = resolve_provider(
+                "llamacpp", None, None, "http://192.168.1.5:9090", None, False
+            )
+        assert api_base == "http://192.168.1.5:9090/v1"
+
+    def test_v1_not_doubled(self):
+        with patch("swival.agent.discover_llamacpp_model", return_value="m"):
+            _, api_base, _, _, _ = resolve_provider(
+                "llamacpp", None, None, "http://host:8080/v1", None, False
+            )
+        assert api_base == "http://host:8080/v1"
+
+    def test_explicit_model_skips_discovery(self):
+        model_id, api_base, _, _, _ = resolve_provider(
+            "llamacpp", "my-model", None, None, None, False
+        )
+        assert model_id == "my-model"
+        assert api_base == "http://127.0.0.1:8080/v1"
+
+    def test_context_length_none_by_default(self):
+        _, _, _, ctx, _ = resolve_provider("llamacpp", "m", None, None, None, False)
+        assert ctx is None
+
+    def test_context_length_from_flag(self):
+        _, _, _, ctx, _ = resolve_provider("llamacpp", "m", None, None, 32768, False)
+        assert ctx == 32768
+
+    def test_discovery_failure_raises(self):
+        from swival.report import AgentError
+
+        with patch("swival.agent.discover_llamacpp_model", return_value=None):
+            with pytest.raises(AgentError, match="no model found"):
+                resolve_provider("llamacpp", None, None, None, None, False)
+
+    def test_model_str(self):
+        from swival.agent import _resolve_model_str
+
+        assert _resolve_model_str("llamacpp", "my-model") == "openai/my-model"
+
+    def _mock_response(self):
+        choice = MagicMock()
+        choice.message = MagicMock(content="ok", tool_calls=None)
+        choice.finish_reason = "stop"
+        resp = MagicMock()
+        resp.choices = [choice]
+        return resp
+
+    def test_call_llm_kwargs(self):
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                "http://127.0.0.1:8080/v1",
+                "test-model",
+                [],
+                100,
+                None,
+                None,
+                None,
+                None,
+                False,
+                provider="llamacpp",
+                api_key=None,
+            )
+            kwargs = mock_comp.call_args[1]
+            assert kwargs["model"] == "openai/test-model"
+            assert kwargs["api_base"] == "http://127.0.0.1:8080/v1"
+            assert kwargs["api_key"] == "none"
+
+
+class TestLlamacppCLIParser:
+    def test_parser_accepts_llamacpp(self):
+        from swival.agent import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["--provider", "llamacpp", "task"])
+        assert args.provider == "llamacpp"
+
+    def test_parser_accepts_llamacpp_with_model(self):
+        from swival.agent import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(
+            ["--provider", "llamacpp", "--model", "my-model", "task"]
+        )
+        assert args.provider == "llamacpp"
+        assert args.model == "my-model"
+
+
+class TestLlamacppDiscoverModel:
+    """Test discover_llamacpp_model against mocked server responses."""
+
+    def test_discovers_model_id(self):
+        from swival.agent import discover_llamacpp_model
+
+        response_data = (
+            b'{"object":"list","data":[{"id":"my-gguf-model","object":"model"}]}'
+        )
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = response_data
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            result = discover_llamacpp_model("http://127.0.0.1:8080", False)
+        assert result == "my-gguf-model"
+
+    def test_returns_none_on_empty_data(self):
+        from swival.agent import discover_llamacpp_model
+
+        response_data = b'{"object":"list","data":[]}'
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = response_data
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            result = discover_llamacpp_model("http://127.0.0.1:8080", False)
+        assert result is None
+
+    def test_connection_error_raises(self):
+        import urllib.error
+        from swival.report import AgentError
+        from swival.agent import discover_llamacpp_model
+
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=urllib.error.URLError("refused"),
+        ):
+            with pytest.raises(AgentError, match="could not connect"):
+                discover_llamacpp_model("http://127.0.0.1:8080", False)
+
+
+class TestLlamacppMainSmoke:
+    """Verify that main() invokes discover_llamacpp_model when --provider llamacpp without --model."""
+
+    def test_calls_discover_when_no_model(self, monkeypatch, tmp_path):
+        from swival import agent, config
+
+        monkeypatch.setattr(config, "load_config", lambda _: {})
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "agent",
+                "hello",
+                "--provider",
+                "llamacpp",
+                "--no-system-prompt",
+                "--base-dir",
+                str(tmp_path),
+            ],
+        )
+
+        discover_called = {"value": False}
+
+        def fake_discover(*args, **kwargs):
+            discover_called["value"] = True
+            return "test-model"
+
+        monkeypatch.setattr(agent, "discover_llamacpp_model", fake_discover)
+
+        def fake_call_llm(*args, **kwargs):
+            msg = types.SimpleNamespace(
+                content="done", tool_calls=None, role="assistant"
+            )
+            msg.get = lambda key, default=None: getattr(msg, key, default)
+            return msg, "stop"
+
+        monkeypatch.setattr(agent, "call_llm", fake_call_llm)
+        agent.main()
+        assert discover_called["value"]
+
+
+class TestLlamacppProfileIntegration:
+    """Verify that a profile with provider=llamacpp resolves correctly."""
+
+    def test_profile_sets_llamacpp(self):
+        from swival.config import resolve_profile_config, apply_config_to_args
+
+        args = TestProfileProviderIntegration._make_args(profile="local")
+
+        config = {
+            "profiles": {
+                "local": {"provider": "llamacpp", "model": "test-gguf"},
+            }
+        }
+        resolve_profile_config(args, config)
+        apply_config_to_args(args, config)
+        assert args.provider == "llamacpp"
+        assert args.model == "test-gguf"
