@@ -1620,14 +1620,14 @@ def clamp_output_tokens(
     messages: list,
     tools: list | None,
     context_length: int | None,
-    requested_max_output: int,
-) -> int:
+    requested_max_output: int | None,
+) -> int | None:
     """Reduce max_output_tokens if prompt + output would exceed context.
 
     Raises ContextOverflowError if there isn't enough room for even the
     minimum output budget — the caller should compact and retry.
     """
-    if context_length is None:
+    if requested_max_output is None or context_length is None:
         return requested_max_output
     prompt_tokens = estimate_tokens(messages, tools)
     available = context_length - prompt_tokens
@@ -5507,7 +5507,7 @@ def run_agent_loop(
     api_base: str,
     model_id: str,
     max_turns: int,
-    max_output_tokens: int,
+    max_output_tokens: int | None,
     temperature: float,
     top_p: float,
     seed: int | None,
@@ -7153,7 +7153,7 @@ def repl_loop(
     api_base: str,
     model_id: str,
     max_turns: int,
-    max_output_tokens: int,
+    max_output_tokens: int | None,
     temperature: float,
     top_p: float,
     seed: int | None,

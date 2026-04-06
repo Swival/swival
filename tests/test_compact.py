@@ -679,6 +679,14 @@ class TestClampOutputTokens:
         result = clamp_output_tokens(msgs, None, 100000, 16384)
         assert result == 16384
 
+    def test_none_max_output_passes_through(self):
+        result = clamp_output_tokens([_user("hi")], None, 100000, None)
+        assert result is None
+
+    def test_none_max_output_and_none_context(self):
+        result = clamp_output_tokens([_user("hi")], None, None, None)
+        assert result is None
+
 
 # ---------------------------------------------------------------------------
 # Integration: compacted messages valid for API
