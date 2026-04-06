@@ -162,7 +162,7 @@ swival --provider openrouter --model z-ai/glm-5 &quot;task&quot;
 <pre><code class="language-sh">llama-server \
     --reasoning auto \
     --fit on \
-    -hf unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL \
+    -hf unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL \
     --temp 1.0 --top-p 0.95 --top-k 64
 </code></pre>
 <p><code>--reasoning auto</code> lets the model use chain-of-thought when it helps. <code>--fit on</code> automatically sizes the context window and batch parameters to fit in available memory. The <code>-hf</code> flag downloads the model directly from HuggingFace on first run and caches it locally.</p>

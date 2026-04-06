@@ -151,7 +151,7 @@ Start `llama-server` with a model from HuggingFace:
 llama-server \
     --reasoning auto \
     --fit on \
-    -hf unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL \
+    -hf unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL \
     --temp 1.0 --top-p 0.95 --top-k 64
 ```
 
