@@ -4,6 +4,7 @@ from contextlib import nullcontext
 import copy
 from datetime import datetime
 import json
+import logging
 from typing import Literal
 import os
 import platform
@@ -5908,10 +5909,8 @@ def run_agent_loop(
         if prune_metrics.messages_mutated:
             if snapshot_state is not None:
                 snapshot_state.invalidate_index_checkpoint()
-        if prune_metrics.net_savings > 0 and verbose:
-            _ps = prune_metrics.summary()
-            if _ps:
-                fmt.info(_ps)
+        if prune_metrics.net_savings > 0:
+            logging.debug("%s", prune_metrics.summary())
 
         token_est = estimate_tokens(messages, effective_tools)
         if verbose:

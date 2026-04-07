@@ -67,10 +67,6 @@ When the model sends malformed tool-call arguments, Swival auto-corrects them an
 
 Different LLM providers attach extra metadata to tool calls — fields like `index` that are useful for streaming but meaningless in replay. The pruning pass rewrites historical tool calls to a minimal shape with just the ID, type, function name, and arguments. The most recent tool-call turn is left untouched.
 
-### Diagnostics
-
-In verbose mode, Swival prints a one-line summary after pruning when tokens were saved, such as `pruned ~26 tokens (synthetic_gc=26)`. This helps you see how much replay cost the pruning pass is eliminating per turn.
-
 ## Proactive Collapse: The Snapshot Tool
 
 The snapshot tool is the centerpiece of Swival's context management. It lets the agent compress its own investigation history on demand.
