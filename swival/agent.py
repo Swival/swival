@@ -5441,8 +5441,8 @@ def _run_main(args, report, _write_report, parser):
             _is_script = is_command_script(args.question)
             if _is_script and not args.oneshot_commands:
                 fmt.warning(
-                    "input looks like a command script "
-                    "but --oneshot-commands was not set."
+                    "input looks like a command script but --oneshot-commands "
+                    "was not set; treating as plain text."
                 )
                 _is_script = False
             if _is_script and reviewer_cmd:

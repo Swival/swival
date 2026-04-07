@@ -589,6 +589,11 @@ class TestApplyConfigToArgs:
         apply_config_to_args(args, {"oneshot_commands": False})
         assert args.oneshot_commands is True
 
+    def test_yolo_does_not_imply_oneshot_commands(self):
+        args = _make_args(yolo=True)
+        apply_config_to_args(args, {})
+        assert args.oneshot_commands is False
+
     def test_color_config_true(self):
         args = _make_args()
         apply_config_to_args(args, {"color": True})
