@@ -2,6 +2,13 @@
 
 All notable user-facing changes to Swival.
 
+## 0.10.13
+
+- Swival now auto-detects the project root by walking up to the nearest `.git` directory or `swival.toml`, so launching from a subdirectory keeps file tools and project-scoped behavior anchored to the repository root.
+- `edit_file` now accepts an optional `line_number` parameter so targeted replacements can disambiguate repeated matches using the line numbers returned by `read_file`.
+- ChatGPT provider handling now tolerates empty Responses API payloads instead of failing the turn.
+- `LITELLM_LOCAL_MODEL_COST_MAP` is now enabled unconditionally to avoid unnecessary remote pricing lookups for local-model providers.
+
 ## 0.10.12
 
 - Add native support for llama.cpp
