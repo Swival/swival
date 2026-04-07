@@ -2,6 +2,11 @@
 
 All notable user-facing changes to Swival.
 
+## 0.10.14
+
+- Slash commands (`/`) and custom commands (`!`) can now be used in one-shot (non-REPL) mode. Because one-shot input may come from untrusted sources, command dispatch is disabled by default; pass `--oneshot-commands` to opt in.
+- Skill directory scanning depth has been reduced from 5 to 3 to avoid descending into vendored or generated trees.
+
 ## 0.10.13
 
 - Swival now auto-detects the project root by walking up to the nearest `.git` directory or `swival.toml`, so launching from a subdirectory keeps file tools and project-scoped behavior anchored to the repository root.
