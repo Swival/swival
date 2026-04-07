@@ -251,7 +251,7 @@ def _scan_skills_dir(
     At each level, if a subdirectory contains SKILL.md it's loaded as a skill.
     Otherwise we recurse into it to find nested skills (e.g. plugins/<name>/skills/<skill>/).
     """
-    if _depth > 3:
+    if _depth >= 3:
         return
     try:
         entries = sorted(directory.iterdir())
