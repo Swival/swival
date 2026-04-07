@@ -7839,6 +7839,11 @@ def repl_loop(
 
     from .completer import SwivalCompleter
 
+    class _SafeFileHistory(FileHistory):
+        def store_string(self, string: str) -> None:
+            os.makedirs(os.path.dirname(self.filename), exist_ok=True)
+            super().store_string(string)
+
     history_path = os.path.join(base_dir, ".swival", "repl_history")
     os.makedirs(os.path.dirname(history_path), exist_ok=True)
     prompt_style = Style.from_dict(
@@ -7849,7 +7854,7 @@ def repl_loop(
     )
     completer = SwivalCompleter(skills_catalog=skills_catalog)
     session = PromptSession(
-        history=FileHistory(history_path),
+        history=_SafeFileHistory(history_path),
         enable_history_search=True,
         style=prompt_style,
         completer=completer,

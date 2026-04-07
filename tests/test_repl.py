@@ -2573,3 +2573,39 @@ class TestStatusCommand:
         assert mock_loop.call_count == 0
         assert mock_status.call_count == 1
         assert len(messages) == 1
+
+
+def test_safe_file_history_recreates_directory(tmp_path):
+    """_SafeFileHistory.store_string recreates .swival/ if deleted mid-session."""
+    from prompt_toolkit.history import FileHistory
+
+    history_dir = tmp_path / ".swival"
+    history_dir.mkdir()
+    history_path = history_dir / "repl_history"
+
+    captured = {}
+
+    orig_init = FileHistory.__init__
+
+    def capture_history(self, *a, **kw):
+        orig_init(self, *a, **kw)
+        captured["history"] = self
+
+    with (
+        patch.object(FileHistory, "__init__", capture_history),
+        patch("prompt_toolkit.PromptSession") as mock_cls,
+    ):
+        mock_session = MagicMock()
+        mock_session.prompt.side_effect = EOFError
+        mock_cls.return_value = mock_session
+        repl_loop([_sys("s")], [], **_loop_kwargs(tmp_path))
+
+    history = captured["history"]
+    import shutil
+
+    shutil.rmtree(history_dir)
+    assert not history_dir.exists()
+
+    history.store_string("hello")
+    assert history_dir.exists()
+    assert history_path.exists()
