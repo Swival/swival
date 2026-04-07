@@ -1,6 +1,12 @@
 # Custom Commands
 
-Custom commands let you run external scripts from the REPL and feed their output into the conversation. Type `!name` and Swival looks up an executable called `name` in your commands directory, runs it, and injects its stdout as the next user message.
+Custom commands let you run external scripts and feed their output into the conversation. Type `!name` and Swival looks up an executable called `name` in your commands directory, runs it, and injects its stdout as the next user message.
+
+In interactive mode, custom commands are always available. In one-shot mode, they require `--oneshot-commands` because the input may come from an untrusted source:
+
+```sh
+swival --oneshot-commands "!context"
+```
 
 ## Setup
 
@@ -31,7 +37,7 @@ chmod +x ~/.config/swival/commands/context
 
 ## Usage
 
-In the REPL, prefix the command name with `!`:
+Prefix the command name with `!`:
 
 ```text
 swival> !context

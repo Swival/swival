@@ -66,6 +66,7 @@ def _make_args(**overrides):
         "max_review_rounds": _UNSET,
         "cache": _UNSET,
         "cache_dir": _UNSET,
+        "oneshot_commands": _UNSET,
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -573,6 +574,21 @@ class TestApplyConfigToArgs:
         apply_config_to_args(args, {"yolo": False})
         assert args.yolo is True
 
+    def test_oneshot_commands_default_false(self):
+        args = _make_args()
+        apply_config_to_args(args, {})
+        assert args.oneshot_commands is False
+
+    def test_oneshot_commands_config_true(self):
+        args = _make_args()
+        apply_config_to_args(args, {"oneshot_commands": True})
+        assert args.oneshot_commands is True
+
+    def test_oneshot_commands_cli_beats_config(self):
+        args = _make_args(oneshot_commands=True)
+        apply_config_to_args(args, {"oneshot_commands": False})
+        assert args.oneshot_commands is True
+
     def test_color_config_true(self):
         args = _make_args()
         apply_config_to_args(args, {"color": True})
@@ -682,6 +698,13 @@ class TestConfigToSessionKwargs:
         assert session.provider == "lmstudio"
         assert session.read_guard is False
         assert session.history is False
+
+    def test_drops_oneshot_commands(self):
+        kwargs = config_to_session_kwargs(
+            {"oneshot_commands": True, "provider": "lmstudio"}
+        )
+        assert "oneshot_commands" not in kwargs
+        assert kwargs["provider"] == "lmstudio"
 
 
 # ===========================================================================

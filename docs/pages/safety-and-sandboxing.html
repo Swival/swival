@@ -136,6 +136,16 @@ swival --commands none &quot;task&quot;
 commands = &quot;ask&quot;
 approved_buckets = [&quot;ls&quot;, &quot;git status&quot;, &quot;python3 -m pytest&quot;]
 </code></pre>
+<h2 id="one-shot-command-dispatch">One-Shot Command Dispatch</h2>
+<p>In one-shot mode, <code>/</code> and <code>!</code> command dispatch is disabled by default. When input comes from a pipe, a file, or an upstream program, it may contain attacker-controlled content that starts with a slash or bang command. Executing that input as a command could run scripts from <code>~/.config/swival/commands/</code> or alter the agent's security posture (e.g. <code>/add-dir /</code>).</p>
+<p>Pass <code>--oneshot-commands</code> to opt in when you trust the input source:</p>
+<pre><code class="language-sh">swival --oneshot-commands &quot;/simplify swival/agent.py&quot;
+</code></pre>
+<p>Or set it in config:</p>
+<pre><code class="language-toml">oneshot_commands = true
+</code></pre>
+<p><code>--yolo</code> does not imply <code>--oneshot-commands</code>. They control different trust boundaries: <code>--yolo</code> governs what the agent can do (filesystem and shell access), while <code>--oneshot-commands</code> governs whether the input itself is trusted to contain commands.</p>
+<p>In interactive mode, the user is typing directly, so commands are always enabled regardless of this flag.</p>
 <h2 id="untrusted-content-labels">Untrusted Content Labels</h2>
 <p>Output from external sources — <code>fetch_url</code>, MCP tools, and A2A tools — is wrapped with a deterministic <code>[UNTRUSTED EXTERNAL CONTENT]</code> header before the model sees it. This header instructs the model to treat the content as data, not instructions, and to avoid changing tool-selection behavior based on it.</p>
 <p>The label is baked into spill files too. When an external tool produces output too large for inline context (over 20 KB for MCP/A2A, over 50 KB for fetch_url), the content is saved to a temp file under <code>.swival/</code>. The untrusted header is prepended to the file contents, so the label survives when the agent reads the file back via <code>read_file</code>.</p>

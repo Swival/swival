@@ -45,6 +45,7 @@ cache = true
 # color = true             # true = force color, false = force no-color, absent = auto
 # files = "some"           # filesystem access: "some" (workspace) | "all" (unrestricted) | "none" (.swival/ only)
 # yolo = false             # shorthand for files = "all" + commands = "all"
+# oneshot_commands = false # enable / and ! command dispatch in one-shot mode
 # no_read_guard = false    # disable read-before-write guard
 # no_mcp = false           # disable MCP server connections
 # no_a2a = false           # disable A2A agent connections

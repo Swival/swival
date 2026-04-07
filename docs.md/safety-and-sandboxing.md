@@ -120,6 +120,26 @@ commands = "ask"
 approved_buckets = ["ls", "git status", "python3 -m pytest"]
 ```
 
+## One-Shot Command Dispatch
+
+In one-shot mode, `/` and `!` command dispatch is disabled by default. When input comes from a pipe, a file, or an upstream program, it may contain attacker-controlled content that starts with a slash or bang command. Executing that input as a command could run scripts from `~/.config/swival/commands/` or alter the agent's security posture (e.g. `/add-dir /`).
+
+Pass `--oneshot-commands` to opt in when you trust the input source:
+
+```sh
+swival --oneshot-commands "/simplify swival/agent.py"
+```
+
+Or set it in config:
+
+```toml
+oneshot_commands = true
+```
+
+`--yolo` does not imply `--oneshot-commands`. They control different trust boundaries: `--yolo` governs what the agent can do (filesystem and shell access), while `--oneshot-commands` governs whether the input itself is trusted to contain commands.
+
+In interactive mode, the user is typing directly, so commands are always enabled regardless of this flag.
+
 ## Untrusted Content Labels
 
 Output from external sources — `fetch_url`, MCP tools, and A2A tools — is wrapped with a deterministic `[UNTRUSTED EXTERNAL CONTENT]` header before the model sees it. This header instructs the model to treat the content as data, not instructions, and to avoid changing tool-selection behavior based on it.

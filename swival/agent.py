@@ -3840,6 +3840,12 @@ def build_parser():
         help='Filesystem access: "some" (default, workspace only), "all" (unrestricted), "none" (.swival/ only).',
     )
     access_group.add_argument(
+        "--oneshot-commands",
+        action="store_true",
+        default=_UNSET,
+        help="Allow / and ! command dispatch in one-shot mode.",
+    )
+    access_group.add_argument(
         "--yolo",
         action="store_true",
         default=_UNSET,
@@ -5433,6 +5439,12 @@ def _run_main(args, report, _write_report, parser):
             from .input_dispatch import is_command_script
 
             _is_script = is_command_script(args.question)
+            if _is_script and not args.oneshot_commands:
+                fmt.warning(
+                    "input looks like a command script "
+                    "but --oneshot-commands was not set."
+                )
+                _is_script = False
             if _is_script and reviewer_cmd:
                 fmt.warning(
                     "command scripts (input starting with / or !) are not "

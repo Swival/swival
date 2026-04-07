@@ -141,7 +141,7 @@ To prevent the checkpoint store from growing without bound, older summaries are 
 
 ## Commands
 
-Swival exposes manual controls for context management as input commands. These work in both interactive mode and one-shot mode.
+Swival exposes manual controls for context management as input commands. These work in interactive mode and in one-shot mode when `--oneshot-commands` is set.
 
 `/compact` triggers Level 1 compaction (shrink tool results). `/compact --drop` also triggers Level 2 (drop low-importance turns). Both report how many tokens were saved.
 

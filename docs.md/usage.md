@@ -49,7 +49,14 @@ The REPL is built on `prompt-toolkit`, so it supports input history, history sea
 
 ## Input Commands
 
-Slash commands work in both interactive mode (typed at the REPL prompt) and one-shot mode (when the input starts with a command, e.g. `swival /status`). A few commands (`/continue`, `/copy`) are REPL-only and are rejected in one-shot mode.
+Slash commands work in interactive mode (typed at the REPL prompt) and optionally in one-shot mode. In one-shot mode, command dispatch is disabled by default because the input may come from an untrusted source (a pipe, a file, or an upstream program). Pass `--oneshot-commands` to enable it:
+
+```sh
+swival --oneshot-commands "/status"
+swival --oneshot-commands $'/profile fast\n/simplify swival/agent.py'
+```
+
+Without `--oneshot-commands`, input that looks like a command script is treated as a plain natural-language prompt. A few commands (`/continue`, `/copy`) are REPL-only and are rejected even with `--oneshot-commands`.
 
 `/help` prints the command reference in the terminal.
 
@@ -89,7 +96,7 @@ Slash commands work in both interactive mode (typed at the REPL prompt) and one-
 
 `/exit` and `/quit` leave the REPL. Pressing `Ctrl-D` exits as well.
 
-`!command [args]` runs an executable from your commands directory (`$XDG_CONFIG_HOME/swival/commands/` or `~/.config/swival/commands/`) and injects its stdout as the next user message. See [Custom Commands](custom-commands.md) for setup and details.
+`!command [args]` runs an executable from your commands directory (`$XDG_CONFIG_HOME/swival/commands/` or `~/.config/swival/commands/`) and injects its stdout as the next user message. In one-shot mode, bang commands require `--oneshot-commands`. See [Custom Commands](custom-commands.md) for setup and details.
 
 ## CLI Flags
 
@@ -157,7 +164,9 @@ Useful for long-running sessions.
 
 `--add-dir-ro` grants read-only access to additional directories and can be repeated. The agent can read, list, and grep files in these directories but cannot write, edit, or delete them.
 
-`--yolo` is shorthand for `--files all --commands all`. Explicit `--files` or `--commands` flags take precedence over `--yolo`. Filesystem root access is always blocked.
+`--oneshot-commands` enables `/` and `!` command dispatch in one-shot mode. By default, command-like input in one-shot mode is treated as plain text because the input may come from an untrusted source. This flag is a no-op in interactive mode, where commands are always available. Can also be set in config as `oneshot_commands = true`.
+
+`--yolo` is shorthand for `--files all --commands all`. It does not imply `--oneshot-commands`. Explicit `--files` or `--commands` flags take precedence over `--yolo`. Filesystem root access is always blocked.
 
 `--sandbox` selects the sandbox backend. The default is `builtin`, which uses application-layer path guards. Set it to `agentfs` to re-exec Swival inside an [AgentFS](agentfs.md) overlay for OS-enforced write isolation. Requires the `agentfs` binary on PATH.
 

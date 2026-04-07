@@ -69,7 +69,10 @@
         </aside>
         <article class="docs-content">
             <h1 id="custom-commands">Custom Commands</h1>
-<p>Custom commands let you run external scripts from the REPL and feed their output into the conversation. Type <code>!name</code> and Swival looks up an executable called <code>name</code> in your commands directory, runs it, and injects its stdout as the next user message.</p>
+<p>Custom commands let you run external scripts and feed their output into the conversation. Type <code>!name</code> and Swival looks up an executable called <code>name</code> in your commands directory, runs it, and injects its stdout as the next user message.</p>
+<p>In interactive mode, custom commands are always available. In one-shot mode, they require <code>--oneshot-commands</code> because the input may come from an untrusted source:</p>
+<pre><code class="language-sh">swival --oneshot-commands &quot;!context&quot;
+</code></pre>
 <h2 id="setup">Setup</h2>
 <p>Create the commands directory and add executable scripts:</p>
 <pre><code class="language-sh">mkdir -p ~/.config/swival/commands
@@ -89,7 +92,7 @@ EOF
 chmod +x ~/.config/swival/commands/context
 </code></pre>
 <h2 id="usage">Usage</h2>
-<p>In the REPL, prefix the command name with <code>!</code>:</p>
+<p>Prefix the command name with <code>!</code>:</p>
 <pre><code class="language-text">swival&gt; !context
 </code></pre>
 <p>This runs the <code>context</code> script and sends its stdout to the model as if you had typed it. Everything after the command name is passed as a single argument (<code>$2</code>):</p>

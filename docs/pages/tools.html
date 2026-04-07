@@ -147,8 +147,8 @@ swival --commands ask &quot;Run the tests&quot;
 &lt;your summary&gt;
 (collapsed N turns, saved ~K tokens)
 </code></pre>
-<h3 id="repl-commands">REPL Commands</h3>
-<p>In REPL mode, you can also trigger snapshots manually with <code>/save</code>, <code>/restore</code>, and <code>/unsave</code>. These work like the tool actions but are initiated by the user instead of the model. <code>/restore</code> auto-generates the summary by calling the LLM, so you don't need to write one yourself. See <a href="usage.html">Usage</a> for details.</p>
+<h3 id="input-commands">Input Commands</h3>
+<p>You can also trigger snapshots manually with <code>/save</code>, <code>/restore</code>, and <code>/unsave</code>. These work like the tool actions but are initiated by the user instead of the model, and are available in interactive mode and in one-shot mode when <code>--oneshot-commands</code> is set. <code>/restore</code> auto-generates the summary by calling the LLM, so you don't need to write one yourself. See <a href="usage.html">Usage</a> for details.</p>
 <h3 id="example-workflow">Example Workflow</h3>
 <ol>
 <li>User asks to debug a performance issue.</li>

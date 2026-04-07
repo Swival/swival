@@ -105,6 +105,7 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "no_lifecycle": bool,
     "subagents": bool,
     "approved_buckets": list,
+    "oneshot_commands": bool,
 }
 
 _LIST_OF_STR_KEYS = {
@@ -197,6 +198,7 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "no_lifecycle": False,
     "aws_profile": None,
     "approved_buckets": [],
+    "oneshot_commands": False,
 }
 
 
@@ -1074,6 +1076,7 @@ def config_to_session_kwargs(config: dict) -> dict:
         "serve_description",
         "serve_skills",
         "approved_buckets",
+        "oneshot_commands",
     }
     for key, value in config.items():
         if key in _DROP_KEYS:

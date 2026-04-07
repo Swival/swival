@@ -145,18 +145,18 @@
 <h3 id="continue-here-files">Continue-Here Files</h3>
 <p>When a session ends abnormally — Ctrl+C, max turns exhausted, compaction failure, or REPL exit — Swival writes a structured <code>.swival/continue.md</code> file capturing the current task, todo state, recent tool activity, and key reasoning. On the next session start, this file is loaded into the system prompt and deleted, so the agent picks up where it left off without re-explanation.</p>
 <p>The file is always written deterministically first (no network call). On the max-turns path only, Swival optionally enhances it with an LLM-generated summary. If the LLM call fails, the deterministic version is already on disk.</p>
-<p>Continue-here files are capped at 4,000 characters. Files older than 24 hours trigger a staleness warning but are still loaded. Use <code>--no-continue</code> to disable both writing and reading. The <code>/status</code> REPL command includes continue file presence in its session overview.</p>
+<p>Continue-here files are capped at 4,000 characters. Files older than 24 hours trigger a staleness warning but are still loaded. Use <code>--no-continue</code> to disable both writing and reading. The <code>/status</code> command includes continue file presence in its session overview.</p>
 <p>Together, these four channels mean that even after nuclear compaction wipes the conversation to nearly nothing, the agent still has its reasoning chain, its task list, a record of what it learned during investigation, and — if the session was interrupted — a structured resume plan for the next run.</p>
 <h2 id="proactive-checkpoint-summaries">Proactive Checkpoint Summaries</h2>
 <p>Enabled with <code>--proactive-summaries</code>, this feature periodically summarizes recent turns in the background. Every 10 turns, the last batch is summarized via an LLM call and stored internally.</p>
 <p>These summaries serve as a safety net. When Level 2 or Level 3 compaction fires and can't get an LLM summary of the dropped turns, it falls back to these pre-computed checkpoint summaries instead of losing the context entirely.</p>
 <p>To prevent the checkpoint store from growing without bound, older summaries are periodically consolidated: the oldest half is merged into a single summary, creating a hierarchical map/reduce structure. The total is capped at roughly 2,000 tokens.</p>
-<h2 id="repl-commands">REPL Commands</h2>
-<p>The interactive REPL exposes manual controls for context management.</p>
+<h2 id="commands">Commands</h2>
+<p>Swival exposes manual controls for context management as input commands. These work in interactive mode and in one-shot mode when <code>--oneshot-commands</code> is set.</p>
 <p><code>/compact</code> triggers Level 1 compaction (shrink tool results). <code>/compact --drop</code> also triggers Level 2 (drop low-importance turns). Both report how many tokens were saved.</p>
 <p><code>/save [label]</code> sets a snapshot checkpoint at the current position. <code>/restore</code> generates a summary via LLM and collapses everything since the checkpoint. <code>/unsave</code> cancels the checkpoint. These are the manual equivalents of the agent's <code>snapshot</code> tool.</p>
 <p><code>/clear</code> drops everything and resets all internal state — conversation, thinking, todos, snapshots, and file tracking.</p>
-<p>For the full REPL command reference, see <a href="usage.html">Usage</a>.</p>
+<p>For the full command reference, see <a href="usage.html">Usage</a>.</p>
 <h2 id="configuration">Configuration</h2>
 <p>Most context management works automatically. A few settings let you tune it.</p>
 <p><code>--max-context-tokens</code> tells Swival how large the context window is. With LM Studio this is auto-detected, but for other providers you should set it to match your model. Without it, Swival may not trigger compaction at the right time.</p>

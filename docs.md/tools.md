@@ -155,7 +155,7 @@ The collapsed message that replaces all intermediate turns looks like this:
 
 ### Input Commands
 
-You can also trigger snapshots manually with `/save`, `/restore`, and `/unsave`. These work like the tool actions but are initiated by the user instead of the model, and are available in both interactive and one-shot mode. `/restore` auto-generates the summary by calling the LLM, so you don't need to write one yourself. See [Usage](usage.md) for details.
+You can also trigger snapshots manually with `/save`, `/restore`, and `/unsave`. These work like the tool actions but are initiated by the user instead of the model, and are available in interactive mode and in one-shot mode when `--oneshot-commands` is set. `/restore` auto-generates the summary by calling the LLM, so you don't need to write one yourself. See [Usage](usage.md) for details.
 
 ### Example Workflow
 
