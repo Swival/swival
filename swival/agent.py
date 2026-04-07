@@ -477,6 +477,63 @@ def _retries_from_exc(exc):
     return getattr(exc, "_provider_retries", 0)
 
 
+def _patch_chatgpt_responses_empty_output():
+    """Monkey-patch litellm ChatGPT Responses API to handle empty output.
+
+    The ChatGPT backend streams output items via response.output_item.done
+    events but the final response.completed event may have output:[].
+    This thin wrapper calls the original method, then backfills from the
+    raw SSE body when the result has empty output.
+    """
+    try:
+        from litellm.llms.chatgpt.responses.transformation import (
+            ChatGPTResponsesAPIConfig,
+        )
+    except ImportError:
+        return
+
+    if getattr(ChatGPTResponsesAPIConfig, "_swival_patched", False):
+        return
+    ChatGPTResponsesAPIConfig._swival_patched = True
+
+    _original = ChatGPTResponsesAPIConfig.transform_response_api_response
+
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    _strip = CustomStreamWrapper._strip_sse_data_from_chunk
+
+    def _patched_transform(self, model, raw_response, logging_obj):
+        result = _original(self, model, raw_response, logging_obj)
+        if getattr(result, "output", None):
+            return result
+
+        body_text = getattr(raw_response, "text", None) or ""
+        done_items = []
+        for line in body_text.splitlines():
+            stripped = _strip(line)
+            if not stripped:
+                continue
+            stripped = stripped.strip()
+            if not stripped:
+                continue
+            try:
+                parsed = json.loads(stripped)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if (
+                isinstance(parsed, dict)
+                and parsed.get("type") == "response.output_item.done"
+            ):
+                item = parsed.get("item")
+                if isinstance(item, dict):
+                    done_items.append(item)
+        if done_items:
+            result.output = done_items
+        return result
+
+    ChatGPTResponsesAPIConfig.transform_response_api_response = _patched_transform
+
+
 def _raise_with_retries(exc):
     """Attach _provider_retries default to an exception before raising."""
     if not hasattr(exc, "_provider_retries"):
@@ -2834,6 +2891,7 @@ def call_llm(
 
     litellm.suppress_debug_info = True
     litellm.drop_params = True
+    _patch_chatgpt_responses_empty_output()
 
     # Resolve sanitize_thinking: opt-in only.
     if sanitize_thinking is None:
