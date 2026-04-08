@@ -3714,7 +3714,7 @@ def build_parser():
         type=str,
         default=None,
         metavar="FILE",
-        help="Write a JSON evaluation report to FILE. Requires a task; incompatible with --repl.",
+        help="Write a JSON evaluation report to FILE.",
     )
     review_group.add_argument(
         "--review-prompt",
@@ -4182,8 +4182,7 @@ def main():
 
     if args.self_review and args.repl:
         parser.error("--self-review is incompatible with --repl")
-    if args.report and args.repl:
-        parser.error("--report is incompatible with --repl")
+
     if args.reviewer and args.repl:
         parser.error("--reviewer is incompatible with --repl")
 
@@ -4323,6 +4322,8 @@ def main():
         review_rounds=0,
         todo_state=None,
         snapshot_state=None,
+        task=None,
+        mode="oneshot",
     ):
         if not report:
             return
@@ -4343,7 +4344,7 @@ def main():
         _session = get_agentfs_session()
         _diff = diff_hint(_session)
         report.finalize(
-            task=args.question or "",
+            task=task or args.question or "",
             model=model_id,
             provider=args.provider,
             settings=_report_settings(model_id, skills_catalog, instructions_loaded),
@@ -4360,6 +4361,7 @@ def main():
             sandbox_strict_read=args.sandbox_strict_read,
             agentfs_version=get_agentfs_version(),
             diff_hint=_diff,
+            mode=mode,
         )
         try:
             report.write(args.report)
@@ -4377,15 +4379,16 @@ def main():
         _run_outcome = "error"
         _run_exit_code = 1
         fmt.error(str(e))
-        _write_report(
-            "error",
-            exit_code=1,
-            error_message=str(e),
-            model_id=getattr(args, "_resolved_model_id", args.model or "unknown"),
-            skills_catalog=getattr(args, "_resolved_skills", None),
-            instructions_loaded=getattr(args, "_resolved_instructions", None),
-            review_rounds=getattr(args, "_review_rounds", 0),
-        )
+        if not report or not report.is_finalized:
+            _write_report(
+                "error",
+                exit_code=1,
+                error_message=str(e),
+                model_id=getattr(args, "_resolved_model_id", args.model or "unknown"),
+                skills_catalog=getattr(args, "_resolved_skills", None),
+                instructions_loaded=getattr(args, "_resolved_instructions", None),
+                review_rounds=getattr(args, "_review_rounds", 0),
+            )
         sys.exit(1)
     except SystemExit as e:
         _run_exit_code = e.code if isinstance(e.code, int) else 1
@@ -5649,6 +5652,8 @@ def _run_main(args, report, _write_report, parser):
                 subagent_manager.shutdown()
 
     # REPL path
+    if report:
+        loop_kwargs["report"] = report
     _sa_holder = [subagent_manager]
     try:
         if args.question:
@@ -5686,6 +5691,8 @@ def _run_main(args, report, _write_report, parser):
                         thinking_state=thinking_state,
                     )
                 raise SystemExit(exc.code)
+            if report is not None:
+                loop_kwargs["turn_offset"] = report.max_turn_seen
             if not no_history and answer:
                 append_history(
                     base_dir, args.question, answer, diagnostics=args.verbose
@@ -5697,6 +5704,21 @@ def _run_main(args, report, _write_report, parser):
                     "max turns reached for initial question. Use /continue to resume."
                 )
 
+        def _on_repl_exit(outcome, exit_code):
+            task = f"repl session ({report.max_turn_seen} turns)"
+            _write_report(
+                outcome,
+                answer=None,
+                exit_code=exit_code,
+                task=task,
+                mode="repl",
+                model_id=model_id,
+                skills_catalog=skills_catalog,
+                instructions_loaded=instructions_loaded,
+                todo_state=todo_state,
+                snapshot_state=snapshot_state,
+            )
+
         repl_loop(
             messages,
             tools,
@@ -5707,6 +5729,7 @@ def _run_main(args, report, _write_report, parser):
             startup_profile=getattr(args, "_active_profile", None),
             raw_llm_baseline=getattr(args, "_raw_llm_baseline", None),
             pre_profile_baseline=getattr(args, "_pre_profile_baseline", None),
+            on_exit=_on_repl_exit if report else None,
         )
     finally:
         if _sa_holder[0] is not None:
@@ -7532,6 +7555,9 @@ def execute_input(
                 todo_state=ctx.todo_state,
                 snapshot_state=ctx.snapshot_state,
             )
+            _rpt = ctx.loop_kwargs.get("report")
+            if _rpt is not None:
+                _rpt.record_session_clear()
             return StepResult(kind="state_change", text=msg)
 
         if cmd == "/compact":
@@ -7830,6 +7856,9 @@ def repl_loop(
     startup_profile: str | None = None,
     raw_llm_baseline: dict | None = None,
     pre_profile_baseline: dict | None = None,
+    report: "ReportCollector | None" = None,
+    turn_offset: int = 0,
+    on_exit=None,
 ):
     """Interactive read-eval-print loop."""
     from prompt_toolkit import PromptSession
@@ -7897,6 +7926,8 @@ def repl_loop(
         secret_shield=secret_shield,
         command_policy=command_policy,
         turn_state=turn_state,
+        report=report,
+        turn_offset=turn_offset,
     )
 
     ctx = InputContext(
@@ -7927,40 +7958,55 @@ def repl_loop(
         is_subagent=is_subagent,
     )
 
-    while True:
-        try:
-            print(file=sys.stderr)  # blank line before prompt
-            line = session.prompt(prompt_text)
-        except (EOFError, KeyboardInterrupt):
-            print(file=sys.stderr)  # newline after ^D / ^C
-            if continue_here and any(_msg_role(m) != "system" for m in messages):
-                from .continue_here import write_continue_file
+    _exit_outcome = "error"
+    _exit_code = 1
+    try:
+        while True:
+            try:
+                print(file=sys.stderr)  # blank line before prompt
+                line = session.prompt(prompt_text)
+            except (EOFError, KeyboardInterrupt):
+                print(file=sys.stderr)  # newline after ^D / ^C
+                if continue_here and any(_msg_role(m) != "system" for m in messages):
+                    from .continue_here import write_continue_file
 
-                write_continue_file(
-                    base_dir,
-                    messages,
-                    todo_state=todo_state,
-                    snapshot_state=snapshot_state,
-                    thinking_state=thinking_state,
-                )
-            break
+                    write_continue_file(
+                        base_dir,
+                        messages,
+                        todo_state=todo_state,
+                        snapshot_state=snapshot_state,
+                        thinking_state=thinking_state,
+                    )
+                break
 
-        parsed = parse_input_line(line)
-        if not parsed.raw:
-            continue
+            parsed = parse_input_line(line)
+            if not parsed.raw:
+                continue
 
-        result = execute_input(parsed, ctx, mode="repl")
+            if report is not None:
+                report.record_repl_turn(parsed.raw)
 
-        if result.text is not None:
-            if result.kind == "agent_turn":
-                fmt.repl_answer(result.text)
-            elif result.is_error:
-                fmt.warning(result.text)
-            else:
-                fmt.info(result.text)
+            result = execute_input(parsed, ctx, mode="repl")
 
-        if result.stop:
-            break
+            if result.kind == "agent_turn" and report is not None:
+                _repl_loop_kwargs["turn_offset"] = report.max_turn_seen
+
+            if result.text is not None:
+                if result.kind == "agent_turn":
+                    fmt.repl_answer(result.text)
+                elif result.is_error:
+                    fmt.warning(result.text)
+                else:
+                    fmt.info(result.text)
+
+            if result.stop:
+                break
+
+        _exit_outcome = "success"
+        _exit_code = 0
+    finally:
+        if on_exit:
+            on_exit(_exit_outcome, _exit_code)
 
 
 if __name__ == "__main__":

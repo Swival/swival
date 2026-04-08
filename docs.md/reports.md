@@ -6,7 +6,9 @@ The `--report` flag writes a structured JSON file that captures what happened du
 swival "Refactor the error handling in src/api.py" --report run1.json
 ```
 
-When `--report` is enabled, Swival still prints the final answer to standard output when an answer exists, and also writes the same answer into the report JSON under `result.answer`. The flag is incompatible with `--repl`.
+When `--report` is enabled, Swival still prints the final answer to standard output when an answer exists, and also writes the same answer into the report JSON under `result.answer`.
+
+In REPL mode (`--repl --report run.json`), a single report covers the entire session. Events accumulate across all REPL turns and the report is written when the session ends. The `task` field becomes `"repl session (<N> turns)"` and `mode` is `"repl"` instead of `"oneshot"`. Each user input is recorded as a `repl_turn` event in the timeline, and `/clear` or `/new` commands appear as `session_clear` events.
 
 ## Real Example
 
@@ -15,6 +17,7 @@ The JSON below is from a verified local run using `--model dummy-model --max-tur
 ```json
 {
   "version": 1,
+  "mode": "oneshot",
   "timestamp": "2026-02-25T22:37:31.546022+00:00",
   "task": "No-op example",
   "model": "dummy-model",
@@ -64,7 +67,7 @@ The JSON below is from a verified local run using `--model dummy-model --max-tur
 
 ### Top-Level Fields
 
-`version` is the schema version and is currently `1`. `timestamp` is the run completion time in UTC ISO 8601 format. `task` is the original question string passed on the command line. `model` is the resolved model identifier that was actually used. `provider` is one of `lmstudio`, `llamacpp`, `huggingface`, `openrouter`, `chatgpt`, `google`, `bedrock`, `generic`, or `command`.
+`version` is the schema version and is currently `1`. `mode` is `"oneshot"` for single-task runs or `"repl"` for interactive sessions. `timestamp` is the run completion time in UTC ISO 8601 format. `task` is the original question string passed on the command line, or `"repl session (<N> turns)"` for REPL sessions. `model` is the resolved model identifier that was actually used. `provider` is one of `lmstudio`, `llamacpp`, `huggingface`, `openrouter`, `chatgpt`, `google`, `bedrock`, `generic`, or `command`.
 
 `settings` captures run configuration. `sandbox` captures the sandbox backend in use. `result` captures outcome and exit semantics. `stats` captures aggregate counters. `timeline` captures ordered event records.
 
@@ -119,6 +122,10 @@ For `lifecycle`, fields include `event` (`startup` or `exit`), `exit_code`, `dur
 For `command_policy`, fields include `bucket` (the normalized command bucket) and `decision` (`allow`, `persist`, `once`, `always_ask`, `deny`, or `block`). These events are emitted when `--commands ask` is active.
 
 For `untrusted_input`, fields include `source` (the tool name, e.g. `fetch_url` or `mcp__server__tool`) and `origin` (the URL or empty string). These events are emitted when external content is successfully ingested.
+
+For `repl_turn`, fields include `turn_offset` (the cumulative turn count at the start of this REPL turn) and `input` (the user's input text, truncated to 500 characters). These events appear only in REPL reports and mark the boundary between user interactions.
+
+For `session_clear`, the event marks that a `/clear` or `/new` command reset the conversation state. No additional fields. These events appear only in REPL reports.
 
 ## Benchmarking Workflow
 

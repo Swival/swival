@@ -50,6 +50,10 @@ class ReportCollector:
             "untrusted_inputs": 0,
         }
 
+    @property
+    def is_finalized(self) -> bool:
+        return self._last_report is not None
+
     def record_llm_call(
         self,
         turn: int,
@@ -212,6 +216,20 @@ class ReportCollector:
             {"type": "untrusted_input", "source": source, "origin": origin}
         )
 
+    def record_repl_turn(self, input_text: str):
+        """Record a REPL turn boundary in the timeline."""
+        self.events.append(
+            {
+                "type": "repl_turn",
+                "turn_offset": self.max_turn_seen,
+                "input": input_text[:500],
+            }
+        )
+
+    def record_session_clear(self):
+        """Record a /clear or /new command in the timeline."""
+        self.events.append({"type": "session_clear"})
+
     def build_report(
         self,
         *,
@@ -232,6 +250,7 @@ class ReportCollector:
         sandbox_strict_read: bool = False,
         agentfs_version: str | None = None,
         diff_hint: str | None = None,
+        mode: str = "oneshot",
     ) -> dict:
         tool_calls_succeeded = sum(s["succeeded"] for s in self.tool_stats.values())
         tool_calls_failed = sum(s["failed"] for s in self.tool_stats.values())
@@ -256,6 +275,7 @@ class ReportCollector:
 
         return {
             "version": 1,
+            "mode": mode,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "task": task,
             "model": model,
@@ -330,6 +350,7 @@ class ReportCollector:
         sandbox_strict_read: bool = False,
         agentfs_version: str | None = None,
         diff_hint: str | None = None,
+        mode: str = "oneshot",
     ) -> dict:
         """Build the report and write it to disk in one step."""
         self._last_report = self.build_report(
@@ -350,5 +371,6 @@ class ReportCollector:
             sandbox_strict_read=sandbox_strict_read,
             agentfs_version=agentfs_version,
             diff_hint=diff_hint,
+            mode=mode,
         )
         return self._last_report

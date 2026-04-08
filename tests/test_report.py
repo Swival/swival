@@ -285,18 +285,11 @@ class TestLoadInstructionsTuple:
 
 
 class TestReportCLIValidation:
-    def test_report_with_repl_is_error(self):
+    def test_report_with_repl_accepted(self):
         parser = agent.build_parser()
-        with pytest.raises(SystemExit) as exc_info:
-            args = parser.parse_args(["--repl", "--report", "out.json", "hello"])
-            args.verbose = True
-            # Trigger the validation in main
-            from swival import fmt
-
-            fmt.init()
-            if args.report and args.repl:
-                parser.error("--report is incompatible with --repl")
-        assert exc_info.value.code == 2
+        args = parser.parse_args(["--repl", "--report", "out.json", "hello"])
+        assert args.repl is True
+        assert args.report == "out.json"
 
     def test_report_flag_parsed(self):
         parser = agent.build_parser()

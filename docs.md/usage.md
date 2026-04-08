@@ -240,7 +240,7 @@ See [A2A](a2a.md) for full server documentation.
 
 `--quiet` and `-q` suppress diagnostics and keep terminal output focused on final answers.
 
-`--report FILE` writes a JSON run report to `FILE`. Requires a task; incompatible with `--repl`.
+`--report FILE` writes a JSON run report to `FILE`. In one-shot mode, requires a task. In REPL mode, the report covers the entire session and is written when the session ends.
 
 `--reviewer COMMAND` runs an external reviewer after each answer. The command string is shell-split, so you can pass arguments inline (e.g. `--reviewer "swival --reviewer-mode"`). Requires a task; incompatible with `--repl`.
 
