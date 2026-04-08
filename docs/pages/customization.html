@@ -120,6 +120,7 @@ cache = true
 # encrypt_secrets = false  # transparent credential encryption
 # encrypt_secrets_key = &quot;...&quot; # hex 32-byte key for stable ciphertext
 # sanitize_thinking = false   # strip leaked &lt;think&gt; tags
+# trace_dir = &quot;traces&quot;        # directory for JSONL trace export (HuggingFace format)
 
 # Reviewer settings
 reviewer = &quot;swival --reviewer-mode&quot;
@@ -192,7 +193,7 @@ swival --model &quot;Qwen/Qwen3-Coder&quot; &quot;task needing a different model
 </code></pre>
 <p>Any model supported by the inference endpoint works — no extra profile needed.</p>
 <p>You can also switch profiles mid-session from the REPL without restarting:</p>
-<pre><code>swival&gt; /profile              # list profiles, active one marked with →
+<pre><code class="language-text">swival&gt; /profile              # list profiles, active one marked with →
 swival&gt; /profile fast-local   # switch to the &quot;fast-local&quot; profile
 swival&gt; /profile -            # revert to the profile active at session start
 </code></pre>

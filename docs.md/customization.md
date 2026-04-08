@@ -61,6 +61,7 @@ cache = true
 # encrypt_secrets = false  # transparent credential encryption
 # encrypt_secrets_key = "..." # hex 32-byte key for stable ciphertext
 # sanitize_thinking = false   # strip leaked <think> tags
+# trace_dir = "traces"        # directory for JSONL trace export (HuggingFace format)
 
 # Reviewer settings
 reviewer = "swival --reviewer-mode"
@@ -165,7 +166,7 @@ Any model supported by the inference endpoint works — no extra profile needed.
 
 You can also switch profiles mid-session from the REPL without restarting:
 
-```
+```text
 swival> /profile              # list profiles, active one marked with →
 swival> /profile fast-local   # switch to the "fast-local" profile
 swival> /profile -            # revert to the profile active at session start

@@ -76,6 +76,7 @@ Session(
     encrypt_secrets_tweak: str | None = None,
     encrypt_secrets_patterns: list | None = None,
     llm_filter: str | None = None,
+    trace_dir: str | None = None,
     subagents: bool = False,
     lifecycle_command: str | None = None,
     lifecycle_timeout: int = 300,
@@ -113,6 +114,7 @@ All parameters are keyword-only. The important ones:
 | `memory`                | Load memory files (`.swival/memory/`) into the system prompt.                                                                                                                                                                                                                          |
 | `prompt_cache`          | Inject explicit `cache_control` annotations for Anthropic/Gemini/Bedrock. Default `True`. Set `False` to opt out.                                                                                                                                                                      |
 | `cache`                 | Cache LLM responses to disk for deterministic replay.                                                                                                                                                                                                                                  |
+| `trace_dir`             | Write HuggingFace-compatible JSONL session traces to this directory. Each `run()` call produces a separate file; `ask()` calls accumulate in one file per session.                                                                                                                     |
 | `verbose`               | Print diagnostics to stderr.                                                                                                                                                                                                                                                           |
 
 Parameters not listed here correspond to the same-named CLI flags and config keys. See [Customization](customization.html) for the full config reference.

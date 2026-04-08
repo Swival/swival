@@ -134,6 +134,7 @@ print(answer)
     encrypt_secrets_tweak: str | None = None,
     encrypt_secrets_patterns: list | None = None,
     llm_filter: str | None = None,
+    trace_dir: str | None = None,
     subagents: bool = False,
     lifecycle_command: str | None = None,
     lifecycle_timeout: int = 300,
@@ -249,6 +250,10 @@ print(answer)
 <tr>
 <td><code>cache</code></td>
 <td>Cache LLM responses to disk for deterministic replay.</td>
+</tr>
+<tr>
+<td><code>trace_dir</code></td>
+<td>Write HuggingFace-compatible JSONL session traces to this directory. Each <code>run()</code> call produces a separate file; <code>ask()</code> calls accumulate in one file per session.</td>
 </tr>
 <tr>
 <td><code>verbose</code></td>

@@ -72,11 +72,13 @@
 <p>The <code>--report</code> flag writes a structured JSON file that captures what happened during a run, including outcome, timing, tool usage, context-management events, and a full chronological timeline. This is designed for benchmarking and evaluation workflows where you want reproducible telemetry across model or prompt variants.</p>
 <pre><code class="language-sh">swival &quot;Refactor the error handling in src/api.py&quot; --report run1.json
 </code></pre>
-<p>When <code>--report</code> is enabled, Swival still prints the final answer to standard output when an answer exists, and also writes the same answer into the report JSON under <code>result.answer</code>. The flag is incompatible with <code>--repl</code>.</p>
+<p>When <code>--report</code> is enabled, Swival still prints the final answer to standard output when an answer exists, and also writes the same answer into the report JSON under <code>result.answer</code>.</p>
+<p>In REPL mode (<code>--repl --report run.json</code>), a single report covers the entire session. Events accumulate across all REPL turns and the report is written when the session ends. The <code>task</code> field becomes <code>"repl session (&lt;N&gt; turns)"</code> and <code>mode</code> is <code>"repl"</code> instead of <code>"oneshot"</code>. Each user input is recorded as a <code>repl_turn</code> event in the timeline, and <code>/clear</code> or <code>/new</code> commands appear as <code>session_clear</code> events.</p>
 <h2 id="real-example">Real Example</h2>
 <p>The JSON below is from a verified local run using <code>--model dummy-model --max-turns 0 --report run.json</code>, which produces an exhausted run with no LLM calls.</p>
 <pre><code class="language-json">{
   &quot;version&quot;: 1,
+  &quot;mode&quot;: &quot;oneshot&quot;,
   &quot;timestamp&quot;: &quot;2026-02-25T22:37:31.546022+00:00&quot;,
   &quot;task&quot;: &quot;No-op example&quot;,
   &quot;model&quot;: &quot;dummy-model&quot;,
@@ -123,7 +125,7 @@
 </code></pre>
 <h2 id="report-structure">Report Structure</h2>
 <h3 id="top-level-fields">Top-Level Fields</h3>
-<p><code>version</code> is the schema version and is currently <code>1</code>. <code>timestamp</code> is the run completion time in UTC ISO 8601 format. <code>task</code> is the original question string passed on the command line. <code>model</code> is the resolved model identifier that was actually used. <code>provider</code> is one of <code>lmstudio</code>, <code>llamacpp</code>, <code>huggingface</code>, <code>openrouter</code>, <code>chatgpt</code>, <code>google</code>, <code>bedrock</code>, <code>generic</code>, or <code>command</code>.</p>
+<p><code>version</code> is the schema version and is currently <code>1</code>. <code>mode</code> is <code>"oneshot"</code> for single-task runs or <code>"repl"</code> for interactive sessions. <code>timestamp</code> is the run completion time in UTC ISO 8601 format. <code>task</code> is the original question string passed on the command line, or <code>"repl session (&lt;N&gt; turns)"</code> for REPL sessions. <code>model</code> is the resolved model identifier that was actually used. <code>provider</code> is one of <code>lmstudio</code>, <code>llamacpp</code>, <code>huggingface</code>, <code>openrouter</code>, <code>chatgpt</code>, <code>google</code>, <code>bedrock</code>, <code>generic</code>, or <code>command</code>.</p>
 <p><code>settings</code> captures run configuration. <code>sandbox</code> captures the sandbox backend in use. <code>result</code> captures outcome and exit semantics. <code>stats</code> captures aggregate counters. <code>timeline</code> captures ordered event records.</p>
 <h3 id="settings"><code>settings</code></h3>
 <p><code>temperature</code> stores the sampling temperature or <code>null</code> when omitted. <code>top_p</code> stores nucleus sampling. <code>seed</code> stores the random seed or <code>null</code>. <code>max_turns</code> and <code>max_output_tokens</code> store turn and output-token limits. <code>context_length</code> stores effective context length after provider resolution. <code>files</code> records the filesystem access policy: <code>"some"</code> (workspace only, the default), <code>"all"</code> (unrestricted), or <code>"none"</code> (<code>.swival/</code> only).</p>
@@ -151,6 +153,8 @@
 <p>For <code>lifecycle</code>, fields include <code>event</code> (<code>startup</code> or <code>exit</code>), <code>exit_code</code>, <code>duration_s</code>, and optionally <code>error</code>. Lifecycle events appear when <code>--lifecycle-command</code> is configured. See <a href="lifecycle-hooks.html">Lifecycle Hooks</a> for details.</p>
 <p>For <code>command_policy</code>, fields include <code>bucket</code> (the normalized command bucket) and <code>decision</code> (<code>allow</code>, <code>persist</code>, <code>once</code>, <code>always_ask</code>, <code>deny</code>, or <code>block</code>). These events are emitted when <code>--commands ask</code> is active.</p>
 <p>For <code>untrusted_input</code>, fields include <code>source</code> (the tool name, e.g. <code>fetch_url</code> or <code>mcp__server__tool</code>) and <code>origin</code> (the URL or empty string). These events are emitted when external content is successfully ingested.</p>
+<p>For <code>repl_turn</code>, fields include <code>turn_offset</code> (the cumulative turn count at the start of this REPL turn) and <code>input</code> (the user's input text, truncated to 500 characters). These events appear only in REPL reports and mark the boundary between user interactions.</p>
+<p>For <code>session_clear</code>, the event marks that a <code>/clear</code> or <code>/new</code> command reset the conversation state. No additional fields. These events appear only in REPL reports.</p>
 <h2 id="benchmarking-workflow">Benchmarking Workflow</h2>
 <p>A standard pattern is to run the same task set against multiple models or settings and then compare their report files. Passing <code>--seed</code> can reduce run-to-run variance for providers that support seeded sampling.</p>
 <pre><code class="language-sh">swival &quot;task&quot; --seed 42 --report run1.json
@@ -196,6 +200,19 @@ diff &lt;(jq '{turns: .stats.turns, tools: .stats.tool_calls_total}' a.json) \
 <h2 id="what-reports-do-not-prove">What Reports Do Not Prove</h2>
 <p>The report captures behavior, not semantic correctness. It tells you whether the run completed cleanly, how the model spent time, which tools it used, and how context recovery behaved.</p>
 <p>It does not prove that generated code compiles, passes tests, or satisfies business requirements. Those checks still belong in your evaluator, CI pipeline, or reviewer script.</p>
+<h2 id="trace-export">Trace Export</h2>
+<p>The <code>--trace-dir</code> flag writes the full conversation as a JSONL file that HuggingFace auto-detects as <code>format:agent-traces</code> with harness <code>swival</code>. This is separate from <code>--report</code> and can be used alongside it or independently.</p>
+<pre><code class="language-sh">swival &quot;Fix the login bug&quot; --trace-dir traces/
+</code></pre>
+<p>Each session produces a <code>&lt;session_id&gt;.jsonl</code> file in the target directory. The format translates Swival's OpenAI-format messages into Anthropic-style content blocks:</p>
+<ul>
+<li><code>role: "assistant"</code> with <code>tool_calls</code> becomes <code>type: "assistant"</code> with <code>tool_use</code> content blocks</li>
+<li><code>role: "tool"</code> becomes <code>type: "user"</code> with <code>tool_result</code> content blocks</li>
+<li><code>role: "system"</code> becomes <code>type: "system"</code> with the prompt text</li>
+<li>Every line includes <code>harness: "swival"</code> for HuggingFace detection</li>
+</ul>
+<p>Works in one-shot mode, REPL mode, and through the Python API (<code>Session(trace_dir="traces/")</code>). When used with <code>Session.ask()</code>, all turns accumulate in a single file per session.</p>
+<p>The config key <code>trace_dir</code> can be set in <code>swival.toml</code> or <code>~/.config/swival/config.toml</code> to enable tracing by default without passing the flag every time.</p>
         </article>
     </div>
     <footer class="site-footer">

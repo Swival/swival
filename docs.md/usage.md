@@ -242,6 +242,8 @@ See [A2A](a2a.md) for full server documentation.
 
 `--report FILE` writes a JSON run report to `FILE`. In one-shot mode, requires a task. In REPL mode, the report covers the entire session and is written when the session ends.
 
+`--trace-dir DIR` writes a HuggingFace-compatible JSONL session trace to `DIR`. Each session produces a `<session_id>.jsonl` file that HuggingFace auto-detects as `format:agent-traces` with harness `swival`. Works in both one-shot and REPL modes. See [Reports](reports.md) for details.
+
 `--reviewer COMMAND` runs an external reviewer after each answer. The command string is shell-split, so you can pass arguments inline (e.g. `--reviewer "swival --reviewer-mode"`). Requires a task; incompatible with `--repl`.
 
 `--max-review-rounds N` limits how many times the reviewer can request retries and defaults to `15`. Set to `0` to accept the first answer without retries.

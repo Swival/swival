@@ -195,3 +195,22 @@ diff <(jq '{turns: .stats.turns, tools: .stats.tool_calls_total}' a.json) \
 The report captures behavior, not semantic correctness. It tells you whether the run completed cleanly, how the model spent time, which tools it used, and how context recovery behaved.
 
 It does not prove that generated code compiles, passes tests, or satisfies business requirements. Those checks still belong in your evaluator, CI pipeline, or reviewer script.
+
+## Trace Export
+
+The `--trace-dir` flag writes the full conversation as a JSONL file that HuggingFace auto-detects as `format:agent-traces` with harness `swival`. This is separate from `--report` and can be used alongside it or independently.
+
+```sh
+swival "Fix the login bug" --trace-dir traces/
+```
+
+Each session produces a `<session_id>.jsonl` file in the target directory. The format translates Swival's OpenAI-format messages into Anthropic-style content blocks:
+
+- `role: "assistant"` with `tool_calls` becomes `type: "assistant"` with `tool_use` content blocks
+- `role: "tool"` becomes `type: "user"` with `tool_result` content blocks
+- `role: "system"` becomes `type: "system"` with the prompt text
+- Every line includes `harness: "swival"` for HuggingFace detection
+
+Works in one-shot mode, REPL mode, and through the Python API (`Session(trace_dir="traces/")`). When used with `Session.ask()`, all turns accumulate in a single file per session.
+
+The config key `trace_dir` can be set in `swival.toml` or `~/.config/swival/config.toml` to enable tracing by default without passing the flag every time.

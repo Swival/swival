@@ -3717,6 +3717,13 @@ def build_parser():
         help="Write a JSON evaluation report to FILE.",
     )
     review_group.add_argument(
+        "--trace-dir",
+        type=str,
+        default=None,
+        metavar="DIR",
+        help="Write HuggingFace-compatible JSONL session trace to DIR.",
+    )
+    review_group.add_argument(
         "--review-prompt",
         type=str,
         default=_UNSET,
@@ -5433,6 +5440,20 @@ def _run_main(args, report, _write_report, parser):
         _validate_external_command(args.reviewer, "reviewer")
         reviewer_cmd = args.reviewer
 
+    def _write_trace(msgs):
+        if not getattr(args, "trace_dir", None) or not msgs:
+            return
+        from .traces import write_trace_to_dir
+
+        write_trace_to_dir(
+            msgs,
+            trace_dir=args.trace_dir,
+            base_dir=base_dir,
+            model=model_id,
+            task=args.question,
+            verbose=args.verbose,
+        )
+
     if not args.repl:
         # Single-shot path
         try:
@@ -5650,6 +5671,7 @@ def _run_main(args, report, _write_report, parser):
         finally:
             if subagent_manager is not None:
                 subagent_manager.shutdown()
+            _write_trace(messages)
 
     # REPL path
     if report:
@@ -5734,6 +5756,7 @@ def _run_main(args, report, _write_report, parser):
     finally:
         if _sa_holder[0] is not None:
             _sa_holder[0].shutdown()
+        _write_trace(messages)
     _show_agentfs_diff_hint(args)
 
 

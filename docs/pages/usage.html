@@ -191,7 +191,8 @@ swival --oneshot-commands $'/profile fast\n/simplify swival/agent.py'
 <p>See <a href="a2a.html">A2A</a> for full server documentation.</p>
 <h3 id="output-and-reporting-flags">Output And Reporting Flags</h3>
 <p><code>--quiet</code> and <code>-q</code> suppress diagnostics and keep terminal output focused on final answers.</p>
-<p><code>--report FILE</code> writes a JSON run report to <code>FILE</code>. Requires a task; incompatible with <code>--repl</code>.</p>
+<p><code>--report FILE</code> writes a JSON run report to <code>FILE</code>. In one-shot mode, requires a task. In REPL mode, the report covers the entire session and is written when the session ends.</p>
+<p><code>--trace-dir DIR</code> writes a HuggingFace-compatible JSONL session trace to <code>DIR</code>. Each session produces a <code>&lt;session_id&gt;.jsonl</code> file that HuggingFace auto-detects as <code>format:agent-traces</code> with harness <code>swival</code>. Works in both one-shot and REPL modes. See <a href="reports.html">Reports</a> for details.</p>
 <p><code>--reviewer COMMAND</code> runs an external reviewer after each answer. The command string is shell-split, so you can pass arguments inline (e.g. <code>--reviewer "swival --reviewer-mode"</code>). Requires a task; incompatible with <code>--repl</code>.</p>
 <p><code>--max-review-rounds N</code> limits how many times the reviewer can request retries and defaults to <code>15</code>. Set to <code>0</code> to accept the first answer without retries.</p>
 <p><code>--self-review</code> uses a second Swival instance as reviewer, inheriting provider, model, and skills-dir settings from the current invocation. Requires a task; incompatible with <code>--repl</code> and <code>--reviewer</code>. See <a href="reviews.html">Reviews</a> for details.</p>

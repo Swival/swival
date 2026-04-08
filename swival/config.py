@@ -106,6 +106,7 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "subagents": bool,
     "approved_buckets": list,
     "oneshot_commands": bool,
+    "trace_dir": str,
 }
 
 _LIST_OF_STR_KEYS = {
@@ -199,6 +200,7 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "aws_profile": None,
     "approved_buckets": [],
     "oneshot_commands": False,
+    "trace_dir": None,
 }
 
 
@@ -999,6 +1001,7 @@ def args_to_session_kwargs(args, base_dir: str) -> dict:
         "lifecycle_command",
         "lifecycle_timeout",
         "lifecycle_fail_closed",
+        "trace_dir",
     ]
 
     kwargs: dict = {"base_dir": base_dir}

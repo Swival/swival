@@ -98,6 +98,7 @@ class Session:
         encrypt_secrets_tweak: str | None = None,
         encrypt_secrets_patterns: list | None = None,
         llm_filter: str | None = None,
+        trace_dir: str | None = None,
         subagents: bool = False,
         lifecycle_command: str | None = None,
         lifecycle_timeout: int = 300,
@@ -161,6 +162,8 @@ class Session:
         self.encrypt_secrets_tweak = encrypt_secrets_tweak
         self.encrypt_secrets_patterns = encrypt_secrets_patterns
         self.llm_filter = llm_filter
+        self.trace_dir = trace_dir
+        self._trace_session_id: str | None = None
         self.subagents = subagents
         self.lifecycle_command = lifecycle_command
         self.lifecycle_timeout = lifecycle_timeout
@@ -572,6 +575,8 @@ class Session:
             if _subagent_mgr is not None:
                 _subagent_mgr.shutdown()
             self._run_lifecycle_exit(outcome=outcome, exit_code=exit_code)
+            if self.trace_dir and messages:
+                self._write_trace(messages, question)
 
         report_dict = None
         if collector:
@@ -652,11 +657,37 @@ class Session:
         if self.history and answer:
             append_history(self.base_dir, question, answer, diagnostics=self.verbose)
 
+        if self.trace_dir and messages:
+            if self._trace_session_id is None:
+                import uuid
+
+                self._trace_session_id = str(uuid.uuid4())
+            self._write_trace(messages, question, session_id=self._trace_session_id)
+
         return Result(
             answer=answer,
             exhausted=exhausted,
             messages=copy.deepcopy(messages),
             report=None,
+        )
+
+    def _write_trace(
+        self,
+        messages: list,
+        task: str | None = None,
+        *,
+        session_id: str | None = None,
+    ) -> None:
+        from .traces import write_trace_to_dir
+
+        write_trace_to_dir(
+            messages,
+            trace_dir=self.trace_dir,
+            base_dir=self.base_dir,
+            model=self._model_id or "unknown",
+            task=task,
+            session_id=session_id,
+            verbose=self.verbose,
         )
 
     def _run_lifecycle_exit(
