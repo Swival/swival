@@ -6,7 +6,7 @@ The `--report` flag writes a structured JSON file that captures what happened du
 swival "Refactor the error handling in src/api.py" --report run1.json
 ```
 
-When `--report` is enabled, Swival still prints the final answer to standard output when an answer exists, and also writes the same answer into the report JSON under `result.answer`.
+When `--report` is enabled, Swival still prints the final answer to standard output when an answer exists, and also writes the same answer into the report JSON under `result.answer`. Recognized credential tokens in the report are always encrypted before the file is written — using the session key when `--encrypt-secrets` is active, or an ephemeral key otherwise.
 
 In REPL mode (`--repl --report run.json`), a single report covers the entire session. Events accumulate across all REPL turns and the report is written when the session ends. The `task` field becomes `"repl session (<N> turns)"` and `mode` is `"repl"` instead of `"oneshot"`. Each user input is recorded as a `repl_turn` event in the timeline, and `/clear` or `/new` commands appear as `session_clear` events.
 
@@ -211,6 +211,6 @@ Each session produces a `<session_id>.jsonl` file in the target directory. The f
 - `role: "system"` becomes `type: "system"` with the prompt text
 - Every line includes `harness: "swival"` for HuggingFace detection
 
-Works in one-shot mode, REPL mode, and through the Python API (`Session(trace_dir="traces/")`). When used with `Session.ask()`, all turns accumulate in a single file per session.
+Works in one-shot mode, REPL mode, and through the Python API (`Session(trace_dir="traces/")`). When used with `Session.ask()`, all turns accumulate in a single file per session. Recognized credential tokens in the trace are always encrypted before the file is written, using the same key policy as report files.
 
 The config key `trace_dir` can be set in `swival.toml` or `~/.config/swival/config.toml` to enable tracing by default without passing the flag every time.

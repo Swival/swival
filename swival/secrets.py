@@ -9,6 +9,8 @@ see real values.
 import copy
 import os
 import threading
+from contextlib import contextmanager
+from typing import Any
 
 from fast_cipher.tokens import TokenEncryptor
 from fast_cipher.tokens.alphabets import ALPHANUMERIC
@@ -114,6 +116,37 @@ class SecretShield:
         return encrypted
 
     # --- Inbound (after LLM) ---
+
+    def encrypt_text(self, text: str) -> str:
+        """Encrypt a single string."""
+        if self._destroyed:
+            raise ConfigError("SecretShield has been destroyed")
+        if not text:
+            return text
+        return self._encrypt_and_record(text)
+
+    def encrypt_obj(self, obj: Any) -> Any:
+        """Recursively encrypt all string values in a JSON-serializable structure."""
+        if isinstance(obj, str):
+            return self.encrypt_text(obj)
+        if isinstance(obj, dict):
+            return {k: self.encrypt_obj(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [self.encrypt_obj(v) for v in obj]
+        return obj
+
+    @classmethod
+    @contextmanager
+    def ensure(cls, shield: "SecretShield | None"):
+        """Yield shield if provided, else create and destroy an ephemeral one."""
+        if shield is not None:
+            yield shield
+            return
+        s = cls()
+        try:
+            yield s
+        finally:
+            s.destroy()
 
     def reverse_known(self, text: str) -> str:
         """Replace only ciphertext tokens that we actually emitted.

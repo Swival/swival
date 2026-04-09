@@ -5,7 +5,7 @@ import types
 
 import pytest
 
-from swival.traces import write_trace
+from swival.traces import write_trace, write_trace_to_dir
 
 
 def _read_lines(path):
@@ -465,3 +465,142 @@ def test_cli_repl_path_has_trace_write():
     assert "_write_trace(messages)" in repl_source, (
         "_write_trace(messages) not found in the REPL branch of _run_main"
     )
+
+
+# --- Secret encryption tests ---
+
+_FAKE_TOKEN = "ghp_" + "A" * 36  # matches the github-pat pattern
+
+
+def _all_text(lines):
+    """Flatten all string values from a list of parsed JSONL dicts."""
+    out = []
+
+    def _collect(obj):
+        if isinstance(obj, str):
+            out.append(obj)
+        elif isinstance(obj, dict):
+            for v in obj.values():
+                _collect(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                _collect(v)
+
+    for ln in lines:
+        _collect(ln)
+    return out
+
+
+def test_trace_no_plaintext_secret_ephemeral(tmp_path):
+    """write_trace_to_dir with no shield creates an ephemeral one; token must not appear."""
+    messages = [
+        {"role": "user", "content": f"my token is {_FAKE_TOKEN} please use it"},
+    ]
+    write_trace_to_dir(
+        messages,
+        trace_dir=str(tmp_path),
+        base_dir="/tmp",
+        model="m",
+        task=f"use token {_FAKE_TOKEN}",
+    )
+    files = list(tmp_path.glob("*.jsonl"))
+    assert len(files) == 1
+    lines = _read_lines(str(files[0]))
+    texts = _all_text(lines)
+    assert not any(_FAKE_TOKEN in t for t in texts)
+
+
+def test_trace_persistent_shield_stable_ciphertext(tmp_path):
+    """The same SecretShield produces the same ciphertext for the same token."""
+    from swival.secrets import SecretShield
+
+    messages = [{"role": "user", "content": f"token={_FAKE_TOKEN}"}]
+    shield = SecretShield()
+    try:
+        write_trace_to_dir(
+            messages,
+            trace_dir=str(tmp_path),
+            base_dir="/tmp",
+            model="m",
+            session_id="s1",
+            secret_shield=shield,
+        )
+        write_trace_to_dir(
+            messages,
+            trace_dir=str(tmp_path),
+            base_dir="/tmp",
+            model="m",
+            session_id="s2",
+            secret_shield=shield,
+        )
+    finally:
+        shield.destroy()
+
+    lines1 = _read_lines(str(tmp_path / "s1.jsonl"))
+    lines2 = _read_lines(str(tmp_path / "s2.jsonl"))
+    texts1 = [t for t in _all_text(lines1) if "ghp_" in t]
+    texts2 = [t for t in _all_text(lines2) if "ghp_" in t]
+    assert texts1 and texts1 == texts2
+
+
+def test_trace_tool_use_input_encrypted(tmp_path):
+    """Secrets inside tool-call arguments are encrypted; input is still a dict."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "tc1",
+                    "type": "function",
+                    "function": {
+                        "name": "call_api",
+                        "arguments": json.dumps(
+                            {"key": _FAKE_TOKEN, "url": "https://example.com"}
+                        ),
+                    },
+                }
+            ],
+        }
+    ]
+    write_trace_to_dir(
+        messages,
+        trace_dir=str(tmp_path),
+        base_dir="/tmp",
+        model="m",
+    )
+    files = list(tmp_path.glob("*.jsonl"))
+    lines = _read_lines(str(files[0]))
+    assistant_lines = [ln for ln in lines if ln.get("type") == "assistant"]
+    assert assistant_lines
+    tool_use_blocks = [
+        b for b in assistant_lines[0]["message"]["content"] if b["type"] == "tool_use"
+    ]
+    assert tool_use_blocks
+    inp = tool_use_blocks[0]["input"]
+    assert isinstance(inp, dict)
+    assert _FAKE_TOKEN not in json.dumps(inp)
+
+
+def test_trace_tool_result_encrypted(tmp_path):
+    """Secrets in tool results are encrypted in both toolUseResult and tool_result.content."""
+    messages = [
+        {
+            "role": "tool",
+            "tool_call_id": "tc1",
+            "content": f"api returned {_FAKE_TOKEN}",
+        },
+    ]
+    write_trace_to_dir(
+        messages,
+        trace_dir=str(tmp_path),
+        base_dir="/tmp",
+        model="m",
+    )
+    files = list(tmp_path.glob("*.jsonl"))
+    lines = _read_lines(str(files[0]))
+    tool_lines = [ln for ln in lines if "toolUseResult" in ln]
+    assert tool_lines
+    ln = tool_lines[0]
+    assert _FAKE_TOKEN not in ln["toolUseResult"]
+    assert _FAKE_TOKEN not in ln["message"]["content"][0]["content"]

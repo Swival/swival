@@ -72,7 +72,7 @@
 <p>The <code>--report</code> flag writes a structured JSON file that captures what happened during a run, including outcome, timing, tool usage, context-management events, and a full chronological timeline. This is designed for benchmarking and evaluation workflows where you want reproducible telemetry across model or prompt variants.</p>
 <pre><code class="language-sh">swival &quot;Refactor the error handling in src/api.py&quot; --report run1.json
 </code></pre>
-<p>When <code>--report</code> is enabled, Swival still prints the final answer to standard output when an answer exists, and also writes the same answer into the report JSON under <code>result.answer</code>.</p>
+<p>When <code>--report</code> is enabled, Swival still prints the final answer to standard output when an answer exists, and also writes the same answer into the report JSON under <code>result.answer</code>. Recognized credential tokens in the report are always encrypted before the file is written — using the session key when <code>--encrypt-secrets</code> is active, or an ephemeral key otherwise.</p>
 <p>In REPL mode (<code>--repl --report run.json</code>), a single report covers the entire session. Events accumulate across all REPL turns and the report is written when the session ends. The <code>task</code> field becomes <code>"repl session (&lt;N&gt; turns)"</code> and <code>mode</code> is <code>"repl"</code> instead of <code>"oneshot"</code>. Each user input is recorded as a <code>repl_turn</code> event in the timeline, and <code>/clear</code> or <code>/new</code> commands appear as <code>session_clear</code> events.</p>
 <h2 id="real-example">Real Example</h2>
 <p>The JSON below is from a verified local run using <code>--model dummy-model --max-turns 0 --report run.json</code>, which produces an exhausted run with no LLM calls.</p>
@@ -211,7 +211,7 @@ diff &lt;(jq '{turns: .stats.turns, tools: .stats.tool_calls_total}' a.json) \
 <li><code>role: "system"</code> becomes <code>type: "system"</code> with the prompt text</li>
 <li>Every line includes <code>harness: "swival"</code> for HuggingFace detection</li>
 </ul>
-<p>Works in one-shot mode, REPL mode, and through the Python API (<code>Session(trace_dir="traces/")</code>). When used with <code>Session.ask()</code>, all turns accumulate in a single file per session.</p>
+<p>Works in one-shot mode, REPL mode, and through the Python API (<code>Session(trace_dir="traces/")</code>). When used with <code>Session.ask()</code>, all turns accumulate in a single file per session. Recognized credential tokens in the trace are always encrypted before the file is written, using the same key policy as report files.</p>
 <p>The config key <code>trace_dir</code> can be set in <code>swival.toml</code> or <code>~/.config/swival/config.toml</code> to enable tracing by default without passing the flag every time.</p>
         </article>
     </div>

@@ -24,7 +24,11 @@ def write_trace(
     base_dir: str,
     model: str,
     task: str | None = None,
+    secret_shield=None,
 ) -> None:
+    enc = secret_shield.encrypt_text if secret_shield is not None else (lambda s: s)
+    enc_obj = secret_shield.encrypt_obj if secret_shield is not None else (lambda o: o)
+
     version = _swival_version()
     last_uuid = None
     lines: list[dict] = []
@@ -53,13 +57,15 @@ def write_trace(
         role = _msg_role(msg)
 
         if role == "system":
-            _append("system", content=_msg_content(msg), level="info", isMeta=False)
+            _append(
+                "system", content=enc(_msg_content(msg)), level="info", isMeta=False
+            )
 
         elif role == "user":
             content = _msg_content(msg)
             _append(
                 "user",
-                message={"role": "user", "content": content},
+                message={"role": "user", "content": enc(content)},
                 promptId=str(uuid.uuid4()),
             )
 
@@ -69,7 +75,7 @@ def write_trace(
 
             text = _msg_content(msg)
             if text:
-                content_blocks.append({"type": "text", "text": text})
+                content_blocks.append({"type": "text", "text": enc(text)})
 
             if tool_calls:
                 for tc in tool_calls:
@@ -84,7 +90,7 @@ def write_trace(
                             "type": "tool_use",
                             "id": _msg_get(tc, "id"),
                             "name": _msg_get(fn, "name"),
-                            "input": parsed,
+                            "input": enc_obj(parsed),
                         }
                     )
 
@@ -120,6 +126,7 @@ def write_trace(
             raw = _msg_content(msg)
             tc_id = _msg_get(msg, "tool_call_id")
             is_error = raw.startswith("error:")
+            encrypted_raw = enc(raw)
             _append(
                 "user",
                 message={
@@ -128,17 +135,17 @@ def write_trace(
                         {
                             "type": "tool_result",
                             "tool_use_id": tc_id,
-                            "content": raw,
+                            "content": encrypted_raw,
                             "is_error": is_error,
                         }
                     ],
                 },
-                toolUseResult=raw,
+                toolUseResult=encrypted_raw,
             )
 
     if task:
         lines.append(
-            {"type": "last-prompt", "lastPrompt": task, "sessionId": session_id}
+            {"type": "last-prompt", "lastPrompt": enc(task), "sessionId": session_id}
         )
 
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -156,26 +163,32 @@ def write_trace_to_dir(
     task: str | None = None,
     session_id: str | None = None,
     verbose: bool = False,
+    secret_shield=None,
 ) -> None:
     if not messages:
         return
     if session_id is None:
         session_id = str(uuid.uuid4())
     path = os.path.join(trace_dir, f"{session_id}.jsonl")
-    try:
-        write_trace(
-            messages,
-            path=path,
-            session_id=session_id,
-            base_dir=base_dir,
-            model=model,
-            task=task,
-        )
-        if verbose:
+
+    from .secrets import SecretShield
+
+    with SecretShield.ensure(secret_shield) as shield:
+        try:
+            write_trace(
+                messages,
+                path=path,
+                session_id=session_id,
+                base_dir=base_dir,
+                model=model,
+                task=task,
+                secret_shield=shield,
+            )
+            if verbose:
+                from . import fmt
+
+                fmt.info(f"Trace written to {path}")
+        except OSError as exc:
             from . import fmt
 
-            fmt.info(f"Trace written to {path}")
-    except OSError as exc:
-        from . import fmt
-
-        fmt.error(f"Failed to write trace to {path}: {exc}")
+            fmt.error(f"Failed to write trace to {path}: {exc}")

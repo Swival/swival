@@ -688,6 +688,7 @@ class Session:
             task=task,
             session_id=session_id,
             verbose=self.verbose,
+            secret_shield=self._secret_shield,
         )
 
     def _run_lifecycle_exit(

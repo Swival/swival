@@ -4371,7 +4371,10 @@ def main():
             mode=mode,
         )
         try:
-            report.write(args.report)
+            report.write(
+                args.report,
+                secret_shield=getattr(args, "_secret_shield", None),
+            )
         except OSError as e:
             fmt.error(f"Failed to write report to {args.report}: {e}")
             return
@@ -4446,7 +4449,10 @@ def main():
                             report.lifecycle_events
                         )
                         try:
-                            report.write(_lc_report_path)
+                            report.write(
+                                _lc_report_path,
+                                secret_shield=getattr(args, "_secret_shield", None),
+                            )
                         except OSError:
                             pass
             except LifecycleError as e:
@@ -5452,6 +5458,7 @@ def _run_main(args, report, _write_report, parser):
             model=model_id,
             task=args.question,
             verbose=args.verbose,
+            secret_shield=secret_shield,
         )
 
     if not args.repl:

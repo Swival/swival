@@ -325,9 +325,13 @@ class ReportCollector:
             "timeline": self.events,
         }
 
-    def write(self, path: str):
+    def write(self, path: str, *, secret_shield=None):
+        from .secrets import SecretShield
+
+        with SecretShield.ensure(secret_shield) as shield:
+            data = shield.encrypt_obj(self._last_report)
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(self._last_report, f, indent=2)
+            json.dump(data, f, indent=2)
             f.write("\n")
 
     def finalize(

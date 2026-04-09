@@ -411,3 +411,49 @@ class TestDeterminism:
         finally:
             s1.destroy()
             s2.destroy()
+
+
+class TestEncryptObj:
+    def test_encrypts_string(self):
+        s = SecretShield()
+        try:
+            result = s.encrypt_obj(f"token={GHP_TOKEN}")
+            assert GHP_TOKEN not in result
+            assert isinstance(result, str)
+        finally:
+            s.destroy()
+
+    def test_encrypts_nested_dict(self):
+        s = SecretShield()
+        try:
+            obj = {"key": GHP_TOKEN, "nested": {"also": GHP_TOKEN}, "plain": "hello"}
+            result = s.encrypt_obj(obj)
+            assert GHP_TOKEN not in result["key"]
+            assert GHP_TOKEN not in result["nested"]["also"]
+            assert result["plain"] == "hello"
+        finally:
+            s.destroy()
+
+    def test_encrypts_list(self):
+        s = SecretShield()
+        try:
+            result = s.encrypt_obj([GHP_TOKEN, "plain", {"k": GHP_TOKEN}])
+            assert GHP_TOKEN not in result[0]
+            assert result[1] == "plain"
+            assert GHP_TOKEN not in result[2]["k"]
+        finally:
+            s.destroy()
+
+    def test_passthrough_non_strings(self):
+        s = SecretShield()
+        try:
+            obj = {"count": 42, "flag": True, "nothing": None}
+            assert s.encrypt_obj(obj) == obj
+        finally:
+            s.destroy()
+
+    def test_raises_after_destroy(self):
+        s = SecretShield()
+        s.destroy()
+        with pytest.raises(ConfigError):
+            s.encrypt_obj(GHP_TOKEN)

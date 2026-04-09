@@ -623,3 +623,82 @@ class TestReportIntegration:
 
         captured = capsys.readouterr()
         assert "visible answer" in captured.out
+
+
+# --- Secret encryption tests ---
+
+_FAKE_TOKEN = "ghp_" + "A" * 36
+
+
+class TestReportSecretEncryption:
+    def _make_report(self, task=None, answer=None, tool_args=None):
+        rc = ReportCollector()
+        rc.record_llm_call(1, 1.0, 100, "stop")
+        if tool_args is not None:
+            rc.record_tool_call(
+                turn=1,
+                name="call_api",
+                arguments=tool_args,
+                succeeded=True,
+                duration=0.1,
+                result_length=10,
+            )
+        rc.finalize(
+            task=task or "test task",
+            model="m",
+            provider="p",
+            settings={},
+            outcome="success",
+            answer=answer or "done",
+            exit_code=0,
+            turns=1,
+        )
+        return rc
+
+    def test_no_plaintext_secret_in_report(self, tmp_path):
+        """write() with no shield uses an ephemeral one; token must not appear."""
+        rc = self._make_report(
+            task=f"use token {_FAKE_TOKEN}",
+            answer=f"result with {_FAKE_TOKEN}",
+        )
+        path = str(tmp_path / "report.json")
+        rc.write(path)
+        raw = (tmp_path / "report.json").read_text()
+        assert _FAKE_TOKEN not in raw
+
+    def test_tool_args_encrypted_in_report(self, tmp_path):
+        """Secrets in tool call arguments are encrypted in the timeline."""
+        rc = self._make_report(
+            tool_args={"key": _FAKE_TOKEN, "url": "https://example.com"}
+        )
+        path = str(tmp_path / "report.json")
+        rc.write(path)
+        raw = (tmp_path / "report.json").read_text()
+        assert _FAKE_TOKEN not in raw
+        data = json.load(open(path))
+        tool_events = [e for e in data["timeline"] if e.get("type") == "tool_call"]
+        assert tool_events
+        assert isinstance(tool_events[0]["arguments"], dict)
+
+    def test_encrypt_text_raises_after_destroy(self):
+        """encrypt_text() raises ConfigError on a destroyed shield."""
+        from swival.report import ConfigError
+        from swival.secrets import SecretShield
+
+        shield = SecretShield()
+        shield.destroy()
+        with pytest.raises(ConfigError):
+            shield.encrypt_text(_FAKE_TOKEN)
+
+    def test_lifecycle_rewrite_passes_shield(self):
+        """Both report.write() call sites in main() forward secret_shield."""
+        import inspect
+        from swival import agent
+
+        source = inspect.getsource(agent.main)
+        # Every report.write() call in main() must include secret_shield=
+        write_sites = source.split("report.write(")
+        forwarded = [site for site in write_sites[1:] if "secret_shield=" in site[:200]]
+        assert len(forwarded) == len(write_sites) - 1, (
+            "not all report.write() calls in main() forward secret_shield"
+        )
