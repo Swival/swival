@@ -281,7 +281,8 @@ def fetch_url(
             try:
                 from html_to_markdown import convert
 
-                output = convert(body)
+                result = convert(body)
+                output = result["content"] if isinstance(result, dict) else result
             except Exception as e:
                 return f"error: failed to convert HTML to markdown: {e}"
             if not isinstance(output, str):
