@@ -143,10 +143,14 @@ def write_trace(
                 toolUseResult=encrypted_raw,
             )
 
-    if task:
-        lines.append(
-            {"type": "last-prompt", "lastPrompt": enc(task), "sessionId": session_id}
-        )
+    lines.append(
+        {
+            "type": "last-prompt",
+            "lastPrompt": enc(task or ""),
+            "sessionId": session_id,
+            "toolUseResult": "",
+        }
+    )
 
     # Skip writing if there are no user/assistant turns — a system-only trace
     # is useless and causes schema inference failures in HuggingFace streaming

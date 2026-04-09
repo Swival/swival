@@ -153,7 +153,7 @@ def test_namespace_messages(tmp_path):
     write_trace(messages, path=path, session_id="s1", base_dir="/tmp", model="m1")
 
     lines = _read_lines(path)
-    assert len(lines) == 1
+    assert len(lines) == 2
     assert lines[0]["type"] == "assistant"
     msg = json.loads(lines[0]["message"])
     assert msg["content"][0]["text"] == "response text"
@@ -230,16 +230,21 @@ def test_last_prompt_line(tmp_path):
     assert last["type"] == "last-prompt"
     assert last["lastPrompt"] == "hello"
     assert last["sessionId"] == "s1"
+    assert last["toolUseResult"] == ""
 
 
 def test_no_last_prompt_without_task(tmp_path):
-    """When task is None, no last-prompt line is appended."""
+    """When task is None, a last-prompt line with empty string is still written."""
     messages = [{"role": "user", "content": "hello"}]
     path = str(tmp_path / "trace.jsonl")
     write_trace(messages, path=path, session_id="s1", base_dir="/tmp", model="m1")
 
     lines = _read_lines(path)
-    assert all(ln["type"] != "last-prompt" for ln in lines)
+    last = lines[-1]
+    assert last["type"] == "last-prompt"
+    assert last["lastPrompt"] == ""
+    assert last["sessionId"] == "s1"
+    assert last["toolUseResult"] == ""
 
 
 def test_parent_uuid_chain(tmp_path):
@@ -253,11 +258,12 @@ def test_parent_uuid_chain(tmp_path):
     write_trace(messages, path=path, session_id="s1", base_dir="/tmp", model="m1")
 
     lines = _read_lines(path)
-    assert lines[0]["parentUuid"] is None
-    for i in range(1, len(lines)):
-        assert lines[i]["parentUuid"] == lines[i - 1]["uuid"]
+    msg_lines = [ln for ln in lines if "uuid" in ln]
+    assert msg_lines[0]["parentUuid"] is None
+    for i in range(1, len(msg_lines)):
+        assert msg_lines[i]["parentUuid"] == msg_lines[i - 1]["uuid"]
 
-    uuids = [ln["uuid"] for ln in lines]
+    uuids = [ln["uuid"] for ln in msg_lines]
     assert len(set(uuids)) == len(uuids)
 
 
