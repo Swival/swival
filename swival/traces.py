@@ -148,6 +148,19 @@ def write_trace(
             {"type": "last-prompt", "lastPrompt": enc(task), "sessionId": session_id}
         )
 
+    # Normalize schema: HuggingFace requires all rows to have identical columns.
+    # Collect the union of all keys, then fill missing fields with None so every
+    # row has the same shape.  Also serialize the "message" field as a JSON string
+    # to avoid struct-schema mismatches between assistant/user/tool rows.
+    all_keys: set[str] = set()
+    for line in lines:
+        all_keys.update(line.keys())
+    for line in lines:
+        if "message" in line and not isinstance(line["message"], str):
+            line["message"] = json.dumps(line["message"], ensure_ascii=False)
+        for key in all_keys:
+            line.setdefault(key, None)
+
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         for line in lines:
