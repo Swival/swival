@@ -63,6 +63,9 @@ class McpManager:
         self._tool_schemas: dict[
             str, list[dict]
         ] = {}  # server_name -> [openai schemas]
+        self._tool_original_names: dict[
+            str, dict[str, str]
+        ] = {}  # server_name -> {namespaced_name: original_name}
         self._tool_map: dict[
             str, tuple[str, str]
         ] = {}  # namespaced_name -> (server, orig)
@@ -326,9 +329,15 @@ class McpManager:
             self._sessions[name] = session
 
             # Convert schemas
-            self._tool_schemas[name] = [
-                _mcp_tool_to_openai(name, tool) for tool in tools_result.tools
-            ]
+            server_tool_schemas: list[dict] = []
+            server_tool_original_names: dict[str, str] = {}
+            for tool in tools_result.tools:
+                schema, original_name = _mcp_tool_to_openai(name, tool)
+                server_tool_schemas.append(schema)
+                server_tool_original_names[schema["function"]["name"]] = original_name
+
+            self._tool_schemas[name] = server_tool_schemas
+            self._tool_original_names[name] = server_tool_original_names
 
             self._server_start_notice(name, len(tools_result.tools))
 
@@ -383,9 +392,10 @@ class McpManager:
 
         for server_name, schemas in self._tool_schemas.items():
             server_collisions = []
+            original_names = self._tool_original_names.get(server_name, {})
             for schema in schemas:
                 namespaced = schema["function"]["name"]
-                original = schema["function"].get("_mcp_original_name", namespaced)
+                original = original_names.get(namespaced, namespaced)
 
                 if namespaced in tool_map:
                     existing_server, existing_orig = tool_map[namespaced]
@@ -402,6 +412,7 @@ class McpManager:
                     if tool_map.get(n, (None,))[0] == server_name:
                         del tool_map[n]
                 self._tool_schemas[server_name] = []
+                self._tool_original_names[server_name] = {}
                 detail = "\n".join(server_collisions)
                 self._server_error_notice(
                     server_name,
@@ -431,7 +442,7 @@ def validate_server_name(name: str) -> None:
         )
 
 
-def _mcp_tool_to_openai(server_name: str, tool) -> dict:
+def _mcp_tool_to_openai(server_name: str, tool) -> tuple[dict, str]:
     """Convert an MCP Tool object to OpenAI function-calling format."""
     original_name = tool.name
     sanitized_name = _sanitize_tool_name(original_name)
@@ -446,10 +457,9 @@ def _mcp_tool_to_openai(server_name: str, tool) -> dict:
             "name": namespaced,
             "description": tool.description or f"MCP tool from {server_name}",
             "parameters": schema,
-            "_mcp_original_name": original_name,
         },
     }
-    return result
+    return result, original_name
 
 
 def _convert_schema(input_schema: dict) -> dict:

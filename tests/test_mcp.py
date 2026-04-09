@@ -281,34 +281,38 @@ class TestMcpToolToOpenai:
             description="Read a file",
             inputSchema={"type": "object", "properties": {"path": {"type": "string"}}},
         )
-        result = _mcp_tool_to_openai("filesystem", tool)
+        result, original_name = _mcp_tool_to_openai("filesystem", tool)
         assert result["type"] == "function"
         assert result["function"]["name"] == "mcp__filesystem__read_file"
         assert result["function"]["description"] == "Read a file"
         assert (
             result["function"]["parameters"]["properties"]["path"]["type"] == "string"
         )
+        assert original_name == "read_file"
 
     def test_no_description(self):
         tool = _MockBlock(name="ping", description=None, inputSchema={})
-        result = _mcp_tool_to_openai("server1", tool)
+        result, original_name = _mcp_tool_to_openai("server1", tool)
         assert "MCP tool from server1" in result["function"]["description"]
+        assert original_name == "ping"
 
     def test_no_input_schema(self):
         tool = _MockBlock(name="ping", description="Ping", inputSchema=None)
-        result = _mcp_tool_to_openai("server1", tool)
+        result, original_name = _mcp_tool_to_openai("server1", tool)
         assert result["function"]["parameters"]["type"] == "object"
         assert result["function"]["parameters"]["properties"] == {}
+        assert original_name == "ping"
 
-    def test_stores_original_name(self):
+    def test_returns_original_name_without_exposing_private_field(self):
         tool = _MockBlock(
             name="get.data",
             description="Get data",
             inputSchema={},
         )
-        result = _mcp_tool_to_openai("srv", tool)
-        assert result["function"]["_mcp_original_name"] == "get.data"
+        result, original_name = _mcp_tool_to_openai("srv", tool)
         assert result["function"]["name"] == "mcp__srv__get_data"
+        assert original_name == "get.data"
+        assert "_mcp_original_name" not in result["function"]
 
 
 # ---------------------------------------------------------------------------
@@ -821,6 +825,11 @@ class TestCollisionDetection:
                 },
             ],
         }
+        mgr._tool_original_names = {
+            "server1": {
+                "mcp__server1__tool": "tool.v2",
+            }
+        }
         mgr._build_tool_map()
         # Colliding server's tools should be skipped
         assert mgr._tool_schemas["server1"] == []
@@ -848,6 +857,11 @@ class TestCollisionDetection:
                     },
                 },
             ],
+        }
+        mgr._tool_original_names = {
+            "server1": {
+                "mcp__server1__tool": "tool.v2",
+            }
         }
         mgr._build_tool_map()
         assert mgr._tool_schemas["server1"] == []
@@ -883,6 +897,14 @@ class TestCollisionDetection:
                     },
                 },
             ],
+        }
+        mgr._tool_original_names = {
+            "good": {
+                "mcp__good__tool_a": "tool_a",
+            },
+            "bad": {
+                "mcp__bad__tool": "tool.v2",
+            },
         }
         mgr._build_tool_map()
         # Good server unaffected
