@@ -2,6 +2,15 @@
 
 All notable user-facing changes to Swival.
 
+## 0.11.0
+
+- `--command-middleware` adds a hook point before every `run_command` and `run_shell_command` call. The middleware receives a JSON payload on stdin and can pass the command through unchanged, rewrite it, or block it with a reason. Rewritten commands are still validated against Swival's own command policy so the middleware cannot bypass allowlists or `--commands none`.
+- When command, MCP, or A2A output exceeds the inline limit and spills to a temp file, the first 50 lines (up to 2 KB) are now included directly in the tool result. The model can usually continue without a follow-up `read_file` call.
+- `--report` now works in REPL mode and produces a full-session report on exit.
+- HuggingFace-compatible agent trace export (`format:agent-traces`) has been implemented.
+- `AGENTS.md` files are loaded from all ancestor directories up to the project root, not just the project root itself.
+- Custom commands whose name contains a slash are now resolved relative to the config directory, making it easier to organize commands in subdirectories.
+
 ## 0.10.14
 
 - Slash commands (`/`) and custom commands (`!`) can now be used in one-shot (non-REPL) mode. Because one-shot input may come from untrusted sources, command dispatch is disabled by default; pass `--oneshot-commands` to opt in.

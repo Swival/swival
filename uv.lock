@@ -1654,7 +1654,7 @@ wheels = [
 
 [[package]]
 name = "swival"
-version = "0.10.14"
+version = "0.11.0"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
