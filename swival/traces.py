@@ -160,16 +160,6 @@ def write_trace(
     if not has_turns:
         return
 
-    # Serialize the "message" field as a JSON string.  The field has two
-    # incompatible shapes across rows (user: {role, content: string} vs
-    # assistant: {role, content: list, model, ...}), which causes PyArrow to
-    # raise ArrowInvalid when it tries to infer a struct schema.  Storing it
-    # as a string sidesteps struct inference entirely and keeps the column type
-    # consistent across all files in the dataset.
-    for line in lines:
-        if "message" in line and not isinstance(line["message"], str):
-            line["message"] = json.dumps(line["message"], ensure_ascii=False)
-
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         for line in lines:
