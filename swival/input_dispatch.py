@@ -106,15 +106,13 @@ def is_command_script(text: str) -> bool:
     The ``! `` (bang-space) exclusion is deliberate so that ``! foo`` remains
     ordinary text instead of being mistaken for a custom command.
     """
-    from .input_commands import INPUT_COMMANDS
-
     for raw_line in text.splitlines():
         parsed = parse_input_line(raw_line)
         if not parsed.raw:
             continue
         if parsed.is_custom_command:
             return True
-        if parsed.is_command and parsed.cmd in INPUT_COMMANDS:
+        if parsed.is_command:
             return True
         return False
     return False

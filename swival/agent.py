@@ -7785,9 +7785,14 @@ def execute_input(
                 prompt, "/simplify", ctx, interrupt_label="/simplify"
             )
 
-        # Unknown slash command — pass through as plain text.
+        # Unknown slash command.
+        return StepResult(
+            kind="info",
+            text=f"error: unknown command {cmd}. Run /help to list commands.",
+            is_error=True,
+        )
 
-    # Plain text (or unrecognized slash command).
+    # Plain text.
     return _run_agent_step(parsed.raw, parsed.raw, ctx, interrupt_label="question")
 
 

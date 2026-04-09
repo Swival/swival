@@ -1867,8 +1867,8 @@ class TestValidateAgentsMd:
 
 
 class TestUnknownSlashCommand:
-    def test_unknown_slash_sent_to_model(self, tmp_path):
-        """/foo bar is appended to messages and sent to the model."""
+    def test_unknown_slash_returns_error(self, tmp_path, capsys):
+        """/foo bar stays in command handling and emits an error."""
         messages = [_sys("system")]
 
         call_messages = []
@@ -1887,8 +1887,11 @@ class TestUnknownSlashCommand:
         ):
             repl_loop(messages, [], **_loop_kwargs(tmp_path))
 
-        assert len(call_messages) == 1
-        assert call_messages[0][1]["content"] == "/foo bar"
+        captured = capsys.readouterr()
+        assert call_messages == []
+        assert (
+            "error: unknown command /foo. Run /help to list commands." in captured.err
+        )
 
 
 # ---------------------------------------------------------------------------

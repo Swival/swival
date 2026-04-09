@@ -85,8 +85,8 @@ class TestIsCommandScript:
     def test_multiline_script(self):
         assert is_command_script("/profile fast\n/simplify agent.py")
 
-    def test_unknown_slash_not_script(self):
-        assert not is_command_script("/nonexistent\nsome text")
+    def test_unknown_slash_is_script(self):
+        assert is_command_script("/nonexistent\nsome text")
 
     def test_plain_multiline(self):
         assert not is_command_script("please fix this\n/simplify")
@@ -127,6 +127,16 @@ class TestRunInputScript:
         result = run_input_script("/help\n/status", ctx, mode="oneshot")
         # Last output should be from /status, not /help
         assert "model:" in result.text
+
+    def test_unknown_slash_returns_error(self):
+        from swival.agent import run_input_script
+
+        ctx = self._make_ctx()
+        result = run_input_script("/nonexistent arg", ctx, mode="oneshot")
+        assert (
+            result.text
+            == "error: unknown command /nonexistent. Run /help to list commands."
+        )
 
     def test_empty_script(self):
         from swival.agent import run_input_script
@@ -221,6 +231,18 @@ class TestExecuteInput:
         parsed = parse_input_line("/copy")
         result = execute_input(parsed, self._make_ctx(), mode="oneshot")
         assert "not available" in result.text
+
+    def test_unknown_slash_returns_error(self):
+        from swival.agent import execute_input
+
+        parsed = parse_input_line("/nonexistent foo")
+        result = execute_input(parsed, self._make_ctx(), mode="repl")
+        assert result.kind == "info"
+        assert result.is_error is True
+        assert (
+            result.text
+            == "error: unknown command /nonexistent. Run /help to list commands."
+        )
 
     def test_empty_line(self):
         from swival.agent import execute_input
