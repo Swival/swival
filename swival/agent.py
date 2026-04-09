@@ -470,7 +470,7 @@ def _is_transient(exc):
         return True
     if isinstance(exc, _lt.APIError):
         status = getattr(exc, "status_code", None)
-        if status is not None and 500 <= status < 600:
+        if status is None or 500 <= status < 600:
             return True
     return bool(_TRANSIENT_PATTERNS.search(str(exc)))
 
@@ -7451,6 +7451,15 @@ def _invoke_agent_turn(
                 thinking_state=ctx.thinking_state,
             )
         return None, False, True
+    except AgentError as e:
+        fmt.error(str(e))
+        if (
+            content is not None
+            and ctx.messages
+            and _msg_role(ctx.messages[-1]) == "user"
+        ):
+            ctx.messages.pop()
+        return None, False, False
     return answer, exhausted, False
 
 
