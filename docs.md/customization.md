@@ -87,7 +87,7 @@ model = "gpt-5.4"
 
 Relative paths in `allowed_dirs`, `allowed_dirs_ro`, `skills_dir`, `cache_dir`, `objective`, and `verify` resolve against the config file's parent directory, not the working directory. Tilde paths like `~/projects` expand to the home directory.
 
-The `reviewer`, `llm_filter`, `lifecycle_command`, and `command_middleware` values are shell-split; only path-like first tokens (`./`, `../`, `~`, `/`) are resolved against the config directory, while bare command names like `swival` are left for PATH lookup at runtime. The same resolution applies to `model` when `provider = "command"`.
+The `reviewer`, `llm_filter`, `lifecycle_command`, and `command_middleware` values are shell-split; only path-like first tokens — anything starting with `/`, `~`, or containing a `/` (e.g. `./`, `../`, `.rtk/`, `scripts/`) — are resolved against the config directory, while bare command names like `swival` are left for PATH lookup at runtime. The same resolution applies to `model` when `provider = "command"`.
 
 If a project config contains `api_key` — at the top level or inside a profile — inside a git repository, Swival prints a warning because the key could be committed accidentally. Prefer environment variables for credentials.
 

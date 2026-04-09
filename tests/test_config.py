@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import shlex
 import tomllib
 import types
 
@@ -16,6 +17,7 @@ from swival.config import (
     generate_config,
     load_config,
     resolve_profile_config,
+    _resolve_command_string,
 )
 
 
@@ -1872,3 +1874,50 @@ class TestResolveProfileConfig:
         )
         load_config(tmp_path)
         assert "api_key" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# _resolve_command_string: path detection
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_dotslash_prefix(tmp_path):
+    result = _resolve_command_string("./adapter.py arg", tmp_path, "test", "cmd")
+    assert result == f"{tmp_path}/adapter.py arg"
+
+
+def test_resolve_bare_slash_in_token(tmp_path):
+    result = _resolve_command_string(".rtk/adapter.py", tmp_path, "test", "cmd")
+    assert result == str(tmp_path / ".rtk" / "adapter.py")
+
+
+def test_resolve_subdir_slash_in_token(tmp_path):
+    result = _resolve_command_string("scripts/run.sh --flag", tmp_path, "test", "cmd")
+    assert result == f"{tmp_path / 'scripts' / 'run.sh'} --flag"
+
+
+def test_resolve_path_binary_unchanged(tmp_path):
+    result = _resolve_command_string("python3 --version", tmp_path, "test", "cmd")
+    assert result == "python3 --version"
+
+
+def test_resolve_absolute_unchanged(tmp_path):
+    result = _resolve_command_string("/usr/bin/env python3", tmp_path, "test", "cmd")
+    assert result == "/usr/bin/env python3"
+
+
+def test_resolve_slash_in_token_with_spaces(tmp_path):
+    result = _resolve_command_string(
+        '"scripts dir/runner.py" --flag', tmp_path, "test", "cmd"
+    )
+    expected_exe = shlex.quote(str(tmp_path / "scripts dir" / "runner.py"))
+    assert result == f"{expected_exe} --flag"
+
+
+def test_load_config_resolves_slash_in_command_middleware(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+    (tmp_path / "swival.toml").write_text(
+        'command_middleware = "scripts/hook.py --arg"\n'
+    )
+    result = load_config(tmp_path)
+    assert result["command_middleware"] == f"{tmp_path / 'scripts' / 'hook.py'} --arg"

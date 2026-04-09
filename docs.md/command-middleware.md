@@ -27,7 +27,7 @@ session = Session(command_middleware="./scripts/rtk-adapter.py")
 result = session.run("task")
 ```
 
-The value is a shell command string. It is split with `shlex.split`, and path-like first tokens (`./`, `../`, `~`) resolve against the config file's parent directory, consistent with `llm_filter` and other command-valued config keys.
+The value is a shell command string. It is split with `shlex.split`, and path-like first tokens — anything starting with `/`, `~`, or containing a `/` (e.g. `./`, `../`, `.rtk/`, `scripts/`) — resolve against the config file's parent directory, consistent with `llm_filter` and other command-valued config keys.
 
 ## Contract
 

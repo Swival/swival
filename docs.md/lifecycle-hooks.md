@@ -34,7 +34,7 @@ with Session(
     result = s.run("task")
 ```
 
-The value is a shell command string. It is split with `shlex.split`, and path-like first tokens (`./`, `../`, `~`) resolve against the config file's parent directory, consistent with `reviewer`, `llm_filter`, and other command-valued config keys.
+The value is a shell command string. It is split with `shlex.split`, and path-like first tokens — anything starting with `/`, `~`, or containing a `/` (e.g. `./`, `../`, `.rtk/`, `scripts/`) — resolve against the config file's parent directory, consistent with `reviewer`, `llm_filter`, and other command-valued config keys.
 
 ## Command Invocation
 

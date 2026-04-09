@@ -382,6 +382,16 @@ class TestConfigResolution:
         _resolve_command_model(config, tmp_path, "test")
         assert config["model"] == "./script.sh"
 
+    def test_slash_in_token_resolved(self, tmp_path):
+        config = {"provider": "command", "model": "scripts/runner.py --flag"}
+        _resolve_command_model(config, tmp_path, "test")
+        assert config["model"] == f"{tmp_path / 'scripts' / 'runner.py'} --flag"
+
+    def test_bare_binary_unchanged(self, tmp_path):
+        config = {"provider": "command", "model": "myrunner --flag"}
+        _resolve_command_model(config, tmp_path, "test")
+        assert config["model"] == "myrunner --flag"
+
 
 # ---------------------------------------------------------------------------
 # build_system_prompt (command provider)

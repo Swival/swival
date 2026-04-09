@@ -298,7 +298,10 @@ def _validate_config(config: dict, source: str) -> None:
         )
 
 
-_PATH_LIKE = re.compile(r"^(?:[/~]|\.\.?/)")
+# Matches absolute (/…), home (~…), explicit-relative (./… or ../…), and any
+# relative path whose first segment contains a / (scripts/…, .rtk/…).
+# Bare command names (python3, swival) contain no / and don't match.
+_PATH_LIKE = re.compile(r"^(?:[/~]|\.\.?/|[^/]+/)")
 
 
 def _resolve_command_string(
