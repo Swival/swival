@@ -15,7 +15,7 @@
 		<meta property="og:url" content="https://swival.dev/">
 
 		<!-- Twitter Card -->
-		<meta name="twitter:card" content="summary">
+		<meta name="twitter:card" content="summary_large_image">
 		<meta name="twitter:title" content="Swival — A coding agent for any model">
 		<meta name="twitter:description" content="A CLI coding agent built to be reliable with smaller models, including local ones. Designed for tight context windows and limited resources. Works with LM Studio, llama.cpp, HuggingFace, OpenRouter, Google Gemini, ChatGPT Plus/Pro, AWS Bedrock, and any OpenAI-compatible server.">
 		<meta name="twitter:image" content="https://swival.dev/img/logo.png">
@@ -63,16 +63,16 @@
 				<div class="hero-orb hero-orb-2" aria-hidden="true"></div>
 				<div class="hero-orb hero-orb-3" aria-hidden="true"></div>
 				<div class="hero-glow" aria-hidden="true"></div>
-				<h1>A coding agent for any model</h1>
+				<h1>A coding agent for&nbsp;any&nbsp;model</h1>
 				<p class="tagline">
-					Swival works with frontier models, but also strives to be as reliable as possible with smaller models,
-					including local ones. Designed from the ground up for tight context windows and limited resources.
-					<br>
-					Free, opensource, and easy to set up.
+					Works with frontier models, but also strives to be as reliable as possible
+					with smaller models, including local ones. Designed for tight context windows
+					and limited resources. Free, open-source, and easy to set up.
 				</p>
-				<p class="calibra-cta">
-					Run evals with <a href="https://calibra.swival.dev">Calibra</a> — Swival's companion for benchmarking and evaluation.
-				</p>
+				<div class="hero-actions">
+					<a href="#quickstart" class="btn btn-primary">Get Started</a>
+					<a href="pages/" class="btn btn-secondary">Read the Docs</a>
+				</div>
 				<div class="terminal">
 					<div class="terminal-titlebar">
 						<span class="terminal-dot red"></span>
@@ -86,214 +86,217 @@
 				</div>
 			</section>
 
+			<section class="providers">
+				<div class="providers-inner">
+					<p class="providers-label">Works with your stack</p>
+					<div class="providers-strip">
+						<span class="provider-badge">LM&nbsp;Studio</span>
+						<span class="provider-badge">llama.cpp</span>
+						<span class="provider-badge">HuggingFace</span>
+						<span class="provider-badge">OpenRouter</span>
+						<span class="provider-badge">Google&nbsp;Gemini</span>
+						<span class="provider-badge">ChatGPT</span>
+						<span class="provider-badge">AWS&nbsp;Bedrock</span>
+						<span class="provider-badge">Any&nbsp;OpenAI‑compatible</span>
+					</div>
+				</div>
+			</section>
+
 			<section class="features">
 				<div class="features-inner">
-					<h2>Why Swival</h2>
+					<h2 class="section-title">Why Swival</h2>
+					<p class="section-subtitle">Built for the reality of small context windows, limited resources, and models that need careful prompting to produce good output.</p>
 					<div class="features-grid">
-						<div class="feature-card">
+						<div class="feature-card" data-animate>
+							<div class="feature-icon">🧠</div>
 							<h3>Reliable with small models</h3>
-							<p>Context management is one of its strengths. Keeps
-								things clean and focused, avoids unnecessary context
-								bloat. Graduated compaction and persistent state mean
-								the agent doesn't lose track of work, even under tight
-								limits.</p>
+							<p>Context management is one of its strengths. Keeps things clean and focused, avoids unnecessary context bloat. Graduated compaction and persistent state mean the agent doesn't lose track of work, even under tight limits.</p>
 						</div>
-						<div class="feature-card">
+						<div class="feature-card" data-animate>
+							<div class="feature-icon">🔌</div>
 							<h3>Your models, your way</h3>
-							<p>Auto-discovers your LM Studio or llama.cpp model,
-								or point it at HuggingFace, OpenRouter, Google Gemini,
-								ChatGPT Plus/Pro, AWS Bedrock,
-								or any OpenAI-compatible server. You pick
-								the model and the infrastructure.</p>
+							<p>Auto-discovers your LM Studio or llama.cpp model, or point it at HuggingFace, OpenRouter, Google Gemini, ChatGPT Plus/Pro, AWS Bedrock, or any OpenAI-compatible server. You pick the model and the infrastructure.</p>
 						</div>
-						<div class="feature-card">
+						<div class="feature-card" data-animate>
+							<div class="feature-icon">📊</div>
 							<h3>Review loop and benchmarking</h3>
-							<p>A configurable review loop with LLM-as-a-judge
-								support. JSON reports capture timing, tool usage,
-								and context events. Useful for comparing models,
-								settings, skills, and MCP servers on real coding
-								tasks.</p>
+							<p>A configurable review loop with LLM-as-a-judge support. JSON reports capture timing, tool usage, and context events. Useful for comparing models, settings, skills, and MCP servers on real coding tasks.</p>
 						</div>
-						<div class="feature-card">
+						<div class="feature-card" data-animate>
+							<div class="feature-icon">🔒</div>
 							<h3>Secrets stay on your machine</h3>
-							<p>API keys and credentials in LLM messages are
-								automatically encrypted before they leave your
-								machine. The model never sees the real values.
-								Decryption happens locally when the response
-								comes back, so tools still work normally.</p>
+							<p>API keys and credentials in LLM messages are automatically encrypted before they leave your machine. The model never sees the real values. Decryption happens locally when the response comes back, so tools still work normally.</p>
 						</div>
-						<div class="feature-card">
+						<div class="feature-card" data-animate>
+							<div class="feature-icon">📝</div>
 							<h3>Cross-session memory</h3>
-							<p>The agent remembers things across sessions.
-								Relevant past notes are retrieved via BM25
-								ranking, so context from earlier work carries
-								forward without bloating the prompt. Use
-								<code>/learn</code> to teach it on the spot.</p>
+							<p>The agent remembers things across sessions. Relevant past notes are retrieved via BM25 ranking, so context from earlier work carries forward without bloating the prompt. Use <code>/learn</code> to teach it on the spot.</p>
 						</div>
-						<div class="feature-card">
+						<div class="feature-card" data-animate>
+							<div class="feature-icon">⚡</div>
 							<h3>Pick up where you left off</h3>
-							<p>When a session is interrupted &mdash; Ctrl+C,
-								max turns, context overflow &mdash; Swival saves
-								its state to disk and resumes automatically
-								next time you run it in the same directory.</p>
+							<p>When a session is interrupted &mdash; Ctrl+C, max turns, context overflow &mdash; Swival saves its state to disk and resumes automatically next time you run it in the same directory.</p>
 						</div>
-						<div class="feature-card">
+						<div class="feature-card" data-animate>
+							<div class="feature-icon">🌐</div>
 							<h3>A2A server mode</h3>
-							<p>Run <code>swival --serve</code> and your agent
-								becomes an A2A endpoint that other agents can
-								call over HTTP. Multi-turn context, streaming,
-								and bearer auth are built in.</p>
+							<p>Run <code>swival --serve</code> and your agent becomes an A2A endpoint that other agents can call over HTTP. Multi-turn context, streaming, and bearer auth are built in.</p>
 						</div>
-						<div class="feature-card">
+						<div class="feature-card" data-animate>
+							<div class="feature-icon">🛠️</div>
 							<h3>Skills, MCP, and more</h3>
-							<p>Extend the agent with SKILL.md-based skills,
-								MCP servers, and A2A agents. Small and hackable:
-								a few thousand lines of Python, no framework.
-								Read the whole thing in an afternoon.</p>
+							<p>Extend the agent with SKILL.md-based skills, MCP servers, and A2A agents. Small and hackable: a few thousand lines of Python, no framework. Read the whole thing in an afternoon.</p>
 						</div>
 					</div>
 				</div>
 			</section>
 
-			<section class="quickstart">
-				<h2>Quickstart</h2>
-				<h3>LM Studio</h3>
-				<ol>
-					<li>
-						Install <a href="https://lmstudio.ai/">LM Studio</a>
-						and load
-						a model with tool-calling support.
-						Recommended first model:
-						<a href="https://huggingface.co/unsloth/Qwen3-Coder-Next-GGUF">qwen3-coder-next</a>
-						(great quality/speed tradeoff on local hardware).
-						Start the server.
-					</li>
-					<li>
-						Install Swival:
-						<pre><code>uv tool install swival</code></pre>
-					</li>
-					<li>
-						Run:
-						<pre><code>swival "Simplify the error handling in src/api.py"</code></pre>
-					</li>
-				</ol>
-				<h3>llama.cpp</h3>
-				<ol>
-					<li>
-						Start <code>llama-server</code> with a model
-						(<code>--fit on</code> auto-sizes context to available memory,
-						<code>-hf</code> downloads from HuggingFace on first run):
-						<pre><code>llama-server --reasoning auto --fit on \
-    -hf unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL</code></pre>
-					</li>
-					<li>
-						Install Swival:
-						<pre><code>uv tool install swival</code></pre>
-					</li>
-					<li>
-						Run (model is auto-discovered from the server):
-						<pre><code>swival --provider llamacpp "Simplify the error handling in src/api.py"</code></pre>
-					</li>
-				</ol>
-				<h3>HuggingFace</h3>
-				<ol>
-					<li>
-						Create a token at
-						<a href="https://huggingface.co/settings/tokens">huggingface.co/settings/tokens</a>
-						and export it:
-						<pre><code>export HF_TOKEN=hf_...</code></pre>
-					</li>
-					<li>
-						Install Swival:
-						<pre><code>uv tool install swival</code></pre>
-					</li>
-					<li>
-						Run with a tool-calling model (e.g.
-						<a href="https://huggingface.co/zai-org/GLM-5">GLM-5</a>):
-						<pre><code>swival "Simplify the error handling in src/api.py" \
-    --provider huggingface --model zai-org/GLM-5</code></pre>
-					</li>
-				</ol>
-				<h3>OpenRouter</h3>
-				<ol>
-					<li>
-						Sign up at <a href="https://openrouter.ai/">openrouter.ai</a>
-						and export your API key:
-						<pre><code>export OPENROUTER_API_KEY=sk_or_...</code></pre>
-					</li>
-					<li>
-						Install Swival:
-						<pre><code>uv tool install swival</code></pre>
-					</li>
-					<li>
-						Run with any model on the platform (e.g.
-						<a href="https://openrouter.ai/z-ai/glm-5">GLM-5</a>):
-						<pre><code>swival "Simplify the error handling in src/api.py" \
-    --provider openrouter --model z-ai/glm-5</code></pre>
-					</li>
-				</ol>
-				<h3>Other providers</h3>
-				<p>
-					Swival also works with
-					<a href="pages/providers.html#chatgpt-pluspro">ChatGPT Plus/Pro</a> (uses your existing subscription via OAuth),
-					<a href="pages/providers.html#google-gemini-api">Google Gemini</a>,
-					<a href="pages/providers.html#aws-bedrock">AWS Bedrock</a>,
-					and any <a href="pages/providers.html#generic-openai-compatible">OpenAI-compatible server</a>
-					(ollama, mlx_lm.server, vLLM, etc.). See the
-					<a href="pages/providers.html">Providers</a> page for setup details.
-				</p>
-				<h2>Interactive mode</h2>
-				<p>
-					For back-and-forth sessions, just run
-					<code>swival</code> with no arguments. The agent keeps the full
-					conversation in memory, so you can iterate on a task across
-					multiple turns without repeating context.
-				</p>
-				<pre><code>swival</code></pre>
+			<section class="quickstart" id="quickstart">
+				<h2 class="section-title">Get started in seconds</h2>
+				<p class="section-subtitle">Pick your provider and run your first task.</p>
 
-				<h2>Python library</h2>
-				<p>
-					Swival also works as a Python library, so you can embed an agent
-					loop directly in your own code. The simplest way is the
-					<code>swival.run()</code>
-					one-liner:
-				</p>
-				<pre><code>import swival
+				<div class="tabs">
+					<div class="tab-list" role="tablist">
+						<button class="tab-button active" role="tab" data-tab="lmstudio">LM Studio</button>
+						<button class="tab-button" role="tab" data-tab="llamacpp">llama.cpp</button>
+						<button class="tab-button" role="tab" data-tab="huggingface">HuggingFace</button>
+						<button class="tab-button" role="tab" data-tab="openrouter">OpenRouter</button>
+					</div>
+
+					<div class="tab-panel active" id="tab-lmstudio" role="tabpanel">
+						<ol>
+							<li>Install <a href="https://lmstudio.ai/">LM Studio</a> and load a model with tool-calling support. Recommended first model: <a href="https://huggingface.co/unsloth/Qwen3-Coder-Next-GGUF">qwen3-coder-next</a> (great quality/speed tradeoff on local hardware). Start the server.</li>
+							<li>Install Swival:
+								<pre><code>uv tool install swival</code></pre>
+							</li>
+							<li>Run:
+								<pre><code>swival "Simplify the error handling in src/api.py"</code></pre>
+							</li>
+						</ol>
+					</div>
+
+					<div class="tab-panel" id="tab-llamacpp" role="tabpanel">
+						<ol>
+							<li>Start <code>llama-server</code> with a model (<code>--fit on</code> auto-sizes context, <code>-hf</code> downloads from HuggingFace):
+								<pre><code>llama-server --reasoning auto --fit on \
+    -hf unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL</code></pre>
+							</li>
+							<li>Install Swival:
+								<pre><code>uv tool install swival</code></pre>
+							</li>
+							<li>Run (model is auto-discovered):
+								<pre><code>swival --provider llamacpp "Simplify the error handling in src/api.py"</code></pre>
+							</li>
+						</ol>
+					</div>
+
+					<div class="tab-panel" id="tab-huggingface" role="tabpanel">
+						<ol>
+							<li>Create a token at <a href="https://huggingface.co/settings/tokens">huggingface.co/settings/tokens</a> and export it:
+								<pre><code>export HF_TOKEN=hf_...</code></pre>
+							</li>
+							<li>Install Swival:
+								<pre><code>uv tool install swival</code></pre>
+							</li>
+							<li>Run with a tool-calling model (e.g. <a href="https://huggingface.co/zai-org/GLM-5">GLM-5</a>):
+								<pre><code>swival "Simplify the error handling in src/api.py" \
+    --provider huggingface --model zai-org/GLM-5</code></pre>
+							</li>
+						</ol>
+					</div>
+
+					<div class="tab-panel" id="tab-openrouter" role="tabpanel">
+						<ol>
+							<li>Sign up at <a href="https://openrouter.ai/">openrouter.ai</a> and export your API key:
+								<pre><code>export OPENROUTER_API_KEY=sk_or_...</code></pre>
+							</li>
+							<li>Install Swival:
+								<pre><code>uv tool install swival</code></pre>
+							</li>
+							<li>Run with any model on the platform (e.g. <a href="https://openrouter.ai/z-ai/glm-5">GLM-5</a>):
+								<pre><code>swival "Simplify the error handling in src/api.py" \
+    --provider openrouter --model z-ai/glm-5</code></pre>
+							</li>
+						</ol>
+					</div>
+				</div>
+
+				<div class="quickstart-also">
+					<p>Swival also works with <a href="pages/providers.html#chatgpt-pluspro">ChatGPT Plus/Pro</a> (uses your existing subscription via OAuth), <a href="pages/providers.html#google-gemini-api">Google Gemini</a>, <a href="pages/providers.html#aws-bedrock">AWS Bedrock</a>, and any <a href="pages/providers.html#generic-openai-compatible">OpenAI-compatible server</a> (ollama, mlx_lm.server, vLLM, etc.). See <a href="pages/providers.html">all providers</a>.</p>
+				</div>
+
+				<hr class="divider">
+
+				<div class="mode-grid">
+					<div class="mode-card">
+						<h3>💬 Interactive mode</h3>
+						<p>For back-and-forth sessions, just run <code>swival</code> with no arguments. The agent keeps the full conversation in memory, so you can iterate on a task across multiple turns.</p>
+						<pre><code>swival</code></pre>
+					</div>
+					<div class="mode-card">
+						<h3>🐍 Python library</h3>
+						<p>Embed an agent loop directly in your own code. The simplest way is <code>swival.run()</code>:</p>
+						<pre><code>import swival
 
 answer = swival.run(
     "What files handle authentication?",
     provider="openrouter",
     model="z-ai/glm-5",
 )</code></pre>
-				<p>
-					For multi-turn conversations or finer control, use the
-					<code>Session</code>
-					class:
-				</p>
-				<pre><code>from swival import Session
+						<p>For multi-turn conversations, use the <code>Session</code> class &mdash; see the <a href="pages/python-api.html">Python API docs</a>.</p>
+					</div>
+				</div>
+			</section>
 
-session = Session(provider="lmstudio", yolo=True)
-
-result = session.run("Add type hints to utils.py")
-print(result.answer)
-
-# Continue the conversation
-follow_up = session.ask("Now add tests for those functions")
-print(follow_up.answer)</code></pre>
-				<p>
-					<code>Session</code>
-					accepts the same options you'd pass on
-					the command line — provider, model, commands, MCP servers,
-					and everything else. Check the
-					<a href="pages/usage.html">usage docs</a>
-					for the full list.
-				</p>
+			<section class="calibra-banner" data-animate>
+				<div class="calibra-inner">
+					<h2>Benchmark and evaluate</h2>
+					<p>Run evals with <a href="https://calibra.swival.dev">Calibra</a> &mdash; Swival's companion for benchmarking and evaluation. Compare models, settings, skills, and MCP servers on real coding tasks.</p>
+				</div>
 			</section>
 		</main>
 
 		<footer class="site-footer">
-			MIT License &middot;
-			<a href="https://github.com/swival/swival">GitHub</a>
+			<div class="footer-inner">
+				<div class="footer-grid">
+					<div class="footer-col">
+						<img src="img/logo.png" alt="Swival" class="footer-logo">
+						<p class="footer-tagline">A coding agent for any model.<br>Free, open-source, and easy to set up.</p>
+					</div>
+					<div class="footer-col">
+						<h4>Resources</h4>
+						<ul>
+							<li><a href="pages/getting-started.html">Getting Started</a></li>
+							<li><a href="pages/usage.html">Usage</a></li>
+							<li><a href="pages/tools.html">Tools</a></li>
+							<li><a href="pages/context-management.html">Context Management</a></li>
+						</ul>
+					</div>
+					<div class="footer-col">
+						<h4>Guides</h4>
+						<ul>
+							<li><a href="pages/providers.html">Providers</a></li>
+							<li><a href="pages/safety-and-sandboxing.html">Safety &amp; Sandboxing</a></li>
+							<li><a href="pages/python-api.html">Python API</a></li>
+							<li><a href="pages/open-models.html">Open Models</a></li>
+						</ul>
+					</div>
+					<div class="footer-col">
+						<h4>Community</h4>
+						<ul>
+							<li><a href="https://github.com/swival/swival">GitHub</a></li>
+							<li><a href="https://calibra.swival.dev">Calibra</a></li>
+						</ul>
+					</div>
+				</div>
+				<div class="footer-bottom">
+					<p>&copy; 2025 Swival &middot; MIT License</p>
+				</div>
+			</div>
 		</footer>
+
+		<button class="back-to-top" aria-label="Back to top">&uarr;</button>
+
+		<script src="js/site.js"></script>
 	</body>
 </html>
