@@ -682,6 +682,292 @@ img {
     line-height: 1.5;
 }
 
+/* ===== Animations ===== */
+
+/* Hero animated background */
+@keyframes orb-drift-1 {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    25% { transform: translate(30px, -40px) scale(1.05); }
+    50% { transform: translate(-20px, 20px) scale(0.95); }
+    75% { transform: translate(10px, -10px) scale(1.02); }
+}
+
+@keyframes orb-drift-2 {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    25% { transform: translate(-40px, 20px) scale(0.97); }
+    50% { transform: translate(30px, -30px) scale(1.03); }
+    75% { transform: translate(-10px, 10px) scale(0.98); }
+}
+
+@keyframes orb-drift-3 {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    33% { transform: translate(20px, 30px) scale(1.04); }
+    66% { transform: translate(-30px, -20px) scale(0.96); }
+}
+
+@keyframes glow-pulse {
+    0%, 100% { opacity: 0.4; transform: scale(1); }
+    50% { opacity: 0.7; transform: scale(1.05); }
+}
+
+@keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+
+@keyframes fade-in-up {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes gradient-shift {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
+
+@keyframes shimmer {
+    0% { background-position: -200% center; }
+    100% { background-position: 200% center; }
+}
+
+/* Hero orbs — floating gradient circles */
+.hero-orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(80px);
+    opacity: 0.35;
+    pointer-events: none;
+    z-index: 0;
+}
+
+.hero-orb-1 {
+    width: 500px;
+    height: 500px;
+    top: -15%;
+    left: -5%;
+    background: radial-gradient(circle, rgba(37,99,235,0.4), transparent 70%);
+    animation: orb-drift-1 20s ease-in-out infinite;
+}
+
+.hero-orb-2 {
+    width: 400px;
+    height: 400px;
+    top: 10%;
+    right: -10%;
+    background: radial-gradient(circle, rgba(234,88,12,0.3), transparent 70%);
+    animation: orb-drift-2 25s ease-in-out infinite;
+}
+
+.hero-orb-3 {
+    width: 300px;
+    height: 300px;
+    bottom: -5%;
+    left: 30%;
+    background: radial-gradient(circle, rgba(37,99,235,0.25), transparent 70%);
+    animation: orb-drift-3 18s ease-in-out infinite;
+}
+
+/* Hero glow — center radial pulse */
+.hero-glow {
+    position: absolute;
+    top: -20%;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 800px;
+    height: 600px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(37,99,235,0.12), transparent 60%);
+    pointer-events: none;
+    z-index: 0;
+    animation: glow-pulse 8s ease-in-out infinite;
+}
+
+.hero h1,
+.hero .tagline,
+.hero .calibra-cta,
+.hero .terminal {
+    position: relative;
+    z-index: 1;
+}
+
+/* Animated gradient text on hero h1 */
+.hero h1 {
+    background: linear-gradient(135deg, var(--text) 0%, var(--blue) 50%, var(--orange) 100%);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: gradient-shift 8s ease infinite;
+}
+
+/* Terminal blinking cursor */
+.terminal-body .cursor {
+    display: inline-block;
+    width: 0.55em;
+    height: 1.1em;
+    background: var(--orange-light);
+    border-radius: 1px;
+    margin-left: 2px;
+    vertical-align: text-bottom;
+    animation: blink 1s step-end infinite;
+}
+
+/* Feature card entrance animation */
+.feature-card {
+    opacity: 0;
+    animation: fade-in-up 0.6s ease forwards;
+}
+
+.feature-card:nth-child(1) { animation-delay: 0.1s; }
+.feature-card:nth-child(2) { animation-delay: 0.15s; }
+.feature-card:nth-child(3) { animation-delay: 0.2s; }
+.feature-card:nth-child(4) { animation-delay: 0.25s; }
+.feature-card:nth-child(5) { animation-delay: 0.3s; }
+.feature-card:nth-child(6) { animation-delay: 0.35s; }
+.feature-card:nth-child(7) { animation-delay: 0.4s; }
+.feature-card:nth-child(8) { animation-delay: 0.45s; }
+
+/* Terminal entrance */
+.terminal {
+    opacity: 0;
+    animation: fade-in-up 0.8s ease 0.3s forwards;
+}
+
+/* Calibra CTA shimmer border on hover */
+.calibra-cta:hover {
+    background: linear-gradient(90deg, var(--bg-subtle) 25%, var(--blue-subtle) 50%, var(--bg-subtle) 75%);
+    background-size: 200% auto;
+    animation: shimmer 3s linear infinite;
+    border-color: var(--blue-light);
+}
+
+/* Feature card shimmer glow on hover */
+.feature-card:hover::after {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    background: linear-gradient(135deg, rgba(37,99,235,0.1), transparent, rgba(234,88,12,0.08));
+    z-index: -1;
+    opacity: 0;
+    animation: fade-in-up 0.3s ease forwards;
+}
+
+/* Sidebar link animated indicator */
+.sidebar-section a::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 2px;
+    height: 0;
+    background: var(--blue);
+    border-radius: 1px;
+    transition: height 0.2s ease;
+}
+
+.sidebar-section a {
+    position: relative;
+    padding-left: 0.875rem;
+}
+
+.sidebar-section a:hover::before,
+.sidebar-section a.active::before {
+    height: 60%;
+}
+
+/* Header nav animated underline */
+.header-nav a {
+    position: relative;
+}
+
+.header-nav a::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    width: 0;
+    height: 2px;
+    background: var(--blue);
+    border-radius: 1px;
+    transition: all 0.25s ease;
+    transform: translateX(-50%);
+}
+
+.header-nav a:hover::after {
+    width: 60%;
+}
+
+/* Docs hub list item hover indicator */
+.docs-hub-list li {
+    position: relative;
+    overflow: hidden;
+}
+
+.docs-hub-list li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--blue);
+    border-radius: 0 2px 2px 0;
+    transform: scaleY(0);
+    transition: transform 0.2s ease;
+}
+
+.docs-hub-list li:hover::before {
+    transform: scaleY(1);
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+    .hero-orb,
+    .hero-glow {
+        animation: none;
+    }
+
+    .hero h1 {
+        animation: none;
+        background: var(--text);
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    .terminal-body .cursor {
+        animation: none;
+        opacity: 1;
+    }
+
+    .feature-card,
+    .terminal {
+        animation: none;
+        opacity: 1;
+    }
+
+    .calibra-cta:hover {
+        animation: none;
+    }
+
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
 /* ===== Mobile ===== */
 
 @media (max-width: 768px) {
@@ -923,5 +1209,55 @@ img {
 
     .docs-content strong {
         color: #e2e8f0;
+    }
+
+    /* Dark mode animation overrides */
+    .hero-orb-1 {
+        background: radial-gradient(circle, rgba(96,165,250,0.25), transparent 70%);
+    }
+
+    .hero-orb-2 {
+        background: radial-gradient(circle, rgba(249,115,22,0.2), transparent 70%);
+    }
+
+    .hero-orb-3 {
+        background: radial-gradient(circle, rgba(96,165,250,0.15), transparent 70%);
+    }
+
+    .hero-glow {
+        background: radial-gradient(circle, rgba(96,165,250,0.08), transparent 60%);
+    }
+
+    .terminal-body .cursor {
+        background: #fb923c;
+    }
+
+    .hero h1 {
+        background: linear-gradient(135deg, #e2e8f0 0%, #60a5fa 50%, #fb923c 100%);
+        background-size: 200% auto;
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    .calibra-cta:hover {
+        background: linear-gradient(90deg, #1e293b 25%, rgba(96,165,250,0.08) 50%, #1e293b 75%);
+        background-size: 200% auto;
+    }
+
+    .feature-card:hover::after {
+        background: linear-gradient(135deg, rgba(96,165,250,0.08), transparent, rgba(249,115,22,0.06));
+    }
+
+    .sidebar-section a::before {
+        background: #60a5fa;
+    }
+
+    .header-nav a::after {
+        background: #60a5fa;
+    }
+
+    .docs-hub-list li::before {
+        background: #60a5fa;
     }
 }
