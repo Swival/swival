@@ -493,12 +493,6 @@ img {
     transform: translateY(-2px);
 }
 
-.feature-icon {
-    font-size: 1.5rem;
-    margin-bottom: 0.75rem;
-    display: block;
-}
-
 .feature-card h3 {
     font-size: 1rem;
     color: var(--text);

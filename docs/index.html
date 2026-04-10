@@ -108,42 +108,34 @@
 					<p class="section-subtitle">Built for the reality of small context windows, limited resources, and models that need careful prompting to produce good output.</p>
 					<div class="features-grid">
 						<div class="feature-card" data-animate>
-							<div class="feature-icon">🧠</div>
 							<h3>Reliable with small models</h3>
 							<p>Context management is one of its strengths. Keeps things clean and focused, avoids unnecessary context bloat. Graduated compaction and persistent state mean the agent doesn't lose track of work, even under tight limits.</p>
 						</div>
 						<div class="feature-card" data-animate>
-							<div class="feature-icon">🔌</div>
 							<h3>Your models, your way</h3>
 							<p>Auto-discovers your LM Studio or llama.cpp model, or point it at HuggingFace, OpenRouter, Google Gemini, ChatGPT Plus/Pro, AWS Bedrock, or any OpenAI-compatible server. You pick the model and the infrastructure.</p>
 						</div>
 						<div class="feature-card" data-animate>
-							<div class="feature-icon">📊</div>
 							<h3>Review loop and benchmarking</h3>
 							<p>A configurable review loop with LLM-as-a-judge support. JSON reports capture timing, tool usage, and context events. Useful for comparing models, settings, skills, and MCP servers on real coding tasks.</p>
 						</div>
 						<div class="feature-card" data-animate>
-							<div class="feature-icon">🔒</div>
 							<h3>Secrets stay on your machine</h3>
 							<p>API keys and credentials in LLM messages are automatically encrypted before they leave your machine. The model never sees the real values. Decryption happens locally when the response comes back, so tools still work normally.</p>
 						</div>
 						<div class="feature-card" data-animate>
-							<div class="feature-icon">📝</div>
 							<h3>Cross-session memory</h3>
 							<p>The agent remembers things across sessions. Relevant past notes are retrieved via BM25 ranking, so context from earlier work carries forward without bloating the prompt. Use <code>/learn</code> to teach it on the spot.</p>
 						</div>
 						<div class="feature-card" data-animate>
-							<div class="feature-icon">⚡</div>
 							<h3>Pick up where you left off</h3>
 							<p>When a session is interrupted &mdash; Ctrl+C, max turns, context overflow &mdash; Swival saves its state to disk and resumes automatically next time you run it in the same directory.</p>
 						</div>
 						<div class="feature-card" data-animate>
-							<div class="feature-icon">🌐</div>
 							<h3>A2A server mode</h3>
 							<p>Run <code>swival --serve</code> and your agent becomes an A2A endpoint that other agents can call over HTTP. Multi-turn context, streaming, and bearer auth are built in.</p>
 						</div>
 						<div class="feature-card" data-animate>
-							<div class="feature-icon">🛠️</div>
 							<h3>Skills, MCP, and more</h3>
 							<p>Extend the agent with SKILL.md-based skills, MCP servers, and A2A agents. Small and hackable: a few thousand lines of Python, no framework. Read the whole thing in an afternoon.</p>
 						</div>
