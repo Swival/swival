@@ -172,6 +172,9 @@ def docs_page_html(title: str, body: str, slug: str) -> str:
     <meta name="twitter:image" content="{BASE_URL}/img/logo.png">
     <link rel="icon" href="../favicon.ico">
     <link rel="stylesheet" href="../css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body>
     <header class="site-header">
@@ -234,6 +237,9 @@ def docs_hub_html() -> str:
     <meta name="twitter:image" content="{BASE_URL}/img/logo.png">
     <link rel="icon" href="../favicon.ico">
     <link rel="stylesheet" href="../css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body>
     <header class="site-header">
