@@ -133,14 +133,14 @@ def _check_url_safety(url: str) -> str | None:
         infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
     except socket.gaierror as e:
         return f"error: could not resolve hostname {hostname!r}: {e}"
+    is_localhost = hostname in ("localhost", "127.0.0.1", "::1")
     for family, _, _, _, sockaddr in infos:
         addr = ipaddress.ip_address(sockaddr[0])
-        if (
-            addr.is_private
-            or addr.is_loopback
-            or addr.is_link_local
-            or addr.is_reserved
-        ):
+        if addr.is_loopback:
+            if is_localhost:
+                continue
+            return f"error: url resolves to private/internal address ({addr}), blocked for security"
+        if addr.is_private or addr.is_link_local or addr.is_reserved:
             return f"error: url resolves to private/internal address ({addr}), blocked for security"
     return None
 

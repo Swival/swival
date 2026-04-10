@@ -139,13 +139,37 @@ class TestUrlSafety:
         assert "private/internal" in result
 
     @patch("swival.fetch.socket.getaddrinfo")
-    def test_blocks_ipv6_loopback(self, mock_dns):
+    def test_blocks_ipv6_loopback_rebinding(self, mock_dns):
         mock_dns.return_value = [
             (10, 1, 0, "", ("::1", 0, 0, 0)),
         ]
-        result = _check_url_safety("http://localhost6")
+        result = _check_url_safety("http://evil6.com")
         assert result is not None
         assert "private/internal" in result
+
+    @patch("swival.fetch.socket.getaddrinfo")
+    def test_allows_localhost(self, mock_dns):
+        mock_dns.return_value = [
+            (2, 1, 0, "", ("127.0.0.1", 0)),
+        ]
+        result = _check_url_safety("http://localhost:8765/")
+        assert result is None
+
+    @patch("swival.fetch.socket.getaddrinfo")
+    def test_allows_localhost_ipv4(self, mock_dns):
+        mock_dns.return_value = [
+            (2, 1, 0, "", ("127.0.0.1", 0)),
+        ]
+        result = _check_url_safety("http://127.0.0.1:8080/")
+        assert result is None
+
+    @patch("swival.fetch.socket.getaddrinfo")
+    def test_allows_localhost_ipv6(self, mock_dns):
+        mock_dns.return_value = [
+            (10, 1, 0, "", ("::1", 0, 0, 0)),
+        ]
+        result = _check_url_safety("http://[::1]:8080/")
+        assert result is None
 
     @patch("swival.fetch.socket.getaddrinfo")
     def test_allows_public_address(self, mock_dns):
@@ -631,21 +655,19 @@ class TestRedirectSafety:
     @patch("swival.fetch.socket.getaddrinfo")
     @patch("swival.fetch.urllib.request.build_opener")
     def test_redirect_to_private_blocked(self, mock_opener_factory, mock_dns):
-        """Redirect to a private address should be blocked."""
-        call_count = [0]
+        """Redirect to a private (non-loopback) address should be blocked."""
 
         def dns_side_effect(hostname, *args, **kwargs):
-            call_count[0] += 1
             if hostname == "public.com":
                 return [(2, 1, 0, "", ("93.184.216.34", 0))]
-            elif hostname == "127.0.0.1":
-                return [(2, 1, 0, "", ("127.0.0.1", 0))]
+            elif hostname == "10.0.0.1":
+                return [(2, 1, 0, "", ("10.0.0.1", 0))]
             return [(2, 1, 0, "", ("93.184.216.34", 0))]
 
         mock_dns.side_effect = dns_side_effect
 
         opener = MagicMock()
-        opener.open.side_effect = _RedirectError("http://127.0.0.1/secret", 302)
+        opener.open.side_effect = _RedirectError("http://10.0.0.1/secret", 302)
         mock_opener_factory.return_value = opener
 
         result = fetch_url("http://public.com")

@@ -178,7 +178,7 @@ swival --no-read-guard "task"
 
 ## URL Fetching And SSRF Protections
 
-The `fetch_url` tool only allows `http` and `https`. It resolves each hostname with `socket.getaddrinfo`, blocks private and internal address classes through `ipaddress`, and re-runs those checks on every redirect hop. Redirect chains are handled manually and capped at ten hops, which prevents public-to-private redirect abuse patterns.
+The `fetch_url` tool only allows `http` and `https`. It resolves each hostname with `socket.getaddrinfo`, blocks private and internal address classes through `ipaddress`, and re-runs those checks on every redirect hop. Loopback addresses are allowed when the hostname is explicitly `localhost`, `127.0.0.1`, or `::1`, so agents can test locally running servers. Arbitrary hostnames that resolve to loopback addresses are still blocked to prevent DNS rebinding attacks. Redirect chains are handled manually and capped at ten hops.
 
 Binary MIME types are rejected. Response bodies are capped at 5 MB before conversion, and converted inline output is capped at 50 KB.
 
