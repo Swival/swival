@@ -49,17 +49,77 @@ def _estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
+_ALWAYS_SYNTHETIC_PREFIXES: tuple[str, ...] = (
+    "[REVIEWER FEEDBACK",
+    "[image]",
+    "[Context for follow-up:",
+)
+
+
+def _is_synthetic(msg) -> bool:
+    """Check if a user message is a synthetic intervention, not a real task.
+
+    Accepts a message dict/namespace or a plain content string.
+
+    Uses the ``_swival_synthetic`` marker set by the agent loop when it
+    injects nudges, guardrails, and other scaffolding messages.  Falls back
+    to bracket-prefixed patterns for content that is always synthetic by
+    construction (image, reviewer, command-tool context).
+    """
+    if not isinstance(msg, str) and _msg_get(msg, "_swival_synthetic"):
+        return True
+    content = msg if isinstance(msg, str) else _msg_content(msg)
+    for prefix in _ALWAYS_SYNTHETIC_PREFIXES:
+        if content.startswith(prefix):
+            return True
+    return False
+
+
+def _find_current_turn_boundary(messages: list) -> int:
+    """Return the index of the most recent real user message, or 0 if none.
+
+    This defines the current-turn boundary: all assistant tool_calls after
+    this index are in the current turn and must preserve opaque extras
+    (e.g. extra_content.google.thought_signature) for providers that
+    require replay metadata.
+
+    Synthetic user messages (nudges, guardrails, recap injections) are
+    skipped — they are not real turn boundaries.
+    """
+    for i in range(len(messages) - 1, -1, -1):
+        msg = messages[i]
+        if _msg_role(msg) == "user":
+            content = _msg_content(msg)
+            if content and not _is_synthetic(msg):
+                return i
+    return 0
+
+
 def _canonicalize_tool_calls(messages: list) -> None:
     """Rewrite historical assistant tool_calls to minimal shape.
 
     Strips provider extras (index, etc.) keeping only id, type,
     function.name, function.arguments.  Skips the most recent assistant
     message with tool_calls so in-flight calls are untouched.
+
+    Current-turn tool calls (after the most recent user message) preserve
+    request-shaped extras like extra_content so that providers requiring
+    replay metadata (e.g. Gemini thought_signature) are not broken.
     """
     last_tc_idx = None
+    current_turn_start = 0
+    found_boundary = False
     for i in range(len(messages) - 1, -1, -1):
-        if _msg_role(messages[i]) == "assistant" and _msg_tool_calls(messages[i]):
+        msg = messages[i]
+        role = _msg_role(msg)
+        if last_tc_idx is None and role == "assistant" and _msg_tool_calls(msg):
             last_tc_idx = i
+        if not found_boundary and role == "user":
+            content = _msg_content(msg)
+            if content and not _is_synthetic(msg):
+                current_turn_start = i
+                found_boundary = True
+        if last_tc_idx is not None and found_boundary:
             break
 
     for i, msg in enumerate(messages):
@@ -72,6 +132,8 @@ def _canonicalize_tool_calls(messages: list) -> None:
         tcs = msg.get("tool_calls")
         if not tcs or not isinstance(tcs, list):
             continue
+
+        in_current_turn = i > current_turn_start
 
         new_tcs = []
         changed = False
@@ -86,6 +148,10 @@ def _canonicalize_tool_calls(messages: list) -> None:
                         "arguments": fn.get("arguments", ""),
                     },
                 }
+                if in_current_turn:
+                    extra = _msg_get(tc, "extra_content")
+                    if extra is not None:
+                        canonical["extra_content"] = extra
                 if canonical != tc:
                     changed = True
                 new_tcs.append(canonical)
@@ -100,6 +166,10 @@ def _canonicalize_tool_calls(messages: list) -> None:
                         or "",
                     },
                 }
+                if in_current_turn:
+                    extra = _msg_get(tc, "extra_content")
+                    if extra is not None:
+                        canonical["extra_content"] = extra
                 changed = True
                 new_tcs.append(canonical)
             else:

@@ -4,19 +4,11 @@ import time
 from pathlib import Path
 
 from . import fmt
-from ._msg import _msg_get, _msg_role, _msg_content, _msg_tool_calls
+from ._msg import _msg_role, _msg_content, _msg_tool_calls, _is_synthetic
 
 CONTINUE_PATH = ".swival/continue.md"
 MAX_CONTINUE_CHARS = 4000
 STALENESS_SECONDS = 24 * 60 * 60  # 24 hours
-
-# Prefixes that are always synthetic by construction (inserted by
-# snapshot, image injection, etc.).  These never appear in real user input.
-_ALWAYS_SYNTHETIC_PREFIXES: tuple[str, ...] = (
-    "[REVIEWER FEEDBACK",
-    "[image]",
-    "[Context for follow-up:",
-)
 
 
 _CONTINUE_SUMMARY_PROMPT = (
@@ -40,25 +32,6 @@ def _safe_continue_path(base_dir: str) -> Path:
     if not p.is_relative_to(base):
         raise ValueError(f"continue path {p} escapes base directory {base}")
     return p
-
-
-def _is_synthetic(msg) -> bool:
-    """Check if a user message is a synthetic intervention, not a real task.
-
-    Accepts a message dict/namespace or a plain content string.
-
-    Uses the ``_swival_synthetic`` marker set by the agent loop when it
-    injects nudges, guardrails, and other scaffolding messages.  Falls back
-    to bracket-prefixed patterns for content that is always synthetic by
-    construction (image, reviewer, command-tool context).
-    """
-    if not isinstance(msg, str) and _msg_get(msg, "_swival_synthetic"):
-        return True
-    content = msg if isinstance(msg, str) else _msg_content(msg)
-    for prefix in _ALWAYS_SYNTHETIC_PREFIXES:
-        if content.startswith(prefix):
-            return True
-    return False
 
 
 def _find_last_user_task(messages: list) -> str | None:

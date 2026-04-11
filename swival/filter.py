@@ -22,8 +22,9 @@ def _message_to_dict(msg) -> dict:
         d["content"] = content
     tool_calls = _msg_tool_calls(msg)
     if tool_calls:
-        d["tool_calls"] = [
-            {
+        serialized = []
+        for tc in tool_calls:
+            entry = {
                 "id": tc.id if hasattr(tc, "id") else tc.get("id"),
                 "type": "function",
                 "function": {
@@ -39,8 +40,11 @@ def _message_to_dict(msg) -> dict:
                     ),
                 },
             }
-            for tc in tool_calls
-        ]
+            extra = _msg_get(tc, "extra_content")
+            if extra is not None:
+                entry["extra_content"] = extra
+            serialized.append(entry)
+        d["tool_calls"] = serialized
     tool_call_id = _msg_tool_call_id(msg)
     if tool_call_id is not None:
         d["tool_call_id"] = tool_call_id
