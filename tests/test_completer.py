@@ -72,7 +72,8 @@ class TestSlashCommands:
         from swival.input_commands import INPUT_COMMANDS
 
         results = _completions(completer, "/")
-        assert len(results) == len(INPUT_COMMANDS)
+        slash_commands = [k for k in INPUT_COMMANDS if k.startswith("/")]
+        assert len(results) == len(slash_commands)
 
     def test_case_insensitive(self, completer):
         results = _completions(completer, "/HEL")

@@ -31,8 +31,8 @@ class TestRegistryMatchesDispatcher:
             for cmd in re.findall(r'["\'](/[a-z-]+)["\']', group):
                 dispatched.add(cmd)
 
-        # Pattern: cmd == "/foo"
-        for cmd in re.findall(r'cmd\s*==\s*["\'](/[a-z-]+)["\']', source):
+        # Pattern: cmd == "/foo" or cmd == "!!"
+        for cmd in re.findall(r'cmd\s*==\s*["\']([/!][a-z!-]+)["\']', source):
             dispatched.add(cmd)
 
         registry = set(INPUT_COMMANDS.keys())
