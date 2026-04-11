@@ -2,6 +2,7 @@
 
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from . import fmt
@@ -13,6 +14,8 @@ from .tracker import FileAccessTracker
 
 _SUBAGENT_TOOLS = {"spawn_subagent", "check_subagents"}
 _MAX_CONCURRENT = 4
+_WAIT_TIMEOUT = 60
+_WAIT_POLL_INTERVAL = 0.25
 
 # Keys from loop_kwargs that represent per-run mutable state or
 # non-shareable resources. Excluded when building the subagent template.
@@ -168,6 +171,7 @@ class SubagentManager:
         resolved_system_content: str | None,
         parent_cancel_flag: threading.Event | None,
         verbose: bool,
+        notify_user: Callable[[str], None] | None = None,
     ):
         self._template = loop_kwargs_template
         self._tools = [
@@ -178,7 +182,9 @@ class SubagentManager:
         self._handles: dict[str, SubagentHandle] = {}
         self._counter = 0
         self._verbose = verbose
+        self._notify_user = notify_user
         self._lock = threading.Lock()
+        self._slots = threading.Semaphore(_MAX_CONCURRENT)
 
     def spawn(
         self,
@@ -187,18 +193,44 @@ class SubagentManager:
         max_turns: int | None = None,
         system_hint: str | None = None,
     ) -> str:
+        # Try to acquire a capacity slot immediately. If all slots are taken,
+        # notify the user and wait. spawn() runs on the main tool-dispatch thread,
+        # so blocking here (up to _WAIT_TIMEOUT seconds) is intentional — the agent
+        # loop pauses until a slot opens or the deadline expires.
+        if not self._slots.acquire(blocking=False):
+            if self._notify_user is not None:
+                self._notify_user(
+                    f"All {_MAX_CONCURRENT} background agents are already running; "
+                    f"waiting up to {_WAIT_TIMEOUT}s for one to finish before starting another."
+                )
+            # Cancellation-aware polling — mirrors _CompositeCancelFlag.wait().
+            deadline = time.monotonic() + _WAIT_TIMEOUT
+            acquired = False
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                if (
+                    self._parent_cancel_flag is not None
+                    and self._parent_cancel_flag.is_set()
+                ):
+                    break
+                if self._slots.acquire(
+                    blocking=True, timeout=min(_WAIT_POLL_INTERVAL, remaining)
+                ):
+                    acquired = True
+                    break
+            if not acquired:
+                return (
+                    f"All {_MAX_CONCURRENT} background agents are still running after "
+                    f"waiting {_WAIT_TIMEOUT}s. Try spawning another subagent later."
+                )
+
         with self._lock:
-            running = sum(1 for h in self._handles.values() if not h.done.is_set())
             if len(self._handles) > _MAX_CONCURRENT * 4:
                 self._handles = {
                     k: v for k, v in self._handles.items() if not v.done.is_set()
                 }
-            if running >= _MAX_CONCURRENT:
-                return (
-                    f"error: max {_MAX_CONCURRENT} concurrent subagents; "
-                    "try again after one finishes "
-                    "(use check_subagents to poll or collect a result)"
-                )
             self._counter += 1
             sid = f"sub_{self._counter}"
 
@@ -216,6 +248,7 @@ class SubagentManager:
                 system_hint,
                 self._system_content,
                 composite_cancel,
+                self._slots,
             ),
             name=f"swival-subagent-{sid}",
             daemon=True,
@@ -224,7 +257,7 @@ class SubagentManager:
         with self._lock:
             self._handles[sid] = handle
         t.start()
-        return f"Subagent {sid} launched."
+        return f"Background agent {sid} is ready."
 
     def poll(self) -> str:
         with self._lock:
@@ -303,16 +336,14 @@ class SubagentManager:
                 handle.thread.join()
 
     def fresh_copy(self) -> "SubagentManager":
-        mgr = SubagentManager.__new__(SubagentManager)
-        mgr._template = self._template
-        mgr._tools = self._tools  # already filtered
-        mgr._system_content = self._system_content
-        mgr._parent_cancel_flag = threading.Event()
-        mgr._handles = {}
-        mgr._counter = 0
-        mgr._verbose = self._verbose
-        mgr._lock = threading.Lock()
-        return mgr
+        return SubagentManager(
+            loop_kwargs_template=self._template,
+            tools=self._tools,  # already filtered; __init__ re-filters idempotently
+            resolved_system_content=self._system_content,
+            parent_cancel_flag=threading.Event(),
+            verbose=self._verbose,
+            notify_user=self._notify_user,
+        )
 
 
 def _build_subagent_system(parent_system: str | None, system_hint: str | None) -> str:
@@ -338,6 +369,7 @@ def _subagent_thread_fn(
     system_hint: str | None,
     system_content: str | None,
     composite_cancel: _CompositeCancelFlag,
+    slot: threading.Semaphore,
 ):
     try:
         from .agent import run_agent_loop
@@ -381,3 +413,4 @@ def _subagent_thread_fn(
         handle.error = f"error: subagent crashed: {e}"
     finally:
         handle.done.set()
+        slot.release()

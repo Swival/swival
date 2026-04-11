@@ -539,16 +539,25 @@ class Session:
             kwargs["cancel_flag"] = self.cancel_flag
         if self.subagents:
             from .subagent import SubagentManager, SA_TEMPLATE_EXCLUDE
+            from .a2a_types import EVENT_STATUS_UPDATE
+            from . import fmt
 
             sa_template = {
                 k: v for k, v in kwargs.items() if k not in SA_TEMPLATE_EXCLUDE
             }
+            event_cb = self.event_callback
+            notify = (
+                (lambda msg: event_cb(EVENT_STATUS_UPDATE, {"text": msg}))
+                if event_cb is not None
+                else fmt.info
+            )
             kwargs["subagent_manager"] = SubagentManager(
                 loop_kwargs_template=sa_template,
                 tools=self._tools,
                 resolved_system_content=state.get("resolved_system_content"),
                 parent_cancel_flag=self.cancel_flag,
                 verbose=self.verbose,
+                notify_user=notify,
             )
         return kwargs
 

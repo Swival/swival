@@ -1278,7 +1278,7 @@ def _read_file(
                 "separate files in .swival/memory/ and reference them from MEMORY.md."
             )
         if resolved == _history_path(base_dir):
-            return "No history yet."
+            return "No history yet. Update .swival/memory/MEMORY.md when you learn something worth remembering long-term about the project."
         return f"error: path does not exist: {file_path}"
 
     # Directory listing

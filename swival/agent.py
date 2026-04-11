@@ -5492,6 +5492,7 @@ def _run_main(args, report, _write_report, parser):
             resolved_system_content=system_content,
             parent_cancel_flag=threading.Event(),
             verbose=args.verbose,
+            notify_user=fmt.info,
         )
         loop_kwargs["subagent_manager"] = subagent_manager
 

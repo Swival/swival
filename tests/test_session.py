@@ -526,3 +526,39 @@ class TestVerboseOff:
         captured = capsys.readouterr()
         assert captured.err == ""
         assert captured.out == ""
+
+
+class TestSessionSubagentNotifyUser:
+    """Verify that Session wires notify_user into SubagentManager correctly."""
+
+    def _build_manager(self, tmp_path, monkeypatch, event_callback=None):
+        """Return the SubagentManager constructed by Session._build_loop_kwargs."""
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+        s = Session(base_dir=str(tmp_path), history=False, subagents=True)
+        s._setup()
+        if event_callback is not None:
+            s.event_callback = event_callback
+        state = s._make_per_run_state(system_content=None)
+        kwargs = s._build_loop_kwargs(state)
+        return kwargs["subagent_manager"]
+
+    def test_event_callback_emits_status_update(self, tmp_path, monkeypatch):
+        events = []
+        mgr = self._build_manager(
+            tmp_path, monkeypatch, event_callback=lambda k, d: events.append((k, d))
+        )
+        assert mgr._notify_user is not None
+        mgr._notify_user("waiting for capacity")
+        assert len(events) == 1
+        assert events[0][0] == "status_update"
+        assert events[0][1]["text"] == "waiting for capacity"
+
+    def test_no_event_callback_falls_back_to_fmt_info(self, tmp_path, monkeypatch):
+        from swival import fmt
+
+        fmt_calls = []
+        monkeypatch.setattr(fmt, "info", lambda msg: fmt_calls.append(msg))
+        mgr = self._build_manager(tmp_path, monkeypatch)
+        assert mgr._notify_user is not None
+        mgr._notify_user("waiting for capacity")
+        assert "waiting for capacity" in fmt_calls

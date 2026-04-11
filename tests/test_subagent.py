@@ -109,6 +109,7 @@ class TestSubagentManager:
             resolved_system_content="test system prompt",
             parent_cancel_flag=None,
             verbose=False,
+            notify_user=None,
         )
         defaults.update(kwargs)
         return SubagentManager(**defaults)
@@ -146,6 +147,7 @@ class TestSubagentManager:
 
         result = mgr.spawn(task="test task")
         assert "sub_1" in result
+        assert "ready" in result.lower()
         # Wait for thread to finish
         time.sleep(0.1)
         poll = mgr.poll()
@@ -185,22 +187,28 @@ class TestSubagentManager:
         poll = mgr.poll()
         assert "failed" in poll.lower()
 
-    def test_max_concurrent(self, monkeypatch):
-        mgr = self._make_manager()
+    def test_max_concurrent_aborts_on_cancel(self, monkeypatch):
+        parent_flag = threading.Event()
+        mgr = self._make_manager(parent_cancel_flag=parent_flag)
         barrier = threading.Event()
 
-        def mock_thread_fn(handle, *args, **kwargs):
+        def mock_thread_fn(handle, *args):
             barrier.wait(timeout=10)
             handle.done.set()
+            args[-1].release()  # slot is last positional arg
 
         monkeypatch.setattr("swival.subagent._subagent_thread_fn", mock_thread_fn)
 
         for i in range(4):
             result = mgr.spawn(task=f"task {i}")
-            assert "launched" in result.lower()
+            assert "ready" in result.lower()
 
+        # Set cancel flag so the wait aborts immediately instead of waiting 60s.
+        parent_flag.set()
         result = mgr.spawn(task="one too many")
-        assert result.startswith("error:")
+        assert not result.startswith("error:")
+        assert "background agents" in result.lower()
+        assert "try" in result.lower()
         barrier.set()
         mgr.shutdown(timeout=5)
 
@@ -245,11 +253,13 @@ class TestSubagentManager:
             system_hint,
             system_content,
             composite_cancel,
+            slot,
         ):
             while not composite_cancel.is_set():
                 time.sleep(0.01)
             seen_cancelled.set()
             handle.done.set()
+            slot.release()
 
         monkeypatch.setattr("swival.subagent._subagent_thread_fn", mock_thread_fn)
 
@@ -257,6 +267,105 @@ class TestSubagentManager:
         parent_flag.set()
         assert seen_cancelled.wait(timeout=5)
         mgr.shutdown(timeout=5)
+
+    def test_wait_notifies_user_once(self, monkeypatch):
+        """notify_user fires exactly once when all slots are occupied."""
+        notifications = []
+        mgr = self._make_manager(
+            parent_cancel_flag=threading.Event(),
+            notify_user=notifications.append,
+        )
+        barrier = threading.Event()
+
+        def mock_thread_fn(handle, *args):
+            barrier.wait(timeout=10)
+            handle.done.set()
+            args[-1].release()
+
+        monkeypatch.setattr("swival.subagent._subagent_thread_fn", mock_thread_fn)
+
+        for i in range(4):
+            mgr.spawn(task=f"task {i}")
+
+        # Abort the wait immediately via cancel flag.
+        mgr._parent_cancel_flag.set()
+        mgr.spawn(task="overflow")
+
+        assert len(notifications) == 1
+        assert "4 background agents" in notifications[0]
+        barrier.set()
+        mgr.shutdown(timeout=5)
+
+    def test_wait_delayed_success(self, monkeypatch):
+        """When a slot frees up during the wait, spawn returns the ready message."""
+        mgr = self._make_manager()
+        release_first = threading.Event()
+
+        def mock_thread_fn(handle, *args):
+            release_first.wait(timeout=10)
+            handle.done.set()
+            args[-1].release()
+
+        monkeypatch.setattr("swival.subagent._subagent_thread_fn", mock_thread_fn)
+
+        for i in range(4):
+            mgr.spawn(task=f"task {i}")
+
+        # Release one slot shortly after the 5th spawn starts waiting.
+        def free_one():
+            time.sleep(0.1)
+            release_first.set()
+
+        threading.Thread(target=free_one, daemon=True).start()
+
+        result = mgr.spawn(task="delayed")
+        assert "ready" in result.lower()
+        assert "sub_5" in result
+        mgr.shutdown(timeout=5)
+
+    def test_semaphore_released_on_completion(self, monkeypatch):
+        """Slot is released after a thread finishes so subsequent spawns succeed."""
+        mgr = self._make_manager()
+
+        def mock_thread_fn(handle, *args):
+            handle.result = "done"
+            handle.done.set()
+            args[-1].release()
+
+        monkeypatch.setattr("swival.subagent._subagent_thread_fn", mock_thread_fn)
+
+        for i in range(4):
+            mgr.spawn(task=f"task {i}")
+
+        for i in range(1, 5):
+            mgr.collect(f"sub_{i}", timeout=5)
+
+        result = mgr.spawn(task="after release")
+        assert "ready" in result.lower()
+
+    def test_fresh_copy_full_capacity(self, monkeypatch):
+        """fresh_copy() starts with all capacity slots available."""
+        mgr = self._make_manager()
+        barrier = threading.Event()
+
+        def mock_thread_fn(handle, *args):
+            barrier.wait(timeout=10)
+            handle.done.set()
+            args[-1].release()
+
+        monkeypatch.setattr("swival.subagent._subagent_thread_fn", mock_thread_fn)
+
+        for i in range(4):
+            mgr.spawn(task=f"task {i}")
+
+        # Original manager is at capacity; fresh copy should have all slots free.
+        fresh = mgr.fresh_copy()
+        result = fresh.spawn(task="fresh task")
+        assert "ready" in result.lower()
+
+        barrier.set()
+        mgr.shutdown(timeout=5)
+        fresh.shutdown(timeout=5)
 
     def test_error_captured(self, monkeypatch):
         mgr = self._make_manager()
@@ -312,6 +421,7 @@ class TestSubagentThreadFn:
             None,
             "parent system",
             composite,
+            threading.Semaphore(1),
         )
 
         assert handle.result == "the answer"
@@ -360,6 +470,7 @@ class TestSubagentThreadFn:
             None,
             None,
             _CompositeCancelFlag(None, threading.Event()),
+            threading.Semaphore(1),
         )
 
         assert isinstance(captured_kwargs["todo_state"], TodoState)
@@ -392,6 +503,7 @@ class TestSubagentThreadFn:
             None,
             None,
             _CompositeCancelFlag(None, threading.Event()),
+            threading.Semaphore(1),
         )
 
         assert handle.error is not None
