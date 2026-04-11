@@ -2,11 +2,51 @@
 
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from importlib import metadata
 
 from ._msg import _msg_get, _msg_role, _msg_content, _msg_tool_calls
+
+
+def _sanitize_trace_text(value: str, *, base_dir: str, home_dir: str) -> str:
+    def _replace_prefix(text: str, prefix: str, replacement: str) -> str:
+        if not prefix:
+            return text
+        # Left boundary: start-of-string or a non-alphanumeric character — prevents
+        # rewriting paths embedded inside larger tokens such as URLs
+        # (e.g. https://host/Users/j/... is not touched because 't' precedes '/Users/j').
+        # Right boundary: end-of-string, any character that cannot be part of a path
+        # component, or a dot followed immediately by a non-path character — the last
+        # case handles sentence-ending punctuation (e.g. "see /x/y.") without treating
+        # file extensions on sibling paths (e.g. /x/y.git) as matches.
+        pattern = (
+            r"(?:(?<=[^A-Za-z0-9])|^)"
+            + re.escape(prefix)
+            + r"(?=[^A-Za-z0-9._\-]|$|\.(?:[^A-Za-z0-9._\-]|$))"
+        )
+        return re.sub(pattern, replacement, text)
+
+    value = _replace_prefix(value, base_dir, "BASEDIR")
+    value = _replace_prefix(value, home_dir, "~")
+    return value
+
+
+def _sanitize_trace_obj(obj, *, base_dir: str, home_dir: str) -> object:
+    if isinstance(obj, str):
+        return _sanitize_trace_text(obj, base_dir=base_dir, home_dir=home_dir)
+    if isinstance(obj, dict):
+        return {
+            k: _sanitize_trace_obj(v, base_dir=base_dir, home_dir=home_dir)
+            for k, v in obj.items()
+        }
+    if isinstance(obj, list):
+        return [
+            _sanitize_trace_obj(item, base_dir=base_dir, home_dir=home_dir)
+            for item in obj
+        ]
+    return obj
 
 
 def _swival_version() -> str:
@@ -29,6 +69,16 @@ def write_trace(
     enc = secret_shield.encrypt_text if secret_shield is not None else (lambda s: s)
     enc_obj = secret_shield.encrypt_obj if secret_shield is not None else (lambda o: o)
 
+    home_dir = os.path.expanduser("~")
+
+    def san(text: str) -> str:
+        return _sanitize_trace_text(text, base_dir=base_dir, home_dir=home_dir)
+
+    def san_obj(obj):
+        return _sanitize_trace_obj(obj, base_dir=base_dir, home_dir=home_dir)
+
+    cwd = san(base_dir)
+
     version = _swival_version()
     last_uuid = None
     lines: list[dict] = []
@@ -43,7 +93,7 @@ def write_trace(
             "harness": "swival",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "version": version,
-            "cwd": base_dir,
+            "cwd": cwd,
             "type": type_,
             "isSidechain": False,
             "userType": "external",
@@ -58,14 +108,17 @@ def write_trace(
 
         if role == "system":
             _append(
-                "system", content=enc(_msg_content(msg)), level="info", isMeta=False
+                "system",
+                content=enc(san(_msg_content(msg))),
+                level="info",
+                isMeta=False,
             )
 
         elif role == "user":
             content = _msg_content(msg)
             _append(
                 "user",
-                message={"role": "user", "content": enc(content)},
+                message={"role": "user", "content": enc(san(content))},
                 promptId=str(uuid.uuid4()),
             )
 
@@ -75,7 +128,7 @@ def write_trace(
 
             text = _msg_content(msg)
             if text:
-                content_blocks.append({"type": "text", "text": enc(text)})
+                content_blocks.append({"type": "text", "text": enc(san(text))})
 
             if tool_calls:
                 for tc in tool_calls:
@@ -84,13 +137,13 @@ def write_trace(
                     try:
                         parsed = json.loads(raw_args)
                     except (json.JSONDecodeError, TypeError):
-                        parsed = {"_raw": raw_args}
+                        parsed = {"_raw": san(raw_args)}
                     content_blocks.append(
                         {
                             "type": "tool_use",
                             "id": _msg_get(tc, "id"),
                             "name": _msg_get(fn, "name"),
-                            "input": enc_obj(parsed),
+                            "input": enc_obj(san_obj(parsed)),
                         }
                     )
 
@@ -123,7 +176,7 @@ def write_trace(
             )
 
         elif role == "tool":
-            raw = _msg_content(msg)
+            raw = san(_msg_content(msg))
             tc_id = _msg_get(msg, "tool_call_id")
             is_error = raw.startswith("error:")
             encrypted_raw = enc(raw)
@@ -146,7 +199,7 @@ def write_trace(
     lines.append(
         {
             "type": "last-prompt",
-            "lastPrompt": enc(task or ""),
+            "lastPrompt": enc(san(task or "")),
             "sessionId": session_id,
             "toolUseResult": "",
         }

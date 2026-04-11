@@ -1,11 +1,17 @@
 """Tests for swival.traces — JSONL trace export."""
 
 import json
+import os
 import types
 
 import pytest
 
-from swival.traces import write_trace, write_trace_to_dir
+from swival.traces import (
+    write_trace,
+    write_trace_to_dir,
+    _sanitize_trace_text,
+    _sanitize_trace_obj,
+)
 
 
 def _read_lines(path):
@@ -631,3 +637,370 @@ def test_trace_tool_result_encrypted(tmp_path):
     ln = tool_lines[0]
     assert _FAKE_TOKEN not in ln["toolUseResult"]
     assert _FAKE_TOKEN not in ln["message"]["content"][0]["content"]
+
+
+# --- Path redaction tests ---
+
+_HOME = os.path.expanduser("~")
+_BASE = _HOME + "/test-workspace-redaction"
+
+
+def test_sanitize_text_base_dir_exact():
+    assert _sanitize_trace_text(_BASE, base_dir=_BASE, home_dir=_HOME) == "BASEDIR"
+
+
+def test_sanitize_text_base_dir_prefix():
+    assert (
+        _sanitize_trace_text(f"{_BASE}/foo.py", base_dir=_BASE, home_dir=_HOME)
+        == "BASEDIR/foo.py"
+    )
+
+
+def test_sanitize_text_base_dir_in_prose():
+    assert (
+        _sanitize_trace_text(f"open {_BASE}/file.txt", base_dir=_BASE, home_dir=_HOME)
+        == "open BASEDIR/file.txt"
+    )
+
+
+def test_sanitize_text_base_dir_after_equals():
+    assert (
+        _sanitize_trace_text(f"path={_BASE}/cfg.toml", base_dir=_BASE, home_dir=_HOME)
+        == "path=BASEDIR/cfg.toml"
+    )
+
+
+def test_sanitize_text_home_dir_outside_base():
+    result = _sanitize_trace_text(
+        f"{_HOME}/.config/swival/config.toml", base_dir=_BASE, home_dir=_HOME
+    )
+    assert result == "~/.config/swival/config.toml"
+
+
+def test_sanitize_text_base_dir_preferred_over_home():
+    result = _sanitize_trace_text(
+        f"{_BASE}/src/main.py", base_dir=_BASE, home_dir=_HOME
+    )
+    assert result == "BASEDIR/src/main.py"
+    assert "~" not in result
+
+
+def test_sanitize_text_no_false_positive_suffix():
+    assert (
+        _sanitize_trace_text("/tmpfile", base_dir="/tmp", home_dir="/tmp/home")
+        == "/tmpfile"
+    )
+
+
+def test_sanitize_text_no_false_positive_equals():
+    assert (
+        _sanitize_trace_text("cache=/tmpdir", base_dir="/tmp", home_dir="/tmp/home")
+        == "cache=/tmpdir"
+    )
+
+
+def test_sanitize_text_unrelated_path_unchanged():
+    assert (
+        _sanitize_trace_text("/var/log/syslog", base_dir=_BASE, home_dir=_HOME)
+        == "/var/log/syslog"
+    )
+
+
+def test_sanitize_text_home_lookalike_unchanged():
+    result = _sanitize_trace_text(f"{_HOME}x/other", base_dir=_BASE, home_dir=_HOME)
+    assert result == f"{_HOME}x/other"
+
+
+def test_sanitize_text_backtick_wrapped():
+    result = _sanitize_trace_text(f"`{_BASE}`", base_dir=_BASE, home_dir=_HOME)
+    assert result == "`BASEDIR`"
+
+
+def test_sanitize_text_quote_wrapped():
+    result = _sanitize_trace_text(f'"{_BASE}"', base_dir=_BASE, home_dir=_HOME)
+    assert result == '"BASEDIR"'
+
+
+def test_sanitize_text_paren_wrapped():
+    result = _sanitize_trace_text(f"({_BASE})", base_dir=_BASE, home_dir=_HOME)
+    assert result == "(BASEDIR)"
+
+
+def test_sanitize_text_url_embedded_unchanged():
+    # path embedded inside a URL token — 'm' from '.com' is alphanumeric, so the
+    # left-boundary check must block the match to avoid mangling the URL.
+    url = f"https://example.com{_BASE}/x"
+    result = _sanitize_trace_text(url, base_dir=_BASE, home_dir=_HOME)
+    assert result == url
+
+
+def test_sanitize_text_exact_path_home_preferred_after_base_fix():
+    # Regression: `` `/base/path` `` must become `` `BASEDIR` `` not `` `~/suffix` ``
+    result = _sanitize_trace_text(f"`{_BASE}`", base_dir=_BASE, home_dir=_HOME)
+    assert "BASEDIR" in result
+    assert _HOME.lstrip("/").split("/")[0] not in result.replace("BASEDIR", "")
+
+
+def test_sanitize_text_dot_sentence_terminator():
+    # Sentence-ending dot after exact base_dir must be treated as punctuation.
+    assert (
+        _sanitize_trace_text(f"{_BASE}.", base_dir=_BASE, home_dir=_HOME) == "BASEDIR."
+    )
+
+
+def test_sanitize_text_dot_sentence_in_prose():
+    result = _sanitize_trace_text(f"open {_BASE}.", base_dir=_BASE, home_dir=_HOME)
+    assert result == "open BASEDIR."
+
+
+def test_sanitize_text_dot_sentence_mid_prose():
+    result = _sanitize_trace_text(
+        f"wrote to {_BASE}. Done.", base_dir=_BASE, home_dir=_HOME
+    )
+    assert result == "wrote to BASEDIR. Done."
+
+
+def test_sanitize_text_dot_sibling_path_not_basedir():
+    # /base.git is a sibling directory — the base_dir pass must not rewrite it
+    # (the .git extension shows it is a different path component), but the home_dir
+    # pass still redacts the home prefix as expected.
+    sibling = f"{_BASE}.git"
+    result = _sanitize_trace_text(sibling, base_dir=_BASE, home_dir=_HOME)
+    assert "BASEDIR" not in result
+    assert result == "~/test-workspace-redaction.git"
+
+
+def test_sanitize_obj_recursive():
+    obj = {"path": f"{_BASE}/file.txt", "nested": [f"{_BASE}/sub", 42, None]}
+    result = _sanitize_trace_obj(obj, base_dir=_BASE, home_dir=_HOME)
+    assert result == {"path": "BASEDIR/file.txt", "nested": ["BASEDIR/sub", 42, None]}
+
+
+def test_sanitize_obj_dict_keys_unchanged():
+    key = f"{_BASE}/key"
+    obj = {key: "value"}
+    result = _sanitize_trace_obj(obj, base_dir=_BASE, home_dir=_HOME)
+    assert key in result
+
+
+def test_sanitize_obj_non_strings_unchanged():
+    obj = {"count": 42, "flag": True, "nothing": None}
+    result = _sanitize_trace_obj(obj, base_dir=_BASE, home_dir=_HOME)
+    assert result == {"count": 42, "flag": True, "nothing": None}
+
+
+def test_write_trace_cwd_is_basedir(tmp_path):
+    messages = [{"role": "user", "content": "hello"}]
+    path = str(tmp_path / "trace.jsonl")
+    write_trace(messages, path=path, session_id="s1", base_dir=_BASE, model="m1")
+    lines = _read_lines(path)
+    for line in lines:
+        if "cwd" in line:
+            assert line["cwd"] == "BASEDIR"
+
+
+def test_write_trace_user_content_redacted(tmp_path):
+    messages = [{"role": "user", "content": f"check {_BASE}/foo.py"}]
+    path = str(tmp_path / "trace.jsonl")
+    write_trace(messages, path=path, session_id="s1", base_dir=_BASE, model="m1")
+    lines = _read_lines(path)
+    user_lines = [
+        ln
+        for ln in lines
+        if ln.get("type") == "user" and "message" in ln and "toolUseResult" not in ln
+    ]
+    assert user_lines[0]["message"]["content"] == "check BASEDIR/foo.py"
+
+
+def test_write_trace_assistant_text_redacted(tmp_path):
+    messages = [{"role": "assistant", "content": f"wrote {_BASE}/out.txt"}]
+    path = str(tmp_path / "trace.jsonl")
+    write_trace(messages, path=path, session_id="s1", base_dir=_BASE, model="m1")
+    lines = _read_lines(path)
+    assistant_lines = [ln for ln in lines if ln.get("type") == "assistant"]
+    text_block = [
+        b for b in assistant_lines[0]["message"]["content"] if b["type"] == "text"
+    ]
+    assert text_block[0]["text"] == "wrote BASEDIR/out.txt"
+
+
+def test_write_trace_tool_args_redacted(tmp_path):
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "tc1",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": json.dumps({"file_path": f"{_BASE}/src/main.py"}),
+                    },
+                }
+            ],
+        }
+    ]
+    path = str(tmp_path / "trace.jsonl")
+    write_trace(messages, path=path, session_id="s1", base_dir=_BASE, model="m1")
+    lines = _read_lines(path)
+    tool_block = [b for b in lines[0]["message"]["content"] if b["type"] == "tool_use"][
+        0
+    ]
+    assert tool_block["input"]["file_path"] == "BASEDIR/src/main.py"
+
+
+def test_write_trace_tool_result_redacted(tmp_path):
+    messages = [
+        {"role": "tool", "tool_call_id": "tc1", "content": f"read {_BASE}/readme.md"},
+    ]
+    path = str(tmp_path / "trace.jsonl")
+    write_trace(messages, path=path, session_id="s1", base_dir=_BASE, model="m1")
+    lines = _read_lines(path)
+    tool_lines = [ln for ln in lines if "toolUseResult" in ln]
+    ln = tool_lines[0]
+    assert ln["toolUseResult"] == "read BASEDIR/readme.md"
+    assert ln["message"]["content"][0]["content"] == "read BASEDIR/readme.md"
+
+
+def test_write_trace_home_path_outside_base_redacted(tmp_path):
+    messages = [{"role": "user", "content": f"{_HOME}/.config/swival/config.toml"}]
+    path = str(tmp_path / "trace.jsonl")
+    write_trace(messages, path=path, session_id="s1", base_dir=_BASE, model="m1")
+    lines = _read_lines(path)
+    user_lines = [
+        ln
+        for ln in lines
+        if ln.get("type") == "user" and "message" in ln and "toolUseResult" not in ln
+    ]
+    assert user_lines[0]["message"]["content"] == "~/.config/swival/config.toml"
+
+
+def test_write_trace_last_prompt_redacted(tmp_path):
+    messages = [{"role": "user", "content": "hello"}]
+    path = str(tmp_path / "trace.jsonl")
+    write_trace(
+        messages,
+        path=path,
+        session_id="s1",
+        base_dir=_BASE,
+        model="m1",
+        task=f"analyze {_BASE}/main.py",
+    )
+    lines = _read_lines(path)
+    last = lines[-1]
+    assert last["type"] == "last-prompt"
+    assert last["lastPrompt"] == "analyze BASEDIR/main.py"
+
+
+def test_write_trace_original_base_dir_absent(tmp_path):
+    messages = [
+        {"role": "user", "content": f"task in {_BASE}"},
+        {"role": "assistant", "content": f"reading {_BASE}/file.py"},
+        {
+            "role": "tool",
+            "tool_call_id": "tc1",
+            "content": f"contents from {_BASE}/file.py",
+        },
+    ]
+    path = str(tmp_path / "trace.jsonl")
+    write_trace(
+        messages,
+        path=path,
+        session_id="s1",
+        base_dir=_BASE,
+        model="m1",
+        task=f"work in {_BASE}",
+    )
+    raw = (tmp_path / "trace.jsonl").read_text()
+    assert _BASE not in raw
+
+
+def test_write_trace_to_dir_cwd_redacted(tmp_path):
+    messages = [{"role": "user", "content": "hello"}]
+    write_trace_to_dir(
+        messages,
+        trace_dir=str(tmp_path),
+        base_dir=_BASE,
+        model="m",
+        session_id="rd1",
+    )
+    lines = _read_lines(str(tmp_path / "rd1.jsonl"))
+    for line in lines:
+        if "cwd" in line:
+            assert line["cwd"] == "BASEDIR"
+
+
+def test_write_trace_to_dir_tool_input_redacted(tmp_path):
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "tc1",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": json.dumps({"file_path": f"{_BASE}/src.py"}),
+                    },
+                }
+            ],
+        }
+    ]
+    write_trace_to_dir(
+        messages,
+        trace_dir=str(tmp_path),
+        base_dir=_BASE,
+        model="m",
+        session_id="rd2",
+    )
+    raw = (tmp_path / "rd2.jsonl").read_text()
+    assert _BASE not in raw
+
+
+def test_write_trace_to_dir_tool_result_redacted(tmp_path):
+    messages = [
+        {"role": "tool", "tool_call_id": "tc1", "content": f"file at {_BASE}/out.py"},
+    ]
+    write_trace_to_dir(
+        messages,
+        trace_dir=str(tmp_path),
+        base_dir=_BASE,
+        model="m",
+        session_id="rd3",
+    )
+    raw = (tmp_path / "rd3.jsonl").read_text()
+    assert _BASE not in raw
+
+
+def test_write_trace_to_dir_last_prompt_redacted(tmp_path):
+    messages = [{"role": "user", "content": "hello"}]
+    write_trace_to_dir(
+        messages,
+        trace_dir=str(tmp_path),
+        base_dir=_BASE,
+        model="m",
+        session_id="rd4",
+        task=f"run {_BASE}/script.py",
+    )
+    raw = (tmp_path / "rd4.jsonl").read_text()
+    assert _BASE not in raw
+
+
+def test_write_trace_to_dir_no_original_paths(tmp_path):
+    messages = [
+        {"role": "user", "content": f"run {_BASE}/main.py with config {_HOME}/.config"},
+        {"role": "assistant", "content": f"Done, wrote to {_BASE}/out.txt"},
+    ]
+    write_trace_to_dir(
+        messages,
+        trace_dir=str(tmp_path),
+        base_dir=_BASE,
+        model="m",
+        session_id="rd5",
+        task=f"task at {_BASE}",
+    )
+    raw = (tmp_path / "rd5.jsonl").read_text()
+    assert _BASE not in raw
+    assert _HOME not in raw
