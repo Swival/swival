@@ -751,6 +751,11 @@ def _memory_path(base_dir: str) -> Path:
     return (Path(base_dir).resolve() / ".swival" / "memory" / "MEMORY.md").resolve()
 
 
+def _history_path(base_dir: str) -> Path:
+    """Return the fully-resolved canonical history path for *base_dir*."""
+    return (Path(base_dir).resolve() / ".swival" / "HISTORY.md").resolve()
+
+
 def safe_resolve(
     file_path: str,
     base_dir: str,
@@ -1272,6 +1277,8 @@ def _read_file(
                 "or project-specific conventions. For detailed topics, create "
                 "separate files in .swival/memory/ and reference them from MEMORY.md."
             )
+        if resolved == _history_path(base_dir):
+            return "No history yet."
         return f"error: path does not exist: {file_path}"
 
     # Directory listing
