@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 from prompt_toolkit.document import Document
 
-from swival.completer import SwivalCompleter
+from swival.completer import SwivalCompleter, find_file_prefix
 from swival.skills import SkillInfo
 
 
@@ -198,6 +198,84 @@ class TestSkillMentions:
         completions = list(completer.get_completions(doc, None))
         metas = [c.display_meta for c in completions if c.text == "$security"]
         assert metas and metas[0]
+
+
+# -- file-path mentions (@) -------------------------------------------------
+
+
+class TestFindFilePrefix:
+    def test_mid_sentence(self):
+        assert find_file_prefix("review @./sr") == "./sr"
+
+    def test_bare_at(self):
+        assert find_file_prefix("review @") == ""
+
+    def test_email_rejected(self):
+        assert find_file_prefix("user@example.com") is None
+
+    def test_position_zero(self):
+        assert find_file_prefix("@src") == "src"
+
+    def test_non_alnum_boundary_paren(self):
+        assert find_file_prefix("(@src/foo") == "src/foo"
+
+    def test_non_alnum_boundary_comma(self):
+        assert find_file_prefix(",@path") == "path"
+
+    def test_trailing_punctuation_terminates(self):
+        assert find_file_prefix("review @foo,") is None
+
+    def test_rightmost_at(self):
+        assert find_file_prefix("a @old text @./ne") == "./ne"
+
+    def test_tilde(self):
+        assert find_file_prefix("@~/docs") == "~/docs"
+
+    def test_space_in_path_rejected(self):
+        assert find_file_prefix("@my file.txt") is None
+
+    def test_no_at(self):
+        assert find_file_prefix("plain text") is None
+
+
+class TestFilePathCompletion:
+    def test_yields_files(self, completer, tmp_path):
+        (tmp_path / "agent.py").touch()
+        (tmp_path / "tools.py").touch()
+        doc = Document(
+            f"review @{tmp_path}/ag", cursor_position=len(f"review @{tmp_path}/ag")
+        )
+        completions = list(completer.get_completions(doc, None))
+        assert completions
+        assert any("ent.py" in c.text for c in completions)
+
+    def test_preserves_at(self, completer, tmp_path):
+        (tmp_path / "hello.txt").touch()
+        doc = Document(f"@{tmp_path}/hel", cursor_position=len(f"@{tmp_path}/hel"))
+        completions = list(completer.get_completions(doc, None))
+        assert completions
+        c = completions[0]
+        assert c.start_position <= 0
+        full = f"@{tmp_path}/hel"
+        replaced = full[: len(full) + c.start_position] + c.text
+        assert replaced.startswith("@")
+        assert "hello.txt" in replaced
+
+    def test_bare_at_lists_cwd(self, completer, tmp_path, monkeypatch):
+        (tmp_path / "file.txt").touch()
+        monkeypatch.chdir(tmp_path)
+        results = _completions(completer, "@")
+        assert any("file.txt" in r for r in results)
+
+    def test_email_no_completions(self, completer):
+        assert _completions(completer, "user@host") == []
+
+    def test_includes_files_not_just_dirs(self, completer, tmp_path):
+        (tmp_path / "subdir").mkdir()
+        (tmp_path / "readme.md").touch()
+        results = _completions(completer, f"@{tmp_path}/")
+        texts = " ".join(results)
+        assert "readme.md" in texts
 
 
 # -- plain text (no completion) ---------------------------------------------
