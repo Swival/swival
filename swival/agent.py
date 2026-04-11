@@ -8099,6 +8099,7 @@ def repl_loop(
     from prompt_toolkit import PromptSession
     from prompt_toolkit.formatted_text import FormattedText
     from prompt_toolkit.history import FileHistory
+    from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.styles import Style
 
     from .completer import SwivalCompleter
@@ -8117,12 +8118,20 @@ def repl_loop(
         }
     )
     completer = SwivalCompleter(skills_catalog=skills_catalog)
+    kb = KeyBindings()
+
+    @kb.add("c-j")
+    def _insert_newline(event):
+        event.current_buffer.insert_text("\n")
+
     session = PromptSession(
         history=_SafeFileHistory(history_path),
         enable_history_search=True,
         style=prompt_style,
         completer=completer,
         complete_while_typing=False,
+        key_bindings=kb,
+        prompt_continuation="    ... ",
     )
     prompt_text = FormattedText([("class:prompt", "swival> ")])
 

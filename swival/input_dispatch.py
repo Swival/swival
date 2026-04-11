@@ -72,24 +72,47 @@ class StepResult:
     is_error: bool = False
 
 
-def parse_input_line(line: str) -> ParsedInput:
-    """Parse a single input line into a structured form."""
-    line = line.strip()
-    if not line:
-        return ParsedInput(raw=line)
+def _strip_outer_blank_lines(text: str) -> str:
+    """Strip leading/trailing whitespace-only lines, preserve interior."""
+    lines = text.split("\n")
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines)
 
-    # Custom bang commands: !foo (but not "! foo" with a leading space).
-    if line.startswith("!") and len(line) > 1 and not line[1:].startswith(" "):
+
+def parse_input_line(line: str) -> ParsedInput:
+    """Parse a single input line (or multiline block) into a structured form.
+
+    Command detection uses only the first line. For slash commands,
+    continuation lines are joined into ``cmd_arg``.
+    """
+    line = _strip_outer_blank_lines(line)
+    if not line:
+        return ParsedInput(raw="")
+
+    first_line, _, rest = line.partition("\n")
+    first_line = first_line.strip()
+
+    if (
+        first_line.startswith("!")
+        and len(first_line) > 1
+        and not first_line[1:].startswith(" ")
+    ):
         return ParsedInput(raw=line, is_custom_command=True)
 
-    # Slash commands.
-    if line.startswith("/"):
-        parts = line.split(None, 1)
+    if first_line.startswith("/"):
+        parts = first_line.split(None, 1)
         cmd = parts[0].lower()
-        cmd_arg = parts[1] if len(parts) > 1 else ""
+        first_line_arg = parts[1] if len(parts) > 1 else ""
+        if rest:
+            cmd_arg = (first_line_arg + "\n" + rest) if first_line_arg else rest
+        else:
+            cmd_arg = first_line_arg
         return ParsedInput(raw=line, cmd=cmd, cmd_arg=cmd_arg, is_command=True)
 
-    # Plain text.
+    # Plain text — preserve the full multiline content.
     return ParsedInput(raw=line)
 
 

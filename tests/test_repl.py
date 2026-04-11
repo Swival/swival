@@ -388,6 +388,22 @@ class TestReplLoop:
         _, kwargs = mock_cls.call_args
         assert "style" in kwargs
 
+    def test_repl_prompt_session_receives_multiline_config(self, tmp_path):
+        """Verify PromptSession gets key_bindings, prompt_continuation, and stays single-line."""
+        inputs = ["/exit"]
+        mock_session = self._mock_session(inputs)
+        with (
+            patch(
+                "prompt_toolkit.PromptSession", return_value=mock_session
+            ) as mock_cls,
+            patch("swival.agent.run_agent_loop"),
+        ):
+            repl_loop([], [], **_loop_kwargs(tmp_path))
+        _, kwargs = mock_cls.call_args
+        assert "key_bindings" in kwargs
+        assert kwargs["prompt_continuation"] == "    ... "
+        assert kwargs.get("multiline", False) is not True
+
     def test_exit_command(self, tmp_path):
         """Feeding /exit exits the loop without error."""
         messages = [_sys("system")]

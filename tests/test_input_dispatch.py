@@ -62,6 +62,52 @@ class TestParseInputLine:
         assert p.cmd == "/nonexistent"
         assert p.cmd_arg == "foo"
 
+    def test_multiline_plain_text(self):
+        """Multiline plain text is preserved as-is."""
+        p = parse_input_line("fix this bug\nit crashes on startup")
+        assert p.raw == "fix this bug\nit crashes on startup"
+        assert not p.is_command
+        assert not p.is_custom_command
+
+    def test_multiline_slash_on_second_line_is_plain_text(self):
+        """A / on a non-first line does not trigger command dispatch."""
+        p = parse_input_line("please help\n/with this file")
+        assert not p.is_command
+        assert p.raw == "please help\n/with this file"
+
+    def test_multiline_command_on_first_line(self):
+        """A slash command on the first line is still detected."""
+        p = parse_input_line("/help\nsome extra text")
+        assert p.is_command
+        assert p.cmd == "/help"
+
+    def test_multiline_command_arg_includes_continuation(self):
+        """Continuation lines after a slash command are included in cmd_arg."""
+        p = parse_input_line("/remember this fact\nand this detail\nand more")
+        assert p.is_command
+        assert p.cmd == "/remember"
+        assert p.cmd_arg == "this fact\nand this detail\nand more"
+
+    def test_multiline_command_no_first_line_arg(self):
+        """Slash command with no arg on first line gets continuation as cmd_arg."""
+        p = parse_input_line("/remember\nthe whole thing")
+        assert p.cmd_arg == "the whole thing"
+
+    def test_leading_trailing_blank_lines_stripped(self):
+        """Leading/trailing whitespace-only lines are stripped, interior preserved."""
+        p = parse_input_line("\n\nhello\nworld\n\n")
+        assert p.raw == "hello\nworld"
+
+    def test_whitespace_only_boundary_lines_stripped(self):
+        """Lines with only spaces at boundaries are also stripped."""
+        p = parse_input_line("\n  \nhello\n  \n")
+        assert p.raw == "hello"
+
+    def test_multiline_bang_on_second_line_is_plain_text(self):
+        """A ! on a non-first line does not trigger bang command."""
+        p = parse_input_line("some text\n!command")
+        assert not p.is_custom_command
+
 
 class TestIsCommandScript:
     def test_plain_text(self):
