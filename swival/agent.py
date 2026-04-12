@@ -2898,13 +2898,14 @@ def call_llm(
     _escape_special_tokens_in_messages(messages)
 
     # --- Outbound: strip internal metadata that strict providers reject ---
-    if any(isinstance(m, dict) and "_swival_synthetic" in m for m in messages):
-        messages = [
-            {k: v for k, v in m.items() if k != "_swival_synthetic"}
-            if isinstance(m, dict) and "_swival_synthetic" in m
-            else m
-            for m in messages
-        ]
+    def _strip_internal(m):
+        if not isinstance(m, dict):
+            return m
+        if any(k.startswith("_") for k in m):
+            return {k: v for k, v in m.items() if not k.startswith("_")}
+        return m
+
+    messages = [_strip_internal(m) for m in messages]
 
     # --- Outbound: encrypt secrets ---
     if secret_shield is not None:
