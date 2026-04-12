@@ -2,6 +2,14 @@
 
 All notable user-facing changes to Swival.
 
+## 0.11.2
+
+- Added a quick shell command (`!!`) to the REPL, allowing users to run shell commands without LLM involvement.
+- Added an inline `@` trigger for tab-completing file paths mid-prompt in the REPL.
+- Fixed Gemini 3 multi-turn tool calling failures by preserving `thought_signature` in current-turn tool calls.
+- Custom commands (`!`) now support inlining the content of non-executable text files directly into the prompt.
+- JSONL traces now use relative workspace paths instead of absolute paths to reduce sensitive leakage.
+
 ## 0.11.1
 
 - `fetch_url` now allows connecting to `localhost`, `127.0.0.1`, and `::1`. Agents frequently run a local server and then need to test or inspect it, and the previous blanket loopback block made that workflow awkward. Other private, link-local, and reserved addresses are still blocked.
