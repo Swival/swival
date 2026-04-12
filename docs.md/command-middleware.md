@@ -95,7 +95,7 @@ A blocked command returns an `error:` result to the model with the denial reason
 | Executable not found                | Warn (verbose), execute original command |
 | Timeout (10 seconds)                | Warn (verbose), execute original command |
 
-Middleware fails open. If the middleware process errors, the original command runs unchanged. Swival never silently drops a command due to middleware failure. Warnings appear on stderr in verbose mode (`--verbose`).
+Middleware fails open. If the middleware process errors, the original command runs unchanged. Swival never silently drops a command due to middleware failure. Warnings appear on stderr when diagnostics are enabled (the default unless `--quiet` is set).
 
 ## Policy Re-check After Rewrite
 

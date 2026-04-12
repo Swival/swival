@@ -332,7 +332,7 @@ model = &quot;codex exec --skip-git-repo-check --full-auto --ephemeral&quot;
 </tbody>
 </table>
 <p>Cache annotation is applied automatically when the model is known to support it. If the call succeeds with an unexpected provider, the extra annotation is silently ignored.</p>
-<p>When <code>--verbose</code> is active, Swival prints cache hit and write stats to stderr after each turn:</p>
+<p>When diagnostics are enabled (the default unless <code>--quiet</code> is set), Swival prints cache hit and write stats to stderr after each turn:</p>
 <pre><code class="language-text">Prompt cache: 4821 tokens cached
 Prompt cache: 6103 tokens written to cache
 </code></pre>

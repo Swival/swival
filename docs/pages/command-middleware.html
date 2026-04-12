@@ -163,7 +163,7 @@ result = session.run(&quot;task&quot;)
 </tr>
 </tbody>
 </table>
-<p>Middleware fails open. If the middleware process errors, the original command runs unchanged. Swival never silently drops a command due to middleware failure. Warnings appear on stderr in verbose mode (<code>--verbose</code>).</p>
+<p>Middleware fails open. If the middleware process errors, the original command runs unchanged. Swival never silently drops a command due to middleware failure. Warnings appear on stderr when diagnostics are enabled (the default unless <code>--quiet</code> is set).</p>
 <h2 id="policy-re-check-after-rewrite">Policy Re-check After Rewrite</h2>
 <p>After a successful rewrite, the rewritten command is re-evaluated against Swival's built-in command policy before execution. This means middleware cannot bypass <code>--commands none</code>, allowlists, or interactive approval (<code>--commands ask</code>). The user's safety settings remain authoritative.</p>
 <h2 id="rtk-integration">RTK Integration</h2>

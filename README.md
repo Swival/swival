@@ -270,6 +270,8 @@ Full documentation is available at [swival.dev](https://swival.dev/).
   syncing state to remote storage
 - [Custom Commands](docs.md/custom-commands.md) -- REPL custom command setup
   and execution
+- [Command Middleware](docs.md/command-middleware.md) -- pre-execution command
+  rewriting and policy enforcement (RTK integration)
 - [Python API](docs.md/python-api.md) -- library API for embedding Swival in
   Python applications
 - [Not Just for Frontier Models](docs.md/open-models.md) -- why Swival is

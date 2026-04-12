@@ -369,7 +369,7 @@ For providers that support explicit cache annotations, Swival automatically mark
 
 Cache annotation is applied automatically when the model is known to support it. If the call succeeds with an unexpected provider, the extra annotation is silently ignored.
 
-When `--verbose` is active, Swival prints cache hit and write stats to stderr after each turn:
+When diagnostics are enabled (the default unless `--quiet` is set), Swival prints cache hit and write stats to stderr after each turn:
 
 ```text
 Prompt cache: 4821 tokens cached
