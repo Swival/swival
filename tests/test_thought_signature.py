@@ -314,6 +314,146 @@ class TestCanonicalizePreservesCurrentTurnExtras:
         }
 
 
+class TestCallLlmStripsSwivalSynthetic:
+    """Regression: _swival_synthetic must not reach the provider API (HuggingFace
+    rejects extra fields) but must remain on the live transcript for
+    _is_synthetic() / _find_current_turn_boundary()."""
+
+    def test_outbound_messages_lack_synthetic_marker(self):
+        """The messages list passed to litellm.completion must not contain
+        _swival_synthetic, but the caller's original list must keep it."""
+        from unittest.mock import patch
+        from swival import agent
+
+        original = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "real question"},
+            {
+                "role": "assistant",
+                "content": "step1",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "t", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+            {
+                "role": "user",
+                "content": "Your response was empty. Please continue working on the task using the available tools.",
+                "_swival_synthetic": True,
+            },
+            {"role": "assistant", "content": "done"},
+        ]
+
+        captured = {}
+
+        def fake_completion(**kwargs):
+            captured["messages"] = kwargs["messages"]
+
+            class FakeChoice:
+                def __init__(self):
+                    self.message = types.SimpleNamespace(
+                        role="assistant", content="ok", tool_calls=None
+                    )
+                    self.finish_reason = "stop"
+
+            class FakeResponse:
+                choices = [FakeChoice()]
+                usage = types.SimpleNamespace(
+                    prompt_tokens=10,
+                    completion_tokens=5,
+                    total_tokens=15,
+                    prompt_tokens_details=None,
+                )
+
+            return FakeResponse()
+
+        with patch("litellm.completion", fake_completion):
+            agent.call_llm(
+                base_url="http://localhost:1234",
+                model_id="test-model",
+                messages=original,
+                max_output_tokens=100,
+                temperature=None,
+                top_p=None,
+                seed=None,
+                tools=None,
+                verbose=False,
+                provider="generic",
+                api_key="test",
+            )
+
+        # Outbound must not contain _swival_synthetic
+        for msg in captured["messages"]:
+            if isinstance(msg, dict):
+                assert "_swival_synthetic" not in msg, (
+                    f"_swival_synthetic leaked to provider: {msg}"
+                )
+
+        # Original transcript must still have it
+        assert original[4].get("_swival_synthetic") is True
+
+    def test_synthetic_continuation_survives_for_turn_boundary(self):
+        """After call_llm, a synthetic continuation prompt must still be
+        recognized by _is_synthetic() so _find_current_turn_boundary()
+        does not treat it as a real user turn."""
+        from swival._msg import _is_synthetic, _find_current_turn_boundary
+
+        messages = [
+            {"role": "user", "content": "do something"},
+            {
+                "role": "assistant",
+                "content": "step1",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "t", "arguments": "{}"},
+                        "extra_content": {"google": {"thought_signature": "sig1"}},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+            {
+                "role": "user",
+                "content": "Your response was cut off. Please use the provided tools to complete the task step by step.",
+                "_swival_synthetic": True,
+            },
+            {
+                "role": "assistant",
+                "content": "step2",
+                "tool_calls": [
+                    {
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {"name": "t2", "arguments": "{}"},
+                        "extra_content": {"google": {"thought_signature": "sig2"}},
+                    }
+                ],
+            },
+        ]
+
+        # The synthetic continuation must still be recognized
+        assert _is_synthetic(messages[3])
+
+        # Turn boundary must be the real user message, not the synthetic one
+        assert _find_current_turn_boundary(messages) == 0
+
+        # Therefore canonicalization must preserve extra_content on both tool calls
+        from swival._msg import _canonicalize_tool_calls
+
+        _canonicalize_tool_calls(messages)
+
+        tc1 = messages[1]["tool_calls"][0]
+        assert tc1.get("extra_content") == {"google": {"thought_signature": "sig1"}}
+
+        tc2 = messages[4]["tool_calls"][0]
+        assert tc2.get("extra_content") == {"google": {"thought_signature": "sig2"}}
+
+
 class TestMsgToDictPreservesToolCallExtras:
     def test_strips_provider_specific_fields_preserves_tool_call_extra_content(self):
         """_msg_to_dict strips message-level provider_specific_fields but

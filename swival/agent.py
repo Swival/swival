@@ -2897,6 +2897,15 @@ def call_llm(
     # --- Outbound: escape special tokens in user/system messages ---
     _escape_special_tokens_in_messages(messages)
 
+    # --- Outbound: strip internal metadata that strict providers reject ---
+    if any(isinstance(m, dict) and "_swival_synthetic" in m for m in messages):
+        messages = [
+            {k: v for k, v in m.items() if k != "_swival_synthetic"}
+            if isinstance(m, dict) and "_swival_synthetic" in m
+            else m
+            for m in messages
+        ]
+
     # --- Outbound: encrypt secrets ---
     if secret_shield is not None:
         # Sanitize on canonical list before making the encryption copy
