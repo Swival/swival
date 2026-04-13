@@ -233,6 +233,11 @@ underneath. If something doesn't work the way you want, change it.
 **CLI-native.** stdout is exclusively the final answer. All diagnostics go to
 stderr. Pipe Swival's output straight into another command or a file.
 
+**Extensible with [custom commands](docs.md/custom-commands.md).** Drop scripts
+or prompt templates into `~/.config/swival/commands/` and invoke them with `!name`
+in the REPL. The [swival-commands](https://github.com/Swival/swival-commands)
+community repo has ready-made commands like a security auditor and a PR reviewer.
+
 ## Documentation
 
 Full documentation is available at [swival.dev](https://swival.dev/).
@@ -269,7 +274,7 @@ Full documentation is available at [swival.dev](https://swival.dev/).
 - [Lifecycle Hooks](docs.md/lifecycle-hooks.md) -- startup/exit hooks for
   syncing state to remote storage
 - [Custom Commands](docs.md/custom-commands.md) -- REPL custom command setup
-  and execution
+  and execution (see also the [community commands repo](https://github.com/Swival/swival-commands))
 - [Command Middleware](docs.md/command-middleware.md) -- pre-execution command
   rewriting and policy enforcement (RTK integration)
 - [Python API](docs.md/python-api.md) -- library API for embedding Swival in

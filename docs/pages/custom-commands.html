@@ -157,6 +157,9 @@ Review the changes in $1 for correctness and test coverage.
 <p>For executable scripts, stderr is printed to the terminal on success. On failure (non-zero exit), Swival prints a single error message using stderr, stdout, or the exit code (in that priority order) and injects nothing.</p>
 <h2 id="timeouts">Timeouts</h2>
 <p>Executable scripts have a 30-second timeout. Text templates have no timeout since no process is spawned.</p>
+<h2 id="community-commands">Community Commands</h2>
+<p>The <a href="https://github.com/Swival/swival-commands">swival-commands</a> repository has a growing collection of ready-to-use commands contributed by the community, including a full-repo security audit, a C-specific vulnerability scanner, and a pull request reviewer. Installation is just copying files into your commands directory.</p>
+<p>If you have built a command that others might find useful, contributions are welcome there.</p>
 <h2 id="history">History</h2>
 <p>Custom command output is logged to <code>.swival/HISTORY.md</code> with the label <code>[!name] !name [args...]</code> so you can distinguish command-driven turns from typed input.</p>
         </article>

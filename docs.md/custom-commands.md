@@ -122,6 +122,12 @@ For executable scripts, stderr is printed to the terminal on success. On failure
 
 Executable scripts have a 30-second timeout. Text templates have no timeout since no process is spawned.
 
+## Community Commands
+
+The [swival-commands](https://github.com/Swival/swival-commands) repository has a growing collection of ready-to-use commands contributed by the community, including a full-repo security audit, a C-specific vulnerability scanner, and a pull request reviewer. Installation is just copying files into your commands directory.
+
+If you have built a command that others might find useful, contributions are welcome there.
+
 ## History
 
 Custom command output is logged to `.swival/HISTORY.md` with the label `[!name] !name [args...]` so you can distinguish command-driven turns from typed input.
