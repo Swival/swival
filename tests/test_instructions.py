@@ -123,8 +123,9 @@ def _make_message(content=None, tool_calls=None):
 
 class TestIntegration:
     def test_instructions_in_system_message(self, tmp_path, monkeypatch):
-        from swival import agent
+        from swival import agent, config
 
+        monkeypatch.setattr(config, "load_config", lambda _: {})
         (tmp_path / "CLAUDE.md").write_text("Always use snake_case.", encoding="utf-8")
 
         captured_messages = {}
@@ -155,8 +156,9 @@ class TestIntegration:
         assert "Always use snake_case." in system_msg["content"]
 
     def test_no_system_prompt_flag_skips_instructions(self, tmp_path, monkeypatch):
-        from swival import agent
+        from swival import agent, config
 
+        monkeypatch.setattr(config, "load_config", lambda _: {})
         (tmp_path / "CLAUDE.md").write_text("Should not appear.", encoding="utf-8")
 
         captured_messages = {}
@@ -188,8 +190,9 @@ class TestIntegration:
         )
 
     def test_custom_system_prompt_skips_instructions(self, tmp_path, monkeypatch):
-        from swival import agent
+        from swival import agent, config
 
+        monkeypatch.setattr(config, "load_config", lambda _: {})
         (tmp_path / "CLAUDE.md").write_text("Should not appear.", encoding="utf-8")
 
         captured_messages = {}
@@ -223,8 +226,9 @@ class TestIntegration:
         assert "Should not appear" not in system_msg["content"]
 
     def test_no_instructions_flag(self, tmp_path, monkeypatch):
-        from swival import agent
+        from swival import agent, config
 
+        monkeypatch.setattr(config, "load_config", lambda _: {})
         (tmp_path / "CLAUDE.md").write_text("Should not appear.", encoding="utf-8")
 
         captured_messages = {}
@@ -258,9 +262,10 @@ class TestIntegration:
     def test_custom_system_prompt_with_commands_appends_run_command(
         self, tmp_path, monkeypatch
     ):
-        from swival import agent
+        from swival import agent, config
         import shutil
 
+        monkeypatch.setattr(config, "load_config", lambda _: {})
         (tmp_path / "CLAUDE.md").write_text("Should not appear.", encoding="utf-8")
 
         captured = {}

@@ -497,7 +497,9 @@ class TestAgentYolo:
     def test_yolo_tool_list_includes_run_command(self, tmp_path, monkeypatch):
         """With --yolo and no --commands, the tools list passed to
         call_llm includes run_command with unrestricted description."""
-        from swival import agent
+        from swival import agent, config
+
+        monkeypatch.setattr(config, "load_config", lambda _: {})
 
         captured = {}
 
@@ -534,7 +536,9 @@ class TestAgentYolo:
 
     def test_yolo_system_prompt_text(self, tmp_path, monkeypatch):
         """Yolo mode adds unrestricted run_command tool to tool list."""
-        from swival import agent
+        from swival import agent, config
+
+        monkeypatch.setattr(config, "load_config", lambda _: {})
 
         captured = {}
 
@@ -712,7 +716,9 @@ class TestShellStringCompat:
 
 def _capture_tools_via_main(tmp_path, monkeypatch, extra_args):
     """Run agent.main() with given CLI args and capture the tools list."""
-    from swival import agent
+    from swival import agent, config
+
+    monkeypatch.setattr(config, "load_config", lambda _: {})
 
     captured = {}
 

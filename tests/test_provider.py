@@ -12,6 +12,7 @@ from swival.agent import (
     _pick_best_choice,
     _sanitize_assistant_content,
 )
+from swival.report import AgentError
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +94,123 @@ class TestCallLlmRouting:
             mock_comp.assert_called_once()
             kwargs = mock_comp.call_args
             assert kwargs[1]["api_base"] == "https://xyz.endpoints.huggingface.cloud"
+
+    def test_huggingface_non_chat_model_falls_back_to_text_generation(self):
+        import litellm
+
+        error = litellm.BadRequestError(
+            message=(
+                'HuggingfaceException - {"error":{"message":"The requested model '
+                '\'google/gemma-4-E4B-it\' is not a chat model.","type":"invalid_request_error",'
+                '"param":"model","code":"model_not_supported"}}'
+            ),
+            model="huggingface/google/gemma-4-E4B-it",
+            llm_provider="huggingface",
+        )
+
+        client = MagicMock()
+        client.text_generation.return_value = "fallback ok"
+        info = MagicMock(
+            inference="warm",
+            inference_provider_mapping=[],
+            pipeline_tag="text-generation",
+        )
+
+        with (
+            patch("litellm.completion", side_effect=error) as mock_comp,
+            patch(
+                "huggingface_hub.InferenceClient", return_value=client
+            ) as mock_client,
+            patch("huggingface_hub.HfApi") as mock_hf_api,
+        ):
+            mock_hf_api.return_value.model_info.return_value = info
+            msg, finish_reason, cmd_activity, retries, cache_stats = call_llm(
+                None,
+                "google/gemma-4-E4B-it",
+                [{"role": "user", "content": "hi"}],
+                100,
+                0.5,
+                1.0,
+                7,
+                None,
+                False,
+                provider="huggingface",
+                api_key="hf_test",
+                max_retries=1,
+            )
+
+        mock_comp.assert_called_once()
+        mock_client.assert_called_once_with(provider="hf-inference", api_key="hf_test")
+        client.text_generation.assert_called_once()
+        assert finish_reason == "stop"
+        assert msg.content == "fallback ok"
+        assert cmd_activity == []
+        assert retries == 0
+        assert cache_stats == (0, 0)
+
+    def test_huggingface_non_chat_model_not_deployed_gets_clear_error(self):
+        import litellm
+
+        error = litellm.BadRequestError(
+            message="The requested model 'google/gemma-4-E4B-it' is not a chat model.",
+            model="huggingface/google/gemma-4-E4B-it",
+            llm_provider="huggingface",
+        )
+        info = MagicMock(
+            inference=None,
+            inference_provider_mapping=[],
+            pipeline_tag="any-to-any",
+        )
+
+        with (
+            patch("litellm.completion", side_effect=error),
+            patch("huggingface_hub.HfApi") as mock_hf_api,
+        ):
+            mock_hf_api.return_value.model_info.return_value = info
+            with pytest.raises(
+                AgentError, match="not deployed by any Hugging Face Inference Provider"
+            ):
+                call_llm(
+                    None,
+                    "google/gemma-4-E4B-it",
+                    [{"role": "user", "content": "hi"}],
+                    100,
+                    0.5,
+                    1.0,
+                    None,
+                    None,
+                    False,
+                    provider="huggingface",
+                    api_key="hf_test",
+                    max_retries=1,
+                )
+
+    def test_huggingface_non_chat_model_with_tools_raises_tools_not_supported(self):
+        import litellm
+        from swival.report import ToolsNotSupportedError
+
+        error = litellm.BadRequestError(
+            message="The requested model 'google/gemma-4-E4B-it' is not a chat model.",
+            model="huggingface/google/gemma-4-E4B-it",
+            llm_provider="huggingface",
+        )
+
+        with patch("litellm.completion", side_effect=error):
+            with pytest.raises(ToolsNotSupportedError):
+                call_llm(
+                    None,
+                    "google/gemma-4-E4B-it",
+                    [{"role": "user", "content": "hi"}],
+                    100,
+                    0.5,
+                    1.0,
+                    None,
+                    [{"type": "function", "function": {"name": "dummy"}}],
+                    False,
+                    provider="huggingface",
+                    api_key="hf_test",
+                    max_retries=1,
+                )
 
     def test_openrouter_routing(self):
         with patch("litellm.completion") as mock_comp:
@@ -384,7 +502,9 @@ class TestModelNormalization:
 
 class TestCLIValidation:
     def test_huggingface_requires_model(self, monkeypatch):
-        from swival import agent
+        from swival import agent, config
+
+        monkeypatch.setattr(config, "load_config", lambda _: {})
 
         monkeypatch.setattr(
             sys,
@@ -421,7 +541,9 @@ class TestCLIValidation:
         assert exc_info.value.code == 2
 
     def test_huggingface_model_without_slash(self, monkeypatch):
-        from swival import agent
+        from swival import agent, config
+
+        monkeypatch.setattr(config, "load_config", lambda _: {})
 
         monkeypatch.setattr(
             sys,

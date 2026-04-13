@@ -1098,6 +1098,44 @@ class TestToolsNotSupportedLoop:
         assert llm_events[1].get("is_retry") is True
         assert llm_events[1].get("retry_reason") == "drop_tools_unsupported"
 
+    def test_huggingface_non_chat_model_recovers_via_text_generation(self, tmp_path):
+        """HF models that reject chat completions should recover after tools drop."""
+        import litellm
+        from swival.agent import run_agent_loop
+
+        error = litellm.BadRequestError(
+            message="The requested model 'google/gemma-4-E4B-it' is not a chat model.",
+            model="huggingface/google/gemma-4-E4B-it",
+            llm_provider="huggingface",
+        )
+        client = SimpleNamespace(text_generation=lambda *args, **kwargs: "plain answer")
+        info = SimpleNamespace(
+            inference="warm",
+            inference_provider_mapping=[],
+            pipeline_tag="text-generation",
+        )
+        messages = [_sys("system"), _user("hello")]
+
+        with (
+            patch("litellm.completion", side_effect=error),
+            patch("huggingface_hub.InferenceClient", return_value=client),
+            patch("huggingface_hub.HfApi") as mock_hf_api,
+        ):
+            mock_hf_api.return_value.model_info.return_value = info
+            answer, exhausted = run_agent_loop(
+                messages,
+                _DUMMY_TOOLS,
+                **self._loop_kwargs(
+                    tmp_path,
+                    api_base=None,
+                    model_id="google/gemma-4-E4B-it",
+                    llm_kwargs={"provider": "huggingface", "api_key": "hf_test"},
+                ),
+            )
+
+        assert answer == "plain answer"
+        assert exhausted is False
+
     def test_overflow_then_tools_not_supported_recovers(self, tmp_path):
         """ToolsNotSupportedError discovered during a compaction retry must
         still trigger the tools-drop fallback and eventually succeed."""

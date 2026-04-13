@@ -847,7 +847,9 @@ class TestAgentLoop:
     def test_no_tool_calls_terminates_immediately(self, monkeypatch, capsys):
         """When the model returns no tool_calls, the loop prints content and exits."""
         from unittest.mock import MagicMock
-        from swival import agent
+        from swival import agent, config
+
+        monkeypatch.setattr(config, "load_config", lambda _: {})
 
         # Build a fake message with text content and no tool_calls
         fake_msg = MagicMock()
@@ -884,6 +886,8 @@ class TestAgentLoop:
                 "0",
                 "--model",
                 "fake-model",
+                "--provider",
+                "lmstudio",
                 "--base-url",
                 "http://127.0.0.1:1",
             ],  # won't connect

@@ -163,6 +163,7 @@ def _run_main_validation(
         stack.enter_context(
             patch("swival.agent.build_parser", return_value=mock_parser)
         )
+        stack.enter_context(patch("swival.config.load_config", return_value={}))
         mock_sys = stack.enter_context(patch("swival.agent.sys"))
         if extra_patches:
             for p in extra_patches:

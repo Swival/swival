@@ -235,8 +235,9 @@ class TestAddDirCLIValidation:
 
     def test_add_dir_nonexistent(self, tmp_path, monkeypatch):
         """Passing a non-existent path exits with sys.exit(1)."""
-        from swival import agent
+        from swival import agent, config
 
+        monkeypatch.setattr(config, "load_config", lambda _: {})
         monkeypatch.setattr(
             sys,
             "argv",
@@ -258,8 +259,9 @@ class TestAddDirCLIValidation:
         f = tmp_path / "afile.txt"
         f.write_text("hi", encoding="utf-8")
 
-        from swival import agent
+        from swival import agent, config
 
+        monkeypatch.setattr(config, "load_config", lambda _: {})
         monkeypatch.setattr(
             sys,
             "argv",
@@ -271,8 +273,9 @@ class TestAddDirCLIValidation:
 
     def test_add_dir_root_rejected(self, tmp_path, monkeypatch):
         """Passing / (filesystem root) exits with sys.exit(1)."""
-        from swival import agent
+        from swival import agent, config
 
+        monkeypatch.setattr(config, "load_config", lambda _: {})
         monkeypatch.setattr(
             sys,
             "argv",
@@ -288,7 +291,9 @@ class TestAddDirCLIValidation:
         target.mkdir()
         monkeypatch.setenv("HOME", str(tmp_path))
 
-        from swival import agent
+        from swival import agent, config
+
+        monkeypatch.setattr(config, "load_config", lambda _: {})
 
         # Let main() get past validation, then capture allowed_dirs
         # by patching discover_model to avoid LM Studio connection
@@ -325,7 +330,9 @@ class TestAddDirCLIValidation:
         extra = tmp_path / "extra"
         extra.mkdir()
 
-        from swival import agent
+        from swival import agent, config
+
+        monkeypatch.setattr(config, "load_config", lambda _: {})
 
         captured = {}
 
@@ -359,8 +366,9 @@ class TestAddDirCLIValidation:
 
     def test_add_dir_with_yolo_invalid(self, tmp_path, monkeypatch):
         """--yolo --add-dir <nonexistent> still exits with sys.exit(1)."""
-        from swival import agent
+        from swival import agent, config
 
+        monkeypatch.setattr(config, "load_config", lambda _: {})
         monkeypatch.setattr(
             agent, "discover_model", lambda *a, **kw: ("test-model", 4096)
         )
@@ -648,8 +656,9 @@ class TestAddDirRoCLIValidation:
 
     def test_add_dir_ro_nonexistent(self, tmp_path, monkeypatch):
         """Passing a non-existent path exits with sys.exit(1)."""
-        from swival import agent
+        from swival import agent, config
 
+        monkeypatch.setattr(config, "load_config", lambda _: {})
         monkeypatch.setattr(
             sys,
             "argv",
@@ -671,8 +680,9 @@ class TestAddDirRoCLIValidation:
         f = tmp_path / "afile.txt"
         f.write_text("hi", encoding="utf-8")
 
-        from swival import agent
+        from swival import agent, config
 
+        monkeypatch.setattr(config, "load_config", lambda _: {})
         monkeypatch.setattr(
             sys,
             "argv",
@@ -684,8 +694,9 @@ class TestAddDirRoCLIValidation:
 
     def test_add_dir_ro_root_rejected(self, tmp_path, monkeypatch):
         """Passing / (filesystem root) exits with sys.exit(1)."""
-        from swival import agent
+        from swival import agent, config
 
+        monkeypatch.setattr(config, "load_config", lambda _: {})
         monkeypatch.setattr(
             sys,
             "argv",
@@ -701,7 +712,9 @@ class TestAddDirRoCLIValidation:
         target.mkdir()
         monkeypatch.setenv("HOME", str(tmp_path))
 
-        from swival import agent
+        from swival import agent, config
+
+        monkeypatch.setattr(config, "load_config", lambda _: {})
 
         captured = {}
 
@@ -735,7 +748,9 @@ class TestAddDirRoCLIValidation:
         ro = tmp_path / "readonly"
         ro.mkdir()
 
-        from swival import agent
+        from swival import agent, config
+
+        monkeypatch.setattr(config, "load_config", lambda _: {})
 
         captured = {}
 
@@ -769,8 +784,9 @@ class TestAddDirRoCLIValidation:
 
     def test_add_dir_ro_with_yolo_invalid(self, tmp_path, monkeypatch):
         """--yolo --add-dir-ro <nonexistent> still exits with sys.exit(1)."""
-        from swival import agent
+        from swival import agent, config
 
+        monkeypatch.setattr(config, "load_config", lambda _: {})
         monkeypatch.setattr(
             agent, "discover_model", lambda *a, **kw: ("test-model", 4096)
         )
@@ -799,7 +815,9 @@ class TestAddDirRoCLIValidation:
         ro_dir = tmp_path / "readonly"
         ro_dir.mkdir()
 
-        from swival import agent
+        from swival import agent, config
+
+        monkeypatch.setattr(config, "load_config", lambda _: {})
 
         captured = {}
 
