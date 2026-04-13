@@ -51,12 +51,10 @@ def _normalize_tasks(args: dict) -> list[str] | str:
         if _to_stripped_list(args["tasks"]) != _to_stripped_list(args["task"]):
             return "error: provide either 'tasks' or legacy alias 'task', not conflicting values"
 
-    if has_tasks:
-        raw = args["tasks"]
-    elif has_task:
-        raw = args["task"]
-    else:
+    if not has_tasks and not has_task:
         return "error: action requires a 'tasks' parameter"
+
+    raw = args["tasks"] if has_tasks else args["task"]
 
     items = _to_stripped_list(raw)
     if not items:
@@ -213,15 +211,18 @@ class TodoState:
 
     @staticmethod
     def _batch_note(verb: str, count: int, skipped: int = 0, failed: int = 0) -> str:
-        parts = [f"{verb} {count} item{'s' if count != 1 else ''}"]
-        extras = []
-        if skipped:
-            extras.append(f"{skipped} skipped")
-        if failed:
-            extras.append(f"{failed} failed")
+        note = f"{verb} {count} item{'s' if count != 1 else ''}"
+        extras = ", ".join(
+            text
+            for text in (
+                f"{skipped} skipped" if skipped else "",
+                f"{failed} failed" if failed else "",
+            )
+            if text
+        )
         if extras:
-            parts.append(f"({', '.join(extras)})")
-        return " ".join(parts)
+            note += f" ({extras})"
+        return note
 
     def _match_item(self, task: str, include_done: bool = False) -> TodoItem | str:
         """Find a matching item. Returns the item or an error string."""
