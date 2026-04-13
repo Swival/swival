@@ -2,6 +2,10 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.0
+
+- Hugging Face models that don't support chat completions now fall back to plain text generation in non-tool turns, and models that exist on the Hub but have no live Inference Provider deployment now fail with a clearer error explaining how to run them instead.
+
 ## 0.11.3
 
 - All the underscore-prefixed internal keys are now stripped from outbound messages.
