@@ -410,7 +410,15 @@ def _subagent_thread_fn(
         if cancel_before or cancel_observed:
             handle.cancelled = True
     except Exception as e:
-        handle.error = f"error: subagent crashed: {e}"
+        from .report import ContextOverflowError
+
+        if isinstance(e, ContextOverflowError):
+            handle.error = (
+                "error: subagent context window exceeded after compaction. "
+                "The task may be too large for the current model's context."
+            )
+        else:
+            handle.error = f"error: subagent crashed: {e}"
     finally:
         handle.done.set()
         slot.release()

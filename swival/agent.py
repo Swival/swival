@@ -392,7 +392,8 @@ LEARN_PROMPT = (
 )
 
 _CONTEXT_OVERFLOW_RE = re.compile(
-    r"context.{0,10}(length|window|limit)"
+    r"context.{0,10}(length|window|limit|size)"
+    r"|context.{0,20}exceeded"
     r"|maximum.{0,10}(context|token)"
     r"|token.{0,10}limit"
     r"|exceed.{0,10}(context|token|max)",
