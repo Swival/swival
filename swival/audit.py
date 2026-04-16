@@ -282,7 +282,11 @@ class AuditRunState:
 
     @classmethod
     def find_resumable(
-        cls, state_dir: Path, commit: str, focus: str | None
+        cls,
+        state_dir: Path,
+        commit: str,
+        focus: str | None,
+        include_done: bool = False,
     ) -> AuditRunState | None:
         if not state_dir.exists():
             return None
@@ -300,7 +304,7 @@ class AuditRunState:
                 continue
             if focus is not None and blob.get("scope", {}).get("focus") != focus:
                 continue
-            if blob.get("phase") == "done":
+            if blob.get("phase") == "done" and not include_done:
                 continue
             mtime = sf.stat().st_mtime
             if mtime > best_mtime:
@@ -1509,6 +1513,7 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
     # Parse arguments
     arg = cmd_arg.strip()
     resume = False
+    regen = False
     focus = None
 
     parts = arg.split()
@@ -1517,6 +1522,8 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
     while i < len(parts):
         if parts[i] == "--resume":
             resume = True
+        elif parts[i] == "--regen":
+            regen = True
         elif parts[i] == "--workers" and i + 1 < len(parts):
             i += 1
             try:
@@ -1531,17 +1538,31 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
 
     state_dir = Path(base_dir) / ".swival" / "audit"
 
-    # Resume or create new run
-    if resume:
+    # Resume, regen, or create new run
+    if resume or regen:
         try:
             commit = _git(["rev-parse", "HEAD"], base_dir)
         except RuntimeError as e:
             return f"error: cannot resolve git state: {e}"
 
-        state = AuditRunState.find_resumable(state_dir, commit, focus)
+        state = AuditRunState.find_resumable(
+            state_dir, commit, focus, include_done=regen
+        )
         if state is None:
-            return "error: no resumable audit found for current commit and scope."
-        fmt.info(f"resuming audit run {state.run_id} from phase {state.phase}")
+            label = "regenerable" if regen else "resumable"
+            return f"error: no {label} audit found for current commit and scope."
+        if regen:
+            if not state.verified_findings:
+                return "error: no verified findings to regenerate artifacts for."
+            state.phase = "artifacts"
+            state.next_index = 1
+            state.save()
+            fmt.info(
+                f"regenerating artifacts for audit run {state.run_id} "
+                f"({len(state.verified_findings)} verified findings)"
+            )
+        else:
+            fmt.info(f"resuming audit run {state.run_id} from phase {state.phase}")
     else:
         try:
             scope = _resolve_scope(base_dir, focus)

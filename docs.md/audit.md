@@ -5,7 +5,7 @@ The `/audit` command runs a multi-phase security audit over committed Git-tracke
 It triages files by attack surface, performs deep review on escalated files, verifies each finding with an isolated proof-of-concept agent, generates patches, and writes structured reports. Only provable bugs survive to the final output.
 
 ```text
-/audit [path|glob] [--resume] [--workers N]
+/audit [path|glob] [--resume] [--regen] [--workers N]
 ```
 
 Available only in interactive mode (REPL). Runs against `HEAD`, so dirty working-directory changes are ignored.
@@ -131,16 +131,23 @@ git apply audit-findings/001-command-injection-in-handler.patch
 swival> /audit --resume
 ```
 
+`--regen` regenerates reports and patches for a completed audit run. It reuses the verified findings from the original run and re-runs only phase 5 (artifact generation). This is useful when you want to improve patch quality without repeating the expensive triage, deep review, and verification phases.
+
+```text
+swival> /audit --regen
+```
+
 `--workers N` sets the number of parallel workers for triage and verification (default: 4). Verification is always capped at 2 regardless of this value.
 
 ```text
 swival> /audit --workers 8
 ```
 
-Both can be combined with a focus path:
+All options can be combined with a focus path:
 
 ```text
 swival> /audit src/api/ --resume --workers 6
+swival> /audit src/api/ --regen
 ```
 
 ## Scope
@@ -184,7 +191,7 @@ If verification produces partial results (some findings verified, some failed), 
 Audit incomplete: 2 findings not verified (1 failed). Use /audit --resume to continue.
 ```
 
-A completed audit (phase `"done"`) is not resumable.
+A completed audit (phase `"done"`) is not resumable with `--resume`, but can be used with `--regen` to regenerate artifacts.
 
 ## Limitations
 

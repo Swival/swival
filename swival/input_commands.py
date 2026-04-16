@@ -28,6 +28,7 @@ INPUT_COMMANDS: dict[str, CommandInfo] = {
         modes=("repl",),
         options=(
             ("--resume", "Resume a previous audit run from its last checkpoint"),
+            ("--regen", "Regenerate reports and patches for a completed audit run"),
             ("--workers N", "Number of parallel verification workers (default: 4)"),
         ),
     ),

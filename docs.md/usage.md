@@ -80,7 +80,7 @@ Without `--oneshot-commands`, input that looks like a command script is treated 
 
 `/status` shows a compact session overview: model, endpoint, context usage, message/turn counts, file access, mode flags, and state summaries (thinking, todo, snapshot, checkpoints, continue file).
 
-`/audit [path|glob]` runs a staged security audit over committed Git-tracked code. It triages files by attack surface, deep-reviews escalated files, verifies each finding with an isolated proof-of-concept agent, and writes patches and reports to `audit-findings/`. Pass `--resume` to continue a previous run, `--workers N` to control parallelism. REPL-only. See [Security Audit](audit.md) for the full walkthrough.
+`/audit [path|glob]` runs a staged security audit over committed Git-tracked code. It triages files by attack surface, deep-reviews escalated files, verifies each finding with an isolated proof-of-concept agent, and writes patches and reports to `audit-findings/`. Pass `--resume` to continue a previous run, `--regen` to regenerate reports and patches for a completed run, `--workers N` to control parallelism. REPL-only. See [Security Audit](audit.md) for the full walkthrough.
 
 `/learn` reviews the current session for mistakes and confusions, then persists notes to `.swival/memory/MEMORY.md` for future sessions to learn from. On subsequent runs, memory entries are parsed by heading and selectively injected into the prompt using BM25 retrieval keyed from the user's question, keeping memory token cost bounded.
 
