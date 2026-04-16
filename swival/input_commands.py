@@ -11,6 +11,7 @@ class CommandInfo(NamedTuple):
     arg_type: str | None = None
     kind: str = "state_change"
     modes: tuple[str, ...] = ("repl", "oneshot")
+    options: tuple[tuple[str, str], ...] | None = None
 
 
 INPUT_COMMANDS: dict[str, CommandInfo] = {
@@ -19,6 +20,16 @@ INPUT_COMMANDS: dict[str, CommandInfo] = {
         arg="<command>",
         kind="state_change",
         modes=("repl",),
+    ),
+    "/audit": CommandInfo(
+        desc="Run a staged security audit over tracked committed code",
+        arg="[path|glob]",
+        kind="agent_turn",
+        modes=("repl",),
+        options=(
+            ("--resume", "Resume a previous audit run from its last checkpoint"),
+            ("--workers N", "Number of parallel verification workers (default: 4)"),
+        ),
     ),
     "/add-dir": CommandInfo(
         desc="Grant read+write access to a directory",
@@ -37,9 +48,9 @@ INPUT_COMMANDS: dict[str, CommandInfo] = {
         kind="state_change",
     ),
     "/compact": CommandInfo(
-        desc="Compress context (--drop removes middle turns)",
-        arg="[--drop]",
+        desc="Compress conversation context",
         kind="state_change",
+        options=(("--drop", "Also remove middle turns for more aggressive reduction"),),
     ),
     "/continue": CommandInfo(
         desc="Reset turn counter and continue the agent loop",

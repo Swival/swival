@@ -40,6 +40,7 @@
 <li><a href="getting-started.html">Getting Started</a></li>
 <li><a href="usage.html">Usage</a></li>
 <li><a href="tools.html">Tools</a></li>
+<li><a href="audit.html">Security Audit</a></li>
 <li><a href="context-management.html">Context Management</a></li>
 <li><a href="open-models.html">Not Just for Frontier Models</a></li>
 </ul>
@@ -144,6 +145,9 @@ print(answer)
     lifecycle_timeout: int = 300,
     lifecycle_fail_closed: bool = False,
     lifecycle_enabled: bool = True,
+    command_middleware: str | None = None,
+    aws_profile: str | None = None,
+    approved_buckets: set[str] | None = None,
 )
 </code></pre>
 <p>All parameters are keyword-only. The important ones:</p>
@@ -262,6 +266,18 @@ print(answer)
 <tr>
 <td><code>verbose</code></td>
 <td>Print diagnostics to stderr.</td>
+</tr>
+<tr>
+<td><code>command_middleware</code></td>
+<td>User-defined script to intercept and rewrite shell commands (see <a href="command-middleware.html">Command Middleware</a>).</td>
+</tr>
+<tr>
+<td><code>aws_profile</code></td>
+<td>AWS profile name for the <code>bedrock</code> provider.</td>
+</tr>
+<tr>
+<td><code>approved_buckets</code></td>
+<td>Pre-approved command buckets for <code>commands="ask"</code> mode (e.g. <code>{"ls", "git status"}</code>).</td>
 </tr>
 </tbody>
 </table>

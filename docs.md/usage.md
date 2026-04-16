@@ -80,6 +80,8 @@ Without `--oneshot-commands`, input that looks like a command script is treated 
 
 `/status` shows a compact session overview: model, endpoint, context usage, message/turn counts, file access, mode flags, and state summaries (thinking, todo, snapshot, checkpoints, continue file).
 
+`/audit [path|glob]` runs a staged security audit over committed Git-tracked code. It triages files by attack surface, deep-reviews escalated files, verifies each finding with an isolated proof-of-concept agent, and writes patches and reports to `audit-findings/`. Pass `--resume` to continue a previous run, `--workers N` to control parallelism. REPL-only. See [Security Audit](audit.md) for the full walkthrough.
+
 `/learn` reviews the current session for mistakes and confusions, then persists notes to `.swival/memory/MEMORY.md` for future sessions to learn from. On subsequent runs, memory entries are parsed by heading and selectively injected into the prompt using BM25 retrieval keyed from the user's question, keeping memory token cost bounded.
 
 `/simplify [focus]` inspects the codebase for low-risk simplification opportunities and applies them, preserving all observable behavior. Optionally scope it to a file or area (e.g. `/simplify swival/edit.py`). Prefers recently changed code but expands outward as needed.
@@ -122,6 +124,8 @@ swival --profile gpt5 "review this patch"
 
 `--api-key` provides a key directly on the command line and takes precedence over provider environment variables (`HF_TOKEN` for huggingface, `OPENROUTER_API_KEY` for openrouter, `OPENAI_API_KEY` for generic, `GEMINI_API_KEY` for google, `CHATGPT_API_KEY` for chatgpt). Bedrock uses the AWS credential chain instead (`AWS_PROFILE`, env vars, or IAM roles). Local providers (`lmstudio`, `llamacpp`) need no key.
 
+`--aws-profile` selects a named AWS profile from `~/.aws/config` for the `bedrock` provider. Overrides the `AWS_PROFILE` environment variable.
+
 When `--profile` is combined with explicit flags like `--provider` or `--model`, the explicit flags win on a per-key basis.
 
 ### Behavior Tuning Flags
@@ -143,6 +147,8 @@ When `--profile` is combined with explicit flags like `--provider` or `--model`,
 ```sh
 swival --extra-body '{"chat_template_kwargs": {"enable_thinking": false}}' "task"
 ```
+
+`--retries N` sets the maximum number of provider retries on transient network errors and defaults to `5`. Set to `1` to disable retries entirely.
 
 `--reasoning-effort LEVEL` sets the reasoning effort for models that support tunable reasoning (e.g. gpt-5.4). Valid levels are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `default`.
 
@@ -305,6 +311,10 @@ Neither flag requires a question argument. Both refuse to overwrite an existing 
 `--lifecycle-fail-closed` makes hook failures abort the run instead of logging a warning.
 
 `--no-lifecycle` disables lifecycle hooks entirely, useful for nested or automated invocations.
+
+### Command Middleware Flag
+
+`--command-middleware COMMAND` runs a user-defined script before each `run_command` or `run_shell_command` call. The script can rewrite, block, or pass through commands. The primary use case is integrating with RTK to produce token-optimized command output. See [Command Middleware](command-middleware.md) for the full documentation.
 
 ### Other Flags
 

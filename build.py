@@ -44,6 +44,11 @@ NAV = [
                 "File ops, search, editing, web fetching, thinking, command execution",
             ),
             (
+                "audit",
+                "Security Audit",
+                "Multi-phase security audit with triage, verification, and patch generation",
+            ),
+            (
                 "context-management",
                 "Context Management",
                 "How Swival fits large tasks into small context windows",

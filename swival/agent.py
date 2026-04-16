@@ -5694,6 +5694,7 @@ def _run_main(args, report, _write_report, parser):
                     extra_write_roots=loop_kwargs.get("extra_write_roots", []),
                     skill_read_roots=loop_kwargs.get("skill_read_roots", []),
                     skills_catalog=skills_catalog,
+                    trace_dir=getattr(args, "trace_dir", None),
                 )
                 result = run_input_script(args.question, ctx, mode="oneshot")
                 answer = result.text
@@ -5937,6 +5938,7 @@ def _run_main(args, report, _write_report, parser):
             pre_profile_baseline=getattr(args, "_pre_profile_baseline", None),
             on_exit=_on_repl_exit if report else None,
             start_dir=start_dir,
+            trace_dir=getattr(args, "trace_dir", None),
         )
     finally:
         if _sa_holder[0] is not None:
@@ -7184,6 +7186,9 @@ def _repl_help() -> str:
         if info.arg:
             label += f" {info.arg}"
         lines.append(f"  {label:<19}{info.desc}")
+        if info.options:
+            for flag, flag_desc in info.options:
+                lines.append(f"      {flag:<15}{flag_desc}")
 
     lines.append("")
     lines.append(
@@ -8044,6 +8049,9 @@ def execute_input(
                 prompt, "/simplify", ctx, interrupt_label="/simplify"
             )
 
+        if cmd == "/audit":
+            return _execute_audit(cmd_arg, ctx)
+
         # Unknown slash command.
         return StepResult(
             kind="info",
@@ -8130,6 +8138,25 @@ def _execute_init(cmd_arg: str, ctx: InputContext) -> StepResult:
         )
 
     return StepResult(kind="agent_turn", text=last_answer, exhausted=any_exhausted)
+
+
+def _execute_audit(cmd_arg: str, ctx: InputContext) -> StepResult:
+    """Handle the /audit command by delegating to swival.audit."""
+    from .audit import run_audit_command
+
+    try:
+        result = run_audit_command(cmd_arg, ctx)
+    except KeyboardInterrupt:
+        fmt.warning("interrupted, audit aborted.")
+        return StepResult(kind="agent_turn")
+    except Exception as e:
+        return StepResult(
+            kind="agent_turn", text=f"error: audit failed: {e}", is_error=True
+        )
+
+    if not ctx.no_history and result:
+        append_history(ctx.base_dir, "/audit", result, diagnostics=ctx.verbose)
+    return StepResult(kind="agent_turn", text=result)
 
 
 def run_input_script(
@@ -8237,6 +8264,7 @@ def repl_loop(
     report: "ReportCollector | None" = None,
     turn_offset: int = 0,
     on_exit=None,
+    trace_dir: str | None = None,
 ):
     """Interactive read-eval-print loop."""
     from prompt_toolkit import PromptSession
@@ -8346,6 +8374,7 @@ def repl_loop(
         skill_read_roots=skill_read_roots,
         skills_catalog=skills_catalog,
         is_subagent=is_subagent,
+        trace_dir=trace_dir,
     )
 
     _exit_outcome = "error"

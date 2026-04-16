@@ -40,6 +40,7 @@
 <li><a href="getting-started.html">Getting Started</a></li>
 <li><a href="usage.html" class="active">Usage</a></li>
 <li><a href="tools.html">Tools</a></li>
+<li><a href="audit.html">Security Audit</a></li>
 <li><a href="context-management.html">Context Management</a></li>
 <li><a href="open-models.html">Not Just for Frontier Models</a></li>
 </ul>
@@ -115,6 +116,7 @@ swival --oneshot-commands $'/profile fast\n/simplify swival/agent.py'
 <p><code>/extend</code> doubles the current turn budget. <code>/extend &lt;N&gt;</code> sets the turn budget to an exact value.</p>
 <p><code>/continue</code> restarts the agent loop for the existing conversation without adding a new user message.</p>
 <p><code>/status</code> shows a compact session overview: model, endpoint, context usage, message/turn counts, file access, mode flags, and state summaries (thinking, todo, snapshot, checkpoints, continue file).</p>
+<p><code>/audit [path|glob]</code> runs a staged security audit over committed Git-tracked code. It triages files by attack surface, deep-reviews escalated files, verifies each finding with an isolated proof-of-concept agent, and writes patches and reports to <code>audit-findings/</code>. Pass <code>--resume</code> to continue a previous run, <code>--workers N</code> to control parallelism. REPL-only. See <a href="audit.html">Security Audit</a> for the full walkthrough.</p>
 <p><code>/learn</code> reviews the current session for mistakes and confusions, then persists notes to <code>.swival/memory/MEMORY.md</code> for future sessions to learn from. On subsequent runs, memory entries are parsed by heading and selectively injected into the prompt using BM25 retrieval keyed from the user's question, keeping memory token cost bounded.</p>
 <p><code>/simplify [focus]</code> inspects the codebase for low-risk simplification opportunities and applies them, preserving all observable behavior. Optionally scope it to a file or area (e.g. <code>/simplify swival/edit.py</code>). Prefers recently changed code but expands outward as needed.</p>
 <p><code>/tools</code> lists all tools available in the current session — built-in, MCP, and A2A — grouped by source with full descriptions.</p>
@@ -136,6 +138,7 @@ swival --oneshot-commands $'/profile fast\n/simplify swival/agent.py'
 <p><code>--model</code> overrides auto-discovery with a fixed model identifier.</p>
 <p><code>--base-url</code> sets a custom API base URL. For LM Studio, the default is <code>http://127.0.0.1:1234</code>; for llamacpp, the default is <code>http://127.0.0.1:8080</code>.</p>
 <p><code>--api-key</code> provides a key directly on the command line and takes precedence over provider environment variables (<code>HF_TOKEN</code> for huggingface, <code>OPENROUTER_API_KEY</code> for openrouter, <code>OPENAI_API_KEY</code> for generic, <code>GEMINI_API_KEY</code> for google, <code>CHATGPT_API_KEY</code> for chatgpt). Bedrock uses the AWS credential chain instead (<code>AWS_PROFILE</code>, env vars, or IAM roles). Local providers (<code>lmstudio</code>, <code>llamacpp</code>) need no key.</p>
+<p><code>--aws-profile</code> selects a named AWS profile from <code>~/.aws/config</code> for the <code>bedrock</code> provider. Overrides the <code>AWS_PROFILE</code> environment variable.</p>
 <p>When <code>--profile</code> is combined with explicit flags like <code>--provider</code> or <code>--model</code>, the explicit flags win on a per-key basis.</p>
 <h3 id="behavior-tuning-flags">Behavior Tuning Flags</h3>
 <p><code>--max-turns</code> sets the maximum number of loop iterations and defaults to <code>100</code>.</p>
@@ -147,6 +150,7 @@ swival --oneshot-commands $'/profile fast\n/simplify swival/agent.py'
 <p><code>--extra-body JSON</code> passes extra parameters to the LLM API call. The value must be a JSON object. This is useful for provider-specific or model-specific options that Swival does not expose as dedicated flags.</p>
 <pre><code class="language-sh">swival --extra-body '{&quot;chat_template_kwargs&quot;: {&quot;enable_thinking&quot;: false}}' &quot;task&quot;
 </code></pre>
+<p><code>--retries N</code> sets the maximum number of provider retries on transient network errors and defaults to <code>5</code>. Set to <code>1</code> to disable retries entirely.</p>
 <p><code>--reasoning-effort LEVEL</code> sets the reasoning effort for models that support tunable reasoning (e.g. gpt-5.4). Valid levels are <code>none</code>, <code>minimal</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, and <code>default</code>.</p>
 <pre><code class="language-sh">swival --provider chatgpt --model gpt-5.4 --reasoning-effort high &quot;task&quot;
 </code></pre>
@@ -228,6 +232,8 @@ swival --oneshot-commands $'/profile fast\n/simplify swival/agent.py'
 <p><code>--lifecycle-timeout SECONDS</code> sets the timeout for lifecycle hook execution (default: 300).</p>
 <p><code>--lifecycle-fail-closed</code> makes hook failures abort the run instead of logging a warning.</p>
 <p><code>--no-lifecycle</code> disables lifecycle hooks entirely, useful for nested or automated invocations.</p>
+<h3 id="command-middleware-flag">Command Middleware Flag</h3>
+<p><code>--command-middleware COMMAND</code> runs a user-defined script before each <code>run_command</code> or <code>run_shell_command</code> call. The script can rewrite, block, or pass through commands. The primary use case is integrating with RTK to produce token-optimized command output. See <a href="command-middleware.html">Command Middleware</a> for the full documentation.</p>
 <h3 id="other-flags">Other Flags</h3>
 <p><code>--version</code> prints the version and exits.</p>
 <p>For the full report schema and analysis workflow, see <a href="reports.html">Reports</a>. For the reviewer protocol and examples, see <a href="reviews.html">Reviews</a>.</p>

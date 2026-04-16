@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Security Audit — Swival</title>
+    <meta name="description" content="Security Audit — Swival documentation">
+    <meta property="og:type" content="article">
+    <meta property="og:title" content="Security Audit — Swival">
+    <meta property="og:description" content="Security Audit — Swival documentation">
+    <meta property="og:image" content="https://swival.dev/img/logo.png">
+    <meta property="og:url" content="https://swival.dev/pages/audit.html">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="Security Audit — Swival">
+    <meta name="twitter:description" content="Security Audit — Swival documentation">
+    <meta name="twitter:image" content="https://swival.dev/img/logo.png">
+    <link rel="icon" href="../favicon.ico">
+    <link rel="stylesheet" href="../css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../" class="header-logo">
+                <img src="../img/logo.png" alt="Swival">
+            </a>
+            <nav class="header-nav">
+                <a href="./">Docs</a>
+                <a href="https://github.com/swival/swival">GitHub</a>
+            </nav>
+        </div>
+    </header>
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <div class="sidebar-section">
+<h4>Basics</h4>
+<ul>
+<li><a href="getting-started.html">Getting Started</a></li>
+<li><a href="usage.html">Usage</a></li>
+<li><a href="tools.html">Tools</a></li>
+<li><a href="audit.html" class="active">Security Audit</a></li>
+<li><a href="context-management.html">Context Management</a></li>
+<li><a href="open-models.html">Not Just for Frontier Models</a></li>
+</ul>
+</div>
+<div class="sidebar-section">
+<h4>Configuration & Deployment</h4>
+<ul>
+<li><a href="safety-and-sandboxing.html">Safety & Sandboxing</a></li>
+<li><a href="secrets.html">Secret Encryption</a></li>
+<li><a href="llm-filter.html">Outbound LLM Filter</a></li>
+<li><a href="command-middleware.html">Command Middleware</a></li>
+<li><a href="skills.html">Skills</a></li>
+<li><a href="web-browsing.html">Web Browsing</a></li>
+<li><a href="mcp.html">MCP</a></li>
+<li><a href="a2a.html">A2A</a></li>
+<li><a href="lifecycle-hooks.html">Lifecycle Hooks</a></li>
+<li><a href="custom-commands.html">Custom Commands</a></li>
+<li><a href="customization.html">Customization</a></li>
+<li><a href="providers.html">Providers</a></li>
+<li><a href="reports.html">Reports</a></li>
+<li><a href="reviews.html">Reviews</a></li>
+<li><a href="agentfs.html">AgentFS</a></li>
+</ul>
+</div>
+<div class="sidebar-section">
+<h4>Reference</h4>
+<ul>
+<li><a href="python-api.html">Python API</a></li>
+</ul>
+</div>
+        </aside>
+        <article class="docs-content">
+            <h1 id="security-audit">Security Audit</h1>
+<p>The <code>/audit</code> command runs a multi-phase security audit over committed Git-tracked code.</p>
+<p>It triages files by attack surface, performs deep review on escalated files, verifies each finding with an isolated proof-of-concept agent, generates patches, and writes structured reports. Only provable bugs survive to the final output.</p>
+<pre><code class="language-text">/audit [path|glob] [--resume] [--workers N]
+</code></pre>
+<p>Available only in interactive mode (REPL). Runs against <code>HEAD</code>, so dirty working-directory changes are ignored.</p>
+<h2 id="quick-start">Quick Start</h2>
+<p>Start an audit from the REPL:</p>
+<pre><code class="language-text">swival&gt; /audit
+</code></pre>
+<p>Scope it to a directory or glob:</p>
+<pre><code class="language-text">swival&gt; /audit src/auth/
+swival&gt; /audit **/*.py
+</code></pre>
+<p>When the audit finishes, findings are written to <code>audit-findings/</code> in the project root:</p>
+<pre><code class="language-text">swival&gt; /audit
+Audit complete. 2 finding(s) written to audit-findings/. Run `ls audit-findings/` to review.
+</code></pre>
+<p>If no bugs are found:</p>
+<pre><code class="language-text">No provable logic or security bugs found in Git-tracked files.
+</code></pre>
+<h2 id="how-it-works">How It Works</h2>
+<p>The audit runs in five sequential phases. State is checkpointed after each phase and after every batch within a phase, so interrupted audits can be resumed.</p>
+<h3 id="phase-1-repository-profiling">Phase 1: Repository Profiling</h3>
+<p>Reads manifests (<code>package.json</code>, <code>pyproject.toml</code>, <code>Cargo.toml</code>, <code>Makefile</code>, etc.) and entry-point candidates from committed code, then calls the LLM to produce a compact repository profile: detected languages, frameworks, entry points, trust boundaries, persistence layers, auth surfaces, and dangerous operations. This profile is reused as context in every subsequent phase.</p>
+<p>Files are ordered by an attack-surface heuristic that scores keywords like <code>exec</code>, <code>eval</code>, <code>auth</code>, <code>token</code>, <code>sql</code>, <code>template</code>, and <code>socket</code>. Higher-scoring files are processed first.</p>
+<h3 id="phase-2-triage">Phase 2: Triage</h3>
+<p>Each auditable file is triaged independently. The LLM sees the file contents, its attack-surface score, import/caller context, and the repository profile. It returns one of three labels:</p>
+<ul>
+<li><strong>ESCALATE_HIGH</strong> — concrete suspicious path or invariant break worth deep review</li>
+<li><strong>ESCALATE_MEDIUM</strong> — plausible concern, lower confidence</li>
+<li><strong>SKIP</strong> — no evidence for escalation</li>
+</ul>
+<p>Files labeled SKIP are not reviewed further. Triage runs in parallel with configurable worker count.</p>
+<h3 id="phase-3-deep-review">Phase 3: Deep Review</h3>
+<p>Each escalated file goes through a two-step deep review.</p>
+<p><strong>Inventory (3a):</strong> The LLM produces a compact list of finding stubs — title, severity, exact <code>path:line</code> location, and a one-line claim under 20 words. At most 3 findings per file. Speculative findings are explicitly rejected.</p>
+<p><strong>Expansion (3b):</strong> Each finding stub is expanded with proof details — finding type, preconditions, a propagation-path proof, and a minimal fix outline. Expansion runs in parallel (up to 2 workers per file).</p>
+<p>The two are merged into canonical <code>FindingRecord</code> objects. JSON parse failures trigger an automatic LLM repair pass; if repair also fails, the entire file gets one analytical retry.</p>
+<h3 id="phase-4-verification">Phase 4: Verification</h3>
+<p>Each proposed finding is treated as a hypothesis. A verifier agent runs in an isolated Git worktree at HEAD with full access to the committed source code.</p>
+<p>The verifier can inspect code and optionally compile or run small proof-of-concept programs. It must end with one of two verdicts:</p>
+<ul>
+<li><strong>REPRODUCED</strong> — the finding is real and the verifier demonstrated it</li>
+<li><strong>NOTREPRODUCED</strong> — the code does not support a practical trigger path</li>
+</ul>
+<p>Verified findings advance to artifact generation. Discarded findings are dropped. Failed verifications (infrastructure errors, timeouts) are retried once for transient errors and can be resumed with <code>--resume</code>.</p>
+<p>Verification runs in parallel, capped at 2 concurrent workers regardless of the <code>--workers</code> setting.</p>
+<h3 id="phase-5-artifact-generation">Phase 5: Artifact Generation</h3>
+<p>For each verified finding:</p>
+<ol>
+<li>A patch agent runs in an isolated worktree and applies the minimal correct fix using <code>edit_file</code>. The resulting <code>git diff</code> is captured.</li>
+<li>The LLM writes a structured markdown report.</li>
+</ol>
+<p>Both are saved to the <code>audit-findings/</code> directory:</p>
+<pre><code class="language-text">audit-findings/
+  001-command-injection-in-handler.md
+  001-command-injection-in-handler.patch
+  002-missing-null-check-in-parser.md
+  002-missing-null-check-in-parser.patch
+</code></pre>
+<h2 id="report-format">Report Format</h2>
+<p>Each <code>.md</code> report follows a fixed structure:</p>
+<pre><code class="language-text"># &lt;finding title&gt;
+## Classification
+## Affected Locations
+## Summary
+## Provenance
+## Preconditions
+## Proof
+## Why This Is A Real Bug
+## Fix Requirement
+## Patch Rationale
+## Residual Risk
+## Patch
+</code></pre>
+<p>The <code>## Patch</code> section includes the full unified diff inline. Patches can also be applied directly:</p>
+<pre><code class="language-sh">git apply audit-findings/001-command-injection-in-handler.patch
+</code></pre>
+<h2 id="options">Options</h2>
+<p><code>--resume</code> resumes a previous audit run from its last checkpoint. The resume matches against the current commit and scope (focus argument). If the commit or scope changed since the original run, no match is found and the command returns an error. On resume, completed phases are skipped, and failed verifications are requeued.</p>
+<pre><code class="language-text">swival&gt; /audit --resume
+</code></pre>
+<p><code>--workers N</code> sets the number of parallel workers for triage and verification (default: 4). Verification is always capped at 2 regardless of this value.</p>
+<pre><code class="language-text">swival&gt; /audit --workers 8
+</code></pre>
+<p>Both can be combined with a focus path:</p>
+<pre><code class="language-text">swival&gt; /audit src/api/ --resume --workers 6
+</code></pre>
+<h2 id="scope">Scope</h2>
+<p>The audit examines only committed Git-tracked files at HEAD. Unstaged or uncommitted changes are invisible to the audit.</p>
+<p>Only files with recognized source or configuration extensions are auditable:</p>
+<p><strong>Source:</strong> <code>.py</code>, <code>.js</code>, <code>.ts</code>, <code>.tsx</code>, <code>.jsx</code>, <code>.go</code>, <code>.rs</code>, <code>.java</code>, <code>.kt</code>, <code>.rb</code>, <code>.php</code>, <code>.c</code>, <code>.cc</code>, <code>.cpp</code>, <code>.h</code>, <code>.hpp</code>, <code>.cs</code>, <code>.swift</code>, <code>.scala</code>, <code>.sh</code></p>
+<p><strong>Configuration:</strong> <code>.json</code>, <code>.toml</code>, <code>.yaml</code>, <code>.yml</code>, <code>.xml</code>, <code>.ini</code>, <code>.conf</code>, <code>.sql</code>, <code>.graphql</code>, <code>.proto</code>, <code>.rego</code>, <code>.tf</code>, <code>.cue</code></p>
+<p>Other file types (<code>.md</code>, <code>.png</code>, <code>.csv</code>, etc.) are excluded.</p>
+<p>When a focus argument is provided, it works as both an fnmatch pattern and a prefix filter. For example, <code>/audit src/</code> includes all files under <code>src/</code>, and <code>/audit *.py</code> includes all Python files.</p>
+<h2 id="state-and-storage">State and Storage</h2>
+<p>Audit state is persisted in <code>.swival/audit/&lt;run_id&gt;/state.json</code>. This includes:</p>
+<ul>
+<li>Scope (branch, commit, file list, focus)</li>
+<li>All triage records</li>
+<li>Proposed and verified findings</li>
+<li>Verification status for each finding (pending, running, verified, discarded, failed)</li>
+<li>Metrics (parse failures, repair successes, analytical retries)</li>
+<li>Current phase and next artifact index</li>
+</ul>
+<p>LLM interactions are traced to <code>.swival/audit/&lt;run_id&gt;/traces/</code> when <code>--trace-dir</code> is set on the outer session.</p>
+<p>Temporary worktrees for verification and patch generation are created under <code>.swival/audit/&lt;run_id&gt;/verify/</code> and <code>.swival/audit/&lt;run_id&gt;/patch-gen/</code>, and cleaned up automatically.</p>
+<p>Final artifacts go to <code>audit-findings/</code> in the project root.</p>
+<h2 id="interruption-and-recovery">Interruption and Recovery</h2>
+<p>The audit is designed to be interrupted and resumed. <code>Ctrl+C</code> during any phase stops the audit gracefully. State is always saved before the interrupt is handled, so <code>/audit --resume</code> picks up where it left off.</p>
+<p>If verification produces partial results (some findings verified, some failed), the audit reports the incomplete state and asks you to resume:</p>
+<pre><code class="language-text">Audit incomplete: 2 findings not verified (1 failed). Use /audit --resume to continue.
+</code></pre>
+<p>A completed audit (phase <code>"done"</code>) is not resumable.</p>
+<h2 id="limitations">Limitations</h2>
+<p>The audit depends heavily on the quality of the underlying LLM. Models with weak code understanding will produce lower-quality triage and more false negatives. The verification phase catches many false positives, but a weak verifier model may also miss real bugs or incorrectly confirm speculative findings.</p>
+<p>The audit sees only committed code. Runtime configuration, environment variables, deployment topology, and dynamic code paths that depend on external state are outside its view.</p>
+<p>Large repositories with many auditable files can take significant time and LLM tokens to process.</p>
+        </article>
+    </div>
+    <footer class="site-footer">
+        <div class="footer-inner">
+            <div class="footer-grid">
+                <div class="footer-col">
+                    <img src="../img/logo.png" alt="Swival" class="footer-logo">
+                    <p class="footer-tagline">A coding agent for any model.<br>Free, open-source, and easy to set up.</p>
+                </div>
+                <div class="footer-col">
+                    <h4>Resources</h4>
+                    <ul>
+                        <li><a href="getting-started.html">Getting Started</a></li>
+                        <li><a href="usage.html">Usage</a></li>
+                        <li><a href="tools.html">Tools</a></li>
+                        <li><a href="context-management.html">Context Management</a></li>
+                    </ul>
+                </div>
+                <div class="footer-col">
+                    <h4>Guides</h4>
+                    <ul>
+                        <li><a href="providers.html">Providers</a></li>
+                        <li><a href="safety-and-sandboxing.html">Safety &amp; Sandboxing</a></li>
+                        <li><a href="python-api.html">Python API</a></li>
+                        <li><a href="open-models.html">Open Models</a></li>
+                    </ul>
+                </div>
+                <div class="footer-col">
+                    <h4>Community</h4>
+                    <ul>
+                        <li><a href="https://github.com/swival/swival">GitHub</a></li>
+                        <li><a href="https://calibra.swival.dev">Calibra</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2025 Swival &middot; MIT License</p>
+            </div>
+        </div>
+    </footer>
+    <button class="back-to-top" aria-label="Back to top">&uarr;</button>
+    <script src="../js/site.js"></script>
+</body>
+</html>

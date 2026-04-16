@@ -48,6 +48,7 @@ class InputContext:
     skill_read_roots: list = field(default_factory=list)
     skills_catalog: dict = field(default_factory=dict)
     is_subagent: bool = False
+    trace_dir: str | None = None
 
 
 @dataclass

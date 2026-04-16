@@ -82,6 +82,9 @@ Session(
     lifecycle_timeout: int = 300,
     lifecycle_fail_closed: bool = False,
     lifecycle_enabled: bool = True,
+    command_middleware: str | None = None,
+    aws_profile: str | None = None,
+    approved_buckets: set[str] | None = None,
 )
 ```
 
@@ -116,6 +119,9 @@ All parameters are keyword-only. The important ones:
 | `cache`                 | Cache LLM responses to disk for deterministic replay.                                                                                                                                                                                                                                  |
 | `trace_dir`             | Write HuggingFace-compatible JSONL session traces to this directory. Each `run()` call produces a separate file; `ask()` calls accumulate in one file per session.                                                                                                                     |
 | `verbose`               | Print diagnostics to stderr.                                                                                                                                                                                                                                                           |
+| `command_middleware`    | User-defined script to intercept and rewrite shell commands (see [Command Middleware](command-middleware.html)).                                                                                                                                                                       |
+| `aws_profile`           | AWS profile name for the `bedrock` provider.                                                                                                                                                                                                                                           |
+| `approved_buckets`      | Pre-approved command buckets for `commands="ask"` mode (e.g. `{"ls", "git status"}`).                                                                                                                                                                                                  |
 
 Parameters not listed here correspond to the same-named CLI flags and config keys. See [Customization](customization.html) for the full config reference.
 
