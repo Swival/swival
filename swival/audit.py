@@ -1301,11 +1301,10 @@ def _phase5_patch(
         diff = subprocess.run(
             ["git", "diff"],
             capture_output=True,
-            text=True,
             cwd=str(work_dir),
             timeout=10,
         )
-        patch_text = diff.stdout.strip()
+        patch_text = diff.stdout.decode(errors="replace").strip()
         if not patch_text:
             fmt.info("    patch: no changes produced")
             return None
