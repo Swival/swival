@@ -108,9 +108,7 @@ def main():
             our_sha = h.hexdigest()
         print(f"  SHA256: {our_sha}")
     except Exception as e:
-        our_sha = "PLACEHOLDER"
-        print(f"Warning: could not fetch release tarball: {e}")
-        print("  Using PLACEHOLDER for sha256 — publish the release first")
+        raise SystemExit(f"Error: could not fetch release tarball: {e}\nMake sure the tag {version} exists on GitHub before generating the formula.")
 
     deps = resolve_deps()
     print(f"Resolved {len(deps)} dependencies")
