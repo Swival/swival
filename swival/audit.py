@@ -1601,24 +1601,39 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
 
     # Phase 2: triage
     if state.phase == "triage":
+
+        def _triage(path):
+            return _phase2_triage_one(path, state, ctx)
+
+        def _collect_triage(results):
+            for rec in results:
+                if rec is not None:
+                    state.triage_records[rec.path] = rec
+                    state.reviewed_files.add(rec.path)
+
         pending = [f for f in state.queued_files if f not in state.reviewed_files]
         if pending:
             fmt.info(f"phase 2: triaging {len(pending)} files...")
-
-            def _triage(path):
-                return _phase2_triage_one(path, state, ctx)
-
             for batch_start in range(0, len(pending), workers * 2):
                 batch = pending[batch_start : batch_start + workers * 2]
-                results = _run_batch(_triage, batch, max_workers=workers)
-                for rec in results:
-                    if rec is not None:
-                        state.triage_records[rec.path] = rec
-                        state.reviewed_files.add(rec.path)
+                _collect_triage(_run_batch(_triage, batch, max_workers=workers))
                 state.save()
                 done = len(state.reviewed_files)
                 total = len(state.queued_files)
                 fmt.info(f"  triage progress: {done}/{total}")
+
+        for _triage_retry in range(2):
+            still_pending = [
+                f for f in state.queued_files if f not in state.reviewed_files
+            ]
+            if not still_pending:
+                break
+            fmt.info(
+                f"phase 2: retrying {len(still_pending)} files "
+                f"(attempt {_triage_retry + 2})..."
+            )
+            _collect_triage(_run_batch(_triage, still_pending, max_workers=workers))
+            state.save()
 
         state.candidate_files = [
             path
@@ -1635,14 +1650,23 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
 
     # Phase 3: deep review
     if state.phase == "deep_review":
-        pending = [
-            f for f in state.candidate_files if f not in state.deep_reviewed_files
-        ]
-        if pending:
-            fmt.info(f"phase 3: deep review of {len(pending)} files...")
 
-            def _review(path):
-                return _deep_review_one(path, state, ctx)
+        def _review(path):
+            return _deep_review_one(path, state, ctx)
+
+        for _dr_attempt in range(3):
+            pending = [
+                f for f in state.candidate_files if f not in state.deep_reviewed_files
+            ]
+            if not pending:
+                break
+            if _dr_attempt == 0:
+                fmt.info(f"phase 3: deep review of {len(pending)} files...")
+            else:
+                fmt.info(
+                    f"phase 3: retrying {len(pending)} files "
+                    f"(attempt {_dr_attempt + 1})..."
+                )
 
             results = _run_batch(_review, pending, max_workers=workers)
             for result in results:
@@ -1661,8 +1685,8 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
                 f for f in state.candidate_files if f not in state.deep_reviewed_files
             ]
             return (
-                f"Audit incomplete: {len(remaining)} escalated files failed deep review. "
-                f"Use /audit --resume to continue."
+                f"Audit incomplete: {len(remaining)} escalated files failed deep "
+                f"review after retries. Use /audit --resume to retry."
             )
 
         state.phase = "verification"
@@ -1718,31 +1742,40 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
                     "summary": None,
                 }
 
-        # Reset stale running entries (mandatory on resume)
-        for vs in state.verification_state.values():
-            if vs["status"] == "running":
-                vs["status"] = "pending"
+        max_verify_attempts = 3
 
-        # Build pending list from non-terminal findings
-        pending = []
-        for f in state.proposed_findings:
-            key = _finding_key(f)
-            if state.verification_state[key]["status"] in ("pending", "failed"):
-                pending.append((key, f))
+        def _verify(item):
+            return _verify_one_finding(item, state, ctx)
 
-        if pending:
+        for _v_attempt in range(max_verify_attempts):
+            for vs in state.verification_state.values():
+                if vs["status"] == "running":
+                    vs["status"] = "pending"
+
+            pending = []
+            for f in state.proposed_findings:
+                key = _finding_key(f)
+                if state.verification_state[key]["status"] in ("pending", "failed"):
+                    pending.append((key, f))
+
+            if not pending:
+                break
+
             verify_workers = min(workers, 2)
-            fmt.info(
-                f"phase 4: verifying {len(pending)} findings "
-                f"with {verify_workers} workers..."
-            )
+            if _v_attempt == 0:
+                fmt.info(
+                    f"phase 4: verifying {len(pending)} findings "
+                    f"with {verify_workers} workers..."
+                )
+            else:
+                fmt.info(
+                    f"phase 4: retry {_v_attempt}/{max_verify_attempts - 1}, "
+                    f"{len(pending)} findings remaining..."
+                )
 
             for key, _ in pending:
                 state.verification_state[key]["status"] = "running"
             state.save()
-
-            def _verify(item):
-                return _verify_one_finding(item, state, ctx)
 
             results = _run_batch(_verify, pending, max_workers=verify_workers)
 
@@ -1789,7 +1822,6 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
                 f"{discarded_count} discarded, {failed_count} failed"
             )
 
-        # Fail closed: all findings must reach a terminal state
         non_terminal = [
             key
             for key, vs in state.verification_state.items()
@@ -1803,7 +1835,8 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
             )
             return (
                 f"Audit incomplete: {len(non_terminal)} findings not verified "
-                f"({n_failed} failed). Use /audit --resume to continue."
+                f"after {max_verify_attempts} attempts ({n_failed} failed). "
+                f"Use /audit --resume to retry."
             )
 
         # Deduplicate verified_findings by content key
@@ -1855,26 +1888,32 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
                 state.save()
                 fmt.info(f"  [{fi}/{total}] wrote {report_filename} + {patch_filename}")
 
+        # Safety-net checks before marking done — rewind to the phase that
+        # can fill the gap so /audit --resume actually recovers.
+        unreviewed = [
+            f for f in state.scope.mandatory_files if f not in state.reviewed_files
+        ]
+        if unreviewed:
+            state.phase = "triage"
+            state.save()
+            return (
+                f"Audit incomplete: {len(unreviewed)} files were not reviewed. "
+                f"Use /audit --resume to continue."
+            )
+        undeep_reviewed = [
+            f for f in state.candidate_files if f not in state.deep_reviewed_files
+        ]
+        if undeep_reviewed:
+            state.phase = "deep_review"
+            state.save()
+            return (
+                f"Audit incomplete: {len(undeep_reviewed)} escalated files failed "
+                f"deep review. Use /audit --resume to continue."
+            )
+
         state.phase = "done"
         state.save()
 
-    # Final summary
-    unreviewed = [
-        f for f in state.scope.mandatory_files if f not in state.reviewed_files
-    ]
-    if unreviewed:
-        return (
-            f"Audit incomplete: {len(unreviewed)} files were not reviewed. "
-            f"Use /audit --resume to continue."
-        )
-    undeep_reviewed = [
-        f for f in state.candidate_files if f not in state.deep_reviewed_files
-    ]
-    if undeep_reviewed:
-        return (
-            f"Audit incomplete: {len(undeep_reviewed)} escalated files failed deep review. "
-            f"Use /audit --resume to continue."
-        )
     if artifacts_written == 0:
         return "No provable logic or security bugs found in Git-tracked files."
 

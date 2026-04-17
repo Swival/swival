@@ -11,6 +11,7 @@ from swival.audit import (
     AUDIT_PROVENANCE_URL,
     AuditRunState,
     AuditScope,
+    DeepReviewResult,
     FindingRecord,
     TriageRecord,
     VerificationResult,
@@ -1706,3 +1707,479 @@ class TestPhase3Split:
         loaded = AuditRunState.load(state.state_dir, "x")
         assert loaded.metrics["parse_failures"] == 3
         assert loaded.metrics["repair_successes"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Auto-retry and resumability
+# ---------------------------------------------------------------------------
+
+
+class TestAutoRetry:
+    """Tests for automatic retry loops in phases 2, 3, and 4, and the
+    done-but-incomplete resumability fix."""
+
+    def _make_scope(self, commit="abc123", files=None):
+        files = files or ["a.py"]
+        return AuditScope(
+            branch="main",
+            commit=commit,
+            tracked_files=files,
+            mandatory_files=files,
+            focus=None,
+        )
+
+    def _make_finding(self, title="Bug", source_file="a.py"):
+        return FindingRecord(
+            title=title,
+            finding_type="vulnerability",
+            severity="high",
+            locations=[f"{source_file}:1"],
+            preconditions=["none"],
+            proof=["step 1"],
+            fix_outline="fix it",
+            source_file=source_file,
+        )
+
+    @staticmethod
+    def _triage_escalate(path):
+        return TriageRecord(
+            path=path,
+            priority="ESCALATE_HIGH",
+            confidence="high",
+            bug_classes=["eval"],
+            summary="dangerous",
+            relevant_symbols=[],
+            suspicious_flows=[],
+            needs_followup=True,
+        )
+
+    @staticmethod
+    def _triage_skip(path):
+        return TriageRecord(
+            path=path,
+            priority="SKIP",
+            confidence="high",
+            bug_classes=[],
+            summary="ok",
+            relevant_symbols=[],
+            suspicious_flows=[],
+            needs_followup=False,
+        )
+
+    # -- Phase 2: triage retry -----------------------------------------------
+
+    def test_triage_retries_failed_files(self, monkeypatch, tmp_path):
+        """Files that return None from the triage worker are retried."""
+        from types import SimpleNamespace
+
+        from swival.audit import run_audit_command
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "import os")
+        _commit_file(tmp_path, "b.py", "import sys")
+
+        calls = {"n": 0}
+
+        def fake_triage_one(path, state, ctx):
+            calls["n"] += 1
+            if path == "b.py" and calls["n"] <= 2:
+                return None
+            return self._triage_skip(path)
+
+        monkeypatch.setattr("swival.audit._phase2_triage_one", fake_triage_one)
+        monkeypatch.setattr(
+            "swival.audit._phase1_repo_profile",
+            lambda state, ctx: {"summary": "test"},
+        )
+
+        ctx = SimpleNamespace(
+            base_dir=str(tmp_path),
+            tools=[],
+            verbose=False,
+            no_history=True,
+            loop_kwargs={},
+        )
+        result = run_audit_command("", ctx)
+        assert "Audit incomplete" not in result or "not reviewed" not in result
+        # b.py should have eventually been reviewed via retry
+        assert calls["n"] >= 3
+
+    # -- Phase 3: deep-review retry -------------------------------------------
+
+    def test_deep_review_retries_failed_files(self, monkeypatch, tmp_path):
+        """Files that return an error from deep review are retried."""
+        from types import SimpleNamespace
+        from swival.audit import DeepReviewResult, run_audit_command
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "eval(input())")
+
+        calls = {"n": 0}
+
+        def fake_deep_review(path, state, ctx):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return DeepReviewResult(path=path, error="transient failure")
+            return DeepReviewResult(path=path, findings=[])
+
+        monkeypatch.setattr("swival.audit._deep_review_one", fake_deep_review)
+        monkeypatch.setattr(
+            "swival.audit._phase1_repo_profile",
+            lambda state, ctx: {"summary": "test"},
+        )
+        monkeypatch.setattr(
+            "swival.audit._phase2_triage_one",
+            lambda path, state, ctx: self._triage_escalate(path),
+        )
+
+        ctx = SimpleNamespace(
+            base_dir=str(tmp_path),
+            tools=[],
+            verbose=False,
+            no_history=True,
+            loop_kwargs={},
+        )
+        result = run_audit_command("", ctx)
+        assert "failed deep review" not in result
+        assert calls["n"] >= 2
+
+    def test_deep_review_exhausted_retries_returns_incomplete(
+        self, monkeypatch, tmp_path
+    ):
+        """When deep review always fails, the result says incomplete and state
+        stays at deep_review (not done)."""
+        from types import SimpleNamespace
+        from swival.audit import DeepReviewResult, run_audit_command
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "eval(input())")
+
+        monkeypatch.setattr(
+            "swival.audit._deep_review_one",
+            lambda path, state, ctx: DeepReviewResult(path=path, error="always fails"),
+        )
+        monkeypatch.setattr(
+            "swival.audit._phase1_repo_profile",
+            lambda state, ctx: {"summary": "test"},
+        )
+        monkeypatch.setattr(
+            "swival.audit._phase2_triage_one",
+            lambda path, state, ctx: self._triage_escalate(path),
+        )
+
+        ctx = SimpleNamespace(
+            base_dir=str(tmp_path),
+            tools=[],
+            verbose=False,
+            no_history=True,
+            loop_kwargs={},
+        )
+        result = run_audit_command("", ctx)
+        assert "failed deep review after retries" in result
+
+        # State should stay at deep_review, not done
+        state_dir = Path(tmp_path) / ".swival" / "audit"
+        import json
+
+        for entry in state_dir.iterdir():
+            sf = entry / "state.json"
+            if sf.exists():
+                blob = json.loads(sf.read_text())
+                assert blob["phase"] == "deep_review"
+
+    # -- Phase 4: verification retry ------------------------------------------
+
+    def test_verification_retries_failed_findings(self, monkeypatch, tmp_path):
+        """Failed verifier findings are retried within the same run."""
+        from types import SimpleNamespace
+        from swival.audit import run_audit_command
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "eval(input())")
+        finding = self._make_finding()
+        calls = {"n": 0}
+
+        def fake_verify(item, state, ctx):
+            calls["n"] += 1
+            _key, _finding = item
+            if calls["n"] == 1:
+                return VerificationResult(
+                    finding_key=_key, error="provider timeout", attempts=1
+                )
+            vf = VerifiedFinding(
+                finding=_finding,
+                correctness_reason="ok",
+                rebuttal_reason="n/a",
+                reproducer={"reproduced": True, "summary": "ok"},
+            )
+            return VerificationResult(finding_key=_key, verified_finding=vf, attempts=1)
+
+        monkeypatch.setattr("swival.audit._verify_one_finding", fake_verify)
+        monkeypatch.setattr(
+            "swival.audit._phase1_repo_profile",
+            lambda state, ctx: {"summary": "test"},
+        )
+        monkeypatch.setattr(
+            "swival.audit._phase2_triage_one",
+            lambda path, state, ctx: self._triage_escalate(path),
+        )
+        monkeypatch.setattr(
+            "swival.audit._deep_review_one",
+            lambda path, state, ctx: DeepReviewResult(path=path, findings=[finding]),
+        )
+        monkeypatch.setattr(
+            "swival.audit._phase5_patch",
+            lambda vf, ctx, state: "--- patch ---",
+        )
+        monkeypatch.setattr(
+            "swival.audit._phase5_report",
+            lambda vf, patch_fn, ctx: "# Report",
+        )
+
+        ctx = SimpleNamespace(
+            base_dir=str(tmp_path),
+            tools=[],
+            verbose=False,
+            no_history=True,
+            loop_kwargs={},
+        )
+        result = run_audit_command("", ctx)
+        assert "Audit incomplete" not in result
+        assert calls["n"] >= 2
+
+    def test_verification_exhausted_retries_returns_incomplete(
+        self, monkeypatch, tmp_path
+    ):
+        """When verification always fails, the result mentions attempt count."""
+        from types import SimpleNamespace
+        from swival.audit import run_audit_command
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "eval(input())")
+        finding = self._make_finding()
+
+        monkeypatch.setattr(
+            "swival.audit._verify_one_finding",
+            lambda item, state, ctx: VerificationResult(
+                finding_key=item[0], error="always fails", attempts=1
+            ),
+        )
+        monkeypatch.setattr(
+            "swival.audit._phase1_repo_profile",
+            lambda state, ctx: {"summary": "test"},
+        )
+        monkeypatch.setattr(
+            "swival.audit._phase2_triage_one",
+            lambda path, state, ctx: self._triage_escalate(path),
+        )
+        monkeypatch.setattr(
+            "swival.audit._deep_review_one",
+            lambda path, state, ctx: DeepReviewResult(path=path, findings=[finding]),
+        )
+
+        ctx = SimpleNamespace(
+            base_dir=str(tmp_path),
+            tools=[],
+            verbose=False,
+            no_history=True,
+            loop_kwargs={},
+        )
+        result = run_audit_command("", ctx)
+        assert "after 3 attempts" in result
+        assert "Use /audit --resume to retry" in result
+
+    def test_verification_attempts_additive_across_retries(self, monkeypatch, tmp_path):
+        """verification_state attempts must accumulate across outer retry
+        iterations, including inner retry counts from _verify_one_finding."""
+        from types import SimpleNamespace
+        from swival.audit import run_audit_command
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "eval(input())")
+        finding = self._make_finding()
+
+        monkeypatch.setattr(
+            "swival.audit._verify_one_finding",
+            lambda item, state, ctx: VerificationResult(
+                finding_key=item[0], error="fail", attempts=2
+            ),
+        )
+        monkeypatch.setattr(
+            "swival.audit._phase1_repo_profile",
+            lambda state, ctx: {"summary": "test"},
+        )
+        monkeypatch.setattr(
+            "swival.audit._phase2_triage_one",
+            lambda path, state, ctx: self._triage_escalate(path),
+        )
+        monkeypatch.setattr(
+            "swival.audit._deep_review_one",
+            lambda path, state, ctx: DeepReviewResult(path=path, findings=[finding]),
+        )
+
+        ctx = SimpleNamespace(
+            base_dir=str(tmp_path),
+            tools=[],
+            verbose=False,
+            no_history=True,
+            loop_kwargs={},
+        )
+        run_audit_command("", ctx)
+
+        # Load the state and check that attempts accumulated: 3 outer rounds × 2 inner = 6
+        import json
+
+        state_dir = Path(tmp_path) / ".swival" / "audit"
+        for entry in state_dir.iterdir():
+            sf = entry / "state.json"
+            if sf.exists():
+                blob = json.loads(sf.read_text())
+                for vs in blob["verification_state"].values():
+                    assert vs["attempts"] == 6
+
+    # -- Done-but-incomplete resumability fix ----------------------------------
+
+    def test_artifacts_phase_triage_gap_rewinds_to_triage(self, monkeypatch, tmp_path):
+        """When the artifacts phase detects unreviewed files, state must rewind
+        to 'triage' so /audit --resume re-enters the triage phase and can fill
+        the gap."""
+        from types import SimpleNamespace
+        from swival.audit import run_audit_command
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "x = 1")
+        _commit_file(tmp_path, "b.py", "y = 2")
+
+        commit = (
+            subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path)
+            .decode()
+            .strip()
+        )
+
+        scope = self._make_scope(commit=commit, files=["a.py", "b.py"])
+        state_dir = Path(tmp_path) / ".swival" / "audit"
+        state = AuditRunState(
+            run_id="gap-test",
+            scope=scope,
+            queued_files=["a.py", "b.py"],
+            reviewed_files={"a.py"},  # b.py missing
+            candidate_files=[],
+            deep_reviewed_files=set(),
+            state_dir=state_dir,
+            phase="artifacts",
+        )
+        state.save()
+
+        ctx = SimpleNamespace(
+            base_dir=str(tmp_path),
+            tools=[],
+            verbose=False,
+            no_history=True,
+            loop_kwargs={},
+        )
+        result = run_audit_command("--resume", ctx)
+        assert "Audit incomplete" in result
+        assert "not reviewed" in result
+
+        # State must be rewound to "triage", not stuck at "artifacts" or "done"
+        found = AuditRunState.find_resumable(state_dir, commit, None)
+        assert found is not None
+        assert found.phase == "triage"
+
+    def test_artifacts_phase_deep_review_gap_rewinds_to_deep_review(
+        self, monkeypatch, tmp_path
+    ):
+        """When artifacts phase detects deep-review gaps, state must rewind
+        to 'deep_review' so /audit --resume can fill them."""
+        from types import SimpleNamespace
+        from swival.audit import run_audit_command
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "x = 1")
+        _commit_file(tmp_path, "b.py", "y = 2")
+
+        commit = (
+            subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path)
+            .decode()
+            .strip()
+        )
+
+        scope = self._make_scope(commit=commit, files=["a.py", "b.py"])
+        state_dir = Path(tmp_path) / ".swival" / "audit"
+        state = AuditRunState(
+            run_id="gap-dr-test",
+            scope=scope,
+            queued_files=["a.py", "b.py"],
+            reviewed_files={"a.py", "b.py"},
+            candidate_files=["a.py", "b.py"],
+            deep_reviewed_files={"a.py"},  # b.py not deep-reviewed
+            state_dir=state_dir,
+            phase="artifacts",
+        )
+        state.save()
+
+        ctx = SimpleNamespace(
+            base_dir=str(tmp_path),
+            tools=[],
+            verbose=False,
+            no_history=True,
+            loop_kwargs={},
+        )
+        result = run_audit_command("--resume", ctx)
+        assert "Audit incomplete" in result
+        assert "deep review" in result
+
+        found = AuditRunState.find_resumable(state_dir, commit, None)
+        assert found is not None
+        assert found.phase == "deep_review"
+
+    def test_triage_gap_resume_recovers_and_completes(self, monkeypatch, tmp_path):
+        """End-to-end: a run stuck at artifacts with a triage gap should
+        complete after two resumes — first rewinds to triage, second finishes."""
+        from types import SimpleNamespace
+        from swival.audit import run_audit_command
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "x = 1")
+        _commit_file(tmp_path, "b.py", "y = 2")
+
+        commit = (
+            subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path)
+            .decode()
+            .strip()
+        )
+
+        scope = self._make_scope(commit=commit, files=["a.py", "b.py"])
+        state_dir = Path(tmp_path) / ".swival" / "audit"
+        state = AuditRunState(
+            run_id="recover-test",
+            scope=scope,
+            queued_files=["a.py", "b.py"],
+            reviewed_files={"a.py"},  # b.py missing
+            candidate_files=[],
+            deep_reviewed_files=set(),
+            state_dir=state_dir,
+            phase="artifacts",
+        )
+        state.save()
+
+        monkeypatch.setattr(
+            "swival.audit._phase2_triage_one",
+            lambda path, state, ctx: self._triage_skip(path),
+        )
+
+        ctx = SimpleNamespace(
+            base_dir=str(tmp_path),
+            tools=[],
+            verbose=False,
+            no_history=True,
+            loop_kwargs={},
+        )
+
+        # First resume: rewinds to triage, returns incomplete
+        result1 = run_audit_command("--resume", ctx)
+        assert "not reviewed" in result1
+
+        # Second resume: triage fills b.py, no findings, completes
+        result2 = run_audit_command("--resume", ctx)
+        assert "No provable logic or security bugs" in result2
