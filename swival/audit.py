@@ -628,7 +628,7 @@ def _write_audit_trace(
 def _call_audit_llm(
     ctx: InputContext,
     messages: list[dict],
-    temperature: float = 0.0,
+    temperature: float | None = None,
     trace_task: str | None = None,
 ) -> str:
     from .agent import call_llm, ContextOverflowError
@@ -644,7 +644,7 @@ def _call_audit_llm(
             msgs,
             kw.get("max_output_tokens"),
             temperature,
-            kw.get("top_p", 1.0),
+            kw.get("top_p"),
             kw.get("seed"),
             None,  # tools
             False,  # verbose
