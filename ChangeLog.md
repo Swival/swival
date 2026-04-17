@@ -2,6 +2,12 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.4
+
+- `/audit` can now be used in one-shot mode, not just the REPL.
+- Security audit LLM calls now retry automatically on transient failures (rate limits, timeouts, server errors) with exponential backoff.
+- Audit patch generation no longer crashes on files containing non-UTF-8 bytes.
+
 ## 1.0.3
 
 - A built-in `/audit` command has been added for deep security audits over committed Git-tracked code. It scans source and config files for vulnerabilities using the session's LLM, produces a structured report with severity ratings, and can optionally generate a patch. Supports Python, JavaScript, TypeScript, Go, Rust, C/C++, Zig, and many other languages.
