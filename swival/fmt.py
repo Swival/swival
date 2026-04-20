@@ -2,12 +2,15 @@
 
 import contextlib
 import difflib
+import threading
+import time
 
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.markup import escape
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.rule import Rule
+from rich.spinner import Spinner
 from rich.segment import Segment
 from rich.style import Style
 from rich.text import Text
@@ -60,21 +63,75 @@ def llm_timing(elapsed: float, finish_reason: str) -> None:
     _console.print(text)
 
 
+_SPINNER_PHASES: list[tuple[float, str, str, str]] = [
+    # (min_seconds, spinner_name, style, verb)
+    (0, "dots", "cyan", "Thinking"),
+    (3, "dots2", "cyan", "Reasoning"),
+    (8, "dots3", "blue", "Composing"),
+    (15, "dots", "magenta", "Elaborating"),
+    (25, "dots2", "blue", "Refining"),
+    (40, "dots3", "cyan", "Polishing"),
+]
+
+
 @contextlib.contextmanager
 def llm_spinner(label: str = "Thinking"):
-    """Context manager showing a spinner with elapsed time on stderr."""
+    """Context manager showing a phase-cycling spinner on stderr.
+
+    The spinner style and label evolve over time to give the perception
+    of progress through distinct work stages.
+    """
+    if not _console.is_terminal:
+        yield
+        return
+
+    # Extract the parenthetical suffix from the label, e.g. "(turn 2/5)"
+    # If present, we cycle verbs with the suffix appended.
+    # If not, use the label verbatim as the initial description.
+    suffix = ""
+    if "(" in label:
+        idx = label.index("(")
+        suffix = " " + label[idx:].strip()
+        initial_desc = f"{_SPINNER_PHASES[0][3]}{suffix}"
+    else:
+        initial_desc = label
+
+    spinner_col = SpinnerColumn("dots", style="cyan", speed=1.5)
     progress = Progress(
-        SpinnerColumn("dots", style="cyan", speed=1.5),
+        spinner_col,
         TextColumn("  {task.description}"),
         TimeElapsedColumn(),
         console=_console,
         transient=True,
         refresh_per_second=16,
-        disable=not _console.is_terminal,
     )
+
+    stop = threading.Event()
+
+    def _cycle_phases(task_id):
+        t0 = time.monotonic()
+        phase_idx = 0
+        while not stop.wait(0.3):
+            elapsed = time.monotonic() - t0
+            new_idx = phase_idx
+            for i, (threshold, _, _, _) in enumerate(_SPINNER_PHASES):
+                if elapsed >= threshold:
+                    new_idx = i
+            if new_idx != phase_idx:
+                phase_idx = new_idx
+                _, name, style, verb = _SPINNER_PHASES[phase_idx]
+                spinner_col.spinner = Spinner(name, style=style, speed=1.5)
+                progress.update(task_id, description=f"{verb}{suffix}")
+
     with progress:
-        progress.add_task(label, total=None)
-        yield
+        tid = progress.add_task(initial_desc, total=None)
+        t = threading.Thread(target=_cycle_phases, args=(tid,), daemon=True)
+        t.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            t.join(timeout=1)
 
 
 def completion(turns: int, exit_code: str) -> None:
