@@ -343,8 +343,9 @@ def _resolve_scope(base_dir: str, focus: str | None) -> AuditScope:
     if focus:
         import fnmatch
 
+        prefix = focus if focus.endswith("/") else focus + "/"
         tracked = [
-            f for f in tracked if fnmatch.fnmatch(f, focus) or f.startswith(focus)
+            f for f in tracked if fnmatch.fnmatch(f, focus) or f == focus or f.startswith(prefix)
         ]
 
     mandatory = [f for f in tracked if _is_auditable(f)]
