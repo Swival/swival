@@ -61,14 +61,15 @@ def llm_timing(elapsed: float, finish_reason: str) -> None:
 
 
 @contextlib.contextmanager
-def llm_spinner(label: str = "Waiting for LLM"):
+def llm_spinner(label: str = "Thinking"):
     """Context manager showing a spinner with elapsed time on stderr."""
     progress = Progress(
-        SpinnerColumn("arc", style="cyan"),
+        SpinnerColumn("dots", style="cyan", speed=1.5),
         TextColumn("  {task.description}"),
         TimeElapsedColumn(),
         console=_console,
         transient=True,
+        refresh_per_second=16,
         disable=not _console.is_terminal,
     )
     with progress:

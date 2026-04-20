@@ -6254,7 +6254,7 @@ def run_agent_loop(
             if "command_tool_kwargs" in llm_kwargs:
                 llm_kwargs["command_tool_kwargs"]["outer_turn"] = turns
             with (
-                fmt.llm_spinner(f"Waiting for LLM (turn {turns}/{max_turns})")
+                fmt.llm_spinner(f"Thinking (turn {turns}/{max_turns})")
                 if verbose
                 else nullcontext()
             ):
@@ -6363,7 +6363,7 @@ def run_agent_loop(
                 try:
                     with (
                         fmt.llm_spinner(
-                            f"Waiting for LLM (turn {turns}/{max_turns}, retry after compaction)"
+                            f"Thinking (turn {turns}/{max_turns}, compacted)"
                         )
                         if verbose
                         else nullcontext()
@@ -6480,7 +6480,7 @@ def run_agent_loop(
                     try:
                         with (
                             fmt.llm_spinner(
-                                f"Waiting for LLM (turn {turns}/{max_turns}, no tools)"
+                                f"Thinking (turn {turns}/{max_turns}, no tools)"
                             )
                             if verbose
                             else nullcontext()
