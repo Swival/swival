@@ -3002,6 +3002,22 @@ def call_llm(
 
     messages = [_strip_internal(m) for m in messages]
 
+    # --- Outbound: fill reasoning_content for providers that require it ---
+    # Moonshot (Kimi) rejects tool-calling conversations when assistant
+    # messages that have tool_calls lack a reasoning_content field.
+    _needs_reasoning = "kimi" in model_id.lower() or (
+        base_url and "moonshot" in base_url.lower()
+    )
+    if _needs_reasoning:
+        for m in messages:
+            if (
+                isinstance(m, dict)
+                and m.get("role") == "assistant"
+                and m.get("tool_calls")
+                and not m.get("reasoning_content")
+            ):
+                m["reasoning_content"] = " "
+
     # --- Outbound: encrypt secrets ---
     if secret_shield is not None:
         # Sanitize on canonical list before making the encryption copy

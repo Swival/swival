@@ -2539,3 +2539,190 @@ class TestLlamacppProfileIntegration:
         apply_config_to_args(args, config)
         assert args.provider == "llamacpp"
         assert args.model == "test-gguf"
+
+
+# ---------------------------------------------------------------------------
+# Kimi reasoning_content injection
+# ---------------------------------------------------------------------------
+
+
+class TestKimiReasoningContent:
+    """Verify that call_llm injects reasoning_content for Kimi models."""
+
+    def _mock_response(self):
+        choice = MagicMock()
+        choice.message = MagicMock(content="ok", tool_calls=None)
+        choice.finish_reason = "stop"
+        resp = MagicMock()
+        resp.choices = [choice]
+        return resp
+
+    def test_kimi_model_injects_reasoning_content(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": "Let me check.",
+                "tool_calls": [{"id": "tc1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "tc1", "content": "file contents"},
+        ]
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                "https://api.moonshot.cn/v1",
+                "kimi-k2.6",
+                messages,
+                100,
+                None,
+                None,
+                None,
+                None,
+                False,
+                provider="generic",
+                api_key="sk-test",
+            )
+            sent_messages = mock_comp.call_args[1]["messages"]
+            assistant_msg = [m for m in sent_messages if m.get("role") == "assistant"][0]
+            assert assistant_msg["reasoning_content"] == " "
+
+    def test_kimi_model_detected_by_model_id(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "tc1", "type": "function", "function": {"name": "think", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "tc1", "content": "thought"},
+        ]
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                "http://localhost:8080/v1",
+                "kimi-k2.6",
+                messages,
+                100,
+                None,
+                None,
+                None,
+                None,
+                False,
+                provider="generic",
+                api_key="sk-test",
+            )
+            sent_messages = mock_comp.call_args[1]["messages"]
+            assistant_msg = [m for m in sent_messages if m.get("role") == "assistant"][0]
+            assert assistant_msg["reasoning_content"] == " "
+
+    def test_kimi_model_detected_by_moonshot_base_url(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": "checking",
+                "tool_calls": [{"id": "tc1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "tc1", "content": "data"},
+        ]
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                "https://api.moonshot.cn/v1",
+                "some-other-model",
+                messages,
+                100,
+                None,
+                None,
+                None,
+                None,
+                False,
+                provider="generic",
+                api_key="sk-test",
+            )
+            sent_messages = mock_comp.call_args[1]["messages"]
+            assistant_msg = [m for m in sent_messages if m.get("role") == "assistant"][0]
+            assert assistant_msg["reasoning_content"] == " "
+
+    def test_non_kimi_model_no_injection(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": "checking",
+                "tool_calls": [{"id": "tc1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "tc1", "content": "data"},
+        ]
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                "http://localhost:8080/v1",
+                "qwen-2.5",
+                messages,
+                100,
+                None,
+                None,
+                None,
+                None,
+                False,
+                provider="generic",
+                api_key="sk-test",
+            )
+            sent_messages = mock_comp.call_args[1]["messages"]
+            assistant_msg = [m for m in sent_messages if m.get("role") == "assistant"][0]
+            assert "reasoning_content" not in assistant_msg
+
+    def test_kimi_skips_assistant_without_tool_calls(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "Hello!"},
+        ]
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                "https://api.moonshot.cn/v1",
+                "kimi-k2.6",
+                messages,
+                100,
+                None,
+                None,
+                None,
+                None,
+                False,
+                provider="generic",
+                api_key="sk-test",
+            )
+            sent_messages = mock_comp.call_args[1]["messages"]
+            assistant_msg = [m for m in sent_messages if m.get("role") == "assistant"][0]
+            assert "reasoning_content" not in assistant_msg
+
+    def test_kimi_preserves_existing_reasoning_content(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": "ok",
+                "tool_calls": [{"id": "tc1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+                "reasoning_content": "I need to call a tool",
+            },
+            {"role": "tool", "tool_call_id": "tc1", "content": "result"},
+        ]
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                "https://api.moonshot.cn/v1",
+                "kimi-k2.6",
+                messages,
+                100,
+                None,
+                None,
+                None,
+                None,
+                False,
+                provider="generic",
+                api_key="sk-test",
+            )
+            sent_messages = mock_comp.call_args[1]["messages"]
+            assistant_msg = [m for m in sent_messages if m.get("role") == "assistant"][0]
+            assert assistant_msg["reasoning_content"] == "I need to call a tool"
