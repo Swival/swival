@@ -54,6 +54,7 @@ class Session:
         provider: str = "lmstudio",
         model: str | None = None,
         api_key: str | None = None,
+        user_agent: str | None = None,
         base_url: str | None = None,
         max_turns: int = 100,
         max_output_tokens: int = 32768,
@@ -115,6 +116,7 @@ class Session:
         self.provider = provider
         self.model = model
         self.api_key = api_key
+        self.user_agent = user_agent
         self.base_url = base_url
         self.max_turns = max_turns
         self.max_output_tokens = max_output_tokens
@@ -260,6 +262,8 @@ class Session:
             verbose=self.verbose,
             aws_profile=self.aws_profile,
         )
+        if self.user_agent is not None:
+            self._llm_kwargs["user_agent"] = self.user_agent
         if self.extra_body is not None:
             self._llm_kwargs["extra_body"] = self.extra_body
         if self.reasoning_effort is not None:

@@ -124,6 +124,8 @@ swival --profile gpt5 "review this patch"
 
 `--api-key` provides a key directly on the command line and takes precedence over provider environment variables (`HF_TOKEN` for huggingface, `OPENROUTER_API_KEY` for openrouter, `OPENAI_API_KEY` for generic, `GEMINI_API_KEY` for google, `CHATGPT_API_KEY` for chatgpt). Bedrock uses the AWS credential chain instead (`AWS_PROFILE`, env vars, or IAM roles). Local providers (`lmstudio`, `llamacpp`) need no key.
 
+`--user-agent` sets the `User-Agent` header sent with LLM API requests. Defaults to `Swival/<version>`. Useful when a provider requires a specific agent string (e.g. `--user-agent 'KimiCLI/Swival'` for Kimi's API).
+
 `--aws-profile` selects a named AWS profile from `~/.aws/config` for the `bedrock` provider. Overrides the `AWS_PROFILE` environment variable.
 
 When `--profile` is combined with explicit flags like `--provider` or `--model`, the explicit flags win on a per-key basis.

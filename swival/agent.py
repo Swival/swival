@@ -2922,6 +2922,7 @@ def call_llm(
     *,
     provider="lmstudio",
     api_key=None,
+    user_agent=None,
     extra_body=None,
     reasoning_effort=None,
     sanitize_thinking=None,
@@ -3019,12 +3020,15 @@ def call_llm(
         if base_url:
             kwargs["api_base"] = base_url
     elif provider == "openrouter":
+        _or_headers = {
+            "HTTP-Referer": "https://swival.dev",
+            "X-Title": "swival",
+        }
+        if user_agent:
+            _or_headers["User-Agent"] = user_agent
         kwargs = {
             "api_key": api_key,
-            "extra_headers": {
-                "HTTP-Referer": "https://swival.dev",
-                "X-Title": "swival",
-            },
+            "extra_headers": _or_headers,
         }
         if base_url:
             kwargs["api_base"] = base_url
@@ -3033,13 +3037,11 @@ def call_llm(
             _swival_ver = metadata.version("swival")
         except Exception:
             _swival_ver = "unknown"
-        _generic_headers = {"User-Agent": f"Swival/{_swival_ver}"}
-        if base_url and "api.kimi.com" in base_url:
-            _generic_headers["User-Agent"] = f"KimiCLI/{_swival_ver} Swival/{_swival_ver}"
+        _ua = user_agent or f"Swival/{_swival_ver}"
         kwargs = {
             "api_base": base_url,
             "api_key": api_key or "none",
-            "extra_headers": _generic_headers,
+            "extra_headers": {"User-Agent": _ua},
         }
     elif provider == "chatgpt":
         kwargs = {}
@@ -3500,6 +3502,12 @@ def build_parser():
         default=_UNSET,
         help="API key for the provider (overrides env var: HF_TOKEN, "
         "OPENROUTER_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or CHATGPT_API_KEY).",
+    )
+    provider_group.add_argument(
+        "--user-agent",
+        type=str,
+        default=_UNSET,
+        help="User-Agent header sent with LLM API requests (default: Swival/<version>).",
     )
     access_group.add_argument(
         "--base-dir",
@@ -5250,6 +5258,7 @@ def _run_main(args, report, _write_report, parser):
         "provider": args.provider,
         "model": args.model,
         "api_key": args.api_key,
+        "user_agent": args.user_agent,
         "base_url": args.base_url,
         "aws_profile": args.aws_profile,
         "max_context_tokens": args.max_context_tokens,
@@ -5275,6 +5284,8 @@ def _run_main(args, report, _write_report, parser):
         )
     except ConfigError as e:
         parser.error(str(e))
+    if args.user_agent is not None:
+        llm_kwargs["user_agent"] = args.user_agent
     if args.extra_body is not None:
         llm_kwargs["extra_body"] = args.extra_body
     if getattr(args, "reasoning_effort", None) is not None:
@@ -7361,7 +7372,7 @@ def _repl_profile(
     except (ConfigError, AgentError) as exc:
         return current_profile, f"profile switch failed: {exc}", True
 
-    for key in ("extra_body", "reasoning_effort", "sanitize_thinking"):
+    for key in ("user_agent", "extra_body", "reasoning_effort", "sanitize_thinking"):
         val = merged.get(key)
         if val is not None:
             llm_kwargs[key] = val

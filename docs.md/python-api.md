@@ -31,6 +31,7 @@ Session(
     provider: str = "lmstudio",
     model: str | None = None,
     api_key: str | None = None,
+    user_agent: str | None = None,
     base_url: str | None = None,
     aws_profile: str | None = None,
     max_turns: int = 100,
@@ -96,6 +97,7 @@ All parameters are keyword-only. The important ones:
 | `provider`              | LLM provider: `"lmstudio"`, `"llamacpp"`, `"huggingface"`, `"openrouter"`, `"chatgpt"`, `"google"`, `"bedrock"`, `"generic"`, `"command"`, or a command string.                                                                                                                        |
 | `model`                 | Model identifier. Required for most providers; LM Studio and llama.cpp auto-discover.                                                                                                                                                                                                  |
 | `api_key`               | API key. Can also be set via provider-specific env vars.                                                                                                                                                                                                                               |
+| `user_agent`            | `User-Agent` header for LLM API requests. Defaults to `Swival/<version>`.                                                                                                                                                                                                              |
 | `base_url`              | Override the provider's default endpoint.                                                                                                                                                                                                                                              |
 | `max_turns`             | Maximum agent loop iterations before returning `exhausted=True`.                                                                                                                                                                                                                       |
 | `max_output_tokens`     | Maximum tokens per LLM response.                                                                                                                                                                                                                                                       |

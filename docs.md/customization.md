@@ -24,6 +24,7 @@ provider = "openrouter"
 model = "qwen/qwen3-coder-next"
 # base_url = "http://127.0.0.1:1234"    # provider API base URL
 # api_key = "..."                       # prefer env vars over config for credentials
+# user_agent = "..."                    # User-Agent header for LLM requests
 # system_prompt = "..."                 # replaces the built-in system prompt
 # no_system_prompt = false              # omit the system message entirely
 max_turns = 250
@@ -138,7 +139,7 @@ List available profiles with `--list-profiles`:
 swival --list-profiles
 ```
 
-Each profile requires `provider`. The allowed keys are: `provider`, `model`, `api_key`, `base_url`, `aws_profile`, `max_output_tokens`, `max_context_tokens`, `temperature`, `top_p`, `seed`, `extra_body`, `reasoning_effort`, `sanitize_thinking`, and `description`. Keys outside this set — like `files`, `commands`, or `reviewer` — are rejected with an error listing the allowed keys. Profiles are for choosing a model stack, not for changing agent behavior. The `description` key is metadata — it appears in profile listings but is not passed to the provider.
+Each profile requires `provider`. The allowed keys are: `provider`, `model`, `api_key`, `user_agent`, `base_url`, `aws_profile`, `max_output_tokens`, `max_context_tokens`, `temperature`, `top_p`, `seed`, `extra_body`, `reasoning_effort`, `sanitize_thinking`, and `description`. Keys outside this set — like `files`, `commands`, or `reviewer` — are rejected with an error listing the allowed keys. Profiles are for choosing a model stack, not for changing agent behavior. The `description` key is metadata — it appears in profile listings but is not passed to the provider.
 
 If `--profile` is combined with explicit flags like `--provider` or `--model`, the explicit flags win on a per-key basis, just like CLI flags override config everywhere else in Swival.
 
