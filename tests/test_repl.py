@@ -84,7 +84,7 @@ def _loop_kwargs(tmp_path, **overrides):
         max_turns=5,
         max_output_tokens=1024,
         temperature=0.5,
-        top_p=1.0,
+        top_p=None,
         seed=None,
         context_length=None,
         base_dir=str(tmp_path),
@@ -1963,7 +1963,7 @@ class TestSnapshotRestoreCommand:
                 model_id="test",
                 api_base="http://localhost",
                 api_key=None,
-                top_p=1.0,
+                top_p=None,
                 seed=None,
                 provider="lmstudio",
             )
@@ -1982,7 +1982,7 @@ class TestSnapshotRestoreCommand:
             model_id="test",
             api_base="http://localhost",
             api_key=None,
-            top_p=1.0,
+            top_p=None,
             seed=None,
             provider="lmstudio",
         )
@@ -1997,7 +1997,7 @@ class TestSnapshotRestoreCommand:
             model_id="test",
             api_base="http://localhost",
             api_key=None,
-            top_p=1.0,
+            top_p=None,
             seed=None,
             provider="lmstudio",
         )

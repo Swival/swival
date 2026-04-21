@@ -255,6 +255,118 @@ class TestCallLlmRouting:
             assert kwargs[1]["api_base"] == "https://custom.openrouter.endpoint"
 
 
+class TestTopPDefault:
+    """Verify that top_p is omitted from provider kwargs when not explicitly set."""
+
+    def _mock_response(self):
+        choice = MagicMock()
+        choice.message = MagicMock(content="ok", tool_calls=None)
+        choice.finish_reason = "stop"
+        resp = MagicMock()
+        resp.choices = [choice]
+        resp.usage = MagicMock(prompt_tokens=10, completion_tokens=5)
+        resp.usage.prompt_tokens_details = None
+        return resp
+
+    def test_top_p_none_omitted_from_kwargs(self):
+        """When top_p is None (the default), it must not appear in provider kwargs."""
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                "http://localhost:1234/v1",
+                "test-model",
+                [{"role": "user", "content": "hi"}],
+                100,
+                None,  # temperature
+                None,  # top_p
+                None,  # seed
+                None,  # tools
+                False,
+                provider="generic",
+                api_key="sk-test",
+            )
+            mock_comp.assert_called_once()
+            kwargs = mock_comp.call_args[1]
+            assert "top_p" not in kwargs
+
+    def test_top_p_explicit_included_in_kwargs(self):
+        """When top_p is explicitly set, it must appear in provider kwargs."""
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                "http://localhost:1234/v1",
+                "test-model",
+                [{"role": "user", "content": "hi"}],
+                100,
+                None,  # temperature
+                0.9,  # top_p
+                None,  # seed
+                None,  # tools
+                False,
+                provider="generic",
+                api_key="sk-test",
+            )
+            mock_comp.assert_called_once()
+            kwargs = mock_comp.call_args[1]
+            assert kwargs["top_p"] == 0.9
+
+    def test_top_p_none_not_in_verbose_output(self, capsys):
+        """Verbose output must not mention top_p when it is unset."""
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                "http://localhost:1234/v1",
+                "test-model",
+                [{"role": "user", "content": "hi"}],
+                100,
+                None,  # temperature
+                None,  # top_p
+                None,  # seed
+                None,  # tools
+                True,  # verbose
+                provider="generic",
+                api_key="sk-test",
+            )
+        captured = capsys.readouterr()
+        assert "top_p" not in captured.err
+
+    def test_top_p_explicit_in_verbose_output(self, capsys):
+        """Verbose output must show top_p when it is explicitly set."""
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                "http://localhost:1234/v1",
+                "test-model",
+                [{"role": "user", "content": "hi"}],
+                100,
+                None,  # temperature
+                0.9,  # top_p
+                None,  # seed
+                None,  # tools
+                True,  # verbose
+                provider="generic",
+                api_key="sk-test",
+            )
+        captured = capsys.readouterr()
+        assert "top_p=0.9" in captured.err
+
+
+class TestSessionTopPDefault:
+    """Verify Session() exposes the correct top_p default at the API layer."""
+
+    def test_session_default_top_p_is_none(self, tmp_path):
+        from swival.session import Session
+
+        s = Session(base_dir=str(tmp_path), history=False)
+        assert s.top_p is None
+
+    def test_session_explicit_top_p(self, tmp_path):
+        from swival.session import Session
+
+        s = Session(base_dir=str(tmp_path), history=False, top_p=0.95)
+        assert s.top_p == 0.95
+
+
 class TestAssistantContentSanitization:
     """Verify call_llm strips leaked hidden-reasoning markers."""
 

@@ -60,7 +60,7 @@ class Session:
         max_output_tokens: int = 32768,
         max_context_tokens: int | None = None,
         temperature: float | None = None,
-        top_p: float = 1.0,
+        top_p: float | None = None,
         seed: int | None = None,
         files: str | object = _UNSET,
         commands: str | list[str] | None | object = _UNSET,

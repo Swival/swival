@@ -274,7 +274,7 @@ class TestConfig:
             max_output_tokens=32768,
             max_context_tokens=None,
             temperature=None,
-            top_p=1.0,
+            top_p=None,
             seed=None,
             system_prompt=None,
             no_system_prompt=False,

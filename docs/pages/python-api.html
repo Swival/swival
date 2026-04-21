@@ -94,13 +94,14 @@ print(answer)
     provider: str = &quot;lmstudio&quot;,
     model: str | None = None,
     api_key: str | None = None,
+    user_agent: str | None = None,
     base_url: str | None = None,
     aws_profile: str | None = None,
     max_turns: int = 100,
     max_output_tokens: int = 32768,
     max_context_tokens: int | None = None,
     temperature: float | None = None,
-    top_p: float = 1.0,
+    top_p: float | None = None,
     seed: int | None = None,
     commands: list[str] | str | None = &quot;all&quot;,  # &quot;all&quot;, &quot;none&quot;, &quot;ask&quot;, or list (whitelist = run_command only)
     files: str = &quot;some&quot;,
@@ -174,6 +175,10 @@ print(answer)
 <tr>
 <td><code>api_key</code></td>
 <td>API key. Can also be set via provider-specific env vars.</td>
+</tr>
+<tr>
+<td><code>user_agent</code></td>
+<td><code>User-Agent</code> header for LLM API requests. Defaults to <code>Swival/&lt;version&gt;</code>.</td>
 </tr>
 <tr>
 <td><code>base_url</code></td>

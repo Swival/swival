@@ -23,7 +23,7 @@ BASELINE = {
     "max_context_tokens": None,
     "max_output_tokens": 4096,
     "temperature": 0.7,
-    "top_p": 1.0,
+    "top_p": None,
     "seed": None,
     "extra_body": None,
     "reasoning_effort": None,
@@ -64,7 +64,7 @@ def _make_repl_kwargs():
         "llm_kwargs": {"provider": "old", "api_key": "sk-old"},
         "max_output_tokens": 4096,
         "temperature": 0.7,
-        "top_p": 1.0,
+        "top_p": None,
         "seed": None,
     }
 

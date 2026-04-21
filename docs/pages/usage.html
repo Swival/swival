@@ -138,6 +138,7 @@ swival --oneshot-commands $'/profile fast\n/simplify swival/agent.py'
 <p><code>--model</code> overrides auto-discovery with a fixed model identifier.</p>
 <p><code>--base-url</code> sets a custom API base URL. For LM Studio, the default is <code>http://127.0.0.1:1234</code>; for llamacpp, the default is <code>http://127.0.0.1:8080</code>.</p>
 <p><code>--api-key</code> provides a key directly on the command line and takes precedence over provider environment variables (<code>HF_TOKEN</code> for huggingface, <code>OPENROUTER_API_KEY</code> for openrouter, <code>OPENAI_API_KEY</code> for generic, <code>GEMINI_API_KEY</code> for google, <code>CHATGPT_API_KEY</code> for chatgpt). Bedrock uses the AWS credential chain instead (<code>AWS_PROFILE</code>, env vars, or IAM roles). Local providers (<code>lmstudio</code>, <code>llamacpp</code>) need no key.</p>
+<p><code>--user-agent</code> sets the <code>User-Agent</code> header sent with LLM API requests. Defaults to <code>Swival/&lt;version&gt;</code>. Useful when a provider requires a specific agent string (e.g. <code>--user-agent 'KimiCLI/Swival'</code> for Kimi's API).</p>
 <p><code>--aws-profile</code> selects a named AWS profile from <code>~/.aws/config</code> for the <code>bedrock</code> provider. Overrides the <code>AWS_PROFILE</code> environment variable.</p>
 <p>When <code>--profile</code> is combined with explicit flags like <code>--provider</code> or <code>--model</code>, the explicit flags win on a per-key basis.</p>
 <h3 id="behavior-tuning-flags">Behavior Tuning Flags</h3>

@@ -736,7 +736,7 @@ class TestReportSettingsTypes:
     def test_string_commands(self):
         args = types.SimpleNamespace(
             temperature=0.5,
-            top_p=1.0,
+            top_p=None,
             seed=None,
             max_turns=10,
             max_output_tokens=1024,

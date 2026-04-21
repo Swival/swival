@@ -1490,8 +1490,17 @@ def aggressive_drop_turns(
 
 
 def _call_summarize_llm(
-    text, system_prompt, call_llm_fn, model_id, base_url, api_key, top_p, seed, provider,
-    *, user_agent=None,
+    text,
+    system_prompt,
+    call_llm_fn,
+    model_id,
+    base_url,
+    api_key,
+    top_p,
+    seed,
+    provider,
+    *,
+    user_agent=None,
 ):
     """Call the LLM to summarize text. Returns string or None on failure."""
     if len(text) > 8000:
@@ -3950,7 +3959,7 @@ def build_parser():
         "--top-p",
         type=float,
         default=_UNSET,
-        help="Top-p (nucleus) sampling (default: 1.0).",
+        help="Top-p (nucleus) sampling (omitted by default).",
     )
     server_group.add_argument(
         "--serve",
@@ -5980,7 +5989,7 @@ def run_agent_loop(
     max_turns: int,
     max_output_tokens: int | None,
     temperature: float,
-    top_p: float,
+    top_p: float | None,
     seed: int | None,
     context_length: int | None,
     base_dir: str,
@@ -7667,7 +7676,7 @@ def _repl_snapshot_restore(
     api_base: str,
     api_key: str | None,
     user_agent: str | None = None,
-    top_p: float,
+    top_p: float | None,
     seed: int | None,
     provider: str | None,
 ) -> tuple[str, bool]:
@@ -8262,7 +8271,7 @@ def repl_loop(
     max_turns: int,
     max_output_tokens: int | None,
     temperature: float,
-    top_p: float,
+    top_p: float | None,
     seed: int | None,
     context_length: int | None,
     base_dir: str,

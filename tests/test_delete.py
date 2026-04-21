@@ -474,7 +474,7 @@ class TestThinkNudge:
             model="test-model",
             max_output_tokens=1024,
             temperature=0.55,
-            top_p=1.0,
+            top_p=None,
             seed=None,
             quiet=False,
             max_turns=10,

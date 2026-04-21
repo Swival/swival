@@ -212,6 +212,15 @@ swival --provider generic \
     &quot;task&quot;
 </code></pre>
 <p>There is no model auto-discovery and no context window reload. Set <code>--max-context-tokens</code> manually if you need Swival to know the window size.</p>
+<p>Some providers gate access based on the <code>User-Agent</code> header. Use <code>--user-agent</code> to set it explicitly. For example, Kimi's coding API requires a <code>KimiCLI</code> user agent:</p>
+<pre><code class="language-sh">export KIMI_API_KEY=sk-kimi-...
+swival --provider generic \
+    --base-url https://api.kimi.com/coding/v1 \
+    --model kimi-for-coding \
+    --api-key &quot;$KIMI_API_KEY&quot; \
+    --user-agent &quot;KimiCLI/Swival&quot; \
+    &quot;task&quot;
+</code></pre>
 <h2 id="google-gemini-api">Google Gemini API</h2>
 <p>The <code>google</code> provider connects to Google's Gemini API through its OpenAI-compatible endpoint (<code>/v1beta/openai</code>).</p>
 <p><code>--model</code> is required. Authentication comes from <code>--api-key</code>, <code>GEMINI_API_KEY</code>, or <code>OPENAI_API_KEY</code>.</p>

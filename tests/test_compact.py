@@ -1002,7 +1002,7 @@ class TestToolsNotSupportedLoop:
             max_turns=1,
             max_output_tokens=1024,
             temperature=0.5,
-            top_p=1.0,
+            top_p=None,
             seed=None,
             context_length=None,
             base_dir=str(tmp_path),
@@ -1424,7 +1424,7 @@ class TestSummarizeTurns:
             model_id="test",
             base_url="http://localhost",
             api_key="key",
-            top_p=1.0,
+            top_p=None,
             seed=None,
             provider="lmstudio",
         )
@@ -1438,7 +1438,7 @@ class TestSummarizeTurns:
             model_id="test",
             base_url="http://localhost",
             api_key="key",
-            top_p=1.0,
+            top_p=None,
             seed=None,
             provider="lmstudio",
         )
@@ -1452,7 +1452,7 @@ class TestSummarizeTurns:
             model_id="test",
             base_url="http://localhost",
             api_key="key",
-            top_p=1.0,
+            top_p=None,
             seed=None,
             provider="lmstudio",
         )
@@ -1466,7 +1466,7 @@ class TestSummarizeTurns:
             model_id="test",
             base_url="http://localhost",
             api_key="key",
-            top_p=1.0,
+            top_p=None,
             seed=None,
             provider="lmstudio",
         )
@@ -1480,7 +1480,7 @@ class TestSummarizeTurns:
             model_id="test",
             base_url="http://localhost",
             api_key="key",
-            top_p=1.0,
+            top_p=None,
             seed=None,
             provider="lmstudio",
         )
@@ -1515,7 +1515,7 @@ class TestSummarizeTurns:
             model_id="test",
             base_url="http://localhost",
             api_key="key",
-            top_p=1.0,
+            top_p=None,
             seed=None,
             provider="lmstudio",
         )
@@ -1550,7 +1550,7 @@ class TestSummarizeTurns:
             model_id="test",
             base_url="http://localhost",
             api_key="key",
-            top_p=1.0,
+            top_p=None,
             seed=None,
             provider="lmstudio",
         )
@@ -1620,7 +1620,7 @@ class TestDropMiddleTurnsWithSummary:
             model_id="m",
             base_url="http://x",
             api_key="k",
-            top_p=1.0,
+            top_p=None,
             seed=None,
             provider="lmstudio",
         )
@@ -1646,7 +1646,7 @@ class TestDropMiddleTurnsWithSummary:
             model_id="m",
             base_url="http://x",
             api_key="k",
-            top_p=1.0,
+            top_p=None,
             seed=None,
             provider="lmstudio",
         )
@@ -1680,7 +1680,7 @@ class TestDropMiddleTurnsWithSummary:
             model_id="m",
             base_url="http://x",
             api_key="k",
-            top_p=1.0,
+            top_p=None,
             seed=None,
             provider="lmstudio",
         )
@@ -1743,7 +1743,7 @@ class TestCompactionState:
             model_id="test",
             base_url="http://localhost",
             api_key="key",
-            top_p=1.0,
+            top_p=None,
             seed=None,
             provider="lmstudio",
         )
@@ -1905,7 +1905,7 @@ class TestCompactionState:
             model_id="m",
             base_url="http://x",
             api_key="k",
-            top_p=1.0,
+            top_p=None,
             seed=None,
             provider="lmstudio",
             compaction_state=state,
@@ -1980,7 +1980,7 @@ class TestAggressiveDropTurns:
             model_id="m",
             base_url="http://x",
             api_key="k",
-            top_p=1.0,
+            top_p=None,
             seed=None,
             provider="lmstudio",
         )

@@ -1208,7 +1208,7 @@ class TestCancelMidToolBatch:
             max_turns=5,
             max_output_tokens=4096,
             temperature=0.0,
-            top_p=1.0,
+            top_p=None,
             seed=None,
             context_length=None,
             base_dir=str(tmp_path),

@@ -29,7 +29,7 @@ def _make_ctx(*, messages=None):
             "files_mode": "some",
             "compaction_state": None,
             "command_policy": None,
-            "top_p": 1.0,
+            "top_p": None,
             "seed": None,
             "llm_kwargs": {},
         },

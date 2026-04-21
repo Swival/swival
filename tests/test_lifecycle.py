@@ -341,7 +341,7 @@ class TestConfigIntegration:
             max_output_tokens=32768,
             max_context_tokens=None,
             temperature=None,
-            top_p=1.0,
+            top_p=None,
             seed=None,
             files="some",
             yolo=False,

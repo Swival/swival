@@ -24,7 +24,7 @@ The JSON below is from a verified local run using `--model dummy-model --max-tur
   "provider": "lmstudio",
   "settings": {
     "temperature": null,
-    "top_p": 1.0,
+    "top_p": null,
     "seed": null,
     "max_turns": 0,
     "max_output_tokens": 32768,

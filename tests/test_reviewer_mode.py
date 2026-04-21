@@ -46,7 +46,7 @@ def _reviewer_args(base_dir, **overrides):
         max_output_tokens=1024,
         max_context_tokens=None,
         temperature=0.5,
-        top_p=1.0,
+        top_p=None,
         seed=None,
         quiet=False,
         verbose=True,

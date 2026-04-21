@@ -88,6 +88,7 @@ swival --init-config --project  # project config in current directory
 model = &quot;qwen/qwen3-coder-next&quot;
 # base_url = &quot;http://127.0.0.1:1234&quot;    # provider API base URL
 # api_key = &quot;...&quot;                       # prefer env vars over config for credentials
+# user_agent = &quot;...&quot;                    # User-Agent header for LLM requests
 # system_prompt = &quot;...&quot;                 # replaces the built-in system prompt
 # no_system_prompt = false              # omit the system message entirely
 max_turns = 250
@@ -182,7 +183,7 @@ swival --profile fast-local &quot;write tests&quot;
 <p>List available profiles with <code>--list-profiles</code>:</p>
 <pre><code class="language-sh">swival --list-profiles
 </code></pre>
-<p>Each profile requires <code>provider</code>. The allowed keys are: <code>provider</code>, <code>model</code>, <code>api_key</code>, <code>base_url</code>, <code>aws_profile</code>, <code>max_output_tokens</code>, <code>max_context_tokens</code>, <code>temperature</code>, <code>top_p</code>, <code>seed</code>, <code>extra_body</code>, <code>reasoning_effort</code>, <code>sanitize_thinking</code>, and <code>description</code>. Keys outside this set — like <code>files</code>, <code>commands</code>, or <code>reviewer</code> — are rejected with an error listing the allowed keys. Profiles are for choosing a model stack, not for changing agent behavior. The <code>description</code> key is metadata — it appears in profile listings but is not passed to the provider.</p>
+<p>Each profile requires <code>provider</code>. The allowed keys are: <code>provider</code>, <code>model</code>, <code>api_key</code>, <code>user_agent</code>, <code>base_url</code>, <code>aws_profile</code>, <code>max_output_tokens</code>, <code>max_context_tokens</code>, <code>temperature</code>, <code>top_p</code>, <code>seed</code>, <code>extra_body</code>, <code>reasoning_effort</code>, <code>sanitize_thinking</code>, and <code>description</code>. Keys outside this set — like <code>files</code>, <code>commands</code>, or <code>reviewer</code> — are rejected with an error listing the allowed keys. Profiles are for choosing a model stack, not for changing agent behavior. The <code>description</code> key is metadata — it appears in profile listings but is not passed to the provider.</p>
 <p>If <code>--profile</code> is combined with explicit flags like <code>--provider</code> or <code>--model</code>, the explicit flags win on a per-key basis, just like CLI flags override config everywhere else in Swival.</p>
 <pre><code class="language-sh">swival --profile gpt5 --reasoning-effort medium &quot;task&quot;
 </code></pre>

@@ -254,7 +254,7 @@ class TestIntegration:
             max_context_tokens=None,
             max_output_tokens=4096,
             temperature=0.5,
-            top_p=1.0,
+            top_p=None,
             seed=None,
             system_prompt=None,
             no_system_prompt=True,
