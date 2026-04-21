@@ -653,6 +653,7 @@ def _call_audit_llm(
             False,  # verbose
             provider=llm_kwargs.get("provider", "lmstudio"),
             api_key=llm_kwargs.get("api_key"),
+            user_agent=llm_kwargs.get("user_agent"),
             prompt_cache=True,
             aws_profile=llm_kwargs.get("aws_profile"),
         )

@@ -1377,6 +1377,7 @@ class TestSummarizeTurns:
             verbose,
             api_key,
             provider,
+            **kwargs,
         ):
             return (
                 SimpleNamespace(content=content),
@@ -1401,6 +1402,7 @@ class TestSummarizeTurns:
             verbose,
             api_key,
             provider,
+            **kwargs,
         ):
             raise exc
 
@@ -1502,6 +1504,7 @@ class TestSummarizeTurns:
             verbose,
             api_key,
             provider,
+            **kwargs,
         ):
             captured["messages"] = messages
             return (SimpleNamespace(content="ok"), "stop")
@@ -1536,6 +1539,7 @@ class TestSummarizeTurns:
             verbose,
             api_key,
             provider,
+            **kwargs,
         ):
             captured["tools"] = tools
             return (SimpleNamespace(content="ok"), "stop")
@@ -1570,6 +1574,7 @@ class TestDropMiddleTurnsWithSummary:
             verbose,
             api_key,
             provider,
+            **kwargs,
         ):
             return (SimpleNamespace(content=content), "stop")
 
@@ -1589,6 +1594,7 @@ class TestDropMiddleTurnsWithSummary:
             verbose,
             api_key,
             provider,
+            **kwargs,
         ):
             raise RuntimeError("LLM unavailable")
 
@@ -1706,6 +1712,7 @@ class TestCompactionState:
             verbose,
             api_key,
             provider,
+            **kwargs,
         ):
             return (SimpleNamespace(content=content), "stop")
 
@@ -1725,6 +1732,7 @@ class TestCompactionState:
             verbose,
             api_key,
             provider,
+            **kwargs,
         ):
             raise RuntimeError("LLM unavailable")
 
@@ -1785,6 +1793,7 @@ class TestCompactionState:
             verbose,
             api_key,
             provider,
+            **kwargs,
         ):
             nonlocal call_count
             call_count += 1
@@ -1843,6 +1852,7 @@ class TestCompactionState:
             verbose,
             api_key,
             provider,
+            **kwargs,
         ):
             call_counter["n"] += 1
             # First MAX_CHECKPOINTS+1 calls succeed (building up summaries)
@@ -1885,6 +1895,7 @@ class TestCompactionState:
             verbose,
             api_key,
             provider,
+            **kwargs,
         ):
             raise RuntimeError("LLM down")
 
@@ -1959,6 +1970,7 @@ class TestAggressiveDropTurns:
             verbose,
             api_key,
             provider,
+            **kwargs,
         ):
             return (SimpleNamespace(content="Aggressive recap."), "stop")
 

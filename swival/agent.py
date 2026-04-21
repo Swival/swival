@@ -1490,7 +1490,8 @@ def aggressive_drop_turns(
 
 
 def _call_summarize_llm(
-    text, system_prompt, call_llm_fn, model_id, base_url, api_key, top_p, seed, provider
+    text, system_prompt, call_llm_fn, model_id, base_url, api_key, top_p, seed, provider,
+    *, user_agent=None,
 ):
     """Call the LLM to summarize text. Returns string or None on failure."""
     if len(text) > 8000:
@@ -1512,6 +1513,7 @@ def _call_summarize_llm(
             tools=None,
             verbose=False,
             api_key=api_key,
+            user_agent=user_agent,
             provider=provider,
         )
         resp = _result[0]
@@ -6025,6 +6027,7 @@ def run_agent_loop(
     # sites that pass call_llm as a function reference (compaction summaries,
     # proactive checkpoints, continue-file enrichment).
     _call_llm_for_secondary = call_llm
+    _secondary_user_agent = llm_kwargs.get("user_agent")
     if llm_filter is not None:
         llm_kwargs = {**llm_kwargs, "llm_filter": llm_filter}
     if secret_shield is not None:
@@ -6032,9 +6035,17 @@ def run_agent_loop(
     if cache is not None:
         llm_kwargs = {**llm_kwargs, "cache": cache}
 
-    if cache is not None or secret_shield is not None or llm_filter is not None:
+    _need_secondary_wrapper = (
+        cache is not None
+        or secret_shield is not None
+        or llm_filter is not None
+        or _secondary_user_agent is not None
+    )
+    if _need_secondary_wrapper:
 
         def _call_llm_for_secondary(*args, **kwargs):
+            if _secondary_user_agent is not None:
+                kwargs.setdefault("user_agent", _secondary_user_agent)
             if llm_filter is not None:
                 kwargs.setdefault("llm_filter", llm_filter)
                 kwargs.setdefault("call_kind", "summary")
@@ -7655,6 +7666,7 @@ def _repl_snapshot_restore(
     model_id: str,
     api_base: str,
     api_key: str | None,
+    user_agent: str | None = None,
     top_p: float,
     seed: int | None,
     provider: str | None,
@@ -7676,6 +7688,7 @@ def _repl_snapshot_restore(
             top_p,
             seed,
             provider,
+            user_agent=user_agent,
         )
 
     result = snapshot_state.restore_with_autosummary(messages, summarize_fn)
@@ -8003,6 +8016,7 @@ def execute_input(
                 model_id=ctx.loop_kwargs["model_id"],
                 api_base=ctx.loop_kwargs["api_base"],
                 api_key=ctx.loop_kwargs["llm_kwargs"].get("api_key"),
+                user_agent=ctx.loop_kwargs["llm_kwargs"].get("user_agent"),
                 top_p=ctx.loop_kwargs["top_p"],
                 seed=ctx.loop_kwargs["seed"],
                 provider=ctx.loop_kwargs["llm_kwargs"].get("provider"),
