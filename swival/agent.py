@@ -3029,7 +3029,15 @@ def call_llm(
         if base_url:
             kwargs["api_base"] = base_url
     elif provider in ("generic", "llamacpp"):
-        kwargs = {"api_base": base_url, "api_key": api_key or "none"}
+        try:
+            _swival_ver = metadata.version("swival")
+        except Exception:
+            _swival_ver = "unknown"
+        kwargs = {
+            "api_base": base_url,
+            "api_key": api_key or "none",
+            "extra_headers": {"User-Agent": f"Swival/{_swival_ver}"},
+        }
     elif provider == "chatgpt":
         kwargs = {}
         _skip_params = {"top_p", "seed"}
