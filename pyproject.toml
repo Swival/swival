@@ -22,7 +22,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "litellm==1.83.9",
+    "litellm==1.83.10",
     "tiktoken>=0.12",
     "html-to-markdown>=3.1.0,<3.2",
     "rich>=15.0.0",
@@ -31,9 +31,9 @@ dependencies = [
     "rank-bm25>=0.2.2",
     "httpx>=0.28.1",
     "starlette>=1.0.0",
-    "uvicorn>=0.44.0",
+    "uvicorn>=0.45.0",
     "fast-cipher>=0.2.1",
-    "boto3>=1.42.89",
+    "boto3>=1.42.92",
 ]
 
 [project.urls]
