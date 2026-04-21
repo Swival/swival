@@ -3033,10 +3033,13 @@ def call_llm(
             _swival_ver = metadata.version("swival")
         except Exception:
             _swival_ver = "unknown"
+        _generic_headers = {"User-Agent": f"Swival/{_swival_ver}"}
+        if base_url and "api.kimi.com" in base_url:
+            _generic_headers["User-Agent"] = f"KimiCLI/{_swival_ver} Swival/{_swival_ver}"
         kwargs = {
             "api_base": base_url,
             "api_key": api_key or "none",
-            "extra_headers": {"User-Agent": f"Swival/{_swival_ver}"},
+            "extra_headers": _generic_headers,
         }
     elif provider == "chatgpt":
         kwargs = {}
