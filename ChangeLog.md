@@ -2,6 +2,13 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.6
+
+- `top_p` is no longer sent to the provider by default, letting each provider use its own default. The `--top-p` flag is still available to override it explicitly.
+- A `--user-agent` option has been added to set a custom `User-Agent` header on LLM API requests. The generic and llama.cpp providers now send `Swival/<version>` by default, and OpenRouter forwards the header when set. This can also be configured via `user_agent` in config files.
+- `/audit` path scoping no longer silently skips the target directory when the argument is missing a trailing slash.
+- Provider-specific workarounds have been added for Kimi K2.6.
+
 ## 1.0.5
 
 - When a file is too large for the LLM's context window during an audit, the audit now progressively truncates it and retries instead of failing outright.
