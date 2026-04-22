@@ -1118,10 +1118,13 @@ def _phase3_deep_review(
         return []
 
     expansion_items = [(stub, path, content, state, ctx) for stub in inventory]
-    expansion_workers = min(2, len(expansion_items))
-    expansions = _run_batch(
-        _phase3b_expand_one, expansion_items, max_workers=expansion_workers
-    )
+    expansions = []
+    for item in expansion_items:
+        try:
+            expansions.append(_phase3b_expand_one(item))
+        except Exception as e:
+            fmt.warning(f"expansion failed for {path}: {e}")
+            expansions.append(None)
 
     findings = []
     failed_expansions = 0
