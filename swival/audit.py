@@ -32,6 +32,7 @@ _AUDIT_TRUNCATION_FLOOR = 200
 
 _SOURCE_EXTS = frozenset(
     {
+        ".d",
         ".py",
         ".js",
         ".ts",
