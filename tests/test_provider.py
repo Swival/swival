@@ -2563,7 +2563,13 @@ class TestKimiReasoningContent:
             {
                 "role": "assistant",
                 "content": "Let me check.",
-                "tool_calls": [{"id": "tc1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
+                "tool_calls": [
+                    {
+                        "id": "tc1",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": "{}"},
+                    }
+                ],
             },
             {"role": "tool", "tool_call_id": "tc1", "content": "file contents"},
         ]
@@ -2583,7 +2589,9 @@ class TestKimiReasoningContent:
                 api_key="sk-test",
             )
             sent_messages = mock_comp.call_args[1]["messages"]
-            assistant_msg = [m for m in sent_messages if m.get("role") == "assistant"][0]
+            assistant_msg = [m for m in sent_messages if m.get("role") == "assistant"][
+                0
+            ]
             assert assistant_msg["reasoning_content"] == " "
 
     def test_kimi_model_detected_by_model_id(self):
@@ -2592,7 +2600,13 @@ class TestKimiReasoningContent:
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [{"id": "tc1", "type": "function", "function": {"name": "think", "arguments": "{}"}}],
+                "tool_calls": [
+                    {
+                        "id": "tc1",
+                        "type": "function",
+                        "function": {"name": "think", "arguments": "{}"},
+                    }
+                ],
             },
             {"role": "tool", "tool_call_id": "tc1", "content": "thought"},
         ]
@@ -2612,7 +2626,9 @@ class TestKimiReasoningContent:
                 api_key="sk-test",
             )
             sent_messages = mock_comp.call_args[1]["messages"]
-            assistant_msg = [m for m in sent_messages if m.get("role") == "assistant"][0]
+            assistant_msg = [m for m in sent_messages if m.get("role") == "assistant"][
+                0
+            ]
             assert assistant_msg["reasoning_content"] == " "
 
     def test_kimi_model_detected_by_moonshot_base_url(self):
@@ -2621,7 +2637,13 @@ class TestKimiReasoningContent:
             {
                 "role": "assistant",
                 "content": "checking",
-                "tool_calls": [{"id": "tc1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
+                "tool_calls": [
+                    {
+                        "id": "tc1",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": "{}"},
+                    }
+                ],
             },
             {"role": "tool", "tool_call_id": "tc1", "content": "data"},
         ]
@@ -2641,7 +2663,9 @@ class TestKimiReasoningContent:
                 api_key="sk-test",
             )
             sent_messages = mock_comp.call_args[1]["messages"]
-            assistant_msg = [m for m in sent_messages if m.get("role") == "assistant"][0]
+            assistant_msg = [m for m in sent_messages if m.get("role") == "assistant"][
+                0
+            ]
             assert assistant_msg["reasoning_content"] == " "
 
     def test_non_kimi_model_no_injection(self):
@@ -2650,7 +2674,13 @@ class TestKimiReasoningContent:
             {
                 "role": "assistant",
                 "content": "checking",
-                "tool_calls": [{"id": "tc1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
+                "tool_calls": [
+                    {
+                        "id": "tc1",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": "{}"},
+                    }
+                ],
             },
             {"role": "tool", "tool_call_id": "tc1", "content": "data"},
         ]
@@ -2670,7 +2700,9 @@ class TestKimiReasoningContent:
                 api_key="sk-test",
             )
             sent_messages = mock_comp.call_args[1]["messages"]
-            assistant_msg = [m for m in sent_messages if m.get("role") == "assistant"][0]
+            assistant_msg = [m for m in sent_messages if m.get("role") == "assistant"][
+                0
+            ]
             assert "reasoning_content" not in assistant_msg
 
     def test_kimi_skips_assistant_without_tool_calls(self):
@@ -2694,7 +2726,9 @@ class TestKimiReasoningContent:
                 api_key="sk-test",
             )
             sent_messages = mock_comp.call_args[1]["messages"]
-            assistant_msg = [m for m in sent_messages if m.get("role") == "assistant"][0]
+            assistant_msg = [m for m in sent_messages if m.get("role") == "assistant"][
+                0
+            ]
             assert "reasoning_content" not in assistant_msg
 
     def test_kimi_preserves_existing_reasoning_content(self):
@@ -2703,7 +2737,13 @@ class TestKimiReasoningContent:
             {
                 "role": "assistant",
                 "content": "ok",
-                "tool_calls": [{"id": "tc1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+                "tool_calls": [
+                    {
+                        "id": "tc1",
+                        "type": "function",
+                        "function": {"name": "f", "arguments": "{}"},
+                    }
+                ],
                 "reasoning_content": "I need to call a tool",
             },
             {"role": "tool", "tool_call_id": "tc1", "content": "result"},
@@ -2724,5 +2764,7 @@ class TestKimiReasoningContent:
                 api_key="sk-test",
             )
             sent_messages = mock_comp.call_args[1]["messages"]
-            assistant_msg = [m for m in sent_messages if m.get("role") == "assistant"][0]
+            assistant_msg = [m for m in sent_messages if m.get("role") == "assistant"][
+                0
+            ]
             assert assistant_msg["reasoning_content"] == "I need to call a tool"

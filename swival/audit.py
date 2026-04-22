@@ -964,8 +964,8 @@ def _phase2_triage_one(
         json.dumps(state.repo_profile, indent=2) if state.repo_profile else "{}"
     )
 
+    system = f"{_PHASE2_SYSTEM}\n\nRepository profile:\n{profile_json}"
     suffix = (
-        f"Repository profile:\n{profile_json}\n\n"
         f"Attack-surface metadata:\nscore={score}\n\n"
         f"Direct imports/includes:\n{imports_summary}\n\n"
         f"Direct callers:\n{callers_summary}\n\n"
@@ -973,7 +973,7 @@ def _phase2_triage_one(
         f"The file is: {path}"
     )
     messages = [
-        {"role": "system", "content": _PHASE2_SYSTEM},
+        {"role": "system", "content": system},
         {"role": "user", "content": suffix},
     ]
     raw = _call_audit_llm(ctx, messages, trace_task=f"audit: phase 2 triage {path}")
