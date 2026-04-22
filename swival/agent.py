@@ -3129,7 +3129,7 @@ def call_llm(
     # Bedrock), tell LiteLLM to auto-inject cache breakpoints on the system
     # message. OpenAI/Deepseek cache automatically (>1024 token prompts).
     # lmstudio is local — no caching benefit.
-    if prompt_cache and provider != "lmstudio" and tools is not None:
+    if prompt_cache and provider != "lmstudio":
         try:
             from litellm.utils import supports_prompt_caching
 
