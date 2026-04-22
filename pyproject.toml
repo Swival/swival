@@ -67,7 +67,7 @@ packages = ["swival"]
 [tool.uv]
 package = true
 constraint-dependencies = ["requests>=2.33.1", "cryptography>=46.0.7"]
-override-dependencies = ["aiohttp>=3.13.5"]
+override-dependencies = ["aiohttp>=3.13.5", "python-dotenv>=1.2.2"]
 
 [dependency-groups]
 dev = [
