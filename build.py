@@ -4,7 +4,9 @@ copies logo, generates favicon. Exits non-zero on broken links."""
 
 import re
 import shutil
+import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import markdown
@@ -157,24 +159,46 @@ def sidebar_html(active_slug: str) -> str:
     return "\n".join(parts)
 
 
-def docs_page_html(title: str, body: str, slug: str) -> str:
+def docs_page_html(title: str, desc: str, body: str, slug: str) -> str:
     nav = sidebar_html(slug)
+    page_url = f"{BASE_URL}/pages/{slug}.html"
+    meta_desc = f"{title}: {desc}" if desc else f"{title} — Swival documentation"
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{title} — Swival</title>
-    <meta name="description" content="{title} — Swival documentation">
+    <meta name="description" content="{meta_desc}">
+    <link rel="canonical" href="{page_url}">
     <meta property="og:type" content="article">
     <meta property="og:title" content="{title} — Swival">
-    <meta property="og:description" content="{title} — Swival documentation">
+    <meta property="og:description" content="{meta_desc}">
     <meta property="og:image" content="{BASE_URL}/img/logo.png">
-    <meta property="og:url" content="{BASE_URL}/pages/{slug}.html">
+    <meta property="og:url" content="{page_url}">
     <meta name="twitter:card" content="summary">
     <meta name="twitter:title" content="{title} — Swival">
-    <meta name="twitter:description" content="{title} — Swival documentation">
+    <meta name="twitter:description" content="{meta_desc}">
     <meta name="twitter:image" content="{BASE_URL}/img/logo.png">
+    <script type="application/ld+json">
+    {{
+        "@context": "https://schema.org",
+        "@type": "TechArticle",
+        "headline": "{title} — Swival",
+        "description": "{meta_desc}",
+        "url": "{page_url}",
+        "publisher": {{
+            "@type": "Organization",
+            "name": "Swival",
+            "logo": {{ "@type": "ImageObject", "url": "{BASE_URL}/img/logo.png" }}
+        }},
+        "isPartOf": {{
+            "@type": "WebSite",
+            "name": "Swival",
+            "url": "{BASE_URL}/"
+        }}
+    }}
+    </script>
     <link rel="icon" href="../favicon.ico">
     <link rel="stylesheet" href="../css/style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -266,15 +290,16 @@ def docs_hub_html() -> str:
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Documentation — Swival</title>
-    <meta name="description" content="Swival documentation hub">
+    <meta name="description" content="Swival documentation: guides for installation, configuration, providers, MCP, A2A, security audits, and the Python API.">
+    <link rel="canonical" href="{BASE_URL}/pages/">
     <meta property="og:type" content="website">
     <meta property="og:title" content="Documentation — Swival">
-    <meta property="og:description" content="Swival documentation hub">
+    <meta property="og:description" content="Swival documentation: guides for installation, configuration, providers, MCP, A2A, security audits, and the Python API.">
     <meta property="og:image" content="{BASE_URL}/img/logo.png">
     <meta property="og:url" content="{BASE_URL}/pages/">
     <meta name="twitter:card" content="summary">
     <meta name="twitter:title" content="Documentation — Swival">
-    <meta name="twitter:description" content="Swival documentation hub">
+    <meta name="twitter:description" content="Swival documentation: guides for installation, configuration, providers, MCP, A2A, security audits, and the Python API.">
     <meta name="twitter:image" content="{BASE_URL}/img/logo.png">
     <link rel="icon" href="../favicon.ico">
     <link rel="stylesheet" href="../css/style.css">
@@ -447,6 +472,21 @@ def generate_favicon(logo_path: Path, out_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _git_lastmod(path: Path | None = None) -> str:
+    """Return the last-modified date for *path* (or the repo root) as YYYY-MM-DD.
+    Falls back to today if git is unavailable or the file is untracked."""
+    cmd = ["git", "log", "-1", "--format=%aI"]
+    if path is not None:
+        cmd.append(str(path))
+    try:
+        out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True).strip()
+        if out:
+            return out[:10]
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
 def build() -> bool:
     """Run the full build. Returns True on success, False on broken links."""
     md_converter = markdown.Markdown(extensions=MD_EXTENSIONS)
@@ -474,7 +514,7 @@ def build() -> bool:
 
     # Convert each docs page
     for _group, pages in NAV:
-        for slug, title, _desc in pages:
+        for slug, title, desc in pages:
             md_path = DOCS_SRC / f"{slug}.md"
             if not md_path.exists():
                 print(
@@ -487,7 +527,7 @@ def build() -> bool:
             md_text = md_path.read_text(encoding="utf-8")
             body_html = md_converter.convert(md_text)
             body_html = rewrite_md_links(body_html)
-            full_html = docs_page_html(title, body_html, slug)
+            full_html = docs_page_html(title, desc, body_html, slug)
 
             out_path = WWW_DOCS / f"{slug}.html"
             out_path.write_text(full_html, encoding="utf-8")
@@ -514,6 +554,34 @@ def build() -> bool:
         favicon_path = WWW / "favicon.ico"
         generate_favicon(logo_src, favicon_path)
         print("  favicon.ico generated")
+
+    # Generate sitemap.xml
+    lastmod = _git_lastmod()
+    sitemap_urls = [f"  <url><loc>{BASE_URL}/</loc><lastmod>{lastmod}</lastmod></url>"]
+    sitemap_urls.append(
+        f"  <url><loc>{BASE_URL}/pages/</loc><lastmod>{lastmod}</lastmod></url>"
+    )
+    for _group, pages in NAV:
+        for slug, _title, _desc in pages:
+            md_path = DOCS_SRC / f"{slug}.md"
+            page_mod = _git_lastmod(md_path)
+            sitemap_urls.append(
+                f"  <url><loc>{BASE_URL}/pages/{slug}.html</loc>"
+                f"<lastmod>{page_mod}</lastmod></url>"
+            )
+    sitemap_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        + "\n".join(sitemap_urls)
+        + "\n</urlset>\n"
+    )
+    (WWW / "sitemap.xml").write_text(sitemap_xml, encoding="utf-8")
+    print("  sitemap.xml generated")
+
+    # Generate robots.txt
+    robots_txt = f"User-agent: *\nAllow: /\n\nSitemap: {BASE_URL}/sitemap.xml\n"
+    (WWW / "robots.txt").write_text(robots_txt, encoding="utf-8")
+    print("  robots.txt generated")
 
     # Check links
     print("\nChecking links...")
