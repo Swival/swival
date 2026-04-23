@@ -15,6 +15,7 @@ from swival.agent import (
     score_turn,
     drop_middle_turns,
     aggressive_drop_turns,
+    _emergency_truncate,
     summarize_turns,
     _RECAP_PREFIX,
     CompactionState,
@@ -2136,3 +2137,105 @@ class TestFixOrphanedToolCalls:
         assert _fix_orphaned_tool_calls(msgs) is True
         assert tc.tool_calls is None
         assert tc.content == "I'll read the file"
+
+
+# ---------------------------------------------------------------------------
+# _emergency_truncate
+# ---------------------------------------------------------------------------
+
+
+class TestEmergencyTruncate:
+    """Tests for the last-resort _emergency_truncate compaction."""
+
+    def test_fits_already(self):
+        """No-op when messages already fit within context_length."""
+        msgs = [_sys("system"), _user("hello")]
+        original = [m.copy() for m in msgs]
+        _emergency_truncate(msgs, 10_000)
+        assert msgs[0]["content"] == original[0]["content"]
+        assert msgs[1]["content"] == original[1]["content"]
+
+    def test_compacts_tool_results(self):
+        """Stage 1: tool results in tail turns are compacted."""
+        big_result = "x" * 5000
+        msgs = [
+            _sys("sys"),
+            _assistant_tc([("tc1", "read_file", '{"file_path": "a.py"}')]),
+            _tool("tc1", big_result),
+            _user("thanks"),
+        ]
+        # Use a small context_length so the big tool result must be compacted
+        _emergency_truncate(msgs, 2000)
+        tool_content = msgs[2]["content"] if isinstance(msgs[2], dict) else msgs[2].content
+        assert len(tool_content) < len(big_result)
+
+    def test_truncates_large_messages(self):
+        """Stage 2: large non-system messages get progressively truncated."""
+        msgs = [
+            _sys("short system"),
+            _user("q"),
+            _assistant("a" * 20_000),
+        ]
+        _emergency_truncate(msgs, 2000)
+        result_content = msgs[2]["content"]
+        assert len(result_content) < 20_000
+        assert "truncated" in result_content.lower()
+
+    def test_nuclear_keeps_system_and_last_user(self):
+        """Stage 3: when truncation isn't enough, keep only system + last user."""
+        msgs = [
+            _sys("s"),
+            _user("first question"),
+            _assistant("a" * 10_000),
+            _user("b" * 10_000),
+            _assistant("c" * 10_000),
+            _user("last question"),
+        ]
+        _emergency_truncate(msgs, 200)
+        roles = [m["role"] if isinstance(m, dict) else m.role for m in msgs]
+        assert roles[0] == "system"
+        assert any(r == "user" for r in roles)
+        assert len(msgs) == 2  # system + last user
+        # clamp_output_tokens must not raise after emergency truncation
+        clamp_output_tokens(msgs, None, 200, 200)
+
+    def test_returns_messages(self):
+        """Return value is the same list that was passed in."""
+        msgs = [_sys("s"), _user("u")]
+        result = _emergency_truncate(msgs, 10_000)
+        assert result is msgs
+
+    def test_system_prompt_preserved_when_possible(self):
+        """System prompt is not truncated unless absolutely necessary."""
+        sys_content = "important system rules"
+        msgs = [
+            _sys(sys_content),
+            _user("q"),
+            _assistant("a" * 5000),
+        ]
+        _emergency_truncate(msgs, 2000)
+        assert msgs[0]["content"] == sys_content
+
+    def test_no_system_message(self):
+        """Nuclear fallback works when transcript has no leading system message.
+
+        Use enough messages that stage-2 truncation to 200 chars each still
+        exceeds the tiny context window, forcing the nuclear path.
+        """
+        msgs = [_user("q%d" % i) for i in range(80)] + [_user("last question")]
+        _emergency_truncate(msgs, 50)
+        # Only the last user message should survive
+        assert len(msgs) == 1
+        assert msgs[0]["role"] == "user"
+        clamp_output_tokens(msgs, None, 50, 50)
+
+    def test_tiny_context_clamp_succeeds(self):
+        """After emergency truncation with a tiny context, clamp_output_tokens must not raise."""
+        msgs = [
+            _sys("system " * 500),
+            _user("user " * 500),
+            _assistant("assistant " * 500),
+        ]
+        _emergency_truncate(msgs, 100)
+        # This is the actual contract: clamp must succeed
+        clamp_output_tokens(msgs, None, 100, 100)

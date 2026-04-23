@@ -1489,6 +1489,85 @@ def aggressive_drop_turns(
     return result
 
 
+def _emergency_truncate(messages: list, context_length: int) -> list:
+    """Last-resort message truncation to fit within *context_length*.
+
+    Called after ``aggressive_drop_turns`` and tool removal when the
+    conversation still exceeds the context window.  Mutates and returns
+    *messages*.
+
+    Strategies applied in order:
+
+    1. Compact tool results in **all** turns (``compact_messages`` skips
+       the tail turns that ``aggressive_drop_turns`` preserved intact).
+    2. Progressively truncate the largest non-system messages.
+    3. Nuclear: keep only the system prompt and the last user message,
+       truncating both if necessary.
+    """
+    target = context_length - MIN_OUTPUT_TOKENS
+
+    # Stage 1: compact every remaining tool result
+    _strip_image_content(messages)
+    turns = group_into_turns(messages)
+    tc_idx: dict = {}
+    for turn in turns:
+        tc_idx.update(_tool_call_index(turn))
+    for msg in messages:
+        if _msg_role(msg) == "tool":
+            content = _msg_content(msg) or ""
+            if len(content) > 500:
+                tc_id = _msg_tool_call_id(msg)
+                name, args = tc_idx.get(tc_id, ("?", None))
+                _set_msg_content(msg, compact_tool_result(name, args, content))
+    if estimate_tokens(messages, None) <= target:
+        return messages
+
+    # Stage 2: progressively shrink the largest non-system messages
+    max_chars = 2000
+    while max_chars >= 200:
+        for msg in messages:
+            if _msg_role(msg) == "system":
+                continue
+            content = _msg_content(msg) or ""
+            if len(content) > max_chars:
+                _set_msg_content(
+                    msg, content[:max_chars] + "\n[truncated to fit context]"
+                )
+        if estimate_tokens(messages, None) <= target:
+            return messages
+        max_chars //= 2
+
+    # Stage 3: nuclear — keep only system prompt (if any) + last user message
+    last_user_idx = None
+    for i in range(len(messages) - 1, -1, -1):
+        if _msg_role(messages[i]) == "user":
+            last_user_idx = i
+            break
+    if last_user_idx is not None:
+        last_user = messages[last_user_idx]
+        has_system = _msg_role(messages[0]) == "system" if messages else False
+        if has_system:
+            del messages[1:]
+            messages.append(last_user)
+        else:
+            messages[:] = [last_user]
+
+    # Truncate remaining messages until they fit.  No hard floor — for very
+    # small context windows we must be willing to shrink to whatever fits.
+    while estimate_tokens(messages, None) > target and messages:
+        per_msg_chars = max(1, (target * 4) // max(len(messages), 1))
+        shrank = False
+        for msg in messages:
+            content = _msg_content(msg) or ""
+            if len(content) > per_msg_chars:
+                _set_msg_content(msg, content[:per_msg_chars])
+                shrank = True
+        if not shrank:
+            break
+
+    return messages
+
+
 def _call_summarize_llm(
     text,
     system_prompt,
@@ -6505,8 +6584,6 @@ def run_agent_loop(
                             sys_content[:max_sys_chars]
                             + "\n\n[system prompt truncated to fit context window]",
                         )
-                # When context_length is unknown, progressively halve
-                # max_output_tokens until the LLM accepts the request.
                 _output_budgets = []
                 try:
                     _output_budgets.append(
@@ -6516,6 +6593,22 @@ def run_agent_loop(
                     )
                 except ContextOverflowError:
                     pass
+                if not _output_budgets and context_length is not None:
+                    fmt.warning(
+                        "prompt still exceeds context window — "
+                        "emergency truncation of remaining messages"
+                    )
+                    _emergency_truncate(messages, context_length)
+                    if snapshot_state:
+                        snapshot_state.invalidate_index_checkpoint()
+                    try:
+                        _output_budgets.append(
+                            clamp_output_tokens(
+                                messages, None, context_length, max_output_tokens
+                            )
+                        )
+                    except ContextOverflowError:
+                        pass
                 if not _output_budgets and context_length is None:
                     budget = max_output_tokens
                     while budget >= MIN_OUTPUT_TOKENS:
