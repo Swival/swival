@@ -2,6 +2,15 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.7
+
+- Emergency truncation has been added as a last-resort compaction stage.
+- Prompt caching now works for tool-less LLM calls such as `/audit`. Previously, cache control breakpoints were only injected when tool schemas were present.
+- `/audit` Phase 2 triage now places the repository profile in the system prompt instead of repeating it in every user message, improving prompt cache hit rates and reducing costs.
+- `/audit` Phase 3b finding expansions now run sequentially with per-item error handling instead of in parallel, so a single failed expansion no longer kills the entire batch.
+- D language (`.d`) files are now recognized as source code by `/audit`.
+- LiteLLM has been updated to add support for the Mythos provider.
+
 ## 1.0.6
 
 - `top_p` is no longer sent to the provider by default, letting each provider use its own default. The `--top-p` flag is still available to override it explicitly.
@@ -28,6 +37,11 @@ All notable user-facing changes to Swival.
 
 - Subagents now inherit the parent session's proactive context compaction setting, so long-running subagent tasks get the same graduated summarization as the main loop.
 - When a subagent hits a context overflow, it now recovers partial results from the last real assistant message instead of failing outright. Recap-only messages are skipped so the recovered text reflects actual work.
+
+## 1.0.1
+
+- Proactive context compaction is now enabled in subagents, giving them the same graduated summarization as the main loop.
+- `"context size exceeded"` errors from llama.cpp are now recognized as context overflow, triggering compaction instead of failing the turn.
 
 ## 1.0.0
 
