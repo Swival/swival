@@ -517,14 +517,13 @@ def _build_context_indices(
 # ---------------------------------------------------------------------------
 
 
-_UNQUOTED_VALUE_RE = re.compile(
-    r'(?<=:)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*(?=[,}\]])'
-)
+_UNQUOTED_VALUE_RE = re.compile(r"(?<=:)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*(?=[,}\]])")
 _JSON_LITERALS = frozenset({"true", "false", "null"})
 
 
 def _fix_unquoted_values(text: str) -> str:
     """Quote bare identifiers that aren't JSON literals (true/false/null)."""
+
     def _quote_match(m: re.Match) -> str:
         val = m.group(1)
         if val in _JSON_LITERALS:
@@ -532,6 +531,7 @@ def _fix_unquoted_values(text: str) -> str:
         ws_before = m.group(0)[: m.start(1) - m.start(0)]
         ws_after = m.group(0)[m.end(1) - m.start(0) :]
         return f'{ws_before}"{val}"{ws_after}'
+
     return _UNQUOTED_VALUE_RE.sub(_quote_match, text)
 
 
