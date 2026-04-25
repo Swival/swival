@@ -1781,6 +1781,93 @@ class TestChatGPTCLIValidation:
         agent.main()  # Should not raise
 
 
+class TestChatGPTLogoutCLI:
+    def test_logout_deletes_token_file(self, monkeypatch, tmp_path, capsys):
+        from swival import agent
+
+        token_dir = tmp_path / "tokens"
+        token_dir.mkdir()
+        auth_path = token_dir / "auth.json"
+        auth_path.write_text('{"access_token":"test"}', encoding="utf-8")
+        monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(token_dir))
+        monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+        monkeypatch.setattr(sys, "argv", ["agent", "--logout"])
+
+        with pytest.raises(SystemExit) as exc_info:
+            agent.main()
+
+        assert exc_info.value.code == 0
+        assert not auth_path.exists()
+        assert f"Deleted ChatGPT OAuth tokens: {auth_path}" in capsys.readouterr().err
+
+    def test_logout_noops_when_token_file_missing(self, monkeypatch, tmp_path, capsys):
+        from swival import agent
+
+        monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "missing"))
+        monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+        monkeypatch.setattr(sys, "argv", ["agent", "--logout"])
+
+        with pytest.raises(SystemExit) as exc_info:
+            agent.main()
+
+        assert exc_info.value.code == 0
+        assert "No stored ChatGPT credentials found." in capsys.readouterr().err
+
+    def test_logout_uses_custom_auth_file_env(self, monkeypatch, tmp_path):
+        from swival import agent
+
+        token_dir = tmp_path / "tokens"
+        token_dir.mkdir()
+        auth_path = token_dir / "custom-auth.json"
+        auth_path.write_text('{"access_token":"test"}', encoding="utf-8")
+        default_path = token_dir / "auth.json"
+        default_path.write_text('{"access_token":"keep"}', encoding="utf-8")
+        monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(token_dir))
+        monkeypatch.setenv("CHATGPT_AUTH_FILE", "custom-auth.json")
+        monkeypatch.setattr(sys, "argv", ["agent", "--logout"])
+
+        with pytest.raises(SystemExit) as exc_info:
+            agent.main()
+
+        assert exc_info.value.code == 0
+        assert not auth_path.exists()
+        assert default_path.exists()
+
+    def test_logout_uses_absolute_auth_file_env(self, monkeypatch, tmp_path):
+        from swival import agent
+
+        token_dir = tmp_path / "tokens"
+        token_dir.mkdir()
+        auth_path = tmp_path / "elsewhere" / "auth.json"
+        auth_path.parent.mkdir()
+        auth_path.write_text('{"access_token":"test"}', encoding="utf-8")
+        monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(token_dir))
+        monkeypatch.setenv("CHATGPT_AUTH_FILE", str(auth_path))
+        monkeypatch.setattr(sys, "argv", ["agent", "--logout"])
+
+        with pytest.raises(SystemExit) as exc_info:
+            agent.main()
+
+        assert exc_info.value.code == 0
+        assert not auth_path.exists()
+
+    def test_logout_does_not_load_config(self, monkeypatch, tmp_path):
+        from swival import agent, config
+
+        def fail_load_config(*args, **kwargs):
+            raise AssertionError("logout should exit before config loading")
+
+        monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+        monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+        monkeypatch.setattr(config, "load_config", fail_load_config)
+        monkeypatch.setattr(sys, "argv", ["agent", "--logout"])
+
+        with pytest.raises(SystemExit) as exc_info:
+            agent.main()
+
+        assert exc_info.value.code == 0
+
+
 # ---------------------------------------------------------------------------
 # ChatGPT resolve_provider direct unit tests
 # ---------------------------------------------------------------------------

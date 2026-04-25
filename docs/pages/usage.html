@@ -240,7 +240,8 @@ swival --oneshot-commands $'/profile fast\n/simplify swival/agent.py'
 <h3 id="configuration-flags">Configuration Flags</h3>
 <p><code>--init-config</code> generates a global config file at <code>~/.config/swival/config.toml</code> and exits. The file is a commented starter template covering the main settings and integrations.</p>
 <p><code>--init-config --project</code> generates a project-local config file at <code>swival.toml</code> in the current base directory instead.</p>
-<p>Neither flag requires a question argument. Both refuse to overwrite an existing config file.</p>
+<p><code>--logout</code> deletes locally cached ChatGPT OAuth credentials and exits. The next <code>--provider chatgpt</code> run starts the device-code login flow again.</p>
+<p>These setup flags do not require a question argument. Config generation refuses to overwrite an existing config file.</p>
 <h3 id="outbound-filter-flag">Outbound Filter Flag</h3>
 <p><code>--llm-filter COMMAND</code> runs a user-defined script before each outbound LLM request. The script receives the message list as JSON on stdin and can modify messages, redact content, or block the request. Fails closed: if the script errors or rejects, nothing is sent to the provider. See <a href="llm-filter.html">Outbound LLM Filter</a> for the full script contract and examples.</p>
 <h3 id="encryption-and-sanitization-flags">Encryption And Sanitization Flags</h3>

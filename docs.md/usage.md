@@ -288,7 +288,9 @@ See [A2A](a2a.md) for full server documentation.
 
 `--init-config --project` generates a project-local config file at `swival.toml` in the current base directory instead.
 
-Neither flag requires a question argument. Both refuse to overwrite an existing config file.
+`--logout` deletes locally cached ChatGPT OAuth credentials and exits. The next `--provider chatgpt` run starts the device-code login flow again.
+
+These setup flags do not require a question argument. Config generation refuses to overwrite an existing config file.
 
 ### Outbound Filter Flag
 

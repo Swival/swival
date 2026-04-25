@@ -3785,6 +3785,12 @@ def build_parser():
         default=False,
         help="Generate a config file template and exit.",
     )
+    output_group.add_argument(
+        "--logout",
+        action="store_true",
+        default=False,
+        help="Delete stored ChatGPT OAuth credentials and exit.",
+    )
     provider_group.add_argument(
         "--max-context-tokens",
         type=int,
@@ -4226,6 +4232,21 @@ def _should_try_onboarding(args, base_dir: Path) -> bool:
     return True
 
 
+def _handle_logout() -> None:
+    """Delete locally cached ChatGPT OAuth tokens if present."""
+    token_dir = os.getenv(
+        "CHATGPT_TOKEN_DIR",
+        os.path.expanduser("~/.config/litellm/chatgpt"),
+    )
+    auth_file = os.path.join(token_dir, os.getenv("CHATGPT_AUTH_FILE", "auth.json"))
+    auth_path = Path(auth_file)
+    if auth_path.is_file():
+        auth_path.unlink()
+        print(f"Deleted ChatGPT OAuth tokens: {auth_path}", file=sys.stderr)
+    else:
+        print("No stored ChatGPT credentials found.", file=sys.stderr)
+
+
 def _handle_init_config(args):
     """Generate a config file template and write it.
 
@@ -4366,9 +4387,12 @@ def main():
         args.base_dir = str(Path(args.base_dir).resolve())
     args._start_dir = _start_dir
 
-    # Handle --init-config before anything else
+    # Handle setup-only commands before loading config files.
     if getattr(args, "init_config", False):
         _handle_init_config(args)
+        sys.exit(0)
+    if getattr(args, "logout", False):
+        _handle_logout()
         sys.exit(0)
 
     # Load config files, apply to args, resolve sentinels to defaults

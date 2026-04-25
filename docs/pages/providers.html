@@ -258,11 +258,12 @@ swival --provider google \
 <p><code>--model</code> is required. There is no default model.</p>
 <pre><code class="language-sh">swival --provider chatgpt --model gpt-5.4 &quot;task&quot;
 </code></pre>
-<p>On the first run, you will see a device-code prompt with a URL and a code to enter in your browser. Once you complete the flow, the OAuth tokens are stored locally and refreshed automatically.</p>
+<p>On the first run, you will see a device-code prompt with a URL and a code to enter in your browser. Once you complete the flow, the OAuth tokens are stored locally and refreshed automatically. To remove the cached tokens and force the device-code flow on the next run, use <code>swival --logout</code>.</p>
 <p>Supported model names may change over time. Check OpenAI's documentation for the current model list and naming conventions.</p>
-<p>Two environment variables are available for advanced use. <code>CHATGPT_TOKEN_DIR</code> overrides the default token storage directory. <code>CHATGPT_API_BASE</code> overrides the API base URL.</p>
+<p>Three environment variables are available for advanced use. <code>CHATGPT_TOKEN_DIR</code> overrides the default token storage directory, <code>CHATGPT_AUTH_FILE</code> overrides the token filename or path, and <code>CHATGPT_API_BASE</code> overrides the API base URL.</p>
 <pre><code class="language-sh">export CHATGPT_TOKEN_DIR=/path/to/tokens
 swival --provider chatgpt --model gpt-5.4 &quot;task&quot;
+swival --logout
 </code></pre>
 <p>The <code>--top-p</code>, <code>--seed</code>, and <code>tool_choice</code> parameters are not supported by the ChatGPT Plus/Pro backend. Swival drops them automatically when using this provider.</p>
 <p>Models like <code>gpt-5.4</code> support tunable reasoning effort. Use <code>--reasoning-effort</code> to control how much the model thinks before responding:</p>

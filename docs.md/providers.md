@@ -260,15 +260,16 @@ If you need to pass an API key explicitly (for example, when using `--self-revie
 swival --provider chatgpt --model gpt-5.4 "task"
 ```
 
-On the first run, you will see a device-code prompt with a URL and a code to enter in your browser. Once you complete the flow, the OAuth tokens are stored locally and refreshed automatically.
+On the first run, you will see a device-code prompt with a URL and a code to enter in your browser. Once you complete the flow, the OAuth tokens are stored locally and refreshed automatically. To remove the cached tokens and force the device-code flow on the next run, use `swival --logout`.
 
 Supported model names may change over time. Check OpenAI's documentation for the current model list and naming conventions.
 
-Two environment variables are available for advanced use. `CHATGPT_TOKEN_DIR` overrides the default token storage directory. `CHATGPT_API_BASE` overrides the API base URL.
+Three environment variables are available for advanced use. `CHATGPT_TOKEN_DIR` overrides the default token storage directory, `CHATGPT_AUTH_FILE` overrides the token filename or path, and `CHATGPT_API_BASE` overrides the API base URL.
 
 ```sh
 export CHATGPT_TOKEN_DIR=/path/to/tokens
 swival --provider chatgpt --model gpt-5.4 "task"
+swival --logout
 ```
 
 The `--top-p`, `--seed`, and `tool_choice` parameters are not supported by the ChatGPT Plus/Pro backend. Swival drops them automatically when using this provider.
