@@ -6,6 +6,8 @@ import hashlib
 import json
 import re
 import subprocess
+import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, asdict
@@ -25,6 +27,23 @@ AUDIT_PROVENANCE_URL = "https://swival.dev"
 
 _AUDIT_TRUNCATION_MARKER = "\n\n[truncated — file too large for context window]"
 _AUDIT_TRUNCATION_FLOOR = 200
+
+# ---------------------------------------------------------------------------
+# Debug log
+# ---------------------------------------------------------------------------
+
+_debug_log_path: Path | None = None
+_debug_log_lock = threading.Lock()
+
+
+def _debug_log(event: str, **fields) -> None:
+    if _debug_log_path is None:
+        return
+    entry = {"ts": time.time(), "event": event, **fields}
+    line = json.dumps(entry, default=str) + "\n"
+    with _debug_log_lock:
+        with open(_debug_log_path, "a") as f:
+            f.write(line)
 
 # ---------------------------------------------------------------------------
 # File extensions
@@ -584,20 +603,35 @@ def _parse_with_repair(
 ) -> dict:
     """Parse JSON, falling back to an LLM repair pass on failure."""
     try:
-        return _parse_json_response(raw, required_keys=required_keys)
+        result = _parse_json_response(raw, required_keys=required_keys)
+        _debug_log("parse_ok", required_keys=required_keys)
+        return result
     except ValueError as e:
         metrics["parse_failures"] += 1
         error_msg = str(e)
+        _debug_log(
+            "parse_failed",
+            error=error_msg,
+            required_keys=required_keys,
+            raw_len=len(raw),
+            raw_preview=raw[:3000],
+        )
         fmt.info(f"  parse failed ({error_msg}), attempting repair...")
         try:
             result = _repair_json_response(
                 ctx, raw, error_msg, schema_hint, required_keys
             )
             metrics["repair_successes"] += 1
+            _debug_log("repair_ok", required_keys=required_keys)
             fmt.info("  repair succeeded")
             return result
-        except ValueError:
+        except ValueError as repair_err:
             metrics["repair_failures"] += 1
+            _debug_log(
+                "repair_failed",
+                error=str(repair_err),
+                required_keys=required_keys,
+            )
             fmt.info("  repair failed")
             raise
 
@@ -666,11 +700,19 @@ def _call_audit_llm(
     messages = list(messages)
     overflowed_once = False
 
+    _debug_log(
+        "llm_request",
+        task=trace_task,
+        system=messages[0].get("content", "")[:500] if messages else "",
+        user_len=len(original_text),
+    )
+
     while True:
         try:
             content = _do_call(messages)
             break
         except ContextOverflowError:
+            _debug_log("llm_overflow", task=trace_task, limit=limit)
             if not overflowed_once:
                 overflowed_once = True
                 _write_audit_trace(
@@ -691,6 +733,13 @@ def _call_audit_llm(
                 **user_msg,
                 "content": original_text[:limit] + _AUDIT_TRUNCATION_MARKER,
             }
+
+    _debug_log(
+        "llm_response",
+        task=trace_task,
+        response_len=len(content),
+        response_preview=content[:2000],
+    )
 
     trace_messages = list(messages) + [{"role": "assistant", "content": content}]
     _write_audit_trace(ctx, trace_messages, task=trace_task)
@@ -1529,6 +1578,7 @@ def _run_batch(fn, items, max_workers: int = 4):
             try:
                 results[idx] = future.result()
             except Exception as e:
+                _debug_log("batch_error", idx=idx, error=str(e))
                 fmt.warning(f"batch item {idx} failed: {e}")
                 results[idx] = None
     return results
@@ -1551,6 +1601,8 @@ def _make_slug(title: str) -> str:
 
 def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
     """Entry point for the /audit command. Returns summary text."""
+    global _debug_log_path
+
     base_dir = ctx.base_dir
     workers = 4
 
@@ -1558,6 +1610,7 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
     arg = cmd_arg.strip()
     resume = False
     regen = False
+    debug = False
     focus = None
 
     parts = arg.split()
@@ -1568,6 +1621,8 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
             resume = True
         elif parts[i] == "--regen":
             regen = True
+        elif parts[i] == "--debug":
+            debug = True
         elif parts[i] == "--workers" and i + 1 < len(parts):
             i += 1
             try:
@@ -1580,8 +1635,33 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
     if filtered:
         focus = " ".join(filtered)
 
+    if debug:
+        log_dir = Path(base_dir) / ".swival" / "audit"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        _debug_log_path = log_dir / "debug.jsonl"
+        _debug_log("audit_start", args=cmd_arg.strip())
+        fmt.info(f"debug log: {_debug_log_path}")
+    else:
+        _debug_log_path = None
+
     state_dir = Path(base_dir) / ".swival" / "audit"
 
+    try:
+        return _run_audit_phases(cmd_arg, ctx, base_dir, state_dir, workers, resume, regen, focus)
+    finally:
+        _debug_log_path = None
+
+
+def _run_audit_phases(
+    cmd_arg: str,
+    ctx: InputContext,
+    base_dir: str,
+    state_dir: Path,
+    workers: int,
+    resume: bool,
+    regen: bool,
+    focus: str | None,
+) -> str:
     # Resume, regen, or create new run
     if resume or regen:
         try:
