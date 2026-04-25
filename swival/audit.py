@@ -977,7 +977,7 @@ def _phase2_triage_one(
         {"role": "user", "content": suffix},
     ]
     raw = _call_audit_llm(ctx, messages, trace_task=f"audit: phase 2 triage {path}")
-    parsed = _parse_json_response(raw, required_keys=["priority"])
+    parsed = _parse_json_response(raw)
 
     priority = parsed.get("priority", "SKIP").upper()
     if priority not in ("ESCALATE_HIGH", "ESCALATE_MEDIUM", "SKIP"):
