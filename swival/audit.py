@@ -734,9 +734,21 @@ def _call_audit_llm(
         user_len=len(original_text),
     )
 
+    empty_retries = 0
     while True:
         try:
             content = _do_call(messages)
+            if not content and limit > _AUDIT_TRUNCATION_FLOOR:
+                empty_retries += 1
+                if empty_retries > 3:
+                    break
+                _debug_log("llm_empty", task=trace_task, limit=limit)
+                limit = limit // 2
+                messages[-1] = {
+                    **user_msg,
+                    "content": original_text[:limit] + _AUDIT_TRUNCATION_MARKER,
+                }
+                continue
             break
         except ContextOverflowError:
             _debug_log("llm_overflow", task=trace_task, limit=limit)

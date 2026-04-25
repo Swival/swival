@@ -2446,3 +2446,32 @@ class TestCallAuditLlmOverflowRetry:
         _call_audit_llm(ctx, msgs, trace_task="triage foo.py")
         assert any("overflow" in (t or "") for t in traces)
         assert any(t == "triage foo.py" for t in traces)
+
+    def test_empty_response_retries_with_truncation(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from swival.audit import _call_audit_llm
+
+        calls = []
+
+        def fake_call_llm(*args, **kwargs):
+            messages = args[2]
+            user_text = messages[-1]["content"]
+            calls.append(len(user_text))
+            if "[truncated" not in user_text:
+                msg = SimpleNamespace(content="", role="assistant")
+                return msg, "stop", None, 0, None
+            msg = SimpleNamespace(content="ok-after-truncation", role="assistant")
+            return msg, "stop", None, 0, None
+
+        monkeypatch.setattr("swival.agent.call_llm", fake_call_llm)
+        ctx = self._make_ctx()
+        msgs = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "x" * 2000},
+        ]
+        result = _call_audit_llm(ctx, msgs)
+        assert result == "ok-after-truncation"
+        assert len(calls) == 2
+        assert calls[0] == 2000
+        assert calls[1] < 2000
