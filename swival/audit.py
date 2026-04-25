@@ -1793,12 +1793,32 @@ def _run_audit_phases(
         def _review(path):
             return _deep_review_one(path, state, ctx)
 
+        def _collect_deep_review(results, pending_batch, total_files):
+            for result in results:
+                if result is None:
+                    continue
+                done = len(state.deep_reviewed_files)
+                if result.error is not None:
+                    fmt.warning(
+                        f"  [{done}/{total_files}] failed: {result.path} "
+                        f"({result.error[:80]})"
+                    )
+                    continue
+                n = len(result.findings) if result.findings else 0
+                if result.findings:
+                    state.proposed_findings.extend(result.findings)
+                state.deep_reviewed_files.add(result.path)
+                done = len(state.deep_reviewed_files)
+                label = f"{n} finding(s)" if n else "no findings"
+                fmt.info(f"  [{done}/{total_files}] {result.path}: {label}")
+
         for _dr_attempt in range(3):
             pending = [
                 f for f in state.candidate_files if f not in state.deep_reviewed_files
             ]
             if not pending:
                 break
+            total_files = len(state.candidate_files)
             if _dr_attempt == 0:
                 fmt.info(f"phase 3: deep review of {len(pending)} files...")
             else:
@@ -1807,17 +1827,11 @@ def _run_audit_phases(
                     f"(attempt {_dr_attempt + 1})..."
                 )
 
-            results = _run_batch(_review, pending, max_workers=workers)
-            for result in results:
-                if result is None:
-                    continue
-                if result.error is not None:
-                    fmt.warning(f"deep review failed for {result.path}: {result.error}")
-                    continue
-                if result.findings:
-                    state.proposed_findings.extend(result.findings)
-                state.deep_reviewed_files.add(result.path)
-            state.save()
+            for batch_start in range(0, len(pending), workers * 2):
+                batch = pending[batch_start : batch_start + workers * 2]
+                results = _run_batch(_review, batch, max_workers=workers)
+                _collect_deep_review(results, batch, total_files)
+                state.save()
 
         if any(f not in state.deep_reviewed_files for f in state.candidate_files):
             remaining = [
