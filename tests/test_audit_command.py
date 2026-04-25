@@ -798,7 +798,12 @@ class TestMessageLayout:
             return '{"type": "vulnerability", "preconditions": "none", "proof": "direct", "fix_outline": "fix it"}'
 
         monkeypatch.setattr("swival.audit._call_audit_llm", fake_call)
-        stub = {"title": "eval injection", "severity": "high", "location": "a.py:1", "claim": "user input reaches eval"}
+        stub = {
+            "title": "eval injection",
+            "severity": "high",
+            "location": "a.py:1",
+            "claim": "user input reaches eval",
+        }
         _phase3b_expand_one((stub, "a.py", "eval(input())", state, ctx))
 
         system_content = captured["messages"][0]["content"]
@@ -806,7 +811,9 @@ class TestMessageLayout:
         assert system_content == _PHASE3B_SYSTEM
         evidence_pos = user_content.index("Committed evidence")
         finding_pos = user_content.index("Finding to expand:")
-        assert evidence_pos < finding_pos, "evidence must come before finding metadata for prefix caching"
+        assert evidence_pos < finding_pos, (
+            "evidence must come before finding metadata for prefix caching"
+        )
         assert "eval injection" in user_content
         assert "user input reaches eval" in user_content
 
