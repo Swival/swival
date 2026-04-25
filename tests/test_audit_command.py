@@ -640,20 +640,18 @@ class TestVerificationGates:
 
 class TestPromptSemantics:
     def test_phase3a_prefers_narrow_directly_proven_bug(self):
-        from swival.audit import _PHASE3A_TEMPLATE
+        from swival.audit import _PHASE3A_SYSTEM
 
         assert (
             "Prefer the narrowest bug that the evidence directly proves."
-            in _PHASE3A_TEMPLATE
+            in _PHASE3A_SYSTEM
         )
-        assert "undefined behavior or uninitialized-state bugs" in _PHASE3A_TEMPLATE
+        assert "undefined behavior or uninitialized-state bugs" in _PHASE3A_SYSTEM
 
     def test_phase3b_expansion_prompt_exists(self):
-        from swival.audit import _PHASE3B_TEMPLATE
+        from swival.audit import _PHASE3B_SYSTEM
 
-        assert "expanding one security finding" in _PHASE3B_TEMPLATE.lower()
-        assert "{title}" in _PHASE3B_TEMPLATE
-        assert "{claim}" in _PHASE3B_TEMPLATE
+        assert "expanding one security finding" in _PHASE3B_SYSTEM.lower()
 
     def test_phase4_verifier_allows_source_or_runtime_proof(self):
         from swival.audit import _PHASE4_VERIFY_SYSTEM
@@ -701,14 +699,116 @@ class TestTriageOrdering:
         from swival.audit import _PHASE2_SYSTEM
 
         assert "The file is:" not in _PHASE2_SYSTEM
-        # The suffix template appends "The file is: {path}" at the end
-        # Verified by reading the _phase2_triage_one function
 
     def test_deep_review_includes_bug_classes(self):
-        """Phase 3a inventory prompt includes triage bug classes."""
-        from swival.audit import _PHASE3A_TEMPLATE
+        """Phase 3a bug classes are passed via user message, not system prompt."""
+        from swival.audit import _PHASE3A_SYSTEM
 
-        assert "{bug_classes}" in _PHASE3A_TEMPLATE
+        assert "bug classes" not in _PHASE3A_SYSTEM.lower()
+
+
+class TestMessageLayout:
+    """Verify that variable data lands in user messages (not system) and
+    that the ordering within user messages is cache-friendly."""
+
+    def _make_state(self, tmp_path):
+        scope = AuditScope(
+            branch="main",
+            commit="abc123",
+            tracked_files=["a.py"],
+            mandatory_files=["a.py"],
+            focus=None,
+        )
+        return AuditRunState(
+            run_id="x",
+            scope=scope,
+            queued_files=["a.py"],
+            triage_records={
+                "a.py": TriageRecord(
+                    path="a.py",
+                    priority="ESCALATE_HIGH",
+                    confidence="high",
+                    bug_classes=["unsafe_data_flow", "injection"],
+                    summary="x",
+                    relevant_symbols=[],
+                    suspicious_flows=[],
+                    needs_followup=True,
+                )
+            },
+            repo_profile={"summary": "tiny repo", "languages": ["Python"]},
+            import_index={},
+            caller_index={},
+            state_dir=tmp_path,
+        )
+
+    def test_phase2_repo_profile_in_user_not_system(self, monkeypatch, tmp_path):
+        from types import SimpleNamespace
+        from swival.audit import _phase2_triage_one, _PHASE2_SYSTEM
+
+        state = self._make_state(tmp_path)
+        ctx = SimpleNamespace(base_dir=str(tmp_path), loop_kwargs={})
+        captured = {}
+
+        monkeypatch.setattr("swival.audit._git_show", lambda p, b: "x = 1")
+
+        def fake_call(ctx, messages, temperature=None, trace_task=None):
+            captured["messages"] = messages
+            return '{"priority": "SKIP", "confidence": "high", "bug_classes": [], "summary": "ok", "relevant_symbols": [], "suspicious_flows": [], "needs_followup": false}'
+
+        monkeypatch.setattr("swival.audit._call_audit_llm", fake_call)
+        _phase2_triage_one("a.py", state, ctx)
+
+        system_content = captured["messages"][0]["content"]
+        user_content = captured["messages"][1]["content"]
+        assert system_content == _PHASE2_SYSTEM
+        assert "Repository profile:" in user_content
+        assert "tiny repo" in user_content
+
+    def test_phase3a_bug_classes_in_user_not_system(self, monkeypatch, tmp_path):
+        from types import SimpleNamespace
+        from swival.audit import _phase3a_inventory, _PHASE3A_SYSTEM
+
+        state = self._make_state(tmp_path)
+        ctx = SimpleNamespace(base_dir=str(tmp_path), loop_kwargs={})
+        captured = {}
+
+        def fake_call(ctx, messages, temperature=None, trace_task=None):
+            captured["messages"] = messages
+            return '{"findings": []}'
+
+        monkeypatch.setattr("swival.audit._call_audit_llm", fake_call)
+        _phase3a_inventory("a.py", state, ctx, "x = 1")
+
+        system_content = captured["messages"][0]["content"]
+        user_content = captured["messages"][1]["content"]
+        assert system_content == _PHASE3A_SYSTEM
+        assert "unsafe_data_flow" in user_content
+        assert "injection" in user_content
+
+    def test_phase3b_evidence_before_finding_metadata(self, monkeypatch, tmp_path):
+        from types import SimpleNamespace
+        from swival.audit import _phase3b_expand_one, _PHASE3B_SYSTEM
+
+        state = self._make_state(tmp_path)
+        ctx = SimpleNamespace(base_dir=str(tmp_path), loop_kwargs={})
+        captured = {}
+
+        def fake_call(ctx, messages, temperature=None, trace_task=None):
+            captured["messages"] = messages
+            return '{"type": "vulnerability", "preconditions": "none", "proof": "direct", "fix_outline": "fix it"}'
+
+        monkeypatch.setattr("swival.audit._call_audit_llm", fake_call)
+        stub = {"title": "eval injection", "severity": "high", "location": "a.py:1", "claim": "user input reaches eval"}
+        _phase3b_expand_one((stub, "a.py", "eval(input())", state, ctx))
+
+        system_content = captured["messages"][0]["content"]
+        user_content = captured["messages"][1]["content"]
+        assert system_content == _PHASE3B_SYSTEM
+        evidence_pos = user_content.index("Committed evidence")
+        finding_pos = user_content.index("Finding to expand:")
+        assert evidence_pos < finding_pos, "evidence must come before finding metadata for prefix caching"
+        assert "eval injection" in user_content
+        assert "user input reaches eval" in user_content
 
 
 # ---------------------------------------------------------------------------

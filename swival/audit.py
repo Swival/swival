@@ -676,8 +676,11 @@ def _call_audit_llm(
     kw = ctx.loop_kwargs
     llm_kwargs = kw.get("llm_kwargs", {})
 
+    cache_info = None
+
     def _do_call(msgs):
-        msg, _finish, _activity, _retries, _cache = call_llm(
+        nonlocal cache_info
+        msg, _finish, _activity, _retries, cache_info = call_llm(
             kw["api_base"],
             kw["model_id"],
             msgs,
@@ -740,6 +743,7 @@ def _call_audit_llm(
         task=trace_task,
         response_len=len(content),
         response_preview=content[:2000],
+        cache=cache_info,
     )
 
     trace_messages = list(messages) + [{"role": "assistant", "content": content}]
@@ -830,31 +834,28 @@ Rules:
 - Prefer SKIP if escalation cannot be justified.
 - Use ESCALATE_HIGH only when the evidence bundle contains a concrete suspicious path or invariant break worth deep review."""
 
-_PHASE3A_TEMPLATE = """\
+_PHASE3A_SYSTEM = """\
 You are performing phase 3 deep security review for one candidate file.
 
 Review only the committed repository evidence provided.
 Reject any claim that is not fully proven.
 
-Focus bug classes:
-{bug_classes}
-
 You have no tools, no shell access, and no ability to run commands.
 All the source code you need is included below. Do not request additional information.
 
 Your entire response must be a single JSON object with this shape and nothing else:
-{{
+{
   "findings": [
-    {{
+    {
       "title": "short title",
       "severity": "low | medium | high | critical",
       "location": "path:line",
       "claim": "one-line bug statement under 20 words"
-    }}
+    }
   ]
-}}
+}
 
-If there are no findings, respond with: {{"findings": []}}
+If there are no findings, respond with: {"findings": []}
 
 Rules:
 - Report zero findings rather than a speculative finding.
@@ -868,25 +869,19 @@ Rules:
 
 _PHASE3A_SCHEMA_HINT = '{"findings": [{"title": "...", "severity": "...", "location": "...", "claim": "..."}]}'
 
-_PHASE3B_TEMPLATE = """\
+_PHASE3B_SYSTEM = """\
 You are expanding one security finding with proof details.
-
-The finding was identified during deep security review:
-Title: {title}
-Severity: {severity}
-Location: {location}
-Claim: {claim}
 
 You have no tools, no shell access, and no ability to run commands.
 All the source code you need is included below. Do not request additional information.
 
 Your entire response must be a single JSON object with this shape and nothing else:
-{{
+{
   "type": "logic error | vulnerability | data integrity bug | authorization flaw | trust-boundary violation | race condition | error-handling bug | validation gap | resource lifecycle bug | invariant violation",
   "preconditions": "minimum justified preconditions, under 20 words",
   "proof": "input origin, propagation path, failing condition, impact, reachability — under 80 words total",
   "fix_outline": "smallest correct fix, under 20 words"
-}}
+}
 
 Rules:
 - Use only the provided repository evidence.
@@ -1025,8 +1020,8 @@ def _phase2_triage_one(
         json.dumps(state.repo_profile, indent=2) if state.repo_profile else "{}"
     )
 
-    system = f"{_PHASE2_SYSTEM}\n\nRepository profile:\n{profile_json}"
     suffix = (
+        f"Repository profile:\n{profile_json}\n\n"
         f"Attack-surface metadata:\nscore={score}\n\n"
         f"Direct imports/includes:\n{imports_summary}\n\n"
         f"Direct callers:\n{callers_summary}\n\n"
@@ -1034,7 +1029,7 @@ def _phase2_triage_one(
         f"The file is: {path}"
     )
     messages = [
-        {"role": "system", "content": system},
+        {"role": "system", "content": _PHASE2_SYSTEM},
         {"role": "user", "content": suffix},
     ]
     raw = _call_audit_llm(ctx, messages, trace_task=f"audit: phase 2 triage {path}")
@@ -1084,8 +1079,8 @@ def _phase3a_inventory(
     triage_json = json.dumps(asdict(triage), indent=2) if triage else "{}"
     related = "\n\n".join(related_parts) if related_parts else "(none)"
 
-    system = _PHASE3A_TEMPLATE.format(bug_classes=bug_classes)
     suffix = (
+        f"Focus bug classes: {bug_classes}\n\n"
         f"Repository profile:\n{profile_json}\n\n"
         f"Phase 2 triage result:\n{triage_json}\n\n"
         f"Committed evidence bundle:\n{content}\n\n"
@@ -1093,7 +1088,7 @@ def _phase3a_inventory(
         f"Primary file: {path}"
     )
     messages = [
-        {"role": "system", "content": system},
+        {"role": "system", "content": _PHASE3A_SYSTEM},
         {"role": "user", "content": suffix},
     ]
     raw = _call_audit_llm(ctx, messages, trace_task=f"audit: phase 3a inventory {path}")
@@ -1113,15 +1108,16 @@ def _phase3b_expand_one(
     """Phase 3b: expand one inventory finding with proof details."""
     finding_stub, path, content, state, ctx = item
 
-    system = _PHASE3B_TEMPLATE.format(
-        title=finding_stub.get("title", ""),
-        severity=finding_stub.get("severity", ""),
-        location=finding_stub.get("location", ""),
-        claim=finding_stub.get("claim", ""),
+    suffix = (
+        f"Committed evidence for {path}:\n{content}\n\n"
+        f"Finding to expand:\n"
+        f"  Title: {finding_stub.get('title', '')}\n"
+        f"  Severity: {finding_stub.get('severity', '')}\n"
+        f"  Location: {finding_stub.get('location', '')}\n"
+        f"  Claim: {finding_stub.get('claim', '')}"
     )
-    suffix = f"Committed evidence for {path}:\n{content}"
     messages = [
-        {"role": "system", "content": system},
+        {"role": "system", "content": _PHASE3B_SYSTEM},
         {"role": "user", "content": suffix},
     ]
     raw = _call_audit_llm(ctx, messages, trace_task=f"audit: phase 3b expand {path}")
