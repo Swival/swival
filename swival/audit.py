@@ -794,7 +794,7 @@ Bug classes to consider:
 - command_execution
 - serialization
 - data_integrity
-_ arithmetic
+- arithmetic
 - cryptography
 - memory_safety
 - overflows
