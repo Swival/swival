@@ -1076,7 +1076,19 @@ def _phase2_triage_one(
         {"role": "user", "content": suffix},
     ]
     raw = _call_audit_llm(ctx, messages, trace_task=f"audit: phase 2 triage {path}")
-    parsed = _parse_json_response(raw)
+    try:
+        parsed = _parse_json_response(raw)
+    except ValueError:
+        return TriageRecord(
+            path=path,
+            priority="SKIP",
+            confidence="low",
+            bug_classes=[],
+            summary="triage failed (unparseable LLM response)",
+            relevant_symbols=[],
+            suspicious_flows=[],
+            needs_followup=False,
+        )
 
     priority = parsed.get("priority", "SKIP").upper()
     if priority not in ("ESCALATE_HIGH", "ESCALATE_MEDIUM", "SKIP"):
