@@ -290,6 +290,20 @@ class TestJsonParsing:
         with pytest.raises(ValueError, match="invalid JSON"):
             _parse_json_response("{broken json")
 
+    def test_unquoted_string_values_fixed(self):
+        text = '{"priority":"SKIP","confidence":high,"needs_followup":false}'
+        result = _parse_json_response(text)
+        assert result["confidence"] == "high"
+        assert result["needs_followup"] is False
+
+    def test_unquoted_values_preserves_json_literals(self):
+        text = '{"a":true,"b":null,"c":false,"d":foo}'
+        result = _parse_json_response(text)
+        assert result["a"] is True
+        assert result["b"] is None
+        assert result["c"] is False
+        assert result["d"] == "foo"
+
 
 # ---------------------------------------------------------------------------
 # State persistence and resume

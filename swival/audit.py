@@ -517,6 +517,24 @@ def _build_context_indices(
 # ---------------------------------------------------------------------------
 
 
+_UNQUOTED_VALUE_RE = re.compile(
+    r'(?<=:)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*(?=[,}\]])'
+)
+_JSON_LITERALS = frozenset({"true", "false", "null"})
+
+
+def _fix_unquoted_values(text: str) -> str:
+    """Quote bare identifiers that aren't JSON literals (true/false/null)."""
+    def _quote_match(m: re.Match) -> str:
+        val = m.group(1)
+        if val in _JSON_LITERALS:
+            return m.group(0)
+        ws_before = m.group(0)[: m.start(1) - m.start(0)]
+        ws_after = m.group(0)[m.end(1) - m.start(0) :]
+        return f'{ws_before}"{val}"{ws_after}'
+    return _UNQUOTED_VALUE_RE.sub(_quote_match, text)
+
+
 def _parse_json_response(text: str, required_keys: list[str] | None = None) -> dict:
     if not text:
         raise ValueError("empty LLM response")
@@ -546,10 +564,15 @@ def _parse_json_response(text: str, required_keys: list[str] | None = None) -> d
         # Unmatched braces — try from start to end of string as fallback
         end = len(cleaned)
 
+    candidate = cleaned[start:end]
     try:
-        parsed = json.loads(cleaned[start:end])
-    except json.JSONDecodeError as e:
-        raise ValueError(f"invalid JSON: {e}") from e
+        parsed = json.loads(candidate)
+    except json.JSONDecodeError:
+        candidate = _fix_unquoted_values(candidate)
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"invalid JSON: {e}") from e
 
     if required_keys:
         missing = [k for k in required_keys if k not in parsed]
