@@ -45,6 +45,7 @@ def _debug_log(event: str, **fields) -> None:
         with open(_debug_log_path, "a") as f:
             f.write(line)
 
+
 # ---------------------------------------------------------------------------
 # File extensions
 # ---------------------------------------------------------------------------
@@ -819,12 +820,15 @@ Output strict JSON with these keys only:
 - suspicious_flows: array of short strings
 - needs_followup: boolean
 
+You have no tools, no shell access, and no ability to run commands.
+All the source code you need is included below. Do not request additional information.
+Your entire response must be a single JSON object and nothing else.
+
 Rules:
 - Use only repository-grounded reasoning.
 - Do not declare that a bug is proven in this phase.
 - Prefer SKIP if escalation cannot be justified.
-- Use ESCALATE_HIGH only when the evidence bundle contains a concrete suspicious path or invariant break worth deep review.
-- Keep the response strictly JSON."""
+- Use ESCALATE_HIGH only when the evidence bundle contains a concrete suspicious path or invariant break worth deep review."""
 
 _PHASE3A_TEMPLATE = """\
 You are performing phase 3 deep security review for one candidate file.
@@ -835,7 +839,10 @@ Reject any claim that is not fully proven.
 Focus bug classes:
 {bug_classes}
 
-Output strict JSON with this shape:
+You have no tools, no shell access, and no ability to run commands.
+All the source code you need is included below. Do not request additional information.
+
+Your entire response must be a single JSON object with this shape and nothing else:
 {{
   "findings": [
     {{
@@ -846,6 +853,8 @@ Output strict JSON with this shape:
     }}
   ]
 }}
+
+If there are no findings, respond with: {{"findings": []}}
 
 Rules:
 - Report zero findings rather than a speculative finding.
@@ -868,7 +877,10 @@ Severity: {severity}
 Location: {location}
 Claim: {claim}
 
-Output strict JSON with this shape:
+You have no tools, no shell access, and no ability to run commands.
+All the source code you need is included below. Do not request additional information.
+
+Your entire response must be a single JSON object with this shape and nothing else:
 {{
   "type": "logic error | vulnerability | data integrity bug | authorization flaw | trust-boundary violation | race condition | error-handling bug | validation gap | resource lifecycle bug | invariant violation",
   "preconditions": "minimum justified preconditions, under 20 words",
@@ -1647,7 +1659,9 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
     state_dir = Path(base_dir) / ".swival" / "audit"
 
     try:
-        return _run_audit_phases(cmd_arg, ctx, base_dir, state_dir, workers, resume, regen, focus)
+        return _run_audit_phases(
+            cmd_arg, ctx, base_dir, state_dir, workers, resume, regen, focus
+        )
     finally:
         _debug_log_path = None
 
