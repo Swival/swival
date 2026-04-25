@@ -2518,6 +2518,41 @@ def _resolve_model_str(provider: str, model_id: str) -> str:
         return model_id
 
 
+def _ensure_chatgpt_responses_model_registered(litellm_module, model_str: str) -> None:
+    """Teach older LiteLLM releases about new ChatGPT Responses models."""
+    if not model_str.startswith("chatgpt/"):
+        return
+
+    bare = model_str.removeprefix("chatgpt/")
+    if bare.startswith("responses/") or not bare.startswith("gpt-5"):
+        return
+
+    model_cost = getattr(litellm_module, "model_cost", {}) or {}
+    info = model_cost.get(model_str) or {}
+    if info.get("mode") == "responses":
+        return
+
+    source_info = dict(model_cost.get(bare) or {})
+    if not source_info:
+        source_info = dict(model_cost.get("chatgpt/gpt-5.4") or {})
+    if not source_info:
+        try:
+            source_info = dict(litellm_module.get_model_info("chatgpt/gpt-5.4"))
+        except Exception:
+            return
+
+    source_info.pop("key", None)
+    source_info.update(
+        {
+            "litellm_provider": "chatgpt",
+            "mode": "responses",
+            "input_cost_per_token": 0,
+            "output_cost_per_token": 0,
+        }
+    )
+    litellm_module.register_model({model_str: source_info})
+
+
 def _render_transcript(messages):
     """Render a messages list as a plain-text transcript for command provider."""
     from ._msg import _msg_get, _msg_role, _msg_tool_calls, _msg_tool_call_id
@@ -3118,6 +3153,8 @@ def call_llm(
     _skip_tool_choice = False
 
     model_str = _resolve_model_str(provider, model_id)
+    if provider == "chatgpt":
+        _ensure_chatgpt_responses_model_registered(litellm, model_str)
 
     if provider == "lmstudio":
         kwargs = {"api_base": f"{base_url}/v1", "api_key": "lm-studio"}
@@ -4794,6 +4831,7 @@ def _litellm_context_length(model_str: str) -> int | None:
     try:
         import litellm
 
+        _ensure_chatgpt_responses_model_registered(litellm, model_str)
         info = litellm.get_model_info(model_str)
         return info.get("max_input_tokens")
     except Exception:

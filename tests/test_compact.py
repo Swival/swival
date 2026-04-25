@@ -2166,7 +2166,9 @@ class TestEmergencyTruncate:
         ]
         # Use a small context_length so the big tool result must be compacted
         _emergency_truncate(msgs, 2000)
-        tool_content = msgs[2]["content"] if isinstance(msgs[2], dict) else msgs[2].content
+        tool_content = (
+            msgs[2]["content"] if isinstance(msgs[2], dict) else msgs[2].content
+        )
         assert len(tool_content) < len(big_result)
 
     def test_truncates_large_messages(self):

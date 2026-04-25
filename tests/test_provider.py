@@ -1589,6 +1589,31 @@ class TestChatGPTRouting:
             assert "seed" not in kwargs
             assert "tool_choice" not in kwargs
 
+    def test_chatgpt_registers_new_gpt5_as_responses_model(self):
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                None,
+                "gpt-5.5",
+                [],
+                100,
+                0.5,
+                1.0,
+                None,
+                None,
+                False,
+                provider="chatgpt",
+                api_key=None,
+            )
+            kwargs = mock_comp.call_args[1]
+            assert kwargs["model"] == "chatgpt/gpt-5.5"
+
+        import litellm
+
+        info = litellm.get_model_info("chatgpt/gpt-5.5")
+        assert info["mode"] == "responses"
+        assert info["litellm_provider"] == "chatgpt"
+
 
 # ---------------------------------------------------------------------------
 # ChatGPT model normalization (double-prefix guard)
@@ -1812,6 +1837,12 @@ class TestResolveProviderChatGPT:
         assert context_length is None or (
             isinstance(context_length, int) and context_length > 0
         )
+
+    def test_context_for_new_gpt5_from_bare_metadata(self):
+        _, _, _, context_length, _ = resolve_provider(
+            "chatgpt", "gpt-5.5", None, None, None, False
+        )
+        assert isinstance(context_length, int) and context_length > 0
 
     def test_context_override(self):
         _, _, _, context_length, _ = resolve_provider(
