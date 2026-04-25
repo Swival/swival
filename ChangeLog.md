@@ -2,6 +2,10 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.8
+
+- GPT-5.5 is now recognized by the ChatGPT provider. Older LiteLLM releases that don't yet know about the model are patched at runtime so context-length queries and Responses API routing work out of the box.
+
 ## 1.0.7
 
 - Emergency truncation has been added as a last-resort compaction stage.

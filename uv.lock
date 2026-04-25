@@ -735,7 +735,7 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.83.11"
+version = "1.83.13"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -751,9 +751,9 @@ dependencies = [
     { name = "tiktoken" },
     { name = "tokenizers" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c6/60/dd644f259aa1d0d7769bb5408737bd5e7ea73521523665e5c5a0f0be8024/litellm-1.83.11.tar.gz", hash = "sha256:c091d2254f1d17a6779dbc28c176bf918525495eff944bd0d5f9b8c357dd6077", size = 14750640, upload-time = "2026-04-22T02:02:45.478Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1f/ac/6cc660c476e1cb925055eb7d032b7774de71fce28b9dfec652fc277397f8/litellm-1.83.13.tar.gz", hash = "sha256:803b53077cd678bb78d40f1a971920a8cd06073520c756e3d2bcb5c4da7bd352", size = 14785817, upload-time = "2026-04-24T01:03:03.096Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/61/90/55095f450803ee7ea1b66961a33ba69e3c980e171d3cfad9eeec91c08f94/litellm-1.83.11-py3-none-any.whl", hash = "sha256:f1d508fb0ad5900796299fd20ec81e8a13111193473823236109739b43fda9ba", size = 16366401, upload-time = "2026-04-22T02:02:41.773Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/57/99d553839018ba4c1b94fbe540f218fefb725fba79ecc2abf462cd39d719/litellm-1.83.13-py3-none-any.whl", hash = "sha256:14be9f3b4a9e207372f275d75e6f174a3e717352ccca6c63707c25fd6e23cac6", size = 16406883, upload-time = "2026-04-24T01:02:58.7Z" },
 ]
 
 [[package]]
@@ -1661,7 +1661,7 @@ wheels = [
 
 [[package]]
 name = "swival"
-version = "1.0.7"
+version = "1.0.8"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
@@ -1694,7 +1694,7 @@ requires-dist = [
     { name = "fast-cipher", specifier = ">=0.2.1" },
     { name = "html-to-markdown", specifier = ">=3.1.0,<3.2" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "litellm", specifier = "==1.83.11" },
+    { name = "litellm", specifier = ">=1.83.13" },
     { name = "mcp", specifier = ">=1.27,<2" },
     { name = "prompt-toolkit", specifier = ">=3.0.52" },
     { name = "rank-bm25", specifier = ">=0.2.2" },
