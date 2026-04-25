@@ -2033,7 +2033,7 @@ class TestAutoRetry:
         )
         monkeypatch.setattr(
             "swival.audit._phase5_report",
-            lambda vf, patch_fn, ctx: "# Report",
+            lambda vf, patch_fn, patch_text, ctx: "# Report",
         )
 
         ctx = SimpleNamespace(

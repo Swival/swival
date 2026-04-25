@@ -771,6 +771,10 @@ Output strict JSON with these keys only:
 - dangerous_operations: array of short strings
 - summary: string under 120 words
 
+You have no tools, no shell access, and no ability to run commands.
+All the source code you need is included below. Do not request additional information.
+Your entire response must be a single JSON object and nothing else.
+
 Rules:
 - Use only the provided committed repository evidence.
 - Do not speculate.
@@ -925,6 +929,10 @@ Use exactly this structure:
 - ## Patch Rationale
 - ## Residual Risk
 - ## Patch
+
+You have no tools, no shell access, and no ability to run commands.
+All the information you need is included below. Do not request additional information.
+Your entire response must be a single markdown document and nothing else.
 
 Rules:
 - Confidence must be certain.
@@ -1418,17 +1426,20 @@ def _phase5_patch(
 def _phase5_report(
     vf: VerifiedFinding,
     patch_filename: str,
+    patch_text: str,
     ctx: InputContext,
 ) -> str:
     """Generate the markdown report."""
     finding_json = json.dumps(asdict(vf.finding), indent=2)
     reproducer_json = json.dumps(vf.reproducer, indent=2) if vf.reproducer else "{}"
+    evidence, _n = _gather_evidence(vf.finding, ctx)
 
     system = _PHASE5_REPORT_TEMPLATE.format(provenance_url=AUDIT_PROVENANCE_URL)
     suffix = (
         f"Verified finding:\n{finding_json}\n\n"
         f"Reproducer summary:\n{reproducer_json}\n\n"
-        f"Patch file name: {patch_filename}"
+        f"Affected source:\n{evidence}\n\n"
+        f"Patch ({patch_filename}):\n```diff\n{patch_text}```"
     )
     messages = [
         {"role": "system", "content": system},
@@ -2027,7 +2038,7 @@ def _run_audit_phases(
                     continue
 
                 fmt.info(f"  [{fi}/{total}] generating report...")
-                report_text = _phase5_report(vf, patch_filename, ctx)
+                report_text = _phase5_report(vf, patch_filename, patch_text, ctx)
 
                 (artifact_dir / patch_filename).write_text(patch_text)
                 (artifact_dir / report_filename).write_text(report_text)
