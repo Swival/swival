@@ -2,6 +2,16 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.9
+
+- `--logout` has been added to delete locally cached ChatGPT OAuth tokens and exit, so users can sign out without hand-deleting files under `~/.config/litellm/chatgpt/`.
+- `/audit` no longer asks the LLM for JSON. Intermediate phase responses now use a simple structured-text format (`@@ name @@` blocks with `key: value` lines), which models emit far more reliably across long prompts than nested JSON.
+- `/audit` phase 1 (file profiling) is now dramatically faster on large repositories. File contents are read through a single `git cat-file --batch` process instead of one subprocess per file, cutting the per-file overhead by an order of magnitude on multi-thousand-file scans.
+- A `--debug` option has been added to `/audit`. When enabled, a real-time JSONL log is written to `.swival/audit/debug.jsonl` capturing every LLM request and response, parse outcomes, repair attempts, and per-phase metrics, which makes it tractable to diagnose model misbehavior on large audits.
+- Another `/audit` improvement: it is now considerably more verbose during phase 3, surfacing per-file progress instead of presenting one long silent batch.
+- Phase 5 audit reports no longer occasionally contain raw tool-call JSON (`{"cmd": "ls"}`) or conversational preamble like "I'll inspect the patch...".
+- `/audit` prompt cache hit rates have been improved: the bug-class taxonomy and finding metadata interpolated into phase 3 system prompts have been moved into user messages so the system prefix stays static across calls, and per-phase cache statistics are now logged when `--debug` is on.
+
 ## 1.0.8
 
 - GPT-5.5 is now recognized by the ChatGPT provider. Older LiteLLM releases that don't yet know about the model are patched at runtime so context-length queries and Responses API routing work out of the box.
