@@ -28,6 +28,8 @@ AUDIT_PROVENANCE_URL = "https://swival.dev"
 _AUDIT_TRUNCATION_MARKER = "\n\n[truncated — file too large for context window]"
 _AUDIT_TRUNCATION_FLOOR = 200
 
+_LARGE_SCOPE_THRESHOLD = 500
+
 _DEFAULT_METRICS: dict[str, int] = {
     "parse_failures": 0,
     "parse_failures_profile": 0,
@@ -468,10 +470,107 @@ def _extract_exports(content: str) -> list[str]:
     return exports
 
 
-def _load_file_contents(files: list[str], base_dir: str) -> dict[str, str]:
-    """Read all files from git once and return a path->content cache."""
+def _git_show_many(paths: list[str], base_dir: str) -> dict[str, str]:
+    """Read many files from git in one ``git cat-file --batch`` process.
+
+    Returns a ``path->content`` dict. Missing or non-blob entries are silently
+    skipped, as is anything beyond a record that breaks the framing. Newlines
+    in paths would corrupt the protocol, so they raise ``RuntimeError``.
+    Callers that want a per-path fallback for any path the batch didn't return
+    should walk the input list against the returned dict — see
+    ``_load_file_contents``.
+    """
+    rejected = [p for p in paths if "\n" in p]
+    if rejected:
+        raise RuntimeError(f"refusing to batch paths with newlines: {rejected[:3]}")
+    safe_paths = paths
+    if not safe_paths:
+        return {}
+
+    proc = subprocess.Popen(
+        ["git", "cat-file", "--batch"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=base_dir,
+    )
+
+    def _writer():
+        try:
+            for p in safe_paths:
+                proc.stdin.write(f"HEAD:{p}\n".encode())
+            proc.stdin.close()
+        except BrokenPipeError:
+            pass
+
+    writer = threading.Thread(target=_writer, daemon=True)
+    writer.start()
+
     cache: dict[str, str] = {}
-    for f in files:
+    out = proc.stdout
+    try:
+        for p in safe_paths:
+            header = out.readline()
+            if not header:
+                break
+            parts = header.rstrip(b"\n").split(b" ")
+            if len(parts) >= 2 and parts[1] == b"missing":
+                continue
+            if len(parts) < 3:
+                break
+            objtype = parts[1]
+            try:
+                size = int(parts[2])
+            except ValueError:
+                break
+            chunks: list[bytes] = []
+            remaining = size
+            while remaining > 0:
+                chunk = out.read(remaining)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            if remaining > 0:
+                break
+            sep = out.read(1)
+            if sep != b"\n":
+                break
+            if objtype != b"blob":
+                continue
+            cache[p] = b"".join(chunks).decode(errors="replace")
+    finally:
+        writer.join(timeout=5)
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+            except ProcessLookupError:
+                pass
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+    return cache
+
+
+def _load_file_contents(files: list[str], base_dir: str) -> dict[str, str]:
+    """Read all files from git once and return a path->content cache.
+
+    Tries ``git cat-file --batch`` for the whole list first. Any path the
+    batch process didn't return (because the process died, a record was
+    malformed and broke framing, or the path contained a newline) falls back
+    to per-file ``git show``.
+    """
+    cache: dict[str, str] = {}
+    try:
+        cache = _git_show_many(files, base_dir)
+    except RuntimeError:
+        cache = {}
+
+    missing = [f for f in files if f not in cache]
+    for f in missing:
         try:
             cache[f] = _git_show(f, base_dir)
         except RuntimeError:
@@ -489,6 +588,9 @@ def _repo_profile_json(state: AuditRunState) -> str:
     return cached
 
 
+_IDENT_RE = re.compile(r"\b\w+\b")
+
+
 def _build_context_indices(
     files: list[str],
     content_cache: dict[str, str],
@@ -504,16 +606,18 @@ def _build_context_indices(
         for sym in _extract_exports(content):
             export_map.setdefault(sym, []).append(f)
 
-    sym_patterns = {sym: re.compile(rf"\b{re.escape(sym)}\b") for sym in export_map}
+    export_keys = set(export_map)
 
     caller_index: dict[str, list[str]] = {}
     for f in files:
         content = content_cache.get(f)
         if content is None:
             continue
-        callers = set()
-        for sym, sources in export_map.items():
-            if f not in sources and sym_patterns[sym].search(content):
+        tokens = {m.group() for m in _IDENT_RE.finditer(content)}
+        callers: set[str] = set()
+        for sym in tokens & export_keys:
+            sources = export_map[sym]
+            if f not in sources:
                 callers.update(sources)
         if callers:
             caller_index[f] = sorted(callers)
@@ -2181,17 +2285,28 @@ def _run_audit_phases(
             f"audit {state.run_id}: {len(scope.mandatory_files)} files, "
             f"branch={scope.branch}, commit={scope.commit[:8]}"
         )
+        if len(scope.mandatory_files) > _LARGE_SCOPE_THRESHOLD:
+            fmt.warning(
+                f"{len(scope.mandatory_files)} files in scope. "
+                f"phase 2 may issue up to {len(scope.mandatory_files)} LLM calls. "
+                f"consider narrowing with --focus <subdir>."
+            )
 
     # Phase 1: scope + profile
     if state.phase == "init":
-        fmt.info("phase 1: building repository profile...")
+        fmt.info(
+            f"phase 1: loading {len(state.scope.mandatory_files)} file contents..."
+        )
         content_cache = _load_file_contents(state.scope.mandatory_files, base_dir)
+        fmt.info("phase 1: building import/caller indices...")
         state.import_index, state.caller_index = _build_context_indices(
             state.scope.mandatory_files, content_cache
         )
+        fmt.info("phase 1: ordering by attack surface...")
         state.queued_files = _order_by_attack_surface(
             state.scope.mandatory_files, content_cache
         )
+        fmt.info("phase 1: calling LLM for repo profile...")
         state.repo_profile = _phase1_repo_profile(state, ctx)
         state.phase = "triage"
         state.save()

@@ -19,10 +19,12 @@ from swival.audit import (
     VerificationResult,
     VerifiedFinding,
     _TransientVerifierError,
+    _build_context_indices,
     _canonicalize_finding,
     _extract_exports,
     _extract_imports,
     _finding_key,
+    _git_show_many,
     _is_auditable,
     _make_slug,
     _load_file_contents,
@@ -249,6 +251,157 @@ class TestImportExport:
         assert "handle_request" in exports
         assert "UserModel" in exports
         assert "_private" not in exports
+
+
+# ---------------------------------------------------------------------------
+# Batched git read (_git_show_many)
+# ---------------------------------------------------------------------------
+
+
+class TestGitShowMany:
+    def test_basic_multiple_files(self, tmp_path):
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "alpha\n")
+        _commit_file(tmp_path, "b.py", "beta beta beta\n")
+        _commit_file(tmp_path, "c.py", "gamma")
+
+        out = _git_show_many(["a.py", "b.py", "c.py"], str(tmp_path))
+        assert out == {"a.py": "alpha\n", "b.py": "beta beta beta\n", "c.py": "gamma"}
+
+    def test_path_with_spaces(self, tmp_path):
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "with space.py", "ok")
+        out = _git_show_many(["with space.py"], str(tmp_path))
+        assert out == {"with space.py": "ok"}
+
+    def test_missing_path_skipped_without_desync(self, tmp_path):
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "first.py", "FIRST")
+        _commit_file(tmp_path, "third.py", "THIRD")
+
+        out = _git_show_many(["first.py", "ghost.py", "third.py"], str(tmp_path))
+        assert out == {"first.py": "FIRST", "third.py": "THIRD"}
+
+    def test_non_blob_object_does_not_desync(self, tmp_path):
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "subdir/inner.py", "INNER")
+        _commit_file(tmp_path, "after.py", "AFTER")
+
+        out = _git_show_many(["subdir", "after.py"], str(tmp_path))
+        assert out == {"after.py": "AFTER"}
+
+    def test_empty_file(self, tmp_path):
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "empty.py", "")
+        out = _git_show_many(["empty.py"], str(tmp_path))
+        assert out == {"empty.py": ""}
+
+    def test_no_trailing_newline(self, tmp_path):
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "no_nl.py", "no newline at end")
+        out = _git_show_many(["no_nl.py"], str(tmp_path))
+        assert out == {"no_nl.py": "no newline at end"}
+
+    def test_varied_sizes(self, tmp_path):
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "small.py", "x")
+        _commit_file(tmp_path, "medium.py", "y" * 1024)
+        _commit_file(tmp_path, "large.py", "z" * (256 * 1024))
+
+        out = _git_show_many(["small.py", "medium.py", "large.py"], str(tmp_path))
+        assert out["small.py"] == "x"
+        assert out["medium.py"] == "y" * 1024
+        assert out["large.py"] == "z" * (256 * 1024)
+
+    def test_matches_git_show_for_non_utf8(self, tmp_path):
+        from swival.audit import _git_show
+
+        _init_git(tmp_path)
+        fp = tmp_path / "binary.py"
+        fp.write_bytes(b"prefix\x80\x81\xfesuffix")
+        subprocess.run(
+            ["git", "add", "binary.py"], cwd=tmp_path, capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "add binary"],
+            cwd=tmp_path,
+            capture_output=True,
+            check=True,
+        )
+
+        batch = _git_show_many(["binary.py"], str(tmp_path))
+        single = _git_show("binary.py", str(tmp_path))
+        assert batch["binary.py"] == single
+
+    def test_rejects_path_with_newline(self, tmp_path):
+        _init_git(tmp_path)
+        with pytest.raises(RuntimeError):
+            _git_show_many(["evil\nname.py"], str(tmp_path))
+
+    def test_load_file_contents_falls_back_per_path(self, tmp_path):
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "kept.py", "real")
+
+        cache = _load_file_contents(["kept.py", "ghost.py"], str(tmp_path))
+        assert cache == {"kept.py": "real"}
+
+
+# ---------------------------------------------------------------------------
+# Context indices (tokenization equivalence)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildContextIndices:
+    def test_basic_caller_index(self):
+        cache = {
+            "lib.py": "def handle_request():\n    pass\n",
+            "app.py": "from lib import handle_request\nhandle_request()\n",
+        }
+        imp_idx, call_idx = _build_context_indices(["lib.py", "app.py"], cache)
+
+        assert "lib" in imp_idx["app.py"]
+        assert call_idx["app.py"] == ["lib.py"]
+        assert "lib.py" not in call_idx
+
+    def test_self_file_excluded(self):
+        cache = {
+            "lib.py": "def handle_request():\n    handle_request()\n",
+        }
+        _imp_idx, call_idx = _build_context_indices(["lib.py"], cache)
+        assert "lib.py" not in call_idx
+
+    def test_symbol_exported_from_multiple_files(self):
+        cache = {
+            "a.py": "def shared():\n    pass\n",
+            "b.py": "def shared():\n    pass\n",
+            "c.py": "shared()\n",
+        }
+        _imp_idx, call_idx = _build_context_indices(["a.py", "b.py", "c.py"], cache)
+        assert call_idx["c.py"] == ["a.py", "b.py"]
+
+    def test_substring_does_not_match(self):
+        cache = {
+            "lib.py": "def run():\n    pass\n",
+            "app.py": "rerun()\nprerun()\nrunner()\n",
+        }
+        _imp_idx, call_idx = _build_context_indices(["lib.py", "app.py"], cache)
+        assert "app.py" not in call_idx
+
+    def test_underscore_and_digit_identifiers(self):
+        cache = {
+            "lib.py": "def handle_v2():\n    pass\n\ndef _private():\n    pass\n",
+            "app.py": "handle_v2()\n_private()\n",
+        }
+        _imp_idx, call_idx = _build_context_indices(["lib.py", "app.py"], cache)
+        assert call_idx["app.py"] == ["lib.py"]
+
+    def test_no_overlap_no_entry(self):
+        cache = {
+            "lib.py": "def alpha():\n    pass\n",
+            "app.py": "print('hello world')\n",
+        }
+        _imp_idx, call_idx = _build_context_indices(["lib.py", "app.py"], cache)
+        assert call_idx == {}
 
 
 # ---------------------------------------------------------------------------
