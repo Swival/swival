@@ -1374,6 +1374,7 @@ Rules:
 _PHASE3B_TYPE_VALUES = (
     "logic error",
     "vulnerability",
+    "memory safety",
     "data integrity bug",
     "authorization flaw",
     "trust-boundary violation",
