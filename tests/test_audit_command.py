@@ -1,4 +1,4 @@
-"""Tests for swival/audit.py — scope, JSON parsing, triage, verification, artifacts."""
+"""Tests for swival/audit.py — scope, record parsing, triage, verification, artifacts."""
 
 from __future__ import annotations
 
@@ -13,6 +13,8 @@ from swival.audit import (
     AuditScope,
     DeepReviewResult,
     FindingRecord,
+    PhaseSchema,
+    RecordSchema,
     TriageRecord,
     VerificationResult,
     VerifiedFinding,
@@ -25,8 +27,8 @@ from swival.audit import (
     _make_slug,
     _load_file_contents,
     _order_by_attack_surface,
-    _parse_json_response,
-    _parse_with_repair,
+    _parse_records,
+    _parse_records_with_repair,
     _score_attack_surface,
     _verify_one_finding,
     _verify_single_finding,
@@ -250,59 +252,1320 @@ class TestImportExport:
 
 
 # ---------------------------------------------------------------------------
-# JSON parsing
+# Structured-text record parsing
 # ---------------------------------------------------------------------------
 
 
-class TestJsonParsing:
-    def test_plain_json(self):
-        result = _parse_json_response('{"priority": "SKIP"}')
-        assert result["priority"] == "SKIP"
+class TestParseRecords:
+    """Unit tests for _parse_records and its strict validation pass."""
 
-    def test_fenced_json(self):
-        text = '```json\n{"priority": "ESCALATE_HIGH"}\n```'
-        result = _parse_json_response(text)
-        assert result["priority"] == "ESCALATE_HIGH"
+    _FINDING_SCHEMA = PhaseSchema(
+        record=RecordSchema(
+            name="finding",
+            required=("title", "severity", "location", "claim"),
+            enums={"severity": ("low", "medium", "high", "critical")},
+        ),
+        cardinality="zero_or_more",
+        allow_none=True,
+    )
 
-    def test_json_with_preamble(self):
-        text = 'Here is my analysis:\n{"priority": "SKIP", "confidence": "high"}'
-        result = _parse_json_response(text)
-        assert result["priority"] == "SKIP"
+    _FINDING_NO_NONE = PhaseSchema(
+        record=RecordSchema(
+            name="finding",
+            required=("title", "severity", "location", "claim"),
+            enums={"severity": ("low", "medium", "high", "critical")},
+        ),
+        cardinality="zero_or_more",
+        allow_none=False,
+    )
 
-    def test_json_with_suffix(self):
-        text = '{"accepted": true}\n\nThis finding looks valid.'
-        result = _parse_json_response(text)
-        assert result["accepted"] is True
+    _PROFILE_SCHEMA = PhaseSchema(
+        record=RecordSchema(
+            name="profile",
+            required=("language", "summary"),
+            optional=("framework", "entry_point"),
+            repeated={
+                "language": "languages",
+                "framework": "frameworks",
+                "entry_point": "entry_points",
+            },
+        ),
+        cardinality="one",
+    )
 
-    def test_missing_required_keys(self):
-        with pytest.raises(ValueError, match="missing required keys"):
-            _parse_json_response('{"foo": 1}', required_keys=["bar"])
+    _TRIAGE_SCHEMA = PhaseSchema(
+        record=RecordSchema(
+            name="triage",
+            required=("priority", "summary"),
+            enums={"priority": ("ESCALATE_HIGH", "ESCALATE_MEDIUM", "SKIP")},
+            booleans=("needs_followup",),
+        ),
+        cardinality="one",
+    )
+
+    _EXPANSION_SCHEMA = PhaseSchema(
+        record=RecordSchema(
+            name="expansion",
+            required=("type", "proof"),
+            multiline=("proof",),
+        ),
+        cardinality="one",
+    )
+
+    # -- Happy path ---------------------------------------------------------
+
+    def test_single_record_with_all_keys(self):
+        text = (
+            "@@ finding @@\n"
+            "title: a bug\n"
+            "severity: high\n"
+            "location: x.py:1\n"
+            "claim: it crashes\n"
+        )
+        result = _parse_records(text, self._FINDING_SCHEMA)
+        assert len(result) == 1
+        assert result[0]["title"] == "a bug"
+        assert result[0]["severity"] == "high"
+        assert result[0]["location"] == "x.py:1"
+        assert result[0]["claim"] == "it crashes"
+
+    def test_multiple_records_of_same_type(self):
+        text = (
+            "@@ finding @@\n"
+            "title: bug A\n"
+            "severity: high\n"
+            "location: x.py:1\n"
+            "claim: claim A\n"
+            "\n"
+            "@@ finding @@\n"
+            "title: bug B\n"
+            "severity: low\n"
+            "location: y.py:2\n"
+            "claim: claim B\n"
+        )
+        result = _parse_records(text, self._FINDING_SCHEMA)
+        assert len(result) == 2
+        assert result[0]["title"] == "bug A"
+        assert result[1]["title"] == "bug B"
+
+    def test_multiline_continuation_joins(self):
+        text = (
+            "@@ expansion @@\n"
+            "type: vulnerability\n"
+            "proof:\n"
+            "  user input arrives at line 10\n"
+            "  flows to eval at line 20\n"
+            "  reachable from public handler\n"
+        )
+        result = _parse_records(text, self._EXPANSION_SCHEMA)
+        assert (
+            result[0]["proof"]
+            == "user input arrives at line 10 flows to eval at line 20 "
+            "reachable from public handler"
+        )
+
+    def test_preamble_before_first_header_is_ignored(self):
+        text = (
+            "Here is my analysis. I will produce one finding.\n"
+            "\n"
+            "@@ finding @@\n"
+            "title: a bug\n"
+            "severity: high\n"
+            "location: x.py:1\n"
+            "claim: it crashes\n"
+        )
+        result = _parse_records(text, self._FINDING_SCHEMA)
+        assert len(result) == 1
+        assert result[0]["title"] == "a bug"
+
+    def test_fenced_code_block_unwrapped(self):
+        text = (
+            "```\n"
+            "@@ finding @@\n"
+            "title: a bug\n"
+            "severity: high\n"
+            "location: x.py:1\n"
+            "claim: it crashes\n"
+            "```"
+        )
+        result = _parse_records(text, self._FINDING_SCHEMA)
+        assert len(result) == 1
+        assert result[0]["title"] == "a bug"
+
+    def test_key_casing_and_separators_accepted(self):
+        text = (
+            "@@ FINDING @@\n"
+            "Title: a bug\n"
+            "SEVERITY = high\n"
+            "location: x.py:1\n"
+            "Claim = it crashes\n"
+        )
+        result = _parse_records(text, self._FINDING_SCHEMA)
+        assert result[0]["title"] == "a bug"
+        assert result[0]["severity"] == "high"
+        assert result[0]["claim"] == "it crashes"
+
+    def test_header_extra_whitespace_matches(self):
+        text = (
+            "@@   finding   @@\n"
+            "title: a bug\n"
+            "severity: high\n"
+            "location: x.py:1\n"
+            "claim: it crashes\n"
+        )
+        result = _parse_records(text, self._FINDING_SCHEMA)
+        assert len(result) == 1
+
+    def test_repeated_keys_collect_to_plural(self):
+        text = (
+            "@@ profile @@\n"
+            "language: python\n"
+            "language: rust\n"
+            "framework: pytest\n"
+            "summary: a tiny tool\n"
+        )
+        result = _parse_records(text, self._PROFILE_SCHEMA)
+        assert result[0]["languages"] == ["python", "rust"]
+        assert result[0]["frameworks"] == ["pytest"]
+        assert result[0]["entry_points"] == []
+        assert result[0]["summary"] == "a tiny tool"
+
+    def test_none_sentinel_returns_empty_when_allowed(self):
+        result = _parse_records("@@ none @@", self._FINDING_SCHEMA)
+        assert result == []
+
+    def test_none_sentinel_with_preamble(self):
+        result = _parse_records(
+            "I found nothing.\n\n@@ none @@\n", self._FINDING_SCHEMA
+        )
+        assert result == []
+
+    # -- Strict-after-parse -------------------------------------------------
+
+    def test_missing_required_key_raises_with_field_and_index(self):
+        text = "@@ finding @@\ntitle: a bug\nseverity: high\nlocation: x.py:1\n"
+        with pytest.raises(
+            ValueError, match="missing required key 'claim' in record 0"
+        ):
+            _parse_records(text, self._FINDING_SCHEMA)
+
+    def test_finding_missing_claim_fails_whole_response(self):
+        text = (
+            "@@ finding @@\n"
+            "title: bug A\n"
+            "severity: high\n"
+            "location: x.py:1\n"
+            "claim: claim A\n"
+            "\n"
+            "@@ finding @@\n"
+            "title: bug B\n"
+            "severity: low\n"
+            "location: y.py:2\n"
+        )
+        with pytest.raises(
+            ValueError, match="missing required key 'claim' in record 1"
+        ):
+            _parse_records(text, self._FINDING_SCHEMA)
+
+    def test_none_sentinel_rejected_when_not_allowed(self):
+        with pytest.raises(ValueError, match="not permitted"):
+            _parse_records("@@ none @@", self._FINDING_NO_NONE)
+
+    def test_cardinality_one_rejects_zero_records(self):
+        with pytest.raises(ValueError, match="exactly one"):
+            _parse_records("just prose, nothing else", self._PROFILE_SCHEMA)
+
+    def test_cardinality_one_rejects_two_records(self):
+        text = (
+            "@@ profile @@\n"
+            "language: python\n"
+            "summary: tool A\n"
+            "\n"
+            "@@ profile @@\n"
+            "language: rust\n"
+            "summary: tool B\n"
+        )
+        with pytest.raises(ValueError, match="exactly one"):
+            _parse_records(text, self._PROFILE_SCHEMA)
+
+    def test_enum_out_of_set_raises(self):
+        text = (
+            "@@ finding @@\n"
+            "title: a bug\n"
+            "severity: catastrophic\n"
+            "location: x.py:1\n"
+            "claim: it crashes\n"
+        )
+        with pytest.raises(ValueError, match="invalid enum value 'catastrophic'"):
+            _parse_records(text, self._FINDING_SCHEMA)
+
+    def test_zero_records_no_allow_none_raises(self):
+        with pytest.raises(ValueError, match="at least one"):
+            _parse_records("just preamble", self._FINDING_NO_NONE)
+
+    def test_prose_only_with_allow_none_still_raises(self):
+        """allow_none means the @@ none @@ sentinel is permitted; it does NOT
+        mean the parser silently accepts a prose-only response."""
+        with pytest.raises(
+            ValueError, match="at least one .* or the '@@ none @@' sentinel"
+        ):
+            _parse_records(
+                "Here is a critical issue but no proper @@ block format.",
+                self._FINDING_SCHEMA,
+            )
+
+    def test_empty_value_with_allow_none_still_raises(self):
+        """An empty response under allow_none must error rather than coerce
+        to []. The model has to either emit a record or the sentinel."""
+        with pytest.raises(ValueError, match="empty"):
+            _parse_records("", self._FINDING_SCHEMA)
+
+    def test_empty_repeated_value_is_dropped(self):
+        text = (
+            "@@ profile @@\nlanguage: python\nlanguage:\nlanguage: rust\nsummary: ok\n"
+        )
+        result = _parse_records(text, self._PROFILE_SCHEMA)
+        assert result[0]["languages"] == ["python", "rust"]
+
+    def test_required_repeated_with_only_empty_values_raises_missing(self):
+        text = "@@ profile @@\nlanguage:\nlanguage:\nsummary: ok\n"
+        with pytest.raises(ValueError, match="missing required key 'language'"):
+            _parse_records(text, self._PROFILE_SCHEMA)
+
+    def test_optional_repeated_with_only_empty_values_normalizes_to_empty(self):
+        text = "@@ profile @@\nlanguage: python\nframework:\nframework:\nsummary: ok\n"
+        result = _parse_records(text, self._PROFILE_SCHEMA)
+        assert result[0]["frameworks"] == []
+
+    # -- Adversarial --------------------------------------------------------
+
+    def test_value_with_commas_preserved_verbatim(self):
+        text = (
+            "@@ finding @@\n"
+            "title: a bug\n"
+            "severity: high\n"
+            "location: x.py:1\n"
+            "claim: foo, bar, baz\n"
+        )
+        result = _parse_records(text, self._FINDING_SCHEMA)
+        assert result[0]["claim"] == "foo, bar, baz"
+
+    def test_trailer_text_does_not_merge(self):
+        text = (
+            "@@ finding @@\n"
+            "title: a bug\n"
+            "severity: high\n"
+            "location: x.py:1\n"
+            "claim: it crashes\n"
+            "\n"
+            "This is some trailing prose. It mentions a key: value somewhere.\n"
+        )
+        result = _parse_records(text, self._FINDING_SCHEMA)
+        assert len(result) == 1
+        assert "trailing" not in result[0]["claim"]
+
+    def test_duplicate_scalar_key_raises(self):
+        text = (
+            "@@ finding @@\n"
+            "title: a bug\n"
+            "severity: high\n"
+            "severity: medium\n"
+            "location: x.py:1\n"
+            "claim: it crashes\n"
+        )
+        with pytest.raises(ValueError, match="duplicate key 'severity' in record 0"):
+            _parse_records(text, self._FINDING_SCHEMA)
+
+    def test_key_known_to_other_schema_terminates_record(self):
+        text = (
+            "@@ finding @@\n"
+            "title: a bug\n"
+            "severity: high\n"
+            "location: x.py:1\n"
+            "claim: it crashes\n"
+            "priority: ESCALATE_HIGH\n"
+        )
+        result = _parse_records(text, self._FINDING_SCHEMA)
+        assert len(result) == 1
+        assert "priority" not in result[0]
+
+    def test_continuation_before_any_key_rejected(self):
+        text = "@@ expansion @@\n  some stray continuation\ntype: bug\nproof: short\n"
+        with pytest.raises(ValueError, match="continuation line before any key"):
+            _parse_records(text, self._EXPANSION_SCHEMA)
+
+    def test_continuation_on_non_multiline_key_rejected(self):
+        text = (
+            "@@ expansion @@\n"
+            "type: bug\n"
+            "  this should not continue type\n"
+            "proof: short\n"
+        )
+        with pytest.raises(ValueError, match="not multiline"):
+            _parse_records(text, self._EXPANSION_SCHEMA)
+
+    def test_mixed_record_types_raises(self):
+        text = (
+            "@@ finding @@\n"
+            "title: a bug\n"
+            "severity: high\n"
+            "location: x.py:1\n"
+            "claim: it crashes\n"
+            "\n"
+            "@@ profile @@\n"
+            "language: python\n"
+            "summary: x\n"
+        )
+        with pytest.raises(ValueError, match="unexpected record type"):
+            _parse_records(text, self._FINDING_SCHEMA)
+
+    def test_mixed_case_header_accepted(self):
+        text = (
+            "@@ Finding @@\n"
+            "title: a bug\n"
+            "severity: high\n"
+            "location: x.py:1\n"
+            "claim: it crashes\n"
+        )
+        result = _parse_records(text, self._FINDING_SCHEMA)
+        assert len(result) == 1
+
+    def test_empty_value_counts_as_missing(self):
+        text = (
+            "@@ finding @@\n"
+            "title:\n"
+            "severity: high\n"
+            "location: x.py:1\n"
+            "claim: it crashes\n"
+        )
+        with pytest.raises(ValueError, match="missing required key 'title'"):
+            _parse_records(text, self._FINDING_SCHEMA)
+
+    def test_at_at_substring_not_treated_as_header(self):
+        text = (
+            "@@ finding @@\n"
+            "title: bug with @@ marker @@ in title\n"
+            "severity: high\n"
+            "location: x.py:1\n"
+            "claim: it crashes\n"
+        )
+        result = _parse_records(text, self._FINDING_SCHEMA)
+        assert len(result) == 1
+        assert "@@ marker @@" in result[0]["title"]
+
+    def test_boolean_true_coercion(self):
+        text = "@@ triage @@\npriority: SKIP\nsummary: tiny\nneeds_followup: yes\n"
+        result = _parse_records(text, self._TRIAGE_SCHEMA)
+        assert result[0]["needs_followup"] is True
+
+    def test_boolean_false_coercion(self):
+        text = "@@ triage @@\npriority: SKIP\nsummary: tiny\nneeds_followup: false\n"
+        result = _parse_records(text, self._TRIAGE_SCHEMA)
+        assert result[0]["needs_followup"] is False
+
+    def test_invalid_boolean_raises(self):
+        text = "@@ triage @@\npriority: SKIP\nsummary: tiny\nneeds_followup: maybe\n"
+        with pytest.raises(ValueError, match="invalid boolean"):
+            _parse_records(text, self._TRIAGE_SCHEMA)
 
     def test_empty_response_raises(self):
         with pytest.raises(ValueError, match="empty"):
-            _parse_json_response("")
+            _parse_records("", self._FINDING_SCHEMA)
 
-    def test_no_json_raises(self):
-        with pytest.raises(ValueError, match="no JSON object"):
-            _parse_json_response("just plain text with no braces")
+    def test_none_sentinel_mixed_with_records_raises(self):
+        text = (
+            "@@ none @@\n"
+            "\n"
+            "@@ finding @@\n"
+            "title: a bug\n"
+            "severity: high\n"
+            "location: x.py:1\n"
+            "claim: it crashes\n"
+        )
+        with pytest.raises(ValueError, match="mixed"):
+            _parse_records(text, self._FINDING_SCHEMA)
 
-    def test_invalid_json_raises(self):
-        with pytest.raises(ValueError, match="invalid JSON"):
-            _parse_json_response("{broken json")
 
-    def test_unquoted_string_values_fixed(self):
-        text = '{"priority":"SKIP","confidence":high,"needs_followup":false}'
-        result = _parse_json_response(text)
-        assert result["confidence"] == "high"
-        assert result["needs_followup"] is False
+class TestParseRecordsWithRepair:
+    """Integration of _parse_records_with_repair with metric tracking."""
 
-    def test_unquoted_values_preserves_json_literals(self):
-        text = '{"a":true,"b":null,"c":false,"d":foo}'
-        result = _parse_json_response(text)
-        assert result["a"] is True
-        assert result["b"] is None
-        assert result["c"] is False
-        assert result["d"] == "foo"
+    _SCHEMA = PhaseSchema(
+        record=RecordSchema(
+            name="finding",
+            required=("title", "severity", "location", "claim"),
+            enums={"severity": ("low", "medium", "high", "critical")},
+        ),
+        cardinality="zero_or_more",
+        allow_none=True,
+    )
+
+    _EXAMPLE = (
+        "@@ finding @@\n"
+        "title: example\n"
+        "severity: low\n"
+        "location: x.py:1\n"
+        "claim: example claim\n"
+    )
+
+    def test_clean_response_no_repair(self):
+        metrics = {"parse_failures": 0, "repair_successes": 0, "repair_failures": 0}
+        result = _parse_records_with_repair(
+            ctx=None,
+            raw="@@ none @@",
+            schema=self._SCHEMA,
+            worked_example=self._EXAMPLE,
+            metrics=metrics,
+        )
+        assert result == []
+        assert metrics["parse_failures"] == 0
+
+    def test_repair_succeeds(self, monkeypatch):
+        from types import SimpleNamespace
+
+        metrics = {"parse_failures": 0, "repair_successes": 0, "repair_failures": 0}
+        monkeypatch.setattr(
+            "swival.audit._call_audit_llm",
+            lambda ctx, messages, temperature=0.0, trace_task=None: "@@ none @@",
+        )
+        result = _parse_records_with_repair(
+            ctx=SimpleNamespace(),
+            raw="@@ finding @@\ntitle: incomplete\n",
+            schema=self._SCHEMA,
+            worked_example=self._EXAMPLE,
+            metrics=metrics,
+        )
+        assert result == []
+        assert metrics["parse_failures"] == 1
+        assert metrics["repair_successes"] == 1
+
+    def test_repair_failure_propagates(self, monkeypatch):
+        from types import SimpleNamespace
+
+        metrics = {"parse_failures": 0, "repair_successes": 0, "repair_failures": 0}
+        monkeypatch.setattr(
+            "swival.audit._call_audit_llm",
+            lambda ctx, messages, temperature=0.0, trace_task=None: (
+                "@@ finding @@\ntitle: still incomplete\n"
+            ),
+        )
+        with pytest.raises(ValueError):
+            _parse_records_with_repair(
+                ctx=SimpleNamespace(),
+                raw="@@ finding @@\ntitle: incomplete\n",
+                schema=self._SCHEMA,
+                worked_example=self._EXAMPLE,
+                metrics=metrics,
+            )
+        assert metrics["parse_failures"] == 1
+        assert metrics["repair_failures"] == 1
+        assert metrics["repair_successes"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 3b expansion contract
+# ---------------------------------------------------------------------------
+
+
+class TestPhase3bExpansion:
+    """Phase 3b structured-text contract: schema, multiline proof, repair."""
+
+    def _schema(self):
+        from swival.audit import _PHASE3B_EXPANSION_SCHEMA
+
+        return _PHASE3B_EXPANSION_SCHEMA
+
+    def _example(self):
+        from swival.audit import _PHASE3B_WORKED_EXAMPLE
+
+        return _PHASE3B_WORKED_EXAMPLE
+
+    def test_happy_path_with_multiline_proof(self):
+        text = (
+            "@@ expansion @@\n"
+            "type: vulnerability\n"
+            "preconditions: caller passes user input\n"
+            "proof:\n"
+            "  user input reaches eval at line 10.\n"
+            "  no validation between origin and sink.\n"
+            "  reachable from a request handler.\n"
+            "fix_outline: validate input before eval\n"
+        )
+        result = _parse_records(text, self._schema())
+        assert len(result) == 1
+        proof = result[0]["proof"]
+        assert "user input reaches eval at line 10." in proof
+        assert "no validation between origin and sink." in proof
+        assert "reachable from a request handler." in proof
+
+    def test_multiline_continuations_metric_increments(self):
+        text = (
+            "@@ expansion @@\n"
+            "type: vulnerability\n"
+            "preconditions: x\n"
+            "proof:\n"
+            "  line 1\n"
+            "  line 2\n"
+            "fix_outline: y\n"
+        )
+        metrics = {"multiline_continuations": 0}
+        _parse_records(text, self._schema(), metrics=metrics)
+        assert metrics["multiline_continuations"] == 1
+
+    def test_multiline_metric_not_incremented_on_failure(self):
+        # Schema requires fix_outline; missing → validation failure.
+        text = (
+            "@@ expansion @@\n"
+            "type: vulnerability\n"
+            "preconditions: x\n"
+            "proof:\n"
+            "  line 1\n"
+            "  line 2\n"
+        )
+        metrics = {"multiline_continuations": 0}
+        with pytest.raises(ValueError, match="fix_outline"):
+            _parse_records(text, self._schema(), metrics=metrics)
+        assert metrics["multiline_continuations"] == 0
+
+    def test_bad_enum_fails(self):
+        text = (
+            "@@ expansion @@\n"
+            "type: not-in-list\n"
+            "preconditions: x\n"
+            "proof: y\n"
+            "fix_outline: z\n"
+        )
+        with pytest.raises(ValueError, match="invalid enum value 'not-in-list'"):
+            _parse_records(text, self._schema())
+
+    def test_bad_enum_then_repair(self, monkeypatch):
+        from types import SimpleNamespace
+
+        metrics = {
+            "parse_failures": 0,
+            "repair_successes": 0,
+            "repair_failures": 0,
+            "multiline_continuations": 0,
+        }
+        monkeypatch.setattr(
+            "swival.audit._call_audit_llm",
+            lambda ctx, messages, temperature=0.0, trace_task=None: (
+                "@@ expansion @@\n"
+                "type: vulnerability\n"
+                "preconditions: x\n"
+                "proof: y\n"
+                "fix_outline: z\n"
+            ),
+        )
+        result = _parse_records_with_repair(
+            ctx=SimpleNamespace(),
+            raw=(
+                "@@ expansion @@\n"
+                "type: speculation\n"
+                "preconditions: x\n"
+                "proof: y\n"
+                "fix_outline: z\n"
+            ),
+            schema=self._schema(),
+            worked_example=self._example(),
+            metrics=metrics,
+        )
+        assert len(result) == 1
+        assert result[0]["type"] == "vulnerability"
+        assert metrics["parse_failures"] == 1
+        assert metrics["repair_successes"] == 1
+
+    def test_duplicate_scalar_key_fails(self):
+        text = (
+            "@@ expansion @@\n"
+            "type: vulnerability\n"
+            "type: logic error\n"
+            "preconditions: x\n"
+            "proof: y\n"
+            "fix_outline: z\n"
+        )
+        with pytest.raises(ValueError, match="duplicate key 'type'"):
+            _parse_records(text, self._schema())
+
+    def test_missing_field_repairs_successfully(self, monkeypatch):
+        from types import SimpleNamespace
+
+        metrics = {
+            "parse_failures": 0,
+            "repair_successes": 0,
+            "repair_failures": 0,
+        }
+        monkeypatch.setattr(
+            "swival.audit._call_audit_llm",
+            lambda ctx, messages, temperature=0.0, trace_task=None: (
+                "@@ expansion @@\n"
+                "type: vulnerability\n"
+                "preconditions: caller passes input\n"
+                "proof: input reaches sink\n"
+                "fix_outline: validate it\n"
+            ),
+        )
+        result = _parse_records_with_repair(
+            ctx=SimpleNamespace(),
+            raw="@@ expansion @@\ntype: vulnerability\n",
+            schema=self._schema(),
+            worked_example=self._example(),
+            metrics=metrics,
+        )
+        assert len(result) == 1
+        assert result[0]["fix_outline"] == "validate it"
+        assert metrics["parse_failures"] == 1
+        assert metrics["repair_successes"] == 1
+
+    def test_repair_prompt_forbids_new_claims(self, monkeypatch):
+        from types import SimpleNamespace
+
+        captured: list = []
+
+        def fake(ctx, messages, temperature=0.0, trace_task=None):
+            captured.append(messages)
+            return (
+                "@@ expansion @@\n"
+                "type: vulnerability\n"
+                "preconditions: x\n"
+                "proof: y\n"
+                "fix_outline: z\n"
+            )
+
+        monkeypatch.setattr("swival.audit._call_audit_llm", fake)
+        metrics = {
+            "parse_failures": 0,
+            "repair_successes": 0,
+            "repair_failures": 0,
+        }
+        _parse_records_with_repair(
+            ctx=SimpleNamespace(),
+            raw="@@ expansion @@\ntype: vulnerability\n",
+            schema=self._schema(),
+            worked_example=self._example(),
+            metrics=metrics,
+        )
+        assert len(captured) == 1
+        repair_user = captured[0][1]["content"].lower()
+        # User-message guard
+        assert "do not introduce new" in repair_user
+        assert "do not add new claims" in repair_user
+        # System-message guard
+        repair_system = captured[0][0]["content"].lower()
+        assert "do not invent" in repair_system
+
+    def test_end_to_end_phase3_records_produce_finding_record(
+        self, monkeypatch, tmp_path
+    ):
+        """Phase 3a + 3b in @@ format should produce the same FindingRecord
+        shape as the JSON-era pipeline."""
+        from types import SimpleNamespace
+        from swival.audit import _deep_review_one
+
+        scope = AuditScope(
+            branch="main",
+            commit="abc123",
+            tracked_files=["a.py"],
+            mandatory_files=["a.py"],
+            focus=None,
+        )
+        state = AuditRunState(
+            run_id="e2e",
+            scope=scope,
+            queued_files=["a.py"],
+            triage_records={
+                "a.py": TriageRecord(
+                    path="a.py",
+                    priority="ESCALATE_HIGH",
+                    confidence="high",
+                    bug_classes=["unsafe_data_flow"],
+                    summary="x",
+                    relevant_symbols=[],
+                    suspicious_flows=[],
+                    needs_followup=True,
+                )
+            },
+            repo_profile={"summary": "tiny repo"},
+            import_index={},
+            caller_index={},
+            state_dir=tmp_path,
+        )
+        ctx = SimpleNamespace(base_dir=str(tmp_path), loop_kwargs={})
+        calls = {"n": 0}
+
+        monkeypatch.setattr(
+            "swival.audit._git_show", lambda path, base_dir: "eval(input())"
+        )
+
+        def fake_call(ctx, messages, temperature=0.0, trace_task=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return (
+                    "@@ finding @@\n"
+                    "title: eval injection\n"
+                    "severity: critical\n"
+                    "location: a.py:1\n"
+                    "claim: user input flows directly into eval\n"
+                )
+            return (
+                "@@ expansion @@\n"
+                "type: vulnerability\n"
+                "preconditions: caller invokes the handler with attacker input\n"
+                "proof:\n"
+                "  user input arrives at line 1 via input() call.\n"
+                "  flows directly to eval() with no sanitization.\n"
+                "  reachable from any HTTP request handler.\n"
+                "fix_outline: replace eval with ast.literal_eval or remove entirely\n"
+            )
+
+        monkeypatch.setattr("swival.audit._call_audit_llm", fake_call)
+
+        result = _deep_review_one("a.py", state, ctx)
+        assert result.error is None
+        assert len(result.findings) == 1
+        f = result.findings[0]
+        assert f.title == "eval injection"
+        assert f.severity == "critical"
+        assert f.finding_type == "vulnerability"
+        assert f.locations == ["a.py:1"]
+        assert f.source_file == "a.py"
+        assert "user input arrives at line 1" in f.proof[0]
+        assert "reachable from any HTTP request handler" in f.proof[0]
+        assert f.fix_outline.startswith("replace eval")
+        assert state.metrics["multiline_continuations"] == 1
+        assert state.metrics["parse_failures"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 triage contract (fail-closed, no repair)
+# ---------------------------------------------------------------------------
+
+
+class TestPhase2Triage:
+    """Phase 2 structured-text contract: parse only, fail-closed to SKIP."""
+
+    def _state(self, tmp_path):
+        scope = AuditScope(
+            branch="main",
+            commit="abc123",
+            tracked_files=["a.py"],
+            mandatory_files=["a.py"],
+            focus=None,
+        )
+        return AuditRunState(
+            run_id="t",
+            scope=scope,
+            queued_files=["a.py"],
+            repo_profile={"summary": "tiny repo"},
+            import_index={},
+            caller_index={},
+            state_dir=tmp_path,
+        )
+
+    def _ctx(self, tmp_path):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(base_dir=str(tmp_path), loop_kwargs={})
+
+    def _patch_git(self, monkeypatch):
+        monkeypatch.setattr("swival.audit._git_show", lambda p, b: "x = 1")
+
+    def _patch_llm(self, monkeypatch, response):
+        calls = {"n": 0}
+
+        def fake(ctx, messages, temperature=None, trace_task=None):
+            calls["n"] += 1
+            return response
+
+        monkeypatch.setattr("swival.audit._call_audit_llm", fake)
+        return calls
+
+    def test_happy_path_full_record(self, monkeypatch, tmp_path):
+        from swival.audit import _phase2_triage_one
+
+        self._patch_git(monkeypatch)
+        self._patch_llm(
+            monkeypatch,
+            "@@ triage @@\n"
+            "priority: ESCALATE_HIGH\n"
+            "confidence: high\n"
+            "summary: parses untrusted url before authentication\n"
+            "bug_class: input_validation\n"
+            "bug_class: trust_boundary_breaks\n"
+            "relevant_symbol: parse_url\n"
+            "relevant_symbol: authenticate\n"
+            "suspicious_flow: external request body reaches parse_url\n"
+            "needs_followup: true\n",
+        )
+
+        state = self._state(tmp_path)
+        rec = _phase2_triage_one("a.py", state, self._ctx(tmp_path))
+        assert rec.priority == "ESCALATE_HIGH"
+        assert rec.confidence == "high"
+        assert rec.bug_classes == ["input_validation", "trust_boundary_breaks"]
+        assert rec.relevant_symbols == ["parse_url", "authenticate"]
+        assert rec.suspicious_flows == ["external request body reaches parse_url"]
+        assert rec.needs_followup is True
+        assert state.metrics["parse_failures"] == 0
+
+    def test_missing_repeated_keys_normalize_to_empty(self, monkeypatch, tmp_path):
+        from swival.audit import _phase2_triage_one
+
+        self._patch_git(monkeypatch)
+        self._patch_llm(
+            monkeypatch,
+            "@@ triage @@\npriority: SKIP\nconfidence: high\nsummary: ok\n",
+        )
+
+        rec = _phase2_triage_one("a.py", self._state(tmp_path), self._ctx(tmp_path))
+        assert rec.priority == "SKIP"
+        assert rec.bug_classes == []
+        assert rec.relevant_symbols == []
+        assert rec.suspicious_flows == []
+
+    def test_needs_followup_defaults_to_false_when_omitted(self, monkeypatch, tmp_path):
+        from swival.audit import _phase2_triage_one
+
+        self._patch_git(monkeypatch)
+        self._patch_llm(
+            monkeypatch,
+            "@@ triage @@\n"
+            "priority: SKIP\n"
+            "confidence: low\n"
+            "summary: nothing of interest\n",
+        )
+
+        rec = _phase2_triage_one("a.py", self._state(tmp_path), self._ctx(tmp_path))
+        assert rec.needs_followup is False
+
+    def test_priority_case_normalized_to_upper(self, monkeypatch, tmp_path):
+        from swival.audit import _phase2_triage_one
+
+        self._patch_git(monkeypatch)
+        self._patch_llm(
+            monkeypatch,
+            "@@ triage @@\n"
+            "priority: escalate_medium\n"
+            "confidence: MEDIUM\n"
+            "summary: fits\n",
+        )
+
+        rec = _phase2_triage_one("a.py", self._state(tmp_path), self._ctx(tmp_path))
+        assert rec.priority == "ESCALATE_MEDIUM"
+        assert rec.confidence == "medium"
+
+    def test_invalid_priority_falls_back_to_skip(self, monkeypatch, tmp_path):
+        from swival.audit import _phase2_triage_one
+
+        self._patch_git(monkeypatch)
+        self._patch_llm(
+            monkeypatch,
+            "@@ triage @@\npriority: ESCALATE_LATER\nconfidence: high\nsummary: ok\n",
+        )
+
+        state = self._state(tmp_path)
+        rec = _phase2_triage_one("a.py", state, self._ctx(tmp_path))
+        assert rec.priority == "SKIP"
+        assert rec.summary == "triage failed (unparseable LLM response)"
+        assert state.metrics["parse_failures"] == 1
+
+    def test_invalid_confidence_falls_back_to_skip(self, monkeypatch, tmp_path):
+        from swival.audit import _phase2_triage_one
+
+        self._patch_git(monkeypatch)
+        self._patch_llm(
+            monkeypatch,
+            "@@ triage @@\npriority: SKIP\nconfidence: somewhat\nsummary: ok\n",
+        )
+
+        state = self._state(tmp_path)
+        rec = _phase2_triage_one("a.py", state, self._ctx(tmp_path))
+        assert rec.priority == "SKIP"
+        assert rec.summary == "triage failed (unparseable LLM response)"
+        assert state.metrics["parse_failures"] == 1
+
+    def test_malformed_response_falls_back_to_skip(self, monkeypatch, tmp_path):
+        from swival.audit import _phase2_triage_one
+
+        self._patch_git(monkeypatch)
+        self._patch_llm(monkeypatch, "I am not following the format at all.")
+
+        state = self._state(tmp_path)
+        rec = _phase2_triage_one("a.py", state, self._ctx(tmp_path))
+        assert rec.priority == "SKIP"
+        assert rec.summary == "triage failed (unparseable LLM response)"
+        assert state.metrics["parse_failures"] == 1
+
+    def test_phase2_does_not_call_repair(self, monkeypatch, tmp_path):
+        """Phase 2 must fail-closed without invoking the repair path —
+        triage volume makes per-failure repair the wrong cost profile."""
+        from swival.audit import _phase2_triage_one
+
+        self._patch_git(monkeypatch)
+        calls = self._patch_llm(monkeypatch, "totally broken response")
+
+        state = self._state(tmp_path)
+        rec = _phase2_triage_one("a.py", state, self._ctx(tmp_path))
+        assert rec.priority == "SKIP"
+        # Exactly one LLM call: the initial triage. No repair.
+        assert calls["n"] == 1
+        assert state.metrics["parse_failures"] == 1
+        assert state.metrics.get("repair_successes", 0) == 0
+        assert state.metrics.get("repair_failures", 0) == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 repo profile contract
+# ---------------------------------------------------------------------------
+
+
+class TestPhase1Profile:
+    """Phase 1 structured-text contract: schema, repair, plural-key canonicalization."""
+
+    def _state(self, tmp_path):
+        scope = AuditScope(
+            branch="main",
+            commit="abc123",
+            tracked_files=["a.py"],
+            mandatory_files=["a.py"],
+            focus=None,
+        )
+        return AuditRunState(
+            run_id="p1",
+            scope=scope,
+            queued_files=["a.py"],
+            state_dir=tmp_path,
+        )
+
+    def _ctx(self, tmp_path):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(base_dir=str(tmp_path), loop_kwargs={})
+
+    def _schema(self):
+        from swival.audit import _PHASE1_PROFILE_SCHEMA
+
+        return _PHASE1_PROFILE_SCHEMA
+
+    def _example(self):
+        from swival.audit import _PHASE1_WORKED_EXAMPLE
+
+        return _PHASE1_WORKED_EXAMPLE
+
+    def test_happy_path_repeated_keys_to_plural(self):
+        text = (
+            "@@ profile @@\n"
+            "language: python\n"
+            "language: rust\n"
+            "framework: pytest\n"
+            "framework: uv\n"
+            "entry_point: swival/agent.py\n"
+            "entry_point: swival/audit.py\n"
+            "trust_boundary: cli args\n"
+            "trust_boundary: mcp servers\n"
+            "persistence_layer: .swival/HISTORY.md\n"
+            "auth_surface: chatgpt oauth device flow\n"
+            "dangerous_operation: subprocess\n"
+            "dangerous_operation: file write\n"
+            "summary: a python cli coding agent with mcp client and audit pipeline.\n"
+        )
+        result = _parse_records(text, self._schema())
+        assert len(result) == 1
+        profile = result[0]
+        assert profile["languages"] == ["python", "rust"]
+        assert profile["frameworks"] == ["pytest", "uv"]
+        assert profile["entry_points"] == ["swival/agent.py", "swival/audit.py"]
+        assert profile["trust_boundaries"] == ["cli args", "mcp servers"]
+        assert profile["persistence_layers"] == [".swival/HISTORY.md"]
+        assert profile["auth_surfaces"] == ["chatgpt oauth device flow"]
+        assert profile["dangerous_operations"] == ["subprocess", "file write"]
+        assert profile["summary"].startswith("a python cli")
+
+    def test_missing_optional_repeated_keys_default_to_empty(self):
+        text = "@@ profile @@\nlanguage: python\nsummary: minimal profile\n"
+        result = _parse_records(text, self._schema())
+        profile = result[0]
+        assert profile["languages"] == ["python"]
+        assert profile["summary"] == "minimal profile"
+        assert profile["frameworks"] == []
+        assert profile["entry_points"] == []
+        assert profile["trust_boundaries"] == []
+        assert profile["persistence_layers"] == []
+        assert profile["auth_surfaces"] == []
+        assert profile["dangerous_operations"] == []
+
+    def test_missing_summary_fails(self):
+        text = "@@ profile @@\nlanguage: python\n"
+        with pytest.raises(ValueError, match="missing required key 'summary'"):
+            _parse_records(text, self._schema())
+
+    def test_missing_language_fails(self):
+        text = "@@ profile @@\nsummary: nothing to see\n"
+        with pytest.raises(ValueError, match="missing required key 'language'"):
+            _parse_records(text, self._schema())
+
+    def test_two_profile_records_rejected(self):
+        text = (
+            "@@ profile @@\n"
+            "language: python\n"
+            "summary: first\n"
+            "\n"
+            "@@ profile @@\n"
+            "language: rust\n"
+            "summary: second\n"
+        )
+        with pytest.raises(ValueError, match="exactly one"):
+            _parse_records(text, self._schema())
+
+    def test_repo_profile_returns_canonicalized_dict(self, monkeypatch, tmp_path):
+        from swival.audit import _phase1_repo_profile
+
+        monkeypatch.setattr("swival.audit._git_show", lambda p, b: "x = 1")
+        monkeypatch.setattr(
+            "swival.audit._call_audit_llm",
+            lambda ctx, messages, temperature=0.0, trace_task=None: (
+                "@@ profile @@\n"
+                "language: python\n"
+                "framework: pytest\n"
+                "entry_point: swival/agent.py\n"
+                "summary: a tiny tool\n"
+            ),
+        )
+
+        state = self._state(tmp_path)
+        profile = _phase1_repo_profile(state, self._ctx(tmp_path))
+        assert profile["languages"] == ["python"]
+        assert profile["frameworks"] == ["pytest"]
+        assert profile["entry_points"] == ["swival/agent.py"]
+        assert profile["summary"] == "a tiny tool"
+        # Downstream phases JSON-encode this dict for prompt context.
+        import json as _json
+
+        encoded = _json.dumps(profile)
+        assert "languages" in encoded
+        assert "summary" in encoded
+
+    def test_repo_profile_repairs_missing_field(self, monkeypatch, tmp_path):
+        from swival.audit import _phase1_repo_profile
+
+        monkeypatch.setattr("swival.audit._git_show", lambda p, b: "x = 1")
+        calls = {"n": 0}
+
+        def fake_call(ctx, messages, temperature=0.0, trace_task=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # Initial response: missing required summary
+                return "@@ profile @@\nlanguage: python\n"
+            return "@@ profile @@\nlanguage: python\nsummary: repaired summary\n"
+
+        monkeypatch.setattr("swival.audit._call_audit_llm", fake_call)
+
+        state = self._state(tmp_path)
+        profile = _phase1_repo_profile(state, self._ctx(tmp_path))
+        assert profile["summary"] == "repaired summary"
+        assert state.metrics["parse_failures"] == 1
+        assert state.metrics["repair_successes"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Per-record-type parse-failure breakdown
+# ---------------------------------------------------------------------------
+
+
+class TestParseFailureBreakdown:
+    """Typed parse_failures_<type> counters increment alongside the aggregate,
+    and the formatter renders the breakdown when at least one is populated."""
+
+    def _new_metrics(self):
+        # Mirror AuditRunState.metrics defaults so the assertions cover the
+        # actual on-disk shape, not a hand-rolled dict.
+        scope = AuditScope(
+            branch="main",
+            commit="abc",
+            tracked_files=[],
+            mandatory_files=[],
+            focus=None,
+        )
+        state = AuditRunState(run_id="m", scope=scope, queued_files=[])
+        return state.metrics
+
+    def test_default_metrics_include_typed_counters(self):
+        m = self._new_metrics()
+        for key in (
+            "parse_failures",
+            "parse_failures_profile",
+            "parse_failures_triage",
+            "parse_failures_finding",
+            "parse_failures_expansion",
+        ):
+            assert m[key] == 0
+
+    def test_records_with_repair_increments_typed_finding(self, monkeypatch):
+        from types import SimpleNamespace
+        from swival.audit import _PHASE3A_FINDING_SCHEMA, _PHASE3A_WORKED_EXAMPLE
+
+        metrics = self._new_metrics()
+        # Repair returns a malformed response too — drives parse failure
+        # without succeeding, so we can pin the typed counter to one event.
+        monkeypatch.setattr(
+            "swival.audit._call_audit_llm",
+            lambda ctx, messages, temperature=0.0, trace_task=None: (
+                "@@ finding @@\ntitle: bad\n"
+            ),
+        )
+        with pytest.raises(ValueError):
+            _parse_records_with_repair(
+                ctx=SimpleNamespace(),
+                raw="@@ finding @@\ntitle: incomplete\n",
+                schema=_PHASE3A_FINDING_SCHEMA,
+                worked_example=_PHASE3A_WORKED_EXAMPLE,
+                metrics=metrics,
+            )
+        assert metrics["parse_failures"] == 1
+        assert metrics["parse_failures_finding"] == 1
+        assert metrics["parse_failures_triage"] == 0
+        assert metrics["parse_failures_expansion"] == 0
+        assert metrics["parse_failures_profile"] == 0
+
+    def test_records_with_repair_increments_typed_expansion(self, monkeypatch):
+        from types import SimpleNamespace
+        from swival.audit import (
+            _PHASE3B_EXPANSION_SCHEMA,
+            _PHASE3B_WORKED_EXAMPLE,
+        )
+
+        metrics = self._new_metrics()
+        monkeypatch.setattr(
+            "swival.audit._call_audit_llm",
+            lambda ctx, messages, temperature=0.0, trace_task=None: (
+                "@@ expansion @@\ntype: vulnerability\n"
+            ),
+        )
+        with pytest.raises(ValueError):
+            _parse_records_with_repair(
+                ctx=SimpleNamespace(),
+                raw="@@ expansion @@\ntype: vulnerability\n",
+                schema=_PHASE3B_EXPANSION_SCHEMA,
+                worked_example=_PHASE3B_WORKED_EXAMPLE,
+                metrics=metrics,
+            )
+        assert metrics["parse_failures"] == 1
+        assert metrics["parse_failures_expansion"] == 1
+        assert metrics["parse_failures_finding"] == 0
+
+    def test_records_with_repair_increments_typed_profile(self, monkeypatch):
+        from types import SimpleNamespace
+        from swival.audit import _PHASE1_PROFILE_SCHEMA, _PHASE1_WORKED_EXAMPLE
+
+        metrics = self._new_metrics()
+        monkeypatch.setattr(
+            "swival.audit._call_audit_llm",
+            lambda ctx, messages, temperature=0.0, trace_task=None: (
+                "@@ profile @@\nlanguage: python\n"
+            ),
+        )
+        with pytest.raises(ValueError):
+            _parse_records_with_repair(
+                ctx=SimpleNamespace(),
+                raw="@@ profile @@\nlanguage: python\n",
+                schema=_PHASE1_PROFILE_SCHEMA,
+                worked_example=_PHASE1_WORKED_EXAMPLE,
+                metrics=metrics,
+            )
+        assert metrics["parse_failures"] == 1
+        assert metrics["parse_failures_profile"] == 1
+
+    def test_phase2_fail_closed_increments_typed_triage(self, monkeypatch, tmp_path):
+        from types import SimpleNamespace
+        from swival.audit import _phase2_triage_one
+
+        scope = AuditScope(
+            branch="main",
+            commit="abc",
+            tracked_files=["a.py"],
+            mandatory_files=["a.py"],
+            focus=None,
+        )
+        state = AuditRunState(
+            run_id="t",
+            scope=scope,
+            queued_files=["a.py"],
+            repo_profile={"summary": "tiny"},
+            state_dir=tmp_path,
+        )
+        ctx = SimpleNamespace(base_dir=str(tmp_path), loop_kwargs={})
+
+        monkeypatch.setattr("swival.audit._git_show", lambda p, b: "x = 1")
+        monkeypatch.setattr(
+            "swival.audit._call_audit_llm",
+            lambda ctx, messages, temperature=0.0, trace_task=None: "garbage",
+        )
+
+        _phase2_triage_one("a.py", state, ctx)
+        assert state.metrics["parse_failures"] == 1
+        assert state.metrics["parse_failures_triage"] == 1
+        assert state.metrics["parse_failures_finding"] == 0
+
+
+class TestFormatAuditMetrics:
+    """Phase 3 summary line rendering — aggregate plus parenthesized breakdown."""
+
+    def _import(self):
+        from swival.audit import _format_audit_metrics
+
+        return _format_audit_metrics
+
+    def test_no_metrics_returns_empty(self):
+        f = self._import()
+        assert f({}) == ""
+        assert f({"parse_failures": 0, "repair_successes": 0}) == ""
+
+    def test_aggregate_only_renders_without_breakdown(self):
+        f = self._import()
+        out = f({"parse_failures": 3})
+        assert out == "3 parse failures"
+
+    def test_breakdown_appears_in_parens(self):
+        f = self._import()
+        out = f(
+            {
+                "parse_failures": 5,
+                "parse_failures_triage": 2,
+                "parse_failures_finding": 3,
+            }
+        )
+        assert out == "5 parse failures (2 triage, 3 finding)"
+
+    def test_breakdown_skips_zero_typed_counters(self):
+        f = self._import()
+        out = f(
+            {
+                "parse_failures": 2,
+                "parse_failures_triage": 0,
+                "parse_failures_finding": 2,
+                "parse_failures_expansion": 0,
+            }
+        )
+        assert out == "2 parse failures (2 finding)"
+
+    def test_other_metrics_appended_after_parse_failures(self):
+        f = self._import()
+        out = f(
+            {
+                "parse_failures": 1,
+                "parse_failures_triage": 1,
+                "repair_successes": 4,
+                "multiline_continuations": 2,
+            }
+        )
+        assert out == (
+            "1 parse failures (1 triage), 4 repairs succeeded, "
+            "2 multiline continuations"
+        )
+
+    def test_only_other_metrics_no_parse_failures(self):
+        f = self._import()
+        out = f({"repair_successes": 1, "analytical_retries": 2})
+        assert out == "1 repairs succeeded, 2 analytical retries"
 
 
 # ---------------------------------------------------------------------------
@@ -464,7 +1727,9 @@ class TestStatePersistence:
 
 
 class TestDeepReviewRecovery:
-    def test_deep_review_repairs_malformed_inventory_json(self, monkeypatch, tmp_path):
+    def test_deep_review_repairs_malformed_inventory_records(
+        self, monkeypatch, tmp_path
+    ):
         from types import SimpleNamespace
         from swival.audit import _deep_review_one
 
@@ -506,8 +1771,8 @@ class TestDeepReviewRecovery:
         def fake_call(ctx, messages, temperature=0.0, trace_task=None):
             calls["n"] += 1
             if calls["n"] == 1:
-                return '{"findings": ['
-            return '{"findings": []}'
+                return "@@ finding @@\ntitle: incomplete\n"
+            return "@@ none @@"
 
         monkeypatch.setattr("swival.audit._call_audit_llm", fake_call)
 
@@ -767,7 +2032,13 @@ class TestMessageLayout:
 
         def fake_call(ctx, messages, temperature=None, trace_task=None):
             captured["messages"] = messages
-            return '{"priority": "SKIP", "confidence": "high", "bug_classes": [], "summary": "ok", "relevant_symbols": [], "suspicious_flows": [], "needs_followup": false}'
+            return (
+                "@@ triage @@\n"
+                "priority: SKIP\n"
+                "confidence: high\n"
+                "summary: ok\n"
+                "needs_followup: false\n"
+            )
 
         monkeypatch.setattr("swival.audit._call_audit_llm", fake_call)
         _phase2_triage_one("a.py", state, ctx)
@@ -788,7 +2059,7 @@ class TestMessageLayout:
 
         def fake_call(ctx, messages, temperature=None, trace_task=None):
             captured["messages"] = messages
-            return '{"findings": []}'
+            return "@@ none @@"
 
         monkeypatch.setattr("swival.audit._call_audit_llm", fake_call)
         _phase3a_inventory("a.py", state, ctx, "x = 1")
@@ -809,7 +2080,13 @@ class TestMessageLayout:
 
         def fake_call(ctx, messages, temperature=None, trace_task=None):
             captured["messages"] = messages
-            return '{"type": "vulnerability", "preconditions": "none", "proof": "direct", "fix_outline": "fix it"}'
+            return (
+                "@@ expansion @@\n"
+                "type: vulnerability\n"
+                "preconditions: none\n"
+                "proof: direct\n"
+                "fix_outline: fix it\n"
+            )
 
         monkeypatch.setattr("swival.audit._call_audit_llm", fake_call)
         stub = {
@@ -1516,68 +2793,6 @@ class TestPhase4Parallelism:
 
 
 # ---------------------------------------------------------------------------
-# JSON repair and parse_with_repair
-# ---------------------------------------------------------------------------
-
-
-class TestJsonRepair:
-    def test_parse_with_repair_succeeds_on_valid_json(self):
-        metrics = {"parse_failures": 0, "repair_successes": 0, "repair_failures": 0}
-        result = _parse_with_repair(
-            ctx=None,
-            raw='{"findings": []}',
-            required_keys=["findings"],
-            schema_hint="{}",
-            metrics=metrics,
-        )
-        assert result == {"findings": []}
-        assert metrics["parse_failures"] == 0
-
-    def test_parse_with_repair_repairs_malformed(self, monkeypatch):
-        from types import SimpleNamespace
-
-        metrics = {"parse_failures": 0, "repair_successes": 0, "repair_failures": 0}
-
-        monkeypatch.setattr(
-            "swival.audit._call_audit_llm",
-            lambda ctx, messages, temperature=0.0, trace_task=None: '{"findings": []}',
-        )
-
-        result = _parse_with_repair(
-            ctx=SimpleNamespace(),
-            raw='{"findings": [',
-            required_keys=["findings"],
-            schema_hint="{}",
-            metrics=metrics,
-        )
-        assert result == {"findings": []}
-        assert metrics["parse_failures"] == 1
-        assert metrics["repair_successes"] == 1
-
-    def test_parse_with_repair_raises_when_repair_fails(self, monkeypatch):
-        from types import SimpleNamespace
-
-        metrics = {"parse_failures": 0, "repair_successes": 0, "repair_failures": 0}
-
-        monkeypatch.setattr(
-            "swival.audit._call_audit_llm",
-            lambda ctx, messages, temperature=0.0, trace_task=None: "still broken {{{",
-        )
-
-        with pytest.raises(ValueError):
-            _parse_with_repair(
-                ctx=SimpleNamespace(),
-                raw='{"findings": [',
-                required_keys=["findings"],
-                schema_hint="{}",
-                metrics=metrics,
-            )
-        assert metrics["parse_failures"] == 1
-        assert metrics["repair_failures"] == 1
-        assert metrics["repair_successes"] == 0
-
-
-# ---------------------------------------------------------------------------
 # Canonicalization
 # ---------------------------------------------------------------------------
 
@@ -1672,7 +2887,7 @@ class TestPhase3Split:
         monkeypatch.setattr("swival.audit._git_show", lambda path, base_dir: "x = 1")
         monkeypatch.setattr(
             "swival.audit._call_audit_llm",
-            lambda ctx, messages, temperature=0.0, trace_task=None: '{"findings": []}',
+            lambda ctx, messages, temperature=0.0, trace_task=None: "@@ none @@",
         )
 
         result = _deep_review_one("a.py", state, ctx)
@@ -1695,15 +2910,18 @@ class TestPhase3Split:
             calls["n"] += 1
             if calls["n"] == 1:
                 return (
-                    '{"findings": [{"title": "eval injection",'
-                    '"severity": "high", "location": "a.py:1",'
-                    '"claim": "user input reaches eval"}]}'
+                    "@@ finding @@\n"
+                    "title: eval injection\n"
+                    "severity: high\n"
+                    "location: a.py:1\n"
+                    "claim: user input reaches eval\n"
                 )
             return (
-                '{"type": "vulnerability",'
-                '"preconditions": "user provides input",'
-                '"proof": "input flows to eval without sanitization",'
-                '"fix_outline": "remove eval"}'
+                "@@ expansion @@\n"
+                "type: vulnerability\n"
+                "preconditions: user provides input\n"
+                "proof: input flows to eval without sanitization\n"
+                "fix_outline: remove eval\n"
             )
 
         monkeypatch.setattr("swival.audit._call_audit_llm", fake_call)
@@ -1729,12 +2947,18 @@ class TestPhase3Split:
 
         monkeypatch.setattr("swival.audit._git_show", lambda path, base_dir: "code")
 
+        inventory_response = (
+            "@@ finding @@\n"
+            "title: bug A\n"
+            "severity: high\n"
+            "location: a.py:1\n"
+            "claim: claim A\n"
+        )
+
         monkeypatch.setattr(
             "swival.audit._call_audit_llm",
             lambda ctx, messages, temperature=0.0, trace_task=None: (
-                '{"findings": [{"title": "bug A",'
-                '"severity": "high", "location": "a.py:1",'
-                '"claim": "claim A"}]}'
+                inventory_response
                 if "phase 3" in (messages[0].get("content", "") or "").lower()
                 else "totally broken output {{{"
             ),
@@ -1759,17 +2983,25 @@ class TestPhase3Split:
             calls["n"] += 1
             if calls["n"] == 1:
                 return (
-                    '{"findings": ['
-                    '{"title": "bug A", "severity": "high", "location": "a.py:1", "claim": "claim A"},'
-                    '{"title": "bug B", "severity": "medium", "location": "a.py:2", "claim": "claim B"}'
-                    "]}"
+                    "@@ finding @@\n"
+                    "title: bug A\n"
+                    "severity: high\n"
+                    "location: a.py:1\n"
+                    "claim: claim A\n"
+                    "\n"
+                    "@@ finding @@\n"
+                    "title: bug B\n"
+                    "severity: medium\n"
+                    "location: a.py:2\n"
+                    "claim: claim B\n"
                 )
             if calls["n"] == 2:
                 return (
-                    '{"type": "vulnerability",'
-                    '"preconditions": "none",'
-                    '"proof": "proven",'
-                    '"fix_outline": "fix"}'
+                    "@@ expansion @@\n"
+                    "type: vulnerability\n"
+                    "preconditions: none\n"
+                    "proof: proven\n"
+                    "fix_outline: fix\n"
                 )
             return "broken {{{"
 
@@ -1793,8 +3025,8 @@ class TestPhase3Split:
         def fake_call(ctx, messages, temperature=0.0, trace_task=None):
             calls["n"] += 1
             if calls["n"] <= 2:
-                return "not json at all"
-            return '{"findings": []}'
+                return "@@ finding @@\ntitle: bad\n"
+            return "@@ none @@"
 
         monkeypatch.setattr("swival.audit._call_audit_llm", fake_call)
 
@@ -1813,7 +3045,9 @@ class TestPhase3Split:
         monkeypatch.setattr("swival.audit._git_show", lambda path, base_dir: "code")
         monkeypatch.setattr(
             "swival.audit._call_audit_llm",
-            lambda ctx, messages, temperature=0.0, trace_task=None: "never valid json",
+            lambda ctx, messages, temperature=0.0, trace_task=None: (
+                "@@ finding @@\ntitle: incomplete\n"
+            ),
         )
 
         result = _deep_review_one("a.py", state, ctx)

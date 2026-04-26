@@ -28,6 +28,18 @@ AUDIT_PROVENANCE_URL = "https://swival.dev"
 _AUDIT_TRUNCATION_MARKER = "\n\n[truncated — file too large for context window]"
 _AUDIT_TRUNCATION_FLOOR = 200
 
+_DEFAULT_METRICS: dict[str, int] = {
+    "parse_failures": 0,
+    "parse_failures_profile": 0,
+    "parse_failures_triage": 0,
+    "parse_failures_finding": 0,
+    "parse_failures_expansion": 0,
+    "repair_successes": 0,
+    "repair_failures": 0,
+    "analytical_retries": 0,
+    "multiline_continuations": 0,
+}
+
 # ---------------------------------------------------------------------------
 # Debug log
 # ---------------------------------------------------------------------------
@@ -213,14 +225,7 @@ class AuditRunState:
     verification_state: dict[str, dict] = field(default_factory=dict)
     next_index: int = 1
     phase: str = "init"
-    metrics: dict[str, int] = field(
-        default_factory=lambda: {
-            "parse_failures": 0,
-            "repair_successes": 0,
-            "repair_failures": 0,
-            "analytical_retries": 0,
-        }
-    )
+    metrics: dict[str, int] = field(default_factory=lambda: dict(_DEFAULT_METRICS))
 
     def save(self) -> None:
         d = self.state_dir / self.run_id
@@ -292,15 +297,7 @@ class AuditRunState:
             state_dir=state_dir,
             next_index=blob.get("next_index", 1),
             phase=blob.get("phase", "init"),
-            metrics=blob.get(
-                "metrics",
-                {
-                    "parse_failures": 0,
-                    "repair_successes": 0,
-                    "repair_failures": 0,
-                    "analytical_retries": 0,
-                },
-            ),
+            metrics=blob.get("metrics", dict(_DEFAULT_METRICS)),
         )
         return state
 
@@ -482,6 +479,16 @@ def _load_file_contents(files: list[str], base_dir: str) -> dict[str, str]:
     return cache
 
 
+def _repo_profile_json(state: AuditRunState) -> str:
+    if state.repo_profile is None:
+        return "{}"
+    cached = getattr(state, "_repo_profile_json_cached", None)
+    if cached is None:
+        cached = json.dumps(state.repo_profile, indent=2)
+        state._repo_profile_json_cached = cached
+    return cached
+
+
 def _build_context_indices(
     files: list[str],
     content_cache: dict[str, str],
@@ -497,6 +504,8 @@ def _build_context_indices(
         for sym in _extract_exports(content):
             export_map.setdefault(sym, []).append(f)
 
+    sym_patterns = {sym: re.compile(rf"\b{re.escape(sym)}\b") for sym in export_map}
+
     caller_index: dict[str, list[str]] = {}
     for f in files:
         content = content_cache.get(f)
@@ -504,7 +513,7 @@ def _build_context_indices(
             continue
         callers = set()
         for sym, sources in export_map.items():
-            if f not in sources and re.search(rf"\b{re.escape(sym)}\b", content):
+            if f not in sources and sym_patterns[sym].search(content):
                 callers.update(sources)
         if callers:
             caller_index[f] = sorted(callers)
@@ -513,148 +522,390 @@ def _build_context_indices(
 
 
 # ---------------------------------------------------------------------------
-# JSON structured-output helper
+# Structured-text record helpers (`@@ name @@` blocks with `key: value` lines)
 # ---------------------------------------------------------------------------
 
 
-_UNQUOTED_VALUE_RE = re.compile(r"(?<=:)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*(?=[,}\]])")
-_JSON_LITERALS = frozenset({"true", "false", "null"})
+@dataclass(frozen=True)
+class RecordSchema:
+    """Describes one record type (the body of a @@ name @@ block)."""
+
+    name: str
+    required: tuple[str, ...] = ()
+    optional: tuple[str, ...] = ()
+    enums: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    booleans: tuple[str, ...] = ()
+    repeated: dict[str, str] = field(default_factory=dict)
+    multiline: tuple[str, ...] = ()
 
 
-def _fix_unquoted_values(text: str) -> str:
-    """Quote bare identifiers that aren't JSON literals (true/false/null)."""
+@dataclass(frozen=True)
+class PhaseSchema:
+    """Describes the expected response shape for one audit phase."""
 
-    def _quote_match(m: re.Match) -> str:
-        val = m.group(1)
-        if val in _JSON_LITERALS:
-            return m.group(0)
-        ws_before = m.group(0)[: m.start(1) - m.start(0)]
-        ws_after = m.group(0)[m.end(1) - m.start(0) :]
-        return f'{ws_before}"{val}"{ws_after}'
-
-    return _UNQUOTED_VALUE_RE.sub(_quote_match, text)
+    record: RecordSchema
+    cardinality: str  # "one" | "zero_or_more"
+    allow_none: bool = False
 
 
-def _parse_json_response(text: str, required_keys: list[str] | None = None) -> dict:
-    if not text:
+_RECORD_HEADER_RE = re.compile(r"^\s*@@\s*([a-zA-Z_]+)\s*@@\s*$")
+_RECORD_KV_RE = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*[:=]\s*(.*)$")
+_RECORD_FENCE_RE = re.compile(
+    r"^```(?:[\w-]+)?\s*\n(.*)\n```\s*$",
+    re.DOTALL,
+)
+_ENTRY_POINT_HINT_RE = re.compile(
+    r"(main|app|server|handler|index|cli|entry)", re.IGNORECASE
+)
+
+
+def _parse_records(
+    text: str,
+    schema: PhaseSchema,
+    *,
+    metrics: dict[str, int] | None = None,
+) -> list[dict]:
+    """Parse @@-block records into a list of dicts, validated against schema.
+
+    Permissive on input: case-insensitive headers and keys, optional blank
+    lines between records, `:` or `=` separator, indented continuations on
+    declared multiline fields, fenced code-block wrapping unwrapped, preamble
+    and trailer prose tolerated.
+
+    Strict on output: required keys must be present and non-empty, declared
+    enums validated, booleans coerced, cardinality enforced, scalar duplicates
+    rejected.
+
+    When ``metrics`` is provided, ``multiline_continuations`` is incremented
+    by the number of records that used at least one continuation line — but
+    only after parsing and validation succeed.
+
+    Raises ``ValueError`` on any failure with a message naming the offending
+    key/record.
+    """
+    if not text or not text.strip():
         raise ValueError("empty LLM response")
 
     cleaned = text.strip()
-    fence = re.search(r"```(?:json)?\s*\n(.*?)```", cleaned, re.DOTALL)
+    fence = _RECORD_FENCE_RE.match(cleaned)
     if fence:
         cleaned = fence.group(1).strip()
 
-    # Find first { ... } block
-    start = cleaned.find("{")
-    if start < 0:
-        raise ValueError(f"no JSON object found in response: {cleaned[:200]}")
+    rec_schema = schema.record
+    target_name = rec_schema.name.lower()
+    known_keys: set[str] = {
+        k.lower()
+        for group in (
+            rec_schema.required,
+            rec_schema.optional,
+            rec_schema.repeated,
+            rec_schema.multiline,
+            rec_schema.booleans,
+        )
+        for k in group
+    }
+    repeated_map = {k.lower(): v for k, v in rec_schema.repeated.items()}
+    multiline_keys = {k.lower() for k in rec_schema.multiline}
 
-    depth = 0
-    end = start
-    for i in range(start, len(cleaned)):
-        if cleaned[i] == "{":
-            depth += 1
-        elif cleaned[i] == "}":
-            depth -= 1
-            if depth == 0:
-                end = i + 1
-                break
+    records: list[dict] = []
+    current: dict | None = None
+    last_key: str | None = None
+    saw_none = False
+    multiline_records = 0
+    current_used_multiline = False
 
-    if end <= start:
-        # Unmatched braces — try from start to end of string as fallback
-        end = len(cleaned)
+    def commit() -> None:
+        nonlocal current, last_key, current_used_multiline, multiline_records
+        if current is not None:
+            if current_used_multiline:
+                multiline_records += 1
+            records.append(current)
+        current = None
+        last_key = None
+        current_used_multiline = False
 
-    candidate = cleaned[start:end]
-    try:
-        parsed = json.loads(candidate)
-    except json.JSONDecodeError:
-        candidate = _fix_unquoted_values(candidate)
-        try:
-            parsed = json.loads(candidate)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"invalid JSON: {e}") from e
+    for raw_line in cleaned.splitlines():
+        if not raw_line.strip():
+            last_key = None
+            continue
 
-    if required_keys:
-        missing = [k for k in required_keys if k not in parsed]
-        if missing:
-            raise ValueError(f"missing required keys: {missing}")
+        m = _RECORD_HEADER_RE.match(raw_line)
+        if m:
+            name = m.group(1).lower()
+            commit()
+            if name == "none":
+                if not schema.allow_none:
+                    raise ValueError("'@@ none @@' sentinel not permitted by schema")
+                saw_none = True
+                continue
+            if name != target_name:
+                raise ValueError(
+                    f"unexpected record type '@@ {name} @@', "
+                    f"expected '@@ {target_name} @@'"
+                )
+            current = {}
+            continue
 
-    return parsed
+        if current is None:
+            continue
+
+        if raw_line.startswith("  "):
+            if last_key is None:
+                raise ValueError(
+                    f"continuation line before any key in record {len(records)}"
+                )
+            if last_key not in multiline_keys:
+                raise ValueError(
+                    f"continuation on key '{last_key}' which is not multiline "
+                    f"in record {len(records)}"
+                )
+            cont_text = raw_line.strip()
+            existing = current.get(last_key, "")
+            current[last_key] = f"{existing} {cont_text}" if existing else cont_text
+            current_used_multiline = True
+            continue
+
+        kv = _RECORD_KV_RE.match(raw_line)
+        if not kv:
+            commit()
+            continue
+
+        key = kv.group(1).lower()
+        value = kv.group(2).rstrip()
+
+        if key not in known_keys:
+            commit()
+            continue
+
+        if key in repeated_map:
+            if value.strip():
+                current.setdefault(key, []).append(value)
+        else:
+            if key in current:
+                raise ValueError(f"duplicate key '{key}' in record {len(records)}")
+            current[key] = value
+        last_key = key
+
+    commit()
+
+    if saw_none:
+        if records:
+            raise ValueError("'@@ none @@' sentinel mixed with actual records")
+        return []
+
+    validated = _validate_records(records, schema, repeated_map)
+    if metrics is not None and multiline_records > 0:
+        metrics["multiline_continuations"] = (
+            metrics.get("multiline_continuations", 0) + multiline_records
+        )
+    return validated
 
 
-_REPAIR_SYSTEM = """\
-You are a JSON syntax repair tool.
+def _validate_records(
+    records: list[dict],
+    schema: PhaseSchema,
+    repeated_map: dict[str, str],
+) -> list[dict]:
+    rec_schema = schema.record
+    enum_lc = {k.lower(): {a.lower() for a in v} for k, v in rec_schema.enums.items()}
+    enum_orig = {k.lower(): v for k, v in rec_schema.enums.items()}
+    booleans = {k.lower() for k in rec_schema.booleans}
 
-You will receive a malformed model output that was supposed to be valid JSON,
-the parse error that was raised, and the expected JSON schema.
+    for idx, record in enumerate(records):
+        for required in rec_schema.required:
+            rk = required.lower()
+            if rk in repeated_map:
+                vals = record.get(rk, [])
+                if not vals or not any(v and v.strip() for v in vals):
+                    raise ValueError(
+                        f"missing required key '{required}' in record {idx}"
+                    )
+            else:
+                val = record.get(rk, "")
+                if not val or not val.strip():
+                    raise ValueError(
+                        f"missing required key '{required}' in record {idx}"
+                    )
+
+        for key, allowed_lc in enum_lc.items():
+            if key in record:
+                v = record[key]
+                values = v if isinstance(v, list) else [v]
+                for val in values:
+                    if val.strip().lower() not in allowed_lc:
+                        raise ValueError(
+                            f"invalid enum value '{val}' for key '{key}' "
+                            f"in record {idx}; allowed: "
+                            f"{sorted(enum_orig[key])}"
+                        )
+
+        for key in booleans:
+            if key in record:
+                raw_val = record[key].strip().lower()
+                if raw_val in ("true", "yes", "1"):
+                    record[key] = True
+                elif raw_val in ("false", "no", "0"):
+                    record[key] = False
+                else:
+                    raise ValueError(
+                        f"invalid boolean '{record[key]}' for key '{key}' "
+                        f"in record {idx}"
+                    )
+
+    if schema.cardinality == "one":
+        if len(records) != 1:
+            raise ValueError(
+                f"expected exactly one '@@ {rec_schema.name} @@' record, "
+                f"got {len(records)}"
+            )
+    elif schema.cardinality == "zero_or_more":
+        if not records:
+            msg = f"expected at least one '@@ {rec_schema.name} @@' record"
+            if schema.allow_none:
+                msg += " or the '@@ none @@' sentinel"
+            raise ValueError(msg)
+
+    for record in records:
+        for singular, plural in repeated_map.items():
+            if singular in record:
+                record[plural] = record.pop(singular)
+            elif plural not in record:
+                record[plural] = []
+
+    return records
+
+
+def _bump_parse_failure(metrics: dict[str, int], record_name: str) -> None:
+    """Increment both the aggregate and the per-record-type parse-failure counter.
+
+    Per-type counters (``parse_failures_<name>``) are added to the aggregate so
+    a high-level reader can still see total failures, while a debugger can see
+    which phase contributed.
+    """
+    metrics["parse_failures"] = metrics.get("parse_failures", 0) + 1
+    typed_key = f"parse_failures_{record_name}"
+    metrics[typed_key] = metrics.get(typed_key, 0) + 1
+
+
+_PARSE_FAILURE_BREAKDOWN: tuple[tuple[str, str], ...] = (
+    ("parse_failures_profile", "profile"),
+    ("parse_failures_triage", "triage"),
+    ("parse_failures_finding", "finding"),
+    ("parse_failures_expansion", "expansion"),
+)
+
+_METRIC_LABELS: tuple[tuple[str, str], ...] = (
+    ("repair_successes", "repairs succeeded"),
+    ("repair_failures", "repairs failed"),
+    ("analytical_retries", "analytical retries"),
+    ("multiline_continuations", "multiline continuations"),
+)
+
+
+def _format_audit_metrics(metrics: dict[str, int]) -> str:
+    """Render the audit metrics dict for the phase 3 summary line.
+
+    `parse_failures` shows the aggregate count and, when typed counters are
+    populated, a parenthesized breakdown by record type. Other counters render
+    as plain ``"N label"`` clauses joined by commas.
+    """
+    parts: list[str] = []
+    pf = metrics.get("parse_failures", 0)
+    if pf:
+        breakdown = ", ".join(
+            f"{metrics.get(k, 0)} {label}"
+            for k, label in _PARSE_FAILURE_BREAKDOWN
+            if metrics.get(k)
+        )
+        if breakdown:
+            parts.append(f"{pf} parse failures ({breakdown})")
+        else:
+            parts.append(f"{pf} parse failures")
+    for k, label in _METRIC_LABELS:
+        if metrics.get(k):
+            parts.append(f"{metrics[k]} {label}")
+    return ", ".join(parts)
+
+
+_RECORD_REPAIR_SYSTEM = """\
+You are a format repair tool for structured text records.
+
+You will receive a malformed model output that was supposed to follow a
+specific @@ block @@ format, the parse error that was raised, and a worked
+example of the correct format.
 
 Rules:
-- Fix only syntax errors: missing quotes, commas, brackets, truncation.
+- Fix only format errors: missing keys, malformed headers, wrong enum values,
+  unbalanced indentation.
 - Do not add, remove, or modify any factual content.
-- Do not invent new fields or values not present in the original.
-- Output only the repaired valid JSON, nothing else."""
+- Do not invent new records, claims, or values not present in the original.
+- Output only the repaired records. No prose, no fences, no commentary."""
 
 
-def _repair_json_response(
+def _repair_records_response(
     ctx: InputContext,
     malformed: str,
     error_msg: str,
-    schema_hint: str,
-    required_keys: list[str] | None = None,
-) -> dict:
-    """Ask the LLM to fix syntax errors in malformed JSON output."""
+    worked_example: str,
+    schema: PhaseSchema,
+    metrics: dict[str, int] | None = None,
+) -> list[dict]:
+    record_name = schema.record.name
+    user_msg = (
+        f"Parse error: {error_msg}\n\n"
+        f"Required format example:\n{worked_example}\n\n"
+        f"Malformed output:\n{malformed}\n\n"
+        f"Re-emit the same content using the exact format shown above. "
+        f"Do not introduce new {record_name} records, do not add new claims, "
+        f"and do not change any factual content; only fix the format."
+    )
     messages = [
-        {"role": "system", "content": _REPAIR_SYSTEM},
-        {
-            "role": "user",
-            "content": (
-                f"Parse error: {error_msg}\n\n"
-                f"Expected schema:\n{schema_hint}\n\n"
-                f"Malformed output:\n{malformed}"
-            ),
-        },
+        {"role": "system", "content": _RECORD_REPAIR_SYSTEM},
+        {"role": "user", "content": user_msg},
     ]
-    raw = _call_audit_llm(ctx, messages, trace_task="audit: json repair")
-    return _parse_json_response(raw, required_keys=required_keys)
+    raw = _call_audit_llm(
+        ctx, messages, trace_task=f"audit: records repair {record_name}"
+    )
+    return _parse_records(raw, schema, metrics=metrics)
 
 
-def _parse_with_repair(
+def _parse_records_with_repair(
     ctx: InputContext,
     raw: str,
-    required_keys: list[str] | None,
-    schema_hint: str,
+    schema: PhaseSchema,
+    worked_example: str,
     metrics: dict[str, int],
-) -> dict:
-    """Parse JSON, falling back to an LLM repair pass on failure."""
+) -> list[dict]:
+    """Parse records, falling back to one LLM repair pass on failure."""
     try:
-        result = _parse_json_response(raw, required_keys=required_keys)
-        _debug_log("parse_ok", required_keys=required_keys)
+        result = _parse_records(raw, schema, metrics=metrics)
+        _debug_log("records_parse_ok", record_type=schema.record.name)
         return result
     except ValueError as e:
-        metrics["parse_failures"] += 1
+        _bump_parse_failure(metrics, schema.record.name)
         error_msg = str(e)
         _debug_log(
-            "parse_failed",
+            "records_parse_failed",
+            record_type=schema.record.name,
             error=error_msg,
-            required_keys=required_keys,
             raw_len=len(raw),
             raw_preview=raw[:3000],
         )
         fmt.info(f"  parse failed ({error_msg}), attempting repair...")
         try:
-            result = _repair_json_response(
-                ctx, raw, error_msg, schema_hint, required_keys
+            result = _repair_records_response(
+                ctx, raw, error_msg, worked_example, schema, metrics=metrics
             )
-            metrics["repair_successes"] += 1
-            _debug_log("repair_ok", required_keys=required_keys)
+            metrics["repair_successes"] = metrics.get("repair_successes", 0) + 1
+            _debug_log("records_repair_ok", record_type=schema.record.name)
             fmt.info("  repair succeeded")
             return result
         except ValueError as repair_err:
-            metrics["repair_failures"] += 1
+            metrics["repair_failures"] = metrics.get("repair_failures", 0) + 1
             _debug_log(
-                "repair_failed",
+                "records_repair_failed",
+                record_type=schema.record.name,
                 error=str(repair_err),
-                required_keys=required_keys,
             )
             fmt.info("  repair failed")
             raise
@@ -790,25 +1041,72 @@ def _call_audit_llm(
 # Prompt templates
 # ---------------------------------------------------------------------------
 
-_PHASE1_SYSTEM = """\
+_PHASE1_PROFILE_SCHEMA = PhaseSchema(
+    record=RecordSchema(
+        name="profile",
+        required=("language", "summary"),
+        repeated={
+            "language": "languages",
+            "framework": "frameworks",
+            "entry_point": "entry_points",
+            "trust_boundary": "trust_boundaries",
+            "persistence_layer": "persistence_layers",
+            "auth_surface": "auth_surfaces",
+            "dangerous_operation": "dangerous_operations",
+        },
+    ),
+    cardinality="one",
+    allow_none=False,
+)
+
+_PHASE1_WORKED_EXAMPLE = """\
+@@ profile @@
+language: python
+language: rust
+framework: pytest
+framework: uv
+entry_point: swival/agent.py
+entry_point: swival/audit.py
+trust_boundary: cli args
+trust_boundary: mcp servers
+trust_boundary: llm provider responses
+persistence_layer: .swival/HISTORY.md
+persistence_layer: sqlite cache
+auth_surface: chatgpt oauth device flow
+dangerous_operation: subprocess
+dangerous_operation: file write
+dangerous_operation: eval-like template
+summary: a python cli coding agent with mcp client and audit pipeline."""
+
+_PHASE1_SYSTEM = f"""\
 You are preparing a compact repository profile for a staged security audit.
 
 This phase does not find bugs.
 Its only job is to extract reusable repository facts that improve later review.
 
-Output strict JSON with these keys only:
-- languages: array of short strings
-- frameworks: array of short strings
-- entry_points: array of repo-relative paths
-- trust_boundaries: array of short strings
-- persistence_layers: array of short strings
-- auth_surfaces: array of short strings
-- dangerous_operations: array of short strings
-- summary: string under 120 words
-
 You have no tools, no shell access, and no ability to run commands.
 All the source code you need is included below. Do not request additional information.
-Your entire response must be a single JSON object and nothing else.
+
+Output format: a single `@@ profile @@` block. The keys, one per line:
+- language: one language per line; repeat the line for each
+- framework: one framework or build/test tool per line; repeat the line for each
+- entry_point: one repo-relative path per line; repeat the line for each
+- trust_boundary: one short string per line; repeat the line for each
+- persistence_layer: one short string per line; repeat the line for each
+- auth_surface: one short string per line; repeat the line for each
+- dangerous_operation: one short string per line; repeat the line for each
+- summary: one line, under 120 words
+
+Use exactly the keys shown. Do not quote, escape, or wrap values. Each value
+runs to the end of its line. Omit a repeated key entirely when there is
+nothing to add for it; do not emit empty values. At least one `language` line
+and a non-empty `summary` are required.
+
+Worked example:
+
+{_PHASE1_WORKED_EXAMPLE}
+
+End of example. Now produce the real profile for the repository below.
 
 Rules:
 - Use only the provided committed repository evidence.
@@ -816,7 +1114,38 @@ Rules:
 - Do not mention findings, vulnerabilities, or risks unless needed to describe a trust boundary.
 - Keep every field short and reusable in later prompts."""
 
-_PHASE2_SYSTEM = """\
+_PHASE2_TRIAGE_SCHEMA = PhaseSchema(
+    record=RecordSchema(
+        name="triage",
+        required=("priority", "confidence", "summary"),
+        enums={
+            "priority": ("ESCALATE_HIGH", "ESCALATE_MEDIUM", "SKIP"),
+            "confidence": ("high", "medium", "low"),
+        },
+        booleans=("needs_followup",),
+        repeated={
+            "bug_class": "bug_classes",
+            "relevant_symbol": "relevant_symbols",
+            "suspicious_flow": "suspicious_flows",
+        },
+    ),
+    cardinality="one",
+    allow_none=False,
+)
+
+_PHASE2_WORKED_EXAMPLE = """\
+@@ triage @@
+priority: ESCALATE_MEDIUM
+confidence: medium
+summary: parses untrusted url before authentication checks
+bug_class: input_validation
+bug_class: trust_boundary_breaks
+relevant_symbol: parse_url
+relevant_symbol: authenticate
+suspicious_flow: external request body reaches parse_url before any auth gate
+needs_followup: false"""
+
+_PHASE2_SYSTEM = f"""\
 You are performing phase 2 security triage for one committed file with its direct local context.
 
 Goal:
@@ -854,18 +1183,28 @@ Bug classes to consider:
 - sandbox_escapes
 - taxonomy_free_unknowns
 
-Output strict JSON with these keys only:
-- priority: ESCALATE_HIGH | ESCALATE_MEDIUM | SKIP
-- confidence: high | medium | low
-- bug_classes: array of taxonomy strings
-- summary: short string, max 25 words
-- relevant_symbols: array of symbol names
-- suspicious_flows: array of short strings
-- needs_followup: boolean
-
 You have no tools, no shell access, and no ability to run commands.
 All the source code you need is included below. Do not request additional information.
-Your entire response must be a single JSON object and nothing else.
+
+Output format: a single `@@ triage @@` block with these keys, one per line:
+- priority: ESCALATE_HIGH | ESCALATE_MEDIUM | SKIP
+- confidence: high | medium | low
+- summary: short string, max 25 words
+- bug_class: one taxonomy string per line; repeat the line for each class
+- relevant_symbol: one symbol name per line; repeat the line for each symbol
+- suspicious_flow: one short string per line; repeat the line for each flow
+- needs_followup: true or false
+
+Use exactly the keys shown. Do not quote, escape, or wrap values. Each value
+runs to the end of its line. Omit `bug_class`, `relevant_symbol`, and
+`suspicious_flow` lines entirely when there is nothing to add for them — do
+not emit empty values.
+
+Worked example:
+
+{_PHASE2_WORKED_EXAMPLE}
+
+End of example. Now produce the real triage for the file below.
 
 Rules:
 - Use only repository-grounded reasoning.
@@ -873,7 +1212,24 @@ Rules:
 - Prefer SKIP if escalation cannot be justified.
 - Use ESCALATE_HIGH only when the evidence bundle contains a concrete suspicious path or invariant break worth deep review."""
 
-_PHASE3A_SYSTEM = """\
+_PHASE3A_FINDING_SCHEMA = PhaseSchema(
+    record=RecordSchema(
+        name="finding",
+        required=("title", "severity", "location", "claim"),
+        enums={"severity": ("low", "medium", "high", "critical")},
+    ),
+    cardinality="zero_or_more",
+    allow_none=True,
+)
+
+_PHASE3A_WORKED_EXAMPLE = """\
+@@ finding @@
+title: integer overflow in length calculation
+severity: medium
+location: src/decode.c:142
+claim: header_len + payload_len wraps for crafted inputs"""
+
+_PHASE3A_SYSTEM = f"""\
 You are performing phase 3 deep security review for one candidate file.
 
 Review only the committed repository evidence provided.
@@ -882,19 +1238,24 @@ Reject any claim that is not fully proven.
 You have no tools, no shell access, and no ability to run commands.
 All the source code you need is included below. Do not request additional information.
 
-Your entire response must be a single JSON object with this shape and nothing else:
-{
-  "findings": [
-    {
-      "title": "short title",
-      "severity": "low | medium | high | critical",
-      "location": "path:line",
-      "claim": "one-line bug statement under 20 words"
-    }
-  ]
-}
+Output format: one or more `@@ finding @@` blocks. Each block has these keys, one per line:
+- title: short title
+- severity: low | medium | high | critical
+- location: path:line
+- claim: one-line bug statement under 20 words
 
-If there are no findings, respond with: {"findings": []}
+Use exactly the keys shown. Do not quote, escape, or wrap values. Each value
+runs to the end of its line.
+
+If there are no findings, output the single line:
+
+@@ none @@
+
+Worked example:
+
+{_PHASE3A_WORKED_EXAMPLE}
+
+End of example. Now produce the real findings for the file below.
 
 Rules:
 - Report zero findings rather than a speculative finding.
@@ -906,31 +1267,68 @@ Rules:
 - Use exact path:line citations.
 - Do not include best practices, missing tests, or generic hardening advice."""
 
-_PHASE3A_SCHEMA_HINT = '{"findings": [{"title": "...", "severity": "...", "location": "...", "claim": "..."}]}'
+_PHASE3B_TYPE_VALUES = (
+    "logic error",
+    "vulnerability",
+    "data integrity bug",
+    "authorization flaw",
+    "trust-boundary violation",
+    "race condition",
+    "error-handling bug",
+    "validation gap",
+    "resource lifecycle bug",
+    "invariant violation",
+)
 
-_PHASE3B_SYSTEM = """\
+_PHASE3B_EXPANSION_SCHEMA = PhaseSchema(
+    record=RecordSchema(
+        name="expansion",
+        required=("type", "preconditions", "proof", "fix_outline"),
+        enums={"type": _PHASE3B_TYPE_VALUES},
+        multiline=("proof",),
+    ),
+    cardinality="one",
+    allow_none=False,
+)
+
+_PHASE3B_WORKED_EXAMPLE = """\
+@@ expansion @@
+type: vulnerability
+preconditions: caller passes a user-supplied string as the cmd argument
+proof:
+  user input arrives at run_shell at line 400 with no validation.
+  at line 412 it is passed to subprocess with shell=true.
+  reachable from the chat tool dispatcher used on every turn.
+fix_outline: pass argv list and drop shell=true, or shlex.quote each segment"""
+
+_PHASE3B_SYSTEM = f"""\
 You are expanding one security finding with proof details.
 
 You have no tools, no shell access, and no ability to run commands.
 All the source code you need is included below. Do not request additional information.
 
-Your entire response must be a single JSON object with this shape and nothing else:
-{
-  "type": "logic error | vulnerability | data integrity bug | authorization flaw | trust-boundary violation | race condition | error-handling bug | validation gap | resource lifecycle bug | invariant violation",
-  "preconditions": "minimum justified preconditions, under 20 words",
-  "proof": "input origin, propagation path, failing condition, impact, reachability — under 80 words total",
-  "fix_outline": "smallest correct fix, under 20 words"
-}
+Output format: a single `@@ expansion @@` block with these keys, one per line:
+- type: one of {", ".join(_PHASE3B_TYPE_VALUES)}
+- preconditions: minimum justified preconditions, under 20 words
+- proof: input origin, propagation path, failing condition, impact, reachability
+  — under 80 words total. The proof value may span multiple lines: any line
+  that begins with two or more spaces continues the proof value.
+- fix_outline: smallest correct fix, under 20 words
+
+Use exactly the keys shown. Do not quote, escape, or wrap values. Every value
+runs to the end of its line, and only `proof:` may continue on indented lines.
+
+Worked example:
+
+{_PHASE3B_WORKED_EXAMPLE}
+
+End of example. Now produce the real expansion for the finding below.
 
 Rules:
 - Use only the provided repository evidence.
 - Prefer the narrowest bug that the evidence directly proves.
 - For undefined behavior or uninitialized-state bugs, describe the direct invariant violation.
 - Do not speculate beyond what the code proves."""
-
-_PHASE3B_SCHEMA_HINT = (
-    '{"type": "...", "preconditions": "...", "proof": "...", "fix_outline": "..."}'
-)
 
 _PHASE4_VERIFY_SYSTEM = """\
 You are verifying one proposed security finding using the committed source code in an isolated worktree.
@@ -1013,7 +1411,7 @@ def _phase1_repo_profile(state: AuditRunState, ctx: InputContext) -> dict:
     entry_hints = [
         f
         for f in state.scope.mandatory_files
-        if re.search(r"(main|app|server|handler|index|cli|entry)", Path(f).stem, re.I)
+        if _ENTRY_POINT_HINT_RE.search(Path(f).stem)
     ]
     for f in entry_hints[:5]:
         try:
@@ -1032,7 +1430,14 @@ def _phase1_repo_profile(state: AuditRunState, ctx: InputContext) -> dict:
         {"role": "user", "content": suffix},
     ]
     raw = _call_audit_llm(ctx, messages, trace_task="audit: phase 1 repo profile")
-    return _parse_json_response(raw, required_keys=["languages", "summary"])
+    records = _parse_records_with_repair(
+        ctx,
+        raw,
+        schema=_PHASE1_PROFILE_SCHEMA,
+        worked_example=_PHASE1_WORKED_EXAMPLE,
+        metrics=state.metrics,
+    )
+    return records[0]
 
 
 def _phase2_triage_one(
@@ -1059,9 +1464,7 @@ def _phase2_triage_one(
     callers_summary = ", ".join(state.caller_index.get(path, [])[:10]) or "(none)"
     score = _score_attack_surface(content)
 
-    profile_json = (
-        json.dumps(state.repo_profile, indent=2) if state.repo_profile else "{}"
-    )
+    profile_json = _repo_profile_json(state)
 
     suffix = (
         f"Repository profile:\n{profile_json}\n\n"
@@ -1077,8 +1480,17 @@ def _phase2_triage_one(
     ]
     raw = _call_audit_llm(ctx, messages, trace_task=f"audit: phase 2 triage {path}")
     try:
-        parsed = _parse_json_response(raw)
-    except ValueError:
+        records = _parse_records(raw, _PHASE2_TRIAGE_SCHEMA, metrics=state.metrics)
+    except ValueError as e:
+        _bump_parse_failure(state.metrics, _PHASE2_TRIAGE_SCHEMA.record.name)
+        _debug_log(
+            "records_parse_failed",
+            record_type="triage",
+            path=path,
+            error=str(e),
+            raw_len=len(raw),
+            raw_preview=raw[:1000],
+        )
         return TriageRecord(
             path=path,
             priority="SKIP",
@@ -1090,16 +1502,13 @@ def _phase2_triage_one(
             needs_followup=False,
         )
 
-    priority = parsed.get("priority", "SKIP").upper()
-    if priority not in ("ESCALATE_HIGH", "ESCALATE_MEDIUM", "SKIP"):
-        priority = "SKIP"
-
+    parsed = records[0]
     return TriageRecord(
         path=path,
-        priority=priority,
-        confidence=parsed.get("confidence", "low"),
+        priority=parsed["priority"].upper(),
+        confidence=parsed["confidence"].lower(),
         bug_classes=parsed.get("bug_classes", []),
-        summary=parsed.get("summary", ""),
+        summary=parsed["summary"],
         relevant_symbols=parsed.get("relevant_symbols", []),
         suspicious_flows=parsed.get("suspicious_flows", []),
         needs_followup=parsed.get("needs_followup", False),
@@ -1128,9 +1537,7 @@ def _phase3a_inventory(
                     pass
                 break
 
-    profile_json = (
-        json.dumps(state.repo_profile, indent=2) if state.repo_profile else "{}"
-    )
+    profile_json = _repo_profile_json(state)
     triage_json = json.dumps(asdict(triage), indent=2) if triage else "{}"
     related = "\n\n".join(related_parts) if related_parts else "(none)"
 
@@ -1147,14 +1554,13 @@ def _phase3a_inventory(
         {"role": "user", "content": suffix},
     ]
     raw = _call_audit_llm(ctx, messages, trace_task=f"audit: phase 3a inventory {path}")
-    parsed = _parse_with_repair(
+    return _parse_records_with_repair(
         ctx,
         raw,
-        required_keys=["findings"],
-        schema_hint=_PHASE3A_SCHEMA_HINT,
+        schema=_PHASE3A_FINDING_SCHEMA,
+        worked_example=_PHASE3A_WORKED_EXAMPLE,
         metrics=state.metrics,
     )
-    return [f for f in parsed.get("findings", []) if isinstance(f, dict)]
 
 
 def _phase3b_expand_one(
@@ -1177,15 +1583,16 @@ def _phase3b_expand_one(
     ]
     raw = _call_audit_llm(ctx, messages, trace_task=f"audit: phase 3b expand {path}")
     try:
-        return _parse_with_repair(
+        records = _parse_records_with_repair(
             ctx,
             raw,
-            required_keys=["type"],
-            schema_hint=_PHASE3B_SCHEMA_HINT,
+            schema=_PHASE3B_EXPANSION_SCHEMA,
+            worked_example=_PHASE3B_WORKED_EXAMPLE,
             metrics=state.metrics,
         )
     except ValueError:
         return None
+    return records[0] if records else None
 
 
 def _canonicalize_finding(
@@ -1266,7 +1673,7 @@ def _deep_review_one(
 ) -> DeepReviewResult:
     """Run deep review with repair-first retry policy.
 
-    Parse failures trigger a cheap LLM repair pass (inside _parse_with_repair).
+    Parse failures trigger a cheap LLM repair pass (inside _parse_records_with_repair).
     If the entire pipeline still fails, one full analytical retry runs before
     giving up.
     """
@@ -1284,7 +1691,7 @@ def _deep_review_one(
             return DeepReviewResult(path=path, error=str(e2))
 
 
-def _gather_evidence(finding: FindingRecord, ctx: InputContext) -> str:
+def _gather_evidence(finding: FindingRecord, ctx: InputContext) -> tuple[str, int]:
     """Collect committed file contents for all locations referenced by a finding."""
     seen = set()
     parts = []
@@ -1898,29 +2305,23 @@ def _run_audit_phases(
 
         state.phase = "verification"
         state.save()
-        _METRIC_LABELS = [
-            ("parse_failures", "parse failures"),
-            ("repair_successes", "repairs succeeded"),
-            ("repair_failures", "repairs failed"),
-            ("analytical_retries", "analytical retries"),
-        ]
-        m = state.metrics
-        metrics_parts = [f"{m[k]} {label}" for k, label in _METRIC_LABELS if m.get(k)]
+        metrics_summary = _format_audit_metrics(state.metrics)
         fmt.info(
             f"phase 3 complete. {len(state.proposed_findings)} proposed findings."
-            + (f" ({', '.join(metrics_parts)})" if metrics_parts else "")
+            + (f" ({metrics_summary})" if metrics_summary else "")
         )
 
     # Phase 4: verification (parallel)
     if state.phase == "verification":
-        # Deduplicate proposed findings by content key
         seen_keys: set[str] = set()
         deduped: list[FindingRecord] = []
+        deduped_keys: list[str] = []
         for f in state.proposed_findings:
             key = _finding_key(f)
             if key not in seen_keys:
                 seen_keys.add(key)
                 deduped.append(f)
+                deduped_keys.append(key)
         if len(deduped) < len(state.proposed_findings):
             fmt.info(
                 f"  deduplicated {len(state.proposed_findings)} proposed findings "
@@ -1928,19 +2329,14 @@ def _run_audit_phases(
             )
             state.proposed_findings = deduped
 
-        # Prune stale verification_state entries from previous key schemes
-        current_keys = {_finding_key(f) for f in state.proposed_findings}
-        stale = [k for k in state.verification_state if k not in current_keys]
+        stale = [k for k in state.verification_state if k not in seen_keys]
         for k in stale:
             del state.verification_state[k]
 
-        # Initialize verification state for any findings not yet tracked,
-        # reconciling against verified_findings to avoid re-verifying on migration
         already_verified_keys = {
             _finding_key(vf.finding) for vf in state.verified_findings
         }
-        for f in state.proposed_findings:
-            key = _finding_key(f)
+        for key in deduped_keys:
             if key not in state.verification_state:
                 state.verification_state[key] = {
                     "status": "verified" if key in already_verified_keys else "pending",
@@ -1959,11 +2355,11 @@ def _run_audit_phases(
                 if vs["status"] == "running":
                     vs["status"] = "pending"
 
-            pending = []
-            for f in state.proposed_findings:
-                key = _finding_key(f)
-                if state.verification_state[key]["status"] in ("pending", "failed"):
-                    pending.append((key, f))
+            pending = [
+                (key, f)
+                for key, f in zip(deduped_keys, state.proposed_findings)
+                if state.verification_state[key]["status"] in ("pending", "failed")
+            ]
 
             if not pending:
                 break
