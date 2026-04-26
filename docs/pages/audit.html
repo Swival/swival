@@ -114,6 +114,8 @@ Audit complete. 2 finding(s) written to audit-findings/. Run `ls audit-findings/
 <p>If no bugs are found:</p>
 <pre><code class="language-text">No provable logic or security bugs found in Git-tracked files.
 </code></pre>
+<h2 id="example-audits">Example Audits</h2>
+<p>A growing collection of security audits run against open-source projects with Swival is published at <a href="https://github.com/swival/security-audits">github.com/swival/security-audits</a>. Each audit there was generated automatically by <code>/audit</code> and contains the full set of findings, reports, and patches.</p>
 <h2 id="how-it-works">How It Works</h2>
 <p>The audit runs in five sequential phases. State is checkpointed after each phase and after every batch within a phase, so interrupted audits can be resumed.</p>
 <h3 id="phase-1-repository-profiling">Phase 1: Repository Profiling</h3>

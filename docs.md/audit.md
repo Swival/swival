@@ -38,6 +38,10 @@ If no bugs are found:
 No provable logic or security bugs found in Git-tracked files.
 ```
 
+## Example Audits
+
+A growing collection of security audits run against open-source projects with Swival is published at [github.com/swival/security-audits](https://github.com/swival/security-audits). Each audit there was generated automatically by `/audit` and contains the full set of findings, reports, and patches.
+
 ## How It Works
 
 The audit runs in five sequential phases. State is checkpointed after each phase and after every batch within a phase, so interrupted audits can be resumed.
