@@ -2,6 +2,11 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.10
+
+- `/audit` now accepts multiple focus paths in a single invocation (`/audit src/auth/ src/api/`).
+- Other minor improvements to `/audit` to reduce false positives while exploring more bug classes.
+
 ## 1.0.9
 
 - `--logout` has been added to delete locally cached ChatGPT OAuth tokens and exit, so users can sign out without hand-deleting files under `~/.config/litellm/chatgpt/`.
