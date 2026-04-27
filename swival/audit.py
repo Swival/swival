@@ -1262,6 +1262,8 @@ Allowed priority labels:
 - ESCALATE_MEDIUM
 - SKIP
 
+Focus on bugs with practical security impact, reachable in this code's actual deployment context. A class match alone is not enough. Escalate only when the security impact is concrete.
+
 Bug classes to consider:
 - domain_and_context-specific
 - authorization
@@ -1272,6 +1274,7 @@ Bug classes to consider:
 - data_integrity
 - arithmetic
 - cryptography
+- secret_lifecycle
 - memory_safety
 - overflows
 - injection
@@ -1281,7 +1284,9 @@ Bug classes to consider:
 - trust_boundary_breaks
 - unsafe_data_flow
 - invariant_violations
+- api_soundness
 - dangerous_api_misuse
+- business_logic
 - edge_case_failures
 - cross_component_contracts
 - sandbox_escapes
