@@ -1288,6 +1288,8 @@ Allowed priority labels:
 
 Focus on bugs with practical security impact, reachable in this code's actual deployment context. A class match alone is not enough. Escalate only when the security impact is concrete.
 
+Do NOT escalate defense-in-depth concerns. A finding is defense-in-depth (and must SKIP) when an existing control in the code already prevents the attack and the proposal is to add a redundant secondary control, tighten an already-sufficient check, or harden against an attacker who has no real path to reach the code. Escalate only when an attacker has a concrete trigger that produces a security-relevant outcome that today's code does not stop.
+
 Bug classes to consider:
 - domain_and_context-specific
 - authorization
@@ -1398,7 +1400,8 @@ Rules:
 - Prefer the narrowest bug that the evidence directly proves.
 - For undefined behavior or uninitialized-state bugs, describe the direct invariant violation or invalid read/write instead of assuming a specific runtime value or deterministic branch outcome unless the evidence proves it.
 - Use exact path:line citations.
-- Do not include best practices, missing tests, or generic hardening advice."""
+- Do not include best practices, missing tests, or generic hardening advice.
+- Do not report defense-in-depth issues. A finding must describe a concrete attacker reaching a security-relevant outcome that the current code does not stop. If an existing control in this code already blocks the attack, or the claim is "an additional check would be safer", "this should also validate X", "this could leak in some other deployment", or "redundant guard missing", omit the finding. Only report bugs where you can name the attacker, the input, and what they gain."""
 
 _PHASE3B_TYPE_VALUES = (
     "logic error",
@@ -1476,6 +1479,7 @@ Rules:
 - A proof counts if you can identify the trigger, reachability conditions, propagation path, failing operation or violated invariant, and practical impact from the code, or demonstrate equivalent runtime evidence.
 - For undefined behavior, uninitialized-state, and memory-safety bugs, either source-based proof or convincing runtime evidence is acceptable.
 - Reject only when the code does not support a practical trigger path.
+- Reject defense-in-depth findings as NOTREPRODUCED. If an existing control in the committed code already blocks the attack, the finding is not real — even if adding another layer would be safer. The bar is a concrete attacker with a concrete input producing a concrete security-relevant outcome under today's code, not "this would be more robust if it also did X".
 - End your final response with exactly one of these tokens on its own line:
   REPRODUCED
   NOTREPRODUCED"""
