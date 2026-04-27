@@ -22,18 +22,18 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "litellm>=1.83.13",
+    "litellm>=1.83.14",
     "tiktoken>=0.12",
-    "html-to-markdown>=3.1.0,<3.2",
+    "html-to-markdown>=3.3.2,<4",
     "rich>=15.0.0",
     "prompt-toolkit>=3.0.52",
     "mcp>=1.27,<2",
     "rank-bm25>=0.2.2",
     "httpx>=0.28.1",
     "starlette>=1.0.0",
-    "uvicorn>=0.45.0",
+    "uvicorn>=0.46.0",
     "fast-cipher>=0.2.1",
-    "boto3>=1.42.92",
+    "boto3>=1.42.96",
 ]
 
 [project.urls]
@@ -66,13 +66,13 @@ packages = ["swival"]
 
 [tool.uv]
 package = true
-constraint-dependencies = ["requests>=2.33.1", "cryptography>=46.0.7"]
+constraint-dependencies = ["requests>=2.33.1", "cryptography>=47.0.0"]
 override-dependencies = ["aiohttp>=3.13.5", "python-dotenv>=1.2.2"]
 
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
-    "ruff>=0.15.11",
+    "ruff>=0.15.12",
 ]
 website = [
     "markdown",
