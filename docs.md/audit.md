@@ -5,7 +5,7 @@ The `/audit` command runs a multi-phase security audit over committed Git-tracke
 It triages files by attack surface, performs deep review on escalated files, verifies each finding with an isolated proof-of-concept agent, generates patches, and writes structured reports. Only provable bugs survive to the final output.
 
 ```text
-/audit [path|glob] [--resume] [--regen] [--workers N]
+/audit [path|glob ...] [--resume] [--regen] [--workers N]
 ```
 
 Works in both interactive (REPL) and one-shot mode (requires `--oneshot-commands`). Runs against `HEAD`, so dirty working-directory changes are ignored.
@@ -23,6 +23,13 @@ Scope it to a directory or glob:
 ```text
 swival> /audit src/auth/
 swival> /audit **/*.py
+```
+
+Multiple paths can be passed; they are unioned into a single audit run with one
+state file and one set of reports:
+
+```text
+swival> /audit src/auth/ src/api/
 ```
 
 When the audit finishes, findings are written to `audit-findings/` in the project root:

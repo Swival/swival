@@ -144,20 +144,36 @@ _ATTACK_SURFACE_PATTERNS: list[tuple[re.Pattern, int]] = [
 # ---------------------------------------------------------------------------
 
 
+def _coerce_focus(raw: object) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [raw]
+    return list(raw)  # type: ignore[arg-type]
+
+
+def _normalize_focus(entries: list[str]) -> list[str]:
+    normalized = (
+        e if any(c in e for c in "*?[") else (e.rstrip("/") or e) for e in entries
+    )
+    return list(dict.fromkeys(normalized))
+
+
 @dataclass(frozen=True)
 class AuditScope:
     branch: str
     commit: str
     tracked_files: list[str]
     mandatory_files: list[str]
-    focus: str | None
+    focus: list[str]
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict) -> AuditScope:
-        return cls(**d)
+        focus = _normalize_focus(_coerce_focus(d.get("focus")))
+        return cls(**{**d, "focus": focus})
 
 
 @dataclass
@@ -308,11 +324,12 @@ class AuditRunState:
         cls,
         state_dir: Path,
         commit: str,
-        focus: str | None,
+        focus: list[str] | None,
         include_done: bool = False,
     ) -> AuditRunState | None:
         if not state_dir.exists():
             return None
+        want = None if focus is None else set(_normalize_focus(focus))
         best = None
         best_mtime = 0.0
         for entry in state_dir.iterdir():
@@ -325,8 +342,12 @@ class AuditRunState:
                 continue
             if blob.get("scope", {}).get("commit") != commit:
                 continue
-            if focus is not None and blob.get("scope", {}).get("focus") != focus:
-                continue
+            if want is not None:
+                persisted = _normalize_focus(
+                    _coerce_focus(blob.get("scope", {}).get("focus"))
+                )
+                if set(persisted) != want:
+                    continue
             if blob.get("phase") == "done" and not include_done:
                 continue
             mtime = sf.stat().st_mtime
@@ -354,21 +375,24 @@ def _git(args: list[str], cwd: str) -> str:
     return result.stdout.strip()
 
 
-def _resolve_scope(base_dir: str, focus: str | None) -> AuditScope:
+def _resolve_scope(base_dir: str, focus: list[str]) -> AuditScope:
     branch = _git(["branch", "--show-current"], base_dir) or "HEAD"
     commit = _git(["rev-parse", "HEAD"], base_dir)
     raw = _git(["ls-tree", "-r", "--name-only", "HEAD"], base_dir)
     tracked = raw.splitlines() if raw else []
 
+    focus = _normalize_focus(focus)
     if focus:
         import fnmatch
 
-        prefix = focus if focus.endswith("/") else focus + "/"
-        tracked = [
-            f
-            for f in tracked
-            if fnmatch.fnmatch(f, focus) or f == focus or f.startswith(prefix)
-        ]
+        pats = [(p, p if p.endswith("/") else p + "/") for p in focus]
+
+        def matches(f: str) -> bool:
+            return any(
+                fnmatch.fnmatch(f, p) or f == p or f.startswith(pre) for p, pre in pats
+            )
+
+        tracked = [f for f in tracked if matches(f)]
 
     mandatory = [f for f in tracked if _is_auditable(f)]
     return AuditScope(
@@ -2189,12 +2213,11 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
     base_dir = ctx.base_dir
     workers = 4
 
-    # Parse arguments
     arg = cmd_arg.strip()
     resume = False
     regen = False
     debug = False
-    focus = None
+    focus: list[str] | None = None
 
     parts = arg.split()
     filtered = []
@@ -2216,7 +2239,7 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
             filtered.append(parts[i])
         i += 1
     if filtered:
-        focus = " ".join(filtered)
+        focus = _normalize_focus(filtered)
 
     if debug:
         log_dir = Path(base_dir) / ".swival" / "audit"
@@ -2245,9 +2268,8 @@ def _run_audit_phases(
     workers: int,
     resume: bool,
     regen: bool,
-    focus: str | None,
+    focus: list[str] | None,
 ) -> str:
-    # Resume, regen, or create new run
     if resume or regen:
         try:
             commit = _git(["rev-parse", "HEAD"], base_dir)
@@ -2274,7 +2296,7 @@ def _run_audit_phases(
             fmt.info(f"resuming audit run {state.run_id} from phase {state.phase}")
     else:
         try:
-            scope = _resolve_scope(base_dir, focus)
+            scope = _resolve_scope(base_dir, focus or [])
         except RuntimeError as e:
             return f"error: cannot resolve git scope: {e}"
 
@@ -2295,7 +2317,8 @@ def _run_audit_phases(
             fmt.warning(
                 f"{len(scope.mandatory_files)} files in scope. "
                 f"phase 2 may issue up to {len(scope.mandatory_files)} LLM calls. "
-                f"consider narrowing with --focus <subdir>."
+                f"consider narrowing with `/audit <subdir>` "
+                f"(one or more paths/globs)."
             )
 
     # Phase 1: scope + profile

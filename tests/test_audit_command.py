@@ -167,7 +167,7 @@ class TestScope:
 
         from swival.audit import _resolve_scope
 
-        scope = _resolve_scope(str(tmp_path), None)
+        scope = _resolve_scope(str(tmp_path), [])
         assert "main.py" in scope.tracked_files
         assert "readme.md" in scope.tracked_files
         assert "main.py" in scope.mandatory_files
@@ -182,7 +182,7 @@ class TestScope:
 
         from swival.audit import _resolve_scope
 
-        scope = _resolve_scope(str(tmp_path), "src/")
+        scope = _resolve_scope(str(tmp_path), ["src/"])
         assert "src/a.py" in scope.mandatory_files
         assert "src/b.py" in scope.mandatory_files
         assert "lib/c.py" not in scope.mandatory_files
@@ -196,7 +196,7 @@ class TestScope:
 
         from swival.audit import _resolve_scope, _git_show
 
-        scope = _resolve_scope(str(tmp_path), None)
+        scope = _resolve_scope(str(tmp_path), [])
         assert "untracked.py" not in scope.tracked_files
         content = _git_show("a.py", str(tmp_path))
         assert content == "committed"
@@ -1119,7 +1119,7 @@ class TestPhase3bExpansion:
             commit="abc123",
             tracked_files=["a.py"],
             mandatory_files=["a.py"],
-            focus=None,
+            focus=[],
         )
         state = AuditRunState(
             run_id="e2e",
@@ -1202,7 +1202,7 @@ class TestPhase2Triage:
             commit="abc123",
             tracked_files=["a.py"],
             mandatory_files=["a.py"],
-            focus=None,
+            focus=[],
         )
         return AuditRunState(
             run_id="t",
@@ -1380,7 +1380,7 @@ class TestPhase1Profile:
             commit="abc123",
             tracked_files=["a.py"],
             mandatory_files=["a.py"],
-            focus=None,
+            focus=[],
         )
         return AuditRunState(
             run_id="p1",
@@ -1536,7 +1536,7 @@ class TestParseFailureBreakdown:
             commit="abc",
             tracked_files=[],
             mandatory_files=[],
-            focus=None,
+            focus=[],
         )
         state = AuditRunState(run_id="m", scope=scope, queued_files=[])
         return state.metrics
@@ -1636,7 +1636,7 @@ class TestParseFailureBreakdown:
             commit="abc",
             tracked_files=["a.py"],
             mandatory_files=["a.py"],
-            focus=None,
+            focus=[],
         )
         state = AuditRunState(
             run_id="t",
@@ -1733,7 +1733,7 @@ class TestStatePersistence:
             commit="abc123",
             tracked_files=["a.py", "b.py"],
             mandatory_files=["a.py", "b.py"],
-            focus=None,
+            focus=[],
         )
         return AuditRunState(
             run_id="test-run",
@@ -1796,7 +1796,7 @@ class TestStatePersistence:
         not_found = AuditRunState.find_resumable(state.state_dir, "different", None)
         assert not_found is None
 
-        not_found = AuditRunState.find_resumable(state.state_dir, "abc123", "src/")
+        not_found = AuditRunState.find_resumable(state.state_dir, "abc123", ["src/"])
         assert not_found is None
 
     def test_resume_without_focus_matches_focused_run(self, tmp_path):
@@ -1807,7 +1807,7 @@ class TestStatePersistence:
             commit=scope.commit,
             tracked_files=scope.tracked_files,
             mandatory_files=scope.mandatory_files,
-            focus="subdir/",
+            focus=["subdir/"],
         )
         state.save()
 
@@ -1815,10 +1815,10 @@ class TestStatePersistence:
         assert found is not None
         assert found.run_id == "test-run"
 
-        found = AuditRunState.find_resumable(state.state_dir, "abc123", "subdir/")
+        found = AuditRunState.find_resumable(state.state_dir, "abc123", ["subdir/"])
         assert found is not None
 
-        not_found = AuditRunState.find_resumable(state.state_dir, "abc123", "other/")
+        not_found = AuditRunState.find_resumable(state.state_dir, "abc123", ["other/"])
         assert not_found is None
 
     def test_done_state_not_resumable(self, tmp_path):
@@ -1835,7 +1835,7 @@ class TestStatePersistence:
             commit="abc123",
             tracked_files=["a.py", "b.py"],
             mandatory_files=["a.py", "b.py"],
-            focus=None,
+            focus=[],
         )
         state = AuditRunState(
             run_id="x",
@@ -1856,7 +1856,7 @@ class TestStatePersistence:
             commit="abc123",
             tracked_files=["a.py", "b.py"],
             mandatory_files=["a.py", "b.py"],
-            focus=None,
+            focus=[],
         )
         state = AuditRunState(
             run_id="x",
@@ -1891,7 +1891,7 @@ class TestDeepReviewRecovery:
             commit="abc123",
             tracked_files=["a.py"],
             mandatory_files=["a.py"],
-            focus=None,
+            focus=[],
         )
         state = AuditRunState(
             run_id="x",
@@ -1944,7 +1944,7 @@ class TestVerificationGates:
             commit="abc123",
             tracked_files=["main.c"],
             mandatory_files=["main.c"],
-            focus=None,
+            focus=[],
         )
         return AuditRunState(
             run_id="verify-run",
@@ -2149,7 +2149,7 @@ class TestMessageLayout:
             commit="abc123",
             tracked_files=["a.py"],
             mandatory_files=["a.py"],
-            focus=None,
+            focus=[],
         )
         return AuditRunState(
             run_id="x",
@@ -2274,7 +2274,7 @@ class TestScopeRoundTrip:
             commit="abc",
             tracked_files=["a.py"],
             mandatory_files=["a.py"],
-            focus="src/",
+            focus=["src"],
         )
         d = scope.to_dict()
         restored = AuditScope.from_dict(d)
@@ -2286,7 +2286,7 @@ class TestScopeRoundTrip:
             commit="abc",
             tracked_files=[],
             mandatory_files=[],
-            focus=None,
+            focus=[],
         )
         with pytest.raises(AttributeError):
             scope.branch = "other"
@@ -2304,7 +2304,7 @@ class TestPhase4Parallelism:
             commit="abc123",
             tracked_files=["main.c"],
             mandatory_files=["main.c"],
-            focus=None,
+            focus=[],
         )
 
     def _make_state(self, tmp_path):
@@ -3006,7 +3006,7 @@ class TestPhase3Split:
             commit="abc123",
             tracked_files=["a.py"],
             mandatory_files=["a.py"],
-            focus=None,
+            focus=[],
         )
         return AuditRunState(
             run_id="x",
@@ -3233,7 +3233,7 @@ class TestAutoRetry:
             commit=commit,
             tracked_files=files,
             mandatory_files=files,
-            focus=None,
+            focus=[],
         )
 
     def _make_finding(self, title="Bug", source_file="a.py"):
@@ -3862,3 +3862,223 @@ class TestCallAuditLlmOverflowRetry:
         assert len(calls) == 2
         assert calls[0] == 2000
         assert calls[1] < 2000
+
+
+class TestMultiFocusPaths:
+    def test_normalize_focus_strips_trailing_slash_and_dedupes(self):
+        from swival.audit import _normalize_focus
+
+        assert _normalize_focus(["src/a/", "src/b", "src/a"]) == ["src/a", "src/b"]
+        assert _normalize_focus([]) == []
+        assert _normalize_focus(["/"]) == ["/"]
+
+    def test_normalize_focus_preserves_trailing_slash_on_globs(self):
+        from swival.audit import _normalize_focus
+
+        assert _normalize_focus(["src/*/"]) == ["src/*/"]
+        assert _normalize_focus(["src/?/"]) == ["src/?/"]
+        assert _normalize_focus(["src/[ab]/"]) == ["src/[ab]/"]
+        assert _normalize_focus(["src/*.py"]) == ["src/*.py"]
+
+    def test_resolve_scope_unions_two_paths(self, tmp_path):
+        from swival.audit import _resolve_scope
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "src/a/x.py", "pass")
+        _commit_file(tmp_path, "src/b/y.py", "pass")
+        _commit_file(tmp_path, "lib/c.py", "pass")
+
+        scope = _resolve_scope(str(tmp_path), ["src/a", "src/b"])
+        assert "src/a/x.py" in scope.mandatory_files
+        assert "src/b/y.py" in scope.mandatory_files
+        assert "lib/c.py" not in scope.mandatory_files
+
+    def test_resolve_scope_normalizes_trailing_slash(self, tmp_path):
+        from swival.audit import _resolve_scope
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "src/a.py", "pass")
+
+        scope = _resolve_scope(str(tmp_path), ["src/"])
+        assert scope.focus == ["src"]
+        assert "src/a.py" in scope.mandatory_files
+
+    def test_from_dict_coerces_legacy_string_focus(self):
+        scope = AuditScope.from_dict(
+            {
+                "branch": "main",
+                "commit": "abc",
+                "tracked_files": ["a.py"],
+                "mandatory_files": ["a.py"],
+                "focus": "src/auth",
+            }
+        )
+        assert scope.focus == ["src/auth"]
+
+    def test_from_dict_coerces_legacy_null_focus(self):
+        scope = AuditScope.from_dict(
+            {
+                "branch": "main",
+                "commit": "abc",
+                "tracked_files": ["a.py"],
+                "mandatory_files": ["a.py"],
+                "focus": None,
+            }
+        )
+        assert scope.focus == []
+
+    def test_from_dict_normalizes_list_focus(self):
+        scope = AuditScope.from_dict(
+            {
+                "branch": "main",
+                "commit": "abc",
+                "tracked_files": [],
+                "mandatory_files": [],
+                "focus": ["src/a/", "src/a", "src/b/"],
+            }
+        )
+        assert scope.focus == ["src/a", "src/b"]
+
+    def _make_focused_state(self, tmp_path: Path, focus: list[str]) -> AuditRunState:
+        scope = AuditScope(
+            branch="main",
+            commit="abc123",
+            tracked_files=["src/a/x.py", "src/b/y.py"],
+            mandatory_files=["src/a/x.py", "src/b/y.py"],
+            focus=focus,
+        )
+        return AuditRunState(
+            run_id="multi-run",
+            scope=scope,
+            queued_files=list(scope.mandatory_files),
+            state_dir=tmp_path / ".swival" / "audit",
+            phase="triage",
+        )
+
+    def test_find_resumable_set_equality_ignores_order(self, tmp_path):
+        state = self._make_focused_state(tmp_path, ["src/a", "src/b"])
+        state.save()
+
+        found = AuditRunState.find_resumable(
+            state.state_dir, "abc123", ["src/b", "src/a"]
+        )
+        assert found is not None
+        assert found.run_id == "multi-run"
+
+    def test_find_resumable_normalizes_trailing_slash(self, tmp_path):
+        state = self._make_focused_state(tmp_path, ["src/a"])
+        state.save()
+
+        found = AuditRunState.find_resumable(state.state_dir, "abc123", ["src/a/"])
+        assert found is not None
+
+    def test_find_resumable_none_wildcards_focused_run(self, tmp_path):
+        state = self._make_focused_state(tmp_path, ["src/a"])
+        state.save()
+
+        found = AuditRunState.find_resumable(state.state_dir, "abc123", None)
+        assert found is not None
+        assert found.run_id == "multi-run"
+
+    def test_find_resumable_empty_list_does_not_match_focused_run(self, tmp_path):
+        state = self._make_focused_state(tmp_path, ["src/a"])
+        state.save()
+
+        found = AuditRunState.find_resumable(state.state_dir, "abc123", [])
+        assert found is None
+
+    def test_find_resumable_empty_list_matches_whole_repo_run(self, tmp_path):
+        state = self._make_focused_state(tmp_path, [])
+        state.save()
+
+        found = AuditRunState.find_resumable(state.state_dir, "abc123", [])
+        assert found is not None
+
+    def test_find_resumable_matches_persisted_legacy_string_focus(self, tmp_path):
+        import json
+
+        state_dir = tmp_path / ".swival" / "audit"
+        run_dir = state_dir / "legacy-run"
+        run_dir.mkdir(parents=True)
+        blob = {
+            "run_id": "legacy-run",
+            "scope": {
+                "branch": "main",
+                "commit": "abc123",
+                "tracked_files": ["src/auth/x.py"],
+                "mandatory_files": ["src/auth/x.py"],
+                "focus": "src/auth",
+            },
+            "queued_files": ["src/auth/x.py"],
+            "phase": "triage",
+        }
+        (run_dir / "state.json").write_text(json.dumps(blob))
+
+        found = AuditRunState.find_resumable(state_dir, "abc123", ["src/auth"])
+        assert found is not None
+        assert found.scope.focus == ["src/auth"]
+
+
+class TestAuditCommandParser:
+    """Parser-level tests: capture kwargs passed to _run_audit_phases."""
+
+    def _capture(self, monkeypatch):
+        import inspect
+
+        from swival.audit import _run_audit_phases
+
+        sig = inspect.signature(_run_audit_phases)
+        captured: dict = {}
+
+        def fake_phases(*args, **kwargs):
+            captured.update(sig.bind(*args, **kwargs).arguments)
+            return "captured"
+
+        monkeypatch.setattr("swival.audit._run_audit_phases", fake_phases)
+        return captured
+
+    def _make_ctx(self, tmp_path: Path):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            base_dir=str(tmp_path),
+            tools=[],
+            verbose=False,
+            no_history=True,
+            loop_kwargs={},
+        )
+
+    def test_no_args_passes_focus_none(self, monkeypatch, tmp_path):
+        from swival.audit import run_audit_command
+
+        captured = self._capture(monkeypatch)
+        run_audit_command("", self._make_ctx(tmp_path))
+        assert captured["focus"] is None
+        assert captured["workers"] == 4
+        assert captured["resume"] is False
+        assert captured["regen"] is False
+
+    def test_two_paths_collected_as_list(self, monkeypatch, tmp_path):
+        from swival.audit import run_audit_command
+
+        captured = self._capture(monkeypatch)
+        run_audit_command("src/a src/b --workers 2 --resume", self._make_ctx(tmp_path))
+        assert captured["focus"] == ["src/a", "src/b"]
+        assert captured["workers"] == 2
+        assert captured["resume"] is True
+
+    def test_dedupes_repeated_paths(self, monkeypatch, tmp_path):
+        from swival.audit import run_audit_command
+
+        captured = self._capture(monkeypatch)
+        run_audit_command("src/a src/a/", self._make_ctx(tmp_path))
+        assert captured["focus"] == ["src/a"]
+
+    def test_flag_intermixing(self, monkeypatch, tmp_path):
+        from swival.audit import run_audit_command
+
+        captured = self._capture(monkeypatch)
+        run_audit_command("--resume src/a --workers 4 src/b", self._make_ctx(tmp_path))
+        assert captured["focus"] == ["src/a", "src/b"]
+        assert captured["workers"] == 4
+        assert captured["resume"] is True

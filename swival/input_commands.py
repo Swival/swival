@@ -23,7 +23,7 @@ INPUT_COMMANDS: dict[str, CommandInfo] = {
     ),
     "/audit": CommandInfo(
         desc="Run a staged security audit over tracked committed code",
-        arg="[path|glob]",
+        arg="[path|glob ...]",
         kind="agent_turn",
         modes=("repl", "oneshot"),
         options=(
