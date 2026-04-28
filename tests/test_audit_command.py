@@ -3271,6 +3271,139 @@ class TestPhase3Split:
         assert result.findings == []
         assert state.metrics["analytical_retries"] == 0
 
+    def test_security_control_failure_is_accepted(self, monkeypatch, tmp_path):
+        from types import SimpleNamespace
+        from swival.audit import _deep_review_one
+
+        state = self._make_state(tmp_path)
+        ctx = SimpleNamespace(base_dir=str(tmp_path), loop_kwargs={})
+        calls = {"n": 0}
+
+        monkeypatch.setattr(
+            "swival.audit._git_show", lambda path, base_dir: "verify_sig(...)"
+        )
+
+        def fake_call(ctx, messages, temperature=0.0, trace_task=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return (
+                    "@@ finding @@\n"
+                    "title: signature verifier accepts forged signatures\n"
+                    "severity: critical\n"
+                    "location: a.py:42\n"
+                    "attacker: any caller of the signature verifier\n"
+                    "trigger: signature buffer whose final byte is zero\n"
+                    "impact: Ed25519 signature verifier fails open\n"
+                    "claim: early return short-circuits constant-time compare\n"
+                )
+            return (
+                "@@ expansion @@\n"
+                "type: security_control_failure\n"
+                "attacker: any caller of the signature verifier\n"
+                "trigger: signature buffer whose final byte is zero\n"
+                "impact: Ed25519 signature verifier fails open: forged sigs accepted\n"
+                "preconditions: caller invokes verify_sig with a 64-byte buffer\n"
+                "proof: verify_sig is the Ed25519 signature decision point and "
+                "returns accept on sig[63]==0 short-circuit\n"
+                "fix_outline: remove early return and complete the compare\n"
+            )
+
+        monkeypatch.setattr("swival.audit._call_audit_llm", fake_call)
+
+        result = _deep_review_one("a.py", state, ctx)
+        assert result.error is None
+        assert len(result.findings) == 1
+        f = result.findings[0]
+        assert f.finding_type == "security_control_failure"
+        assert f.severity == "critical"
+
+    def test_security_control_failure_low_severity_is_dropped(
+        self, monkeypatch, tmp_path
+    ):
+        # Regression guard: SCF must not be usable to smuggle medium-severity
+        # generic logic bugs back into the audit output.
+        from types import SimpleNamespace
+        from swival.audit import _deep_review_one
+
+        state = self._make_state(tmp_path)
+        ctx = SimpleNamespace(base_dir=str(tmp_path), loop_kwargs={})
+        calls = {"n": 0}
+
+        monkeypatch.setattr("swival.audit._git_show", lambda path, base_dir: "code")
+
+        def fake_call(ctx, messages, temperature=0.0, trace_task=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return (
+                    "@@ finding @@\n"
+                    "title: parser accepts trailing garbage\n"
+                    "severity: medium\n"
+                    "location: a.py:9\n"
+                    "attacker: any caller of the parser\n"
+                    "trigger: input with trailing bytes after the structure\n"
+                    "impact: parser accepts malformed input\n"
+                    "claim: bounds check is off by one\n"
+                )
+            return (
+                "@@ expansion @@\n"
+                "type: security_control_failure\n"
+                "attacker: any caller of the parser\n"
+                "trigger: input with trailing bytes\n"
+                "impact: parser fails open: trailing bytes accepted\n"
+                "preconditions: caller passes attacker-shaped input\n"
+                "proof: bounds check at line 9 admits one extra byte\n"
+                "fix_outline: tighten the bounds check\n"
+            )
+
+        monkeypatch.setattr("swival.audit._call_audit_llm", fake_call)
+
+        result = _deep_review_one("a.py", state, ctx)
+        assert result.error is None
+        assert result.findings == []
+        assert state.metrics["analytical_retries"] == 0
+
+    def test_helper_contract_violation_stays_out_of_scope(self, monkeypatch, tmp_path):
+        from types import SimpleNamespace
+        from swival.audit import _deep_review_one
+
+        state = self._make_state(tmp_path)
+        ctx = SimpleNamespace(base_dir=str(tmp_path), loop_kwargs={})
+        calls = {"n": 0}
+
+        monkeypatch.setattr("swival.audit._git_show", lambda path, base_dir: "code")
+
+        def fake_call(ctx, messages, temperature=0.0, trace_task=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return (
+                    "@@ finding @@\n"
+                    "title: helper returns success when it should not\n"
+                    "severity: medium\n"
+                    "location: a.py:5\n"
+                    "attacker: missing\n"
+                    "trigger: internal call from a sibling module\n"
+                    "impact: helper contract violated, no attacker gain proven\n"
+                    "claim: helper returns 0 on a path that should return -1\n"
+                )
+            return (
+                "@@ expansion @@\n"
+                "type: out-of-scope\n"
+                "attacker: missing\n"
+                "trigger: missing\n"
+                "impact: missing\n"
+                "preconditions: out-of-scope\n"
+                "proof: out-of-scope because the helper is not itself a "
+                "named security control and no attacker gain is proven\n"
+                "fix_outline: no security fix\n"
+            )
+
+        monkeypatch.setattr("swival.audit._call_audit_llm", fake_call)
+
+        result = _deep_review_one("a.py", state, ctx)
+        assert result.error is None
+        assert result.findings == []
+        assert state.metrics["analytical_retries"] == 0
+
     def test_analytical_retry_on_inventory_failure(self, monkeypatch, tmp_path):
         from types import SimpleNamespace
         from swival.audit import _deep_review_one

@@ -1294,17 +1294,19 @@ Scope is **security only**. This is not a general code-quality reviewer. A bug i
 - arbitrary code or command execution (remote, local, or in-process)
 - repudiation (attacker hides their actions from logs in a way that defeats audit)
 
+Narrow exception — security_control_failure: a high or critical, deterministic logic bug **inside the code that itself implements a named security control** is in scope even when the attacker is implicit. The function's job must be the control: a signature or MAC verifier, an authentication check, an authorization decision, a sandbox or seccomp boundary, an access-control filter, a crypto primitive, or a parser whose declared purpose is accepting hostile input. The "gain" is the control failing open or fail-permissive. This exception does NOT apply to code that is merely called from a security path, that handles untrusted data without being the decision point, or where the control name is generic ("validation", "checks").
+
 Out of scope and must SKIP:
-- function-contract bugs with no observable adversarial outcome (a function returns success when it should not, but no untrusted caller benefits)
+- function-contract bugs with no observable adversarial outcome (a function returns success when it should not, but no untrusted caller benefits and no named security control fails open)
 - shutdown-time hangs, missed wakeups, leaked locks during teardown — these are correctness issues unless a remote attacker can both trigger them and gain something
-- resource-lifecycle, error-handling, data-integrity, concurrency, or invariant-violation bugs that lack a concrete untrusted trigger and a concrete attacker gain
+- resource-lifecycle, error-handling, data-integrity, concurrency, or invariant-violation bugs that lack a concrete untrusted trigger and a concrete attacker gain, and do not make a named security control fail open
 - protocol-framing or short-write correctness bugs where the only victim is the same trust domain as the input (server-to-server within the same operator)
 - DoS that requires an admin or operator to author the malicious config or input — the operator is trusted
 - generic robustness, missing tests, defensive hardening, "this should also validate X" suggestions
 
 Do NOT escalate defense-in-depth concerns. A finding is defense-in-depth (and must SKIP) when an existing control in the code already prevents the attack and the proposal is to add a redundant secondary control, tighten an already-sufficient check, or harden against an attacker who has no real path to reach the code.
 
-Before escalating, you must be able to name three things: who the attacker is (and why they are untrusted), what they control as input, and what they gain. If you cannot, SKIP.
+Before escalating, you must be able to name three things: who the attacker is (and why they are untrusted), what they control as input, and what they gain. If the finding is a security_control_failure, "attacker" may be any caller of the control and "trigger" may be any input the control is meant to reject — but you must still name the specific control by purpose (e.g., "Ed25519 signature verifier", "JWT audience check", "seccomp policy enforcer"). If you cannot, SKIP.
 
 Security review lenses to consider. These are hints, not sufficient reasons to escalate:
 - project_specific_invariant_break
@@ -1364,6 +1366,8 @@ Rules:
 - Prefer SKIP if escalation cannot be justified.
 - Use ESCALATE_HIGH only when the evidence bundle contains a concrete suspicious path or invariant break worth deep review."""
 
+_SEVERITIES = ("low", "medium", "high", "critical")
+
 _PHASE3A_FINDING_SCHEMA = PhaseSchema(
     record=RecordSchema(
         name="finding",
@@ -1376,7 +1380,7 @@ _PHASE3A_FINDING_SCHEMA = PhaseSchema(
             "impact",
             "claim",
         ),
-        enums={"severity": ("low", "medium", "high", "critical")},
+        enums={"severity": _SEVERITIES},
     ),
     cardinality="zero_or_more",
     allow_none=True,
@@ -1448,19 +1452,28 @@ A finding is in scope only if you can answer all three of these from the evidenc
   2. Trigger: what input or action under their control reaches the bug?
   3. Gain: which security-relevant outcome do they get? — limited to denial of service triggered by attacker input, information disclosure, integrity bypass an attacker can weaponize (smuggling, cache poisoning, log/header injection, auth desync), authentication or authorization bypass, privilege escalation, code/command execution, or repudiation.
 
-If the answer to any of the three is missing, vague, or only achievable by an admin/operator/trusted process, omit the finding and emit `@@ none @@` for the file (or whatever findings remain).
+If the answer to any of the three is missing, vague, or only achievable by an admin/operator/trusted process, omit the finding and emit `@@ none @@` for the file (or whatever findings remain) — UNLESS the carve-out below applies.
+
+Narrow exception — security_control_failure: a high or critical, deterministic logic bug **inside code that itself implements a named security control** is in scope even when the attacker is implicit. The cited function or module must be the security decision point: a signature/MAC verifier, an authentication check, an authorization decision, a sandbox or seccomp boundary, an access-control filter, a crypto primitive, or a parser whose declared purpose is accepting hostile input. For these findings:
+  - attacker may read "any caller of the control"
+  - trigger may read "input the control is required to reject"
+  - impact must read "<named control> fails open: <observable consequence>"
+  - severity must be high or critical
+  - the claim must name the specific control by purpose ("Ed25519 signature verifier", "JWT audience check", "seccomp filter compiler", not "validation" or "input handling")
+This exception does NOT apply to code that is merely called from a security path, that handles untrusted data without being the decision point, or where the control name is generic.
 
 Explicitly out of scope — emit nothing for these even when the bug is real:
-- function-contract violations (a helper returns success when it should not) with no observable adversarial outcome
+- function-contract violations in helpers where no named security control fails open
 - shutdown-time hangs, missed wakeups during teardown, leaked locks on cleanup paths
-- resource-lifecycle, error-handling, data-integrity, concurrency, or invariant-violation bugs that lack an untrusted trigger and a concrete attacker gain
+- resource-lifecycle, error-handling, data-integrity, concurrency, or invariant-violation bugs that lack an untrusted trigger AND do not make a named security control fail open
 - protocol-framing, short-write, or partial-IO bugs whose only effect is local correctness within the same trust domain
 - DoS that requires an admin or operator to author the malicious config, regex, or input
 - defense-in-depth: "an additional check would be safer", "this should also validate X", "this could leak in some other deployment", "redundant guard missing"
 
-Only report bugs where the structured fields specifically answer attacker / trigger / gain — for example "unauthenticated open redirect on failed form auth" or "out-of-bounds read on attacker-supplied trailing CR" — not "filter errors are discarded" or "termination does not wake waiters"."""
+Only report bugs where the structured fields specifically answer attacker / trigger / gain — for example "unauthenticated open redirect on failed form auth" or "out-of-bounds read on attacker-supplied trailing CR" — or where the security_control_failure carve-out lets the cited function's own job (an Ed25519 verifier, a seccomp policy enforcer) supply the security context."""
 
 _PHASE3B_OUT_OF_SCOPE_TYPE = "out-of-scope"
+_PHASE3B_SECURITY_CONTROL_FAILURE_TYPE = "security_control_failure"
 
 _PHASE3B_SECURITY_TYPE_VALUES = (
     "denial of service",
@@ -1486,9 +1499,12 @@ _PHASE3B_SECURITY_TYPE_VALUES = (
     "repudiation",
     "cross-tenant isolation break",
     "sandbox escape",
+    _PHASE3B_SECURITY_CONTROL_FAILURE_TYPE,
 )
 
 _PHASE3B_TYPE_VALUES = _PHASE3B_SECURITY_TYPE_VALUES + (_PHASE3B_OUT_OF_SCOPE_TYPE,)
+
+_SECURITY_CONTROL_FAILURE_MIN_SEVERITIES = _SEVERITIES[_SEVERITIES.index("high") :]
 
 _PHASE3B_EXPANSION_SCHEMA = PhaseSchema(
     record=RecordSchema(
@@ -1522,6 +1538,20 @@ proof:
   metacharacters execute under the server account.
 fix_outline: pass argv list and drop shell=true, or shlex.quote each segment"""
 
+_PHASE3B_SECURITY_CONTROL_FAILURE_TEMPLATE = """\
+type: security_control_failure
+attacker: any caller of the signature verifier
+trigger: signature buffer whose final byte is zero
+impact: Ed25519 signature verifier fails open and accepts forged signatures
+preconditions: caller invokes verify_sig with a 64-byte signature buffer
+proof:
+  verify_sig at crypto/ed25519.c:88 implements Ed25519 signature verification.
+  At line 102 it returns 0 (accept) when an early return on sig[63] == 0
+  short-circuits the compare loop, so any forged signature whose last byte is
+  zero is accepted as valid. The function is the verification decision point;
+  no other check guards its callers.
+fix_outline: remove the early return and complete the constant-time compare"""
+
 _PHASE3B_SYSTEM = f"""\
 You are expanding one security finding with proof details.
 
@@ -1554,14 +1584,41 @@ Rules:
 - For undefined behavior or uninitialized-state bugs, describe the direct invariant violation.
 - Do not speculate beyond what the code proves.
 - The attacker, trigger, and impact fields must restate the security scope in
-  concrete terms. If any one of them is missing from evidence, this is not a
-  security finding.
-- The `type` value must be a security impact, not a generic-correctness category.
-  If the closest fit would be "logic error", "data integrity", "error handling",
-  "resource lifecycle", or "invariant violation", the finding is out of scope
-  and must not be expanded.
-- If the candidate is a real bug but out of security scope, still emit a valid
-  block so the pipeline can discard it:
+  concrete terms. For every type other than `security_control_failure`, all
+  three must point to a specific untrusted actor, an input or action under
+  their control, and a security-relevant outcome they observe.
+- The `type` value must be a security impact label. Do not pick a label
+  whose closest plain-English fit would be "logic error", "data integrity",
+  "error handling", "resource lifecycle", or "invariant violation"; if the bug
+  matches one of those without further security framing, it is out of scope.
+
+`security_control_failure` rules — apply only when the cited code itself
+implements a named security control:
+- Severity must be `high` or `critical`. Lower-severity control failures are
+  out of scope for this exception.
+- The proof must name the specific control by its security purpose
+  (for example: "Ed25519 signature verifier", "JWT audience authorization
+  check", "seccomp filter compiler", "TLS hostname matcher"). Generic phrases
+  like "validation", "input handling", "the parser" are not enough.
+- The proof must show a deterministic path on which the control returns
+  accept/allow/true for an input it must reject, or returns the wrong
+  decision in a way an attacker can rely on. Speculative fail-open paths,
+  partial-coverage gaps, and "could be hardened" notes do not qualify.
+- attacker may read "any caller of the control"; trigger may read
+  "input the control is required to reject"; impact must read
+  "<named control> fails open: <observable consequence>".
+- Do NOT use this type when the function only happens to be called from a
+  security-sensitive path, when the bug is a robustness gap, when the proof
+  is a contract violation in a helper that no security decision depends on,
+  or when untrusted data merely passes through the function on its way
+  somewhere else.
+
+A correctly-shaped `security_control_failure` block looks like:
+
+{_PHASE3B_SECURITY_CONTROL_FAILURE_TEMPLATE}
+
+If the candidate is a real bug but out of security scope, still emit a valid
+block so the pipeline can discard it:
   type: out-of-scope
   attacker: missing
   trigger: missing
@@ -1590,6 +1647,12 @@ Rules:
   - You must be able to name an untrusted actor (remote client, malicious peer, attacker-controlled file or backend, lower-privileged local user) who controls the trigger. If the only way to reach the bug is through an admin, operator, or otherwise trusted process authoring the malicious config, regex, or input, the finding is out of scope.
   - You must be able to name a security-relevant outcome from this list: denial of service triggered by attacker-controlled input, information disclosure, integrity bypass an attacker can weaponize (smuggling, cache poisoning, log/header injection, auth desync), authentication or authorization bypass, privilege escalation, arbitrary code/command execution, or repudiation. "The function returns success when it should not", "the protocol can desync between two trusted endpoints", "a worker thread hangs at shutdown", and "a missed wakeup leaves a producer asleep" are not security-relevant outcomes on their own.
   - Generic correctness, contract, robustness, error-handling, resource-lifecycle, missed-wakeup, partial-IO, or invariant-violation bugs without an untrusted trigger AND a concrete attacker gain must be rejected as NOTREPRODUCED. Reproducibility of the bug behavior is not enough; the security impact must also reproduce.
+- Narrow exception — `security_control_failure` findings: a high or critical, deterministic logic bug **inside code that itself implements a named security control** is in scope even when the attacker is implicit. Verify these claims, in order, before accepting:
+  1. The cited function or module **is itself the security control** named in the proof — a signature/MAC verifier, an authentication check, an authorization decision, a sandbox or seccomp boundary, an access-control filter, a crypto primitive, or a parser whose declared purpose is accepting hostile input. Not "called from a security path", not "handles untrusted data on the way somewhere else".
+  2. The proof names that specific control by purpose. Generic phrases like "validation", "input handling", or "the parser" do not satisfy this — reject as NOTREPRODUCED.
+  3. The bug deterministically makes that control return accept/allow/true for an input it must reject (or otherwise return the wrong security decision). Speculative fail-open paths, partial-coverage gaps, and "this would be more robust if" arguments do not qualify — reject as NOTREPRODUCED.
+  4. Severity is high or critical. If a proposed `security_control_failure` is low or medium severity, reject as NOTREPRODUCED. Do not reclassify it under the standard scope test during verification — a lower-severity bug with a concrete attacker, trigger, and gain belongs under its concrete impact type (`authorization bypass`, `information disclosure`, etc.), and that reclassification is phase 3B's job, not yours.
+  If all four hold, treat the finding as REPRODUCED even though the attacker is "any caller of the control" and the trigger is "input the control is required to reject". If any one fails, reject as NOTREPRODUCED — including the case where the underlying logic bug is real but the function is merely security-adjacent rather than the control itself.
 - End your final response with exactly one of these tokens on its own line:
   REPRODUCED
   NOTREPRODUCED"""
@@ -1853,7 +1916,7 @@ def _canonicalize_finding(
 ) -> FindingRecord:
     """Build a FindingRecord from compact inventory + expansion dicts."""
     severity = (inventory_item.get("severity") or "low").lower()
-    if severity not in ("low", "medium", "high", "critical"):
+    if severity not in _SEVERITIES:
         severity = "low"
 
     location = inventory_item.get("location", source_file)
@@ -1880,6 +1943,12 @@ def _canonicalize_finding(
 
 def _is_out_of_scope_expansion(expansion: dict) -> bool:
     return expansion.get("type", "").strip().lower() == _PHASE3B_OUT_OF_SCOPE_TYPE
+
+
+def _scf_below_min_severity(finding_type: str, severity: str) -> bool:
+    if finding_type.strip().lower() != _PHASE3B_SECURITY_CONTROL_FAILURE_TYPE:
+        return False
+    return severity.strip().lower() not in _SECURITY_CONTROL_FAILURE_MIN_SEVERITIES
 
 
 def _phase3_deep_review(
@@ -1913,6 +1982,8 @@ def _phase3_deep_review(
             failed_expansions += 1
             continue
         if _is_out_of_scope_expansion(expansion):
+            continue
+        if _scf_below_min_severity(expansion.get("type", ""), stub.get("severity", "")):
             continue
         findings.append(_canonicalize_finding(stub, expansion, path))
 
@@ -2791,7 +2862,10 @@ def _run_audit_phases(
         state.save()
 
     if artifacts_written == 0:
-        return "No provable security bugs found in Git-tracked files."
+        return (
+            "No provable security bugs or security-control failures found "
+            "in Git-tracked files."
+        )
 
     return (
         f"Audit complete. {artifacts_written} finding(s) written to {state.artifact_dir}/. "
