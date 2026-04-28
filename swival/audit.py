@@ -1286,37 +1286,54 @@ Allowed priority labels:
 - ESCALATE_MEDIUM
 - SKIP
 
-Focus on bugs with practical security impact, reachable in this code's actual deployment context. A class match alone is not enough. Escalate only when the security impact is concrete.
+Scope is **security only**. This is not a general code-quality reviewer. A bug is in scope only when an untrusted actor (remote client, malicious peer, attacker-controlled file or backend, lower-privileged local user) has a concrete trigger that yields a concrete security-relevant outcome under today's code. Acceptable outcomes are limited to:
+- denial of service triggered by attacker-controlled input (not by admin misconfiguration or normal shutdown sequencing)
+- information disclosure (secrets, tokens, internal addresses, cross-tenant data, memory contents)
+- integrity bypass an attacker can observe or weaponize (HTTP smuggling, cache poisoning, log/header injection, signature/auth desync)
+- authentication bypass, authorization bypass, or privilege escalation
+- arbitrary code or command execution (remote, local, or in-process)
+- repudiation (attacker hides their actions from logs in a way that defeats audit)
 
-Do NOT escalate defense-in-depth concerns. A finding is defense-in-depth (and must SKIP) when an existing control in the code already prevents the attack and the proposal is to add a redundant secondary control, tighten an already-sufficient check, or harden against an attacker who has no real path to reach the code. Escalate only when an attacker has a concrete trigger that produces a security-relevant outcome that today's code does not stop.
+Out of scope and must SKIP:
+- function-contract bugs with no observable adversarial outcome (a function returns success when it should not, but no untrusted caller benefits)
+- shutdown-time hangs, missed wakeups, leaked locks during teardown — these are correctness issues unless a remote attacker can both trigger them and gain something
+- resource-lifecycle, error-handling, data-integrity, concurrency, or invariant-violation bugs that lack a concrete untrusted trigger and a concrete attacker gain
+- protocol-framing or short-write correctness bugs where the only victim is the same trust domain as the input (server-to-server within the same operator)
+- DoS that requires an admin or operator to author the malicious config or input — the operator is trusted
+- generic robustness, missing tests, defensive hardening, "this should also validate X" suggestions
 
-Bug classes to consider:
-- domain_and_context-specific
+Do NOT escalate defense-in-depth concerns. A finding is defense-in-depth (and must SKIP) when an existing control in the code already prevents the attack and the proposal is to add a redundant secondary control, tighten an already-sufficient check, or harden against an attacker who has no real path to reach the code.
+
+Before escalating, you must be able to name three things: who the attacker is (and why they are untrusted), what they control as input, and what they gain. If you cannot, SKIP.
+
+Security review lenses to consider. These are hints, not sufficient reasons to escalate:
+- project_specific_invariant_break
 - authorization
 - input_validation
 - path_traversal
 - command_execution
 - serialization
-- data_integrity
 - arithmetic
 - cryptography
 - secret_lifecycle
 - memory_safety
 - overflows
 - injection
-- concurrency
-- resource_lifecycle
-- error_handling
+- protocol_desynchronization
+- parser_differential
+- canonicalization_mismatch
+- stale_authorization_cache
+- fail_open_fallback
+- capability_confusion
+- namespace_confusion
+- downgrade_or_policy_bypass
 - trust_boundary_breaks
 - unsafe_data_flow
-- invariant_violations
-- api_soundness
 - dangerous_api_misuse
 - business_logic
-- edge_case_failures
 - cross_component_contracts
 - sandbox_escapes
-- taxonomy_free_unknowns
+- taxonomy_free_unknowns_with_security_impact
 
 You have no tools, no shell access, and no ability to run commands.
 All the source code you need is included below. Do not request additional information.
@@ -1350,7 +1367,15 @@ Rules:
 _PHASE3A_FINDING_SCHEMA = PhaseSchema(
     record=RecordSchema(
         name="finding",
-        required=("title", "severity", "location", "claim"),
+        required=(
+            "title",
+            "severity",
+            "location",
+            "attacker",
+            "trigger",
+            "impact",
+            "claim",
+        ),
         enums={"severity": ("low", "medium", "high", "critical")},
     ),
     cardinality="zero_or_more",
@@ -1359,10 +1384,13 @@ _PHASE3A_FINDING_SCHEMA = PhaseSchema(
 
 _PHASE3A_WORKED_EXAMPLE = """\
 @@ finding @@
-title: integer overflow in length calculation
-severity: medium
+title: attacker-controlled length wraps allocation size
+severity: high
 location: src/decode.c:142
-claim: header_len + payload_len wraps for crafted inputs"""
+attacker: unauthenticated client sending a crafted request
+trigger: header_len and payload_len are added before allocation
+impact: heap write past the allocation, crashing or corrupting the request worker
+claim: crafted lengths wrap the allocation size"""
 
 _PHASE3A_SYSTEM = f"""\
 You are performing phase 3 deep security review for one candidate file.
@@ -1377,6 +1405,9 @@ Output format: one or more `@@ finding @@` blocks. Each block has these keys, on
 - title: short title
 - severity: low | medium | high | critical
 - location: path:line
+- attacker: specific untrusted actor, under 15 words
+- trigger: attacker-controlled input or action reaching the bug, under 20 words
+- impact: concrete security outcome, under 20 words
 - claim: one-line bug statement under 20 words
 
 Use exactly the keys shown. Do not quote, escape, or wrap values. Each value
@@ -1401,26 +1432,76 @@ Rules:
 - For undefined behavior or uninitialized-state bugs, describe the direct invariant violation or invalid read/write instead of assuming a specific runtime value or deterministic branch outcome unless the evidence proves it.
 - Use exact path:line citations.
 - Do not include best practices, missing tests, or generic hardening advice.
-- Do not report defense-in-depth issues. A finding must describe a concrete attacker reaching a security-relevant outcome that the current code does not stop. If an existing control in this code already blocks the attack, or the claim is "an additional check would be safer", "this should also validate X", "this could leak in some other deployment", or "redundant guard missing", omit the finding. Only report bugs where you can name the attacker, the input, and what they gain."""
+- The attacker, trigger, and impact fields are required evidence gates. Do not
+  use vague placeholders like "user", "input", "crash", or "could be bad".
+- Spend review effort on project-specific security invariants and uncommon
+  flaws: parser differential behavior, canonicalization mismatches,
+  cross-component contract drift, fail-open fallback paths, stale authorization
+  caches, namespace or capability confusion, protocol desynchronization,
+  downgrade paths, and privilege-boundary mistakes. Do not stop at common
+  checklist categories.
 
-_PHASE3B_TYPE_VALUES = (
-    "logic error",
-    "vulnerability",
-    "memory safety",
-    "data integrity bug",
-    "authorization flaw",
-    "trust-boundary violation",
-    "race condition",
-    "error-handling bug",
-    "validation gap",
-    "resource lifecycle bug",
-    "invariant violation",
+Scope gate — apply to every candidate finding before emitting it:
+
+A finding is in scope only if you can answer all three of these from the evidence, in one breath:
+  1. Attacker: who is the untrusted actor? (remote client, malicious peer, attacker-controlled file/backend, lower-privileged local user)
+  2. Trigger: what input or action under their control reaches the bug?
+  3. Gain: which security-relevant outcome do they get? — limited to denial of service triggered by attacker input, information disclosure, integrity bypass an attacker can weaponize (smuggling, cache poisoning, log/header injection, auth desync), authentication or authorization bypass, privilege escalation, code/command execution, or repudiation.
+
+If the answer to any of the three is missing, vague, or only achievable by an admin/operator/trusted process, omit the finding and emit `@@ none @@` for the file (or whatever findings remain).
+
+Explicitly out of scope — emit nothing for these even when the bug is real:
+- function-contract violations (a helper returns success when it should not) with no observable adversarial outcome
+- shutdown-time hangs, missed wakeups during teardown, leaked locks on cleanup paths
+- resource-lifecycle, error-handling, data-integrity, concurrency, or invariant-violation bugs that lack an untrusted trigger and a concrete attacker gain
+- protocol-framing, short-write, or partial-IO bugs whose only effect is local correctness within the same trust domain
+- DoS that requires an admin or operator to author the malicious config, regex, or input
+- defense-in-depth: "an additional check would be safer", "this should also validate X", "this could leak in some other deployment", "redundant guard missing"
+
+Only report bugs where the structured fields specifically answer attacker / trigger / gain — for example "unauthenticated open redirect on failed form auth" or "out-of-bounds read on attacker-supplied trailing CR" — not "filter errors are discarded" or "termination does not wake waiters"."""
+
+_PHASE3B_OUT_OF_SCOPE_TYPE = "out-of-scope"
+
+_PHASE3B_SECURITY_TYPE_VALUES = (
+    "denial of service",
+    "information disclosure",
+    "memory corruption",
+    "out-of-bounds read",
+    "out-of-bounds write",
+    "authentication bypass",
+    "authorization bypass",
+    "privilege escalation",
+    "code execution",
+    "command execution",
+    "injection",
+    "header injection",
+    "open redirect",
+    "ssrf",
+    "request smuggling",
+    "cache poisoning",
+    "log injection",
+    "cryptographic flaw",
+    "path traversal",
+    "policy bypass",
+    "repudiation",
+    "cross-tenant isolation break",
+    "sandbox escape",
 )
+
+_PHASE3B_TYPE_VALUES = _PHASE3B_SECURITY_TYPE_VALUES + (_PHASE3B_OUT_OF_SCOPE_TYPE,)
 
 _PHASE3B_EXPANSION_SCHEMA = PhaseSchema(
     record=RecordSchema(
         name="expansion",
-        required=("type", "preconditions", "proof", "fix_outline"),
+        required=(
+            "type",
+            "attacker",
+            "trigger",
+            "impact",
+            "preconditions",
+            "proof",
+            "fix_outline",
+        ),
         enums={"type": _PHASE3B_TYPE_VALUES},
         multiline=("proof",),
     ),
@@ -1430,12 +1511,15 @@ _PHASE3B_EXPANSION_SCHEMA = PhaseSchema(
 
 _PHASE3B_WORKED_EXAMPLE = """\
 @@ expansion @@
-type: vulnerability
+type: code execution
+attacker: unauthenticated http client
+trigger: query-string parameter reaches shell command construction
+impact: arbitrary command execution as the server user
 preconditions: caller passes a user-supplied string as the cmd argument
 proof:
-  user input arrives at run_shell at line 400 with no validation.
-  at line 412 it is passed to subprocess with shell=true.
-  reachable from the chat tool dispatcher used on every turn.
+  The public request handler passes the parameter to run_shell at line 400
+  without validation. At line 412 it reaches subprocess(shell=true), so shell
+  metacharacters execute under the server account.
 fix_outline: pass argv list and drop shell=true, or shlex.quote each segment"""
 
 _PHASE3B_SYSTEM = f"""\
@@ -1445,11 +1529,14 @@ You have no tools, no shell access, and no ability to run commands.
 All the source code you need is included below. Do not request additional information.
 
 Output format: a single `@@ expansion @@` block with these keys, one per line:
-- type: one of {", ".join(_PHASE3B_TYPE_VALUES)}
+- type: one of {", ".join(_PHASE3B_TYPE_VALUES)} - pick the security impact label, never a generic-correctness label
+- attacker: specific untrusted actor, under 15 words
+- trigger: attacker-controlled input or action reaching the bug, under 20 words
+- impact: concrete security outcome, under 20 words
 - preconditions: minimum justified preconditions, under 20 words
-- proof: input origin, propagation path, failing condition, impact, reachability
-  — under 80 words total. The proof value may span multiple lines: any line
-  that begins with two or more spaces continues the proof value.
+- proof: propagation path, failing operation, and reachability - under 100
+  words total. The proof value may span multiple lines: any line that begins
+  with two or more spaces continues the proof value.
 - fix_outline: smallest correct fix, under 20 words
 
 Use exactly the keys shown. Do not quote, escape, or wrap values. Every value
@@ -1465,7 +1552,23 @@ Rules:
 - Use only the provided repository evidence.
 - Prefer the narrowest bug that the evidence directly proves.
 - For undefined behavior or uninitialized-state bugs, describe the direct invariant violation.
-- Do not speculate beyond what the code proves."""
+- Do not speculate beyond what the code proves.
+- The attacker, trigger, and impact fields must restate the security scope in
+  concrete terms. If any one of them is missing from evidence, this is not a
+  security finding.
+- The `type` value must be a security impact, not a generic-correctness category.
+  If the closest fit would be "logic error", "data integrity", "error handling",
+  "resource lifecycle", or "invariant violation", the finding is out of scope
+  and must not be expanded.
+- If the candidate is a real bug but out of security scope, still emit a valid
+  block so the pipeline can discard it:
+  type: out-of-scope
+  attacker: missing
+  trigger: missing
+  impact: missing
+  preconditions: out-of-scope
+  proof: out-of-scope because attacker, trigger, or security impact is not proven
+  fix_outline: no security fix"""
 
 _PHASE4_VERIFY_SYSTEM = """\
 You are verifying one proposed security finding using the committed source code in an isolated worktree.
@@ -1480,6 +1583,13 @@ Rules:
 - For undefined behavior, uninitialized-state, and memory-safety bugs, either source-based proof or convincing runtime evidence is acceptable.
 - Reject only when the code does not support a practical trigger path.
 - Reject defense-in-depth findings as NOTREPRODUCED. If an existing control in the committed code already blocks the attack, the finding is not real — even if adding another layer would be safer. The bar is a concrete attacker with a concrete input producing a concrete security-relevant outcome under today's code, not "this would be more robust if it also did X".
+- Treat the proposed finding's attacker, trigger, and impact text as claims to
+  verify, not as facts. A finding that reproduces a correctness failure but not
+  those three security claims is NOTREPRODUCED.
+- Reject as NOTREPRODUCED any finding that fails the security scope test, even if the underlying bug is real:
+  - You must be able to name an untrusted actor (remote client, malicious peer, attacker-controlled file or backend, lower-privileged local user) who controls the trigger. If the only way to reach the bug is through an admin, operator, or otherwise trusted process authoring the malicious config, regex, or input, the finding is out of scope.
+  - You must be able to name a security-relevant outcome from this list: denial of service triggered by attacker-controlled input, information disclosure, integrity bypass an attacker can weaponize (smuggling, cache poisoning, log/header injection, auth desync), authentication or authorization bypass, privilege escalation, arbitrary code/command execution, or repudiation. "The function returns success when it should not", "the protocol can desync between two trusted endpoints", "a worker thread hangs at shutdown", and "a missed wakeup leaves a producer asleep" are not security-relevant outcomes on their own.
+  - Generic correctness, contract, robustness, error-handling, resource-lifecycle, missed-wakeup, partial-IO, or invariant-violation bugs without an untrusted trigger AND a concrete attacker gain must be rejected as NOTREPRODUCED. Reproducibility of the bug behavior is not enough; the security impact must also reproduce.
 - End your final response with exactly one of these tokens on its own line:
   REPRODUCED
   NOTREPRODUCED"""
@@ -1713,6 +1823,9 @@ def _phase3b_expand_one(
         f"  Title: {finding_stub.get('title', '')}\n"
         f"  Severity: {finding_stub.get('severity', '')}\n"
         f"  Location: {finding_stub.get('location', '')}\n"
+        f"  Attacker: {finding_stub.get('attacker', '')}\n"
+        f"  Trigger: {finding_stub.get('trigger', '')}\n"
+        f"  Impact: {finding_stub.get('impact', '')}\n"
         f"  Claim: {finding_stub.get('claim', '')}"
     )
     messages = [
@@ -1745,7 +1858,13 @@ def _canonicalize_finding(
 
     location = inventory_item.get("location", source_file)
     preconditions_raw = expansion.get("preconditions", "")
-    proof_raw = expansion.get("proof", "")
+    proof_parts = [
+        f"attacker: {expansion.get('attacker', '')}",
+        f"trigger: {expansion.get('trigger', '')}",
+        f"impact: {expansion.get('impact', '')}",
+        expansion.get("proof", ""),
+    ]
+    proof_raw = " ".join(p for p in proof_parts if p and not p.endswith(": "))
 
     return FindingRecord(
         title=inventory_item.get("title", "untitled"),
@@ -1757,6 +1876,10 @@ def _canonicalize_finding(
         fix_outline=expansion.get("fix_outline", ""),
         source_file=source_file,
     )
+
+
+def _is_out_of_scope_expansion(expansion: dict) -> bool:
+    return expansion.get("type", "").strip().lower() == _PHASE3B_OUT_OF_SCOPE_TYPE
 
 
 def _phase3_deep_review(
@@ -1788,6 +1911,8 @@ def _phase3_deep_review(
     for stub, expansion in zip(inventory, expansions):
         if expansion is None:
             failed_expansions += 1
+            continue
+        if _is_out_of_scope_expansion(expansion):
             continue
         findings.append(_canonicalize_finding(stub, expansion, path))
 
@@ -2666,7 +2791,7 @@ def _run_audit_phases(
         state.save()
 
     if artifacts_written == 0:
-        return "No provable logic or security bugs found in Git-tracked files."
+        return "No provable security bugs found in Git-tracked files."
 
     return (
         f"Audit complete. {artifacts_written} finding(s) written to {state.artifact_dir}/. "

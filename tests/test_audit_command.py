@@ -935,7 +935,10 @@ class TestPhase3bExpansion:
     def test_happy_path_with_multiline_proof(self):
         text = (
             "@@ expansion @@\n"
-            "type: vulnerability\n"
+            "type: code execution\n"
+            "attacker: remote client\n"
+            "trigger: crafted request parameter reaches eval\n"
+            "impact: arbitrary code execution as server user\n"
             "preconditions: caller passes user input\n"
             "proof:\n"
             "  user input reaches eval at line 10.\n"
@@ -953,7 +956,10 @@ class TestPhase3bExpansion:
     def test_multiline_continuations_metric_increments(self):
         text = (
             "@@ expansion @@\n"
-            "type: vulnerability\n"
+            "type: code execution\n"
+            "attacker: remote client\n"
+            "trigger: crafted request parameter reaches eval\n"
+            "impact: arbitrary code execution as server user\n"
             "preconditions: x\n"
             "proof:\n"
             "  line 1\n"
@@ -968,7 +974,10 @@ class TestPhase3bExpansion:
         # Schema requires fix_outline; missing → validation failure.
         text = (
             "@@ expansion @@\n"
-            "type: vulnerability\n"
+            "type: code execution\n"
+            "attacker: remote client\n"
+            "trigger: crafted request parameter reaches eval\n"
+            "impact: arbitrary code execution as server user\n"
             "preconditions: x\n"
             "proof:\n"
             "  line 1\n"
@@ -983,6 +992,9 @@ class TestPhase3bExpansion:
         text = (
             "@@ expansion @@\n"
             "type: not-in-list\n"
+            "attacker: remote client\n"
+            "trigger: crafted request parameter reaches sink\n"
+            "impact: arbitrary code execution as server user\n"
             "preconditions: x\n"
             "proof: y\n"
             "fix_outline: z\n"
@@ -1003,7 +1015,10 @@ class TestPhase3bExpansion:
             "swival.audit._call_audit_llm",
             lambda ctx, messages, temperature=0.0, trace_task=None: (
                 "@@ expansion @@\n"
-                "type: vulnerability\n"
+                "type: code execution\n"
+                "attacker: remote client\n"
+                "trigger: crafted request parameter reaches sink\n"
+                "impact: arbitrary code execution as server user\n"
                 "preconditions: x\n"
                 "proof: y\n"
                 "fix_outline: z\n"
@@ -1014,6 +1029,9 @@ class TestPhase3bExpansion:
             raw=(
                 "@@ expansion @@\n"
                 "type: speculation\n"
+                "attacker: remote client\n"
+                "trigger: crafted request parameter reaches sink\n"
+                "impact: arbitrary code execution as server user\n"
                 "preconditions: x\n"
                 "proof: y\n"
                 "fix_outline: z\n"
@@ -1023,15 +1041,18 @@ class TestPhase3bExpansion:
             metrics=metrics,
         )
         assert len(result) == 1
-        assert result[0]["type"] == "vulnerability"
+        assert result[0]["type"] == "code execution"
         assert metrics["parse_failures"] == 1
         assert metrics["repair_successes"] == 1
 
     def test_duplicate_scalar_key_fails(self):
         text = (
             "@@ expansion @@\n"
-            "type: vulnerability\n"
+            "type: code execution\n"
             "type: logic error\n"
+            "attacker: remote client\n"
+            "trigger: crafted request parameter reaches sink\n"
+            "impact: arbitrary code execution as server user\n"
             "preconditions: x\n"
             "proof: y\n"
             "fix_outline: z\n"
@@ -1051,7 +1072,10 @@ class TestPhase3bExpansion:
             "swival.audit._call_audit_llm",
             lambda ctx, messages, temperature=0.0, trace_task=None: (
                 "@@ expansion @@\n"
-                "type: vulnerability\n"
+                "type: code execution\n"
+                "attacker: remote client\n"
+                "trigger: crafted request parameter reaches sink\n"
+                "impact: arbitrary code execution as server user\n"
                 "preconditions: caller passes input\n"
                 "proof: input reaches sink\n"
                 "fix_outline: validate it\n"
@@ -1059,7 +1083,7 @@ class TestPhase3bExpansion:
         )
         result = _parse_records_with_repair(
             ctx=SimpleNamespace(),
-            raw="@@ expansion @@\ntype: vulnerability\n",
+            raw="@@ expansion @@\ntype: code execution\n",
             schema=self._schema(),
             worked_example=self._example(),
             metrics=metrics,
@@ -1078,7 +1102,10 @@ class TestPhase3bExpansion:
             captured.append(messages)
             return (
                 "@@ expansion @@\n"
-                "type: vulnerability\n"
+                "type: code execution\n"
+                "attacker: remote client\n"
+                "trigger: crafted request parameter reaches sink\n"
+                "impact: arbitrary code execution as server user\n"
                 "preconditions: x\n"
                 "proof: y\n"
                 "fix_outline: z\n"
@@ -1092,7 +1119,7 @@ class TestPhase3bExpansion:
         }
         _parse_records_with_repair(
             ctx=SimpleNamespace(),
-            raw="@@ expansion @@\ntype: vulnerability\n",
+            raw="@@ expansion @@\ntype: code execution\n",
             schema=self._schema(),
             worked_example=self._example(),
             metrics=metrics,
@@ -1157,11 +1184,17 @@ class TestPhase3bExpansion:
                     "title: eval injection\n"
                     "severity: critical\n"
                     "location: a.py:1\n"
+                    "attacker: remote client\n"
+                    "trigger: request body reaches eval\n"
+                    "impact: arbitrary code execution as server user\n"
                     "claim: user input flows directly into eval\n"
                 )
             return (
                 "@@ expansion @@\n"
-                "type: vulnerability\n"
+                "type: code execution\n"
+                "attacker: remote client\n"
+                "trigger: request body reaches eval\n"
+                "impact: arbitrary code execution as server user\n"
                 "preconditions: caller invokes the handler with attacker input\n"
                 "proof:\n"
                 "  user input arrives at line 1 via input() call.\n"
@@ -1178,7 +1211,7 @@ class TestPhase3bExpansion:
         f = result.findings[0]
         assert f.title == "eval injection"
         assert f.severity == "critical"
-        assert f.finding_type == "vulnerability"
+        assert f.finding_type == "code execution"
         assert f.locations == ["a.py:1"]
         assert f.source_file == "a.py"
         assert "user input arrives at line 1" in f.proof[0]
@@ -1590,13 +1623,13 @@ class TestParseFailureBreakdown:
         monkeypatch.setattr(
             "swival.audit._call_audit_llm",
             lambda ctx, messages, temperature=0.0, trace_task=None: (
-                "@@ expansion @@\ntype: vulnerability\n"
+                "@@ expansion @@\ntype: code execution\n"
             ),
         )
         with pytest.raises(ValueError):
             _parse_records_with_repair(
                 ctx=SimpleNamespace(),
-                raw="@@ expansion @@\ntype: vulnerability\n",
+                raw="@@ expansion @@\ntype: code execution\n",
                 schema=_PHASE3B_EXPANSION_SCHEMA,
                 worked_example=_PHASE3B_WORKED_EXAMPLE,
                 metrics=metrics,
@@ -2111,10 +2144,8 @@ class TestArtifacts:
             assert f"{i:03d}" == expected
 
     def test_no_findings_exact_message(self):
-        expected = "No provable logic or security bugs found in Git-tracked files."
-        assert (
-            expected == "No provable logic or security bugs found in Git-tracked files."
-        )
+        expected = "No provable security bugs found in Git-tracked files."
+        assert expected == "No provable security bugs found in Git-tracked files."
 
     def test_report_provenance_url(self):
         assert AUDIT_PROVENANCE_URL == "https://swival.dev"
@@ -2235,7 +2266,10 @@ class TestMessageLayout:
             captured["messages"] = messages
             return (
                 "@@ expansion @@\n"
-                "type: vulnerability\n"
+                "type: code execution\n"
+                "attacker: remote client\n"
+                "trigger: request body reaches eval\n"
+                "impact: arbitrary code execution as server user\n"
                 "preconditions: none\n"
                 "proof: direct\n"
                 "fix_outline: fix it\n"
@@ -2246,6 +2280,9 @@ class TestMessageLayout:
             "title": "eval injection",
             "severity": "high",
             "location": "a.py:1",
+            "attacker": "remote client",
+            "trigger": "request body reaches eval",
+            "impact": "arbitrary code execution as server user",
             "claim": "user input reaches eval",
         }
         _phase3b_expand_one((stub, "a.py", "eval(input())", state, ctx))
@@ -2959,18 +2996,24 @@ class TestCanonicalization:
             "claim": "strcpy overflows stack buffer",
         }
         expansion = {
-            "type": "vulnerability",
+            "type": "code execution",
+            "attacker": "local user",
+            "trigger": "argv[1] reaches strcpy",
+            "impact": "arbitrary code execution",
             "preconditions": "attacker controls argv[1]",
             "proof": "input reaches strcpy without bounds check",
             "fix_outline": "use strncpy with bounds",
         }
         f = _canonicalize_finding(inventory, expansion, "main.c")
         assert f.title == "Buffer overflow"
-        assert f.finding_type == "vulnerability"
+        assert f.finding_type == "code execution"
         assert f.severity == "high"
         assert f.locations == ["main.c:17"]
         assert f.preconditions == ["attacker controls argv[1]"]
-        assert f.proof == ["input reaches strcpy without bounds check"]
+        assert f.proof == [
+            "attacker: local user trigger: argv[1] reaches strcpy "
+            "impact: arbitrary code execution input reaches strcpy without bounds check"
+        ]
         assert f.fix_outline == "use strncpy with bounds"
         assert f.source_file == "main.c"
 
@@ -3067,11 +3110,17 @@ class TestPhase3Split:
                     "title: eval injection\n"
                     "severity: high\n"
                     "location: a.py:1\n"
+                    "attacker: remote client\n"
+                    "trigger: request body reaches eval\n"
+                    "impact: arbitrary code execution as server user\n"
                     "claim: user input reaches eval\n"
                 )
             return (
                 "@@ expansion @@\n"
-                "type: vulnerability\n"
+                "type: code execution\n"
+                "attacker: remote client\n"
+                "trigger: request body reaches eval\n"
+                "impact: arbitrary code execution as server user\n"
                 "preconditions: user provides input\n"
                 "proof: input flows to eval without sanitization\n"
                 "fix_outline: remove eval\n"
@@ -3084,7 +3133,7 @@ class TestPhase3Split:
         assert len(result.findings) == 1
         f = result.findings[0]
         assert f.title == "eval injection"
-        assert f.finding_type == "vulnerability"
+        assert f.finding_type == "code execution"
         assert f.severity == "high"
         assert f.locations == ["a.py:1"]
         assert f.source_file == "a.py"
@@ -3105,6 +3154,9 @@ class TestPhase3Split:
             "title: bug A\n"
             "severity: high\n"
             "location: a.py:1\n"
+            "attacker: remote client\n"
+            "trigger: crafted request reaches bug A\n"
+            "impact: denial of service\n"
             "claim: claim A\n"
         )
 
@@ -3140,18 +3192,27 @@ class TestPhase3Split:
                     "title: bug A\n"
                     "severity: high\n"
                     "location: a.py:1\n"
+                    "attacker: remote client\n"
+                    "trigger: crafted request reaches bug A\n"
+                    "impact: denial of service\n"
                     "claim: claim A\n"
                     "\n"
                     "@@ finding @@\n"
                     "title: bug B\n"
                     "severity: medium\n"
                     "location: a.py:2\n"
+                    "attacker: remote client\n"
+                    "trigger: crafted request reaches bug B\n"
+                    "impact: denial of service\n"
                     "claim: claim B\n"
                 )
             if calls["n"] == 2:
                 return (
                     "@@ expansion @@\n"
-                    "type: vulnerability\n"
+                    "type: denial of service\n"
+                    "attacker: remote client\n"
+                    "trigger: crafted request reaches bug A\n"
+                    "impact: denial of service\n"
                     "preconditions: none\n"
                     "proof: proven\n"
                     "fix_outline: fix\n"
@@ -3164,6 +3225,51 @@ class TestPhase3Split:
         assert result.error is None
         assert len(result.findings) == 1
         assert result.findings[0].title == "bug A"
+
+    def test_out_of_scope_expansion_is_discarded_without_retry(
+        self, monkeypatch, tmp_path
+    ):
+        """A real non-security bug should be dropped, not treated as a failed
+        expansion that drives analytical retries."""
+        from types import SimpleNamespace
+        from swival.audit import _deep_review_one
+
+        state = self._make_state(tmp_path)
+        ctx = SimpleNamespace(base_dir=str(tmp_path), loop_kwargs={})
+        calls = {"n": 0}
+
+        monkeypatch.setattr("swival.audit._git_show", lambda path, base_dir: "code")
+
+        def fake_call(ctx, messages, temperature=0.0, trace_task=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return (
+                    "@@ finding @@\n"
+                    "title: teardown waiters are not woken\n"
+                    "severity: medium\n"
+                    "location: a.py:1\n"
+                    "attacker: missing\n"
+                    "trigger: shutdown path only\n"
+                    "impact: no attacker-controlled security outcome\n"
+                    "claim: shutdown can leave waiters asleep\n"
+                )
+            return (
+                "@@ expansion @@\n"
+                "type: out-of-scope\n"
+                "attacker: missing\n"
+                "trigger: missing\n"
+                "impact: missing\n"
+                "preconditions: out-of-scope\n"
+                "proof: out-of-scope because only shutdown sequencing is shown\n"
+                "fix_outline: no security fix\n"
+            )
+
+        monkeypatch.setattr("swival.audit._call_audit_llm", fake_call)
+
+        result = _deep_review_one("a.py", state, ctx)
+        assert result.error is None
+        assert result.findings == []
+        assert state.metrics["analytical_retries"] == 0
 
     def test_analytical_retry_on_inventory_failure(self, monkeypatch, tmp_path):
         from types import SimpleNamespace
@@ -3690,7 +3796,7 @@ class TestAutoRetry:
 
         # Second resume: triage fills b.py, no findings, completes
         result2 = run_audit_command("--resume", ctx)
-        assert "No provable logic or security bugs" in result2
+        assert "No provable security bugs" in result2
 
 
 class TestCallAuditLlmOverflowRetry:
