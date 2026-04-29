@@ -2,6 +2,11 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.11
+
+- `/audit` got more constraints to focus more on security issues.
+- `/audit` compatibility with models such as Xiaomi MiMo was also improved.
+
 ## 1.0.10
 
 - `/audit` now accepts multiple focus paths in a single invocation (`/audit src/auth/ src/api/`).
