@@ -823,6 +823,7 @@ def safe_resolve(
 
 
 MAX_LIST_RESULTS = 100
+MAX_LIST_WALK_ENTRIES = 20_000
 MAX_GREP_MATCHES = 100
 
 
@@ -960,17 +961,22 @@ def _list_files(
     if not root.is_dir():
         return f"error: path is not a directory: {path}"
 
-    # Walk the tree, pruning .git directories
     matched: list[Path] = []
+    visited = 0
+    walk_truncated = False
     for dirpath, dirs, files in os.walk(root):
+        if walk_truncated:
+            break
         dirs[:] = [d for d in dirs if d != ".git"]
         for filename in files:
+            visited += 1
+            if visited > MAX_LIST_WALK_ENTRIES:
+                walk_truncated = True
+                break
             filepath = Path(dirpath) / filename
-            # Match the relative path (from root) against the glob pattern
             rel_to_root = filepath.relative_to(root)
             if not PurePath(rel_to_root).full_match(pattern):
                 continue
-            # Per-match containment check
             if not _is_within_base(
                 filepath,
                 base,
@@ -982,13 +988,18 @@ def _list_files(
             matched.append(filepath)
 
     if not matched:
+        if walk_truncated:
+            return (
+                f"No files matched the pattern in the first "
+                f"{MAX_LIST_WALK_ENTRIES} entries visited. "
+                "Search stopped early — narrow the path or use a more specific pattern."
+            )
         return "No files matched the pattern."
 
-    # Sort by modification time, newest first
     matched.sort(key=lambda f: f.stat().st_mtime, reverse=True)
 
-    # Cap results and format output
-    truncated = len(matched) > MAX_LIST_RESULTS
+    count_truncated = len(matched) > MAX_LIST_RESULTS
+    total_matched = len(matched)
     matched = matched[:MAX_LIST_RESULTS]
 
     output_parts: list[str] = []
@@ -1007,11 +1018,19 @@ def _list_files(
         total_bytes += encoded_len
 
     result = "\n".join(output_parts)
-    if truncated or byte_truncated:
-        result += (
-            "\n(Results truncated: showing first 100 results. "
-            "Use a more specific pattern or path.)"
+    notes: list[str] = []
+    if walk_truncated:
+        notes.append(
+            f"Search stopped after visiting {MAX_LIST_WALK_ENTRIES} entries; "
+            "results may be incomplete and not globally sorted by mtime."
         )
+    if count_truncated or byte_truncated:
+        notes.append(
+            f"Showing first {len(output_parts)} of {total_matched} matches "
+            f"(by mtime, newest first)."
+        )
+    if notes:
+        result += "\n(" + " ".join(notes) + " Narrow the path or pattern.)"
     return result
 
 

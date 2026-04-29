@@ -181,7 +181,33 @@ class TestListFiles:
             (many_dir / f"file_{i:04d}.txt").write_text(f"content {i}")
 
         result = _list_files("**/*.txt", ".", str(sandbox))
-        assert "truncated" in result.lower() or "100" in result
+        assert "Showing first 100 of 111 matches" in result
+
+    def test_walk_truncation_stops_early(self, sandbox, monkeypatch):
+        """Walk should bail out when the visit cap is reached."""
+        from swival import tools
+
+        many_dir = sandbox / "many"
+        many_dir.mkdir()
+        for i in range(50):
+            (many_dir / f"file_{i:04d}.txt").write_text(f"content {i}")
+
+        monkeypatch.setattr(tools, "MAX_LIST_WALK_ENTRIES", 10)
+        result = _list_files("**/*.txt", ".", str(sandbox))
+        assert "Search stopped after visiting 10 entries" in result
+
+    def test_walk_truncation_no_matches(self, sandbox, monkeypatch):
+        """When walk halts early with no matches, message should say so."""
+        from swival import tools
+
+        many_dir = sandbox / "many"
+        many_dir.mkdir()
+        for i in range(50):
+            (many_dir / f"file_{i:04d}.txt").write_text(f"content {i}")
+
+        monkeypatch.setattr(tools, "MAX_LIST_WALK_ENTRIES", 5)
+        result = _list_files("**/*.NOMATCH", ".", str(sandbox))
+        assert "No files matched the pattern in the first 5 entries" in result
 
     def test_nonexistent_path(self, sandbox):
         result = _list_files("*.py", "nonexistent", str(sandbox))
