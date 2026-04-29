@@ -31,6 +31,7 @@ from swival.audit import (
     _order_by_attack_surface,
     _parse_records,
     _parse_records_with_repair,
+    _phase1_source_inventory,
     _score_attack_surface,
     _verify_one_finding,
     _verify_single_finding,
@@ -1502,6 +1503,25 @@ class TestPhase1Profile:
         with pytest.raises(ValueError, match="exactly one"):
             _parse_records(text, self._schema())
 
+    def test_source_inventory_reports_language_counts_and_examples(self):
+        inventory = _phase1_source_inventory(
+            [
+                "src/libsodium/crypto_auth/auth.c",
+                "src/libsodium/crypto_auth/auth.h",
+                "src/libsodium/crypto_box/box.c",
+                "src/libsodium/crypto_scalarmult/curve25519/fe51_mul.S",
+                "src/libsodium/Makefile.am",
+            ]
+        )
+
+        assert "--- source inventory ---" in inventory
+        assert "c: 3 file(s); examples: src/libsodium/crypto_auth/auth.c" in inventory
+        assert (
+            "assembly: 1 file(s); examples: src/libsodium/crypto_scalarmult"
+            in inventory
+        )
+        assert "other extensions: .am=1" in inventory
+
     def test_repo_profile_returns_canonicalized_dict(self, monkeypatch, tmp_path):
         from swival.audit import _phase1_repo_profile
 
@@ -1529,6 +1549,55 @@ class TestPhase1Profile:
         encoded = _json.dumps(profile)
         assert "languages" in encoded
         assert "summary" in encoded
+
+    def test_repo_profile_includes_source_inventory_and_autotools_manifest(
+        self, monkeypatch, tmp_path
+    ):
+        from swival.audit import _phase1_repo_profile
+
+        captured = {}
+
+        def fake_git_show(path, base_dir):
+            assert base_dir == str(tmp_path)
+            if path == "src/libsodium/Makefile.am":
+                return "libsodium_la_SOURCES = crypto_auth/auth.c\n"
+            raise AssertionError(f"unexpected git show path: {path}")
+
+        def fake_call(ctx, messages, temperature=0.0, trace_task=None):
+            captured["user"] = messages[1]["content"]
+            return "@@ profile @@\nlanguage: c\nsummary: scoped c library\n"
+
+        monkeypatch.setattr("swival.audit._git_show", fake_git_show)
+        monkeypatch.setattr("swival.audit._call_audit_llm", fake_call)
+
+        scope = AuditScope(
+            branch="main",
+            commit="abc123",
+            tracked_files=[
+                "src/libsodium/Makefile.am",
+                "src/libsodium/crypto_auth/auth.c",
+                "src/libsodium/crypto_auth/auth.h",
+            ],
+            mandatory_files=[
+                "src/libsodium/crypto_auth/auth.c",
+                "src/libsodium/crypto_auth/auth.h",
+            ],
+            focus=["src/libsodium"],
+        )
+        state = AuditRunState(
+            run_id="p1", scope=scope, queued_files=[], state_dir=tmp_path
+        )
+
+        profile = _phase1_repo_profile(state, self._ctx(tmp_path))
+
+        assert profile["languages"] == ["c"]
+        assert "--- source inventory ---" in captured["user"]
+        assert (
+            "c: 2 file(s); examples: src/libsodium/crypto_auth/auth.c"
+            in captured["user"]
+        )
+        assert "--- src/libsodium/Makefile.am ---" in captured["user"]
+        assert "libsodium_la_SOURCES" in captured["user"]
 
     def test_repo_profile_repairs_missing_field(self, monkeypatch, tmp_path):
         from swival.audit import _phase1_repo_profile

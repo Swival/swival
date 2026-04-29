@@ -22,11 +22,30 @@ def _capture(func, *args, **kwargs):
     return buf.getvalue()
 
 
+_FAKE_TTY_ENV = {"TERM": "xterm-256color"}
+
+
+def _styled_console(buf: StringIO) -> Console:
+    """Build a Rich console that always renders styled TTY output.
+
+    Forces terminal mode, truecolor, and a non-dumb TERM so the test asserts
+    Swival's formatting rather than whatever the host shell exports.
+    """
+    return Console(
+        file=buf,
+        force_terminal=True,
+        color_system="truecolor",
+        no_color=False,
+        width=80,
+        _environ=_FAKE_TTY_ENV,
+    )
+
+
 def _capture_styled(func, *args, **kwargs):
     """Call a fmt function with color enabled and return ANSI-escaped output."""
     buf = StringIO()
     old = fmt._console
-    fmt._console = Console(file=buf, force_terminal=True, width=80)
+    fmt._console = _styled_console(buf)
     fmt.reset_state()
     try:
         func(*args, **kwargs)
@@ -77,7 +96,7 @@ class TestLlmSpinner:
         """On a terminal console the label text appears in the output."""
         buf = StringIO()
         old = fmt._console
-        fmt._console = Console(file=buf, force_terminal=True, width=80)
+        fmt._console = _styled_console(buf)
         try:
             with fmt.llm_spinner("Custom label"):
                 pass
@@ -452,7 +471,8 @@ class TestInit:
         finally:
             fmt._stdout_console = old
 
-    def test_init_color_configures_stdout_console(self):
+    def test_init_color_configures_stdout_console(self, monkeypatch):
+        monkeypatch.delenv("NO_COLOR", raising=False)
         old = fmt._stdout_console
         try:
             fmt.init(color=True)
@@ -460,8 +480,9 @@ class TestInit:
         finally:
             fmt._stdout_console = old
 
-    def test_color_does_not_force_stdout_terminal(self):
+    def test_color_does_not_force_stdout_terminal(self, monkeypatch):
         """--color forces stderr terminal mode but not stdout (keeps piped stdout clean)."""
+        monkeypatch.delenv("NO_COLOR", raising=False)
         old_stderr = fmt._console
         old_stdout = fmt._stdout_console
         try:
@@ -505,7 +526,7 @@ class TestReplAnswer:
         """When stdout is a TTY with color, repl_answer renders Markdown."""
         buf = StringIO()
         old = fmt._stdout_console
-        fmt._stdout_console = Console(file=buf, force_terminal=True, width=80)
+        fmt._stdout_console = _styled_console(buf)
         try:
             fmt.repl_answer("**bold text**")
         finally:

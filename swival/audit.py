@@ -686,6 +686,87 @@ _ENTRY_POINT_HINT_RE = re.compile(
     r"(main|app|server|handler|index|cli|entry)", re.IGNORECASE
 )
 
+_EXT_TO_LANG: dict[str, str] = {
+    ".py": "python",
+    ".js": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".jsx": "javascript",
+    ".go": "go",
+    ".rs": "rust",
+    ".java": "java",
+    ".kt": "kotlin",
+    ".rb": "ruby",
+    ".php": "php",
+    ".c": "c",
+    ".h": "c",
+    ".cc": "c++",
+    ".cpp": "c++",
+    ".cxx": "c++",
+    ".hpp": "c++",
+    ".hh": "c++",
+    ".cs": "c#",
+    ".swift": "swift",
+    ".scala": "scala",
+    ".sh": "shell",
+    ".bash": "shell",
+    ".zsh": "shell",
+    ".zig": "zig",
+    ".d": "d",
+    ".m": "objective-c",
+    ".mm": "objective-c++",
+    ".lua": "lua",
+    ".pl": "perl",
+    ".r": "r",
+    ".dart": "dart",
+    ".ex": "elixir",
+    ".exs": "elixir",
+    ".erl": "erlang",
+    ".clj": "clojure",
+    ".hs": "haskell",
+    ".ml": "ocaml",
+    ".nim": "nim",
+    ".S": "assembly",
+    ".s": "assembly",
+    ".asm": "assembly",
+}
+
+
+def _phase1_source_inventory(tracked: list[str]) -> str:
+    """Deterministic per-language file counts plus a few sample paths.
+
+    Gives the model concrete facts for the required `language` field even when
+    no recognized manifest is present in scope.
+    """
+    by_lang: dict[str, list[str]] = {}
+    other_exts: dict[str, int] = {}
+    for f in tracked:
+        suffix = Path(f).suffix
+        lang = _EXT_TO_LANG.get(suffix)
+        if lang is None and suffix:
+            other_exts[suffix] = other_exts.get(suffix, 0) + 1
+            continue
+        if lang is None:
+            continue
+        by_lang.setdefault(lang, []).append(f)
+
+    if not by_lang and not other_exts:
+        return ""
+
+    lines = ["--- source inventory ---"]
+    ranked = sorted(by_lang.items(), key=lambda kv: -len(kv[1]))
+    for lang, files in ranked:
+        samples = ", ".join(files[:3])
+        more = f" (+{len(files) - 3} more)" if len(files) > 3 else ""
+        lines.append(f"{lang}: {len(files)} file(s); examples: {samples}{more}")
+    if other_exts:
+        top_other = sorted(other_exts.items(), key=lambda kv: -kv[1])[:5]
+        rendered = ", ".join(f"{ext}={n}" for ext, n in top_other)
+        lines.append(f"other extensions: {rendered}")
+    return "\n".join(lines)
+
 
 def _parse_records(
     text: str,
@@ -1692,7 +1773,10 @@ Rules:
 def _phase1_repo_profile(state: AuditRunState, ctx: InputContext) -> dict:
     """Build a compact repository profile from committed evidence."""
     evidence_parts = []
-    # Grab manifests
+    inventory = _phase1_source_inventory(state.scope.tracked_files)
+    if inventory:
+        evidence_parts.append(inventory)
+
     manifest_names = {
         "package.json",
         "Cargo.toml",
@@ -1702,13 +1786,19 @@ def _phase1_repo_profile(state: AuditRunState, ctx: InputContext) -> dict:
         "setup.py",
         "setup.cfg",
         "Makefile",
+        "Makefile.am",
+        "Makefile.in",
+        "configure.ac",
+        "CMakeLists.txt",
+        "meson.build",
+        "build.zig",
+        "build.zig.zon",
         "Dockerfile",
         "docker-compose.yml",
         "docker-compose.yaml",
         "pom.xml",
         "build.gradle",
         "Gemfile",
-        "build.zig.zon",
     }
     for f in state.scope.tracked_files:
         if Path(f).name in manifest_names:
@@ -1718,7 +1808,6 @@ def _phase1_repo_profile(state: AuditRunState, ctx: InputContext) -> dict:
             except RuntimeError:
                 pass
 
-    # Entry point hints: files with main, app, server, handler in name
     entry_hints = [
         f
         for f in state.scope.mandatory_files
@@ -1733,7 +1822,7 @@ def _phase1_repo_profile(state: AuditRunState, ctx: InputContext) -> dict:
         except RuntimeError:
             pass
 
-    evidence = "\n\n".join(evidence_parts) if evidence_parts else "(no manifests found)"
+    evidence = "\n\n".join(evidence_parts) if evidence_parts else "(no evidence)"
     suffix = f"Committed repository evidence:\n{evidence}"
 
     messages = [
