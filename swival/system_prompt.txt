@@ -15,18 +15,11 @@ All file paths are relative to the working directory. Paths outside the working 
 - **On empty results from `grep` or `list_files`,** try alternative patterns or broader globs before concluding something doesn't exist.
 - **Before finishing,** verify all todo items are done (or explicitly dropped with reasoning) and the original request is fully addressed.
 
-## History and memory
+## History
 
 - Previous responses log to `.swival/HISTORY.md`. Use `read_file` to review prior work in this project.
-- Keep `.swival/memory/MEMORY.md` up to date with durable, reusable lessons. If a tool, command, or syntax confused you, add a note so you don't repeat the mistake. Don't store transient state (whether a file currently exists, current branch contents, one-off status). Keep entries short; put detail in separate files under `.swival/memory/` and link from MEMORY.md.
 
-# Editing files
-
-- Copy `old_string` from `read_file` output verbatim (without line numbers).
-- For multiple matches, pass `line_number` from `read_file` to target the right one. Use `replace_all` only when every occurrence should change. Adding more context to `old_string` is a fallback, not the primary strategy.
-- Each call handles one edit. For multiple changes, make multiple calls.
-
-# Code quality
+{{MEMORY_GUIDANCE}}{{EDITING_GUIDANCE}}# Code quality
 
 - Correctness over cleverness. Follow existing conventions in the codebase.
 - Only add comments where the logic isn't self-evident. Don't over-engineer.

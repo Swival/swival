@@ -5207,6 +5207,49 @@ def _apply_interaction_policy(
     ).replace("{{AMBIGUITY_DIRECTIVE}}", _AMBIGUITY_DIRECTIVES[policy])
 
 
+_MEMORY_GUIDANCE_BLOCK = (
+    "## Memory\n"
+    "\n"
+    "- Keep `.swival/memory/MEMORY.md` up to date with durable, reusable lessons. "
+    "If a tool, command, or syntax confused you, add a note so you don't repeat the mistake. "
+    "Don't store transient state (whether a file currently exists, current branch contents, "
+    "one-off status). Keep entries short; put detail in separate files under `.swival/memory/` "
+    "and link from MEMORY.md.\n"
+    "\n"
+)
+
+_EDITING_GUIDANCE_BLOCK = (
+    "# Editing files\n"
+    "\n"
+    "- Copy `old_string` from `read_file` output verbatim (without line numbers).\n"
+    "- For multiple matches, pass `line_number` from `read_file` to target the right one. "
+    "Use `replace_all` only when every occurrence should change. Adding more context to "
+    "`old_string` is a fallback, not the primary strategy.\n"
+    "- Each call handles one edit. For multiple changes, make multiple calls.\n"
+    "\n"
+)
+
+
+def _apply_capability_substitutions(
+    system_content: str,
+    *,
+    no_memory: bool,
+    files_mode: str,
+) -> str:
+    """Substitute capability-gated placeholders in the prompt template.
+
+    {{MEMORY_GUIDANCE}}: dropped when no_memory is True (MEMORY.md isn't loaded).
+    {{EDITING_GUIDANCE}}: dropped when files_mode == "none" (file tools error
+    outside .swival/, so the editing rules are unreachable). The post-template
+    "Filesystem access is restricted" sentence still gets appended.
+    """
+    memory_block = "" if no_memory else _MEMORY_GUIDANCE_BLOCK
+    editing_block = "" if files_mode == "none" else _EDITING_GUIDANCE_BLOCK
+    return system_content.replace("{{MEMORY_GUIDANCE}}", memory_block).replace(
+        "{{EDITING_GUIDANCE}}", editing_block
+    )
+
+
 def build_system_prompt(
     base_dir: str,
     system_prompt: str | None,
@@ -5260,6 +5303,9 @@ def build_system_prompt(
             )
     else:
         system_content = DEFAULT_SYSTEM_PROMPT_FILE.read_text(encoding="utf-8")
+        system_content = _apply_capability_substitutions(
+            system_content, no_memory=no_memory, files_mode=files_mode
+        )
         if not no_instructions:
             instructions, instructions_loaded = load_instructions(
                 base_dir,

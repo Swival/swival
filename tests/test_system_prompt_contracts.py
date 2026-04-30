@@ -20,11 +20,28 @@ to rephrase without losing the trigger word.
 
 import re
 
-from swival.agent import DEFAULT_SYSTEM_PROMPT_FILE, _apply_interaction_policy
+from swival.agent import (
+    DEFAULT_SYSTEM_PROMPT_FILE,
+    _apply_capability_substitutions,
+    _apply_interaction_policy,
+)
 
 
-def _read_prompt(policy: str = "autonomous") -> str:
+def _read_prompt(
+    policy: str = "autonomous",
+    *,
+    no_memory: bool = False,
+    files_mode: str = "some",
+) -> str:
+    """Return the assembled prompt the way build_system_prompt() would.
+
+    Defaults match the common-case ("memory on, file tools usable"), so the
+    hard-contract tests below see the full default prompt.
+    """
     raw = DEFAULT_SYSTEM_PROMPT_FILE.read_text(encoding="utf-8")
+    raw = _apply_capability_substitutions(
+        raw, no_memory=no_memory, files_mode=files_mode
+    )
     return _apply_interaction_policy(raw, policy)
 
 
@@ -205,3 +222,77 @@ class TestInteractionPolicySubstitution:
         for policy in ("autonomous", "interactive"):
             text = _normalize(_read_prompt(policy))
             assert "think" in text
+
+    def test_no_unsubstituted_capability_placeholders(self):
+        # All four flag combinations must produce a fully-substituted prompt.
+        for no_memory in (False, True):
+            for files_mode in ("some", "all", "none"):
+                text = _read_prompt(no_memory=no_memory, files_mode=files_mode)
+                assert "{{MEMORY_GUIDANCE}}" not in text, (
+                    f"MEMORY_GUIDANCE leaked with no_memory={no_memory}, files_mode={files_mode}"
+                )
+                assert "{{EDITING_GUIDANCE}}" not in text, (
+                    f"EDITING_GUIDANCE leaked with no_memory={no_memory}, files_mode={files_mode}"
+                )
+
+
+# ---------------------------------------------------------------------------
+# Capability gates: prompt content must adapt to active features
+# ---------------------------------------------------------------------------
+
+
+class TestMemoryGate:
+    def test_memory_guidance_present_by_default(self):
+        text = _normalize(_read_prompt(no_memory=False))
+        # The memory bullet names MEMORY.md explicitly — the model needs to
+        # know where to write durable lessons.
+        assert "memory.md" in text, "memory guidance missing in default prompt"
+
+    def test_memory_guidance_absent_when_no_memory(self):
+        text = _normalize(_read_prompt(no_memory=True))
+        # With --no-memory, MEMORY.md isn't loaded; telling the model to
+        # write to it would be misleading.
+        assert "memory.md" not in text, (
+            "memory guidance must be dropped when no_memory=True"
+        )
+
+    def test_history_guidance_present_in_both_modes(self):
+        # History is independent of the memory flag.
+        for no_memory in (False, True):
+            text = _normalize(_read_prompt(no_memory=no_memory))
+            assert "history.md" in text, (
+                f"history guidance missing with no_memory={no_memory}"
+            )
+
+
+class TestEditingGate:
+    def test_editing_section_present_by_default(self):
+        # files_mode="some" is the default; editing rules must be in scope.
+        text = _read_prompt(files_mode="some")
+        assert "# Editing files" in text
+        # Hard-contract substrings must be present (smoke check; the
+        # TestEditContract class above does the real work).
+        norm = _normalize(text)
+        assert "verbatim" in norm
+        assert "line_number" in norm
+
+    def test_editing_section_present_with_files_all(self):
+        text = _read_prompt(files_mode="all")
+        assert "# Editing files" in text
+
+    def test_editing_section_absent_when_files_none(self):
+        # In --files none the file tools error outside .swival/, so the
+        # editing rules are unreachable. Drop them; the post-template
+        # "Filesystem access is restricted" sentence still informs the model.
+        text = _read_prompt(files_mode="none")
+        assert "# Editing files" not in text
+        norm = _normalize(text)
+        assert "verbatim" not in norm, (
+            "edit guidance must be dropped when files_mode=none"
+        )
+
+    def test_default_path_passes_all_hard_contracts(self):
+        # Sanity: the contract regexes above all run against _read_prompt()
+        # with defaults. This test pins the default tuple so a future change
+        # to defaults can't silently weaken the hard-contract coverage.
+        assert _read_prompt() == _read_prompt(no_memory=False, files_mode="some")
