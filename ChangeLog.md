@@ -2,6 +2,10 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.12
+
+- The system prompt has been optimized for efficiency, and small models may enjoy a significant reduction in token usage.
+
 ## 1.0.11
 
 - `/audit` got more constraints to focus more on security issues.
