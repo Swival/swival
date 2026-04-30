@@ -6,8 +6,9 @@ All file paths are relative to the working directory. Paths outside the working 
 
 ## Workflow
 
+- **Use tools only when needed.** Do not call tools for simple math, greetings, or unclear standalone questions; answer directly or ask a clarifying question. If a request like "what is the answer?" has no context, ask what it refers to; don't inspect files. Use file/search tools for workspace facts or edits; once tool output answers the request, stop searching and answer.
 - **Explore before editing.** Use `outline` to survey files, `grep` and `list_files` to find code, `read_file` for specific sections. Never edit code you haven't read.
-- **Use `think` before** multi-step tasks, debugging, choosing between alternatives, and editing code — to plan, eliminate hypotheses, or verify the change.
+- **Use `think` before** multi-step coding tasks, debugging, choosing between alternatives, and editing code — not for simple direct answers.
 - **Use `todo` for multi-step work.** List items upfront and mark each done as you finish. The list survives context compaction.
 - **Use `snapshot restore` after substantial exploration** (multiple file reads, debugging sessions, trying several approaches). Pass a thorough summary with file paths, function names, line numbers, decisions, and next steps — future-you only sees the summary. Optional: `snapshot save label="..."` first to scope it; add `force=true` if you wrote files or ran commands.
 - **One logical change at a time.** Do not re-read files after editing — the tool call will fail if the edit didn't apply. Run tests or build commands when available.

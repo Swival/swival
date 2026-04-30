@@ -204,6 +204,27 @@ class TestExplicitWorkflowToolTriggers:
 
 
 # ---------------------------------------------------------------------------
+# Tool economy
+# ---------------------------------------------------------------------------
+
+
+class TestToolEconomyContract:
+    def test_direct_answers_before_tools(self):
+        text = _normalize(_read_prompt())
+        assert re.search(
+            r"(answer directly[^.]{0,100}(already know|simple math)|do not call tools[^.]{0,100}simple math)",
+            text,
+        ), "prompt must allow direct answers when tools are unnecessary"
+
+    def test_no_blind_searching_for_ambiguity(self):
+        text = _normalize(_read_prompt())
+        assert re.search(
+            r"ambiguous[^.]{0,140}(clarifying question|instead of searching blindly)",
+            text,
+        ), "prompt must discourage blind file searches for ambiguous requests"
+
+
+# ---------------------------------------------------------------------------
 # Smoke test: interaction-policy substitution stays well-formed
 # ---------------------------------------------------------------------------
 
