@@ -89,6 +89,7 @@ def _build_deterministic_continue(
     todo_state=None,
     snapshot_state=None,
     thinking_state=None,
+    goal_state=None,
 ) -> str:
     """Build continue-file content from structured state, no LLM needed."""
     sections: list[str] = ["# Continue Here\n"]
@@ -110,6 +111,11 @@ def _build_deterministic_continue(
             if len(first_task) > 300:
                 orig_preview += "..."
             sections.append(orig_preview)
+
+    # Goal state — if a goal is in flight it is the most important context.
+    if goal_state is not None and goal_state.get() is not None:
+        sections.append("\n## Active goal")
+        sections.append(goal_state.status_block())
 
     # Todo state
     if todo_state is not None:
@@ -164,6 +170,7 @@ def write_continue_file(
     todo_state=None,
     snapshot_state=None,
     thinking_state=None,
+    goal_state=None,
     call_llm_fn=None,
     model_id: str | None = None,
     base_url: str | None = None,
@@ -185,7 +192,7 @@ def write_continue_file(
 
     # Build and write deterministic version first
     det_content = _build_deterministic_continue(
-        messages, todo_state, snapshot_state, thinking_state
+        messages, todo_state, snapshot_state, thinking_state, goal_state
     )
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -2,6 +2,7 @@ import argparse
 from collections.abc import Callable
 from contextlib import nullcontext
 import copy
+from dataclasses import dataclass
 from datetime import datetime
 import json
 from typing import Literal
@@ -50,6 +51,15 @@ from .snapshot import (
     SNAPSHOT_RECAP_PREFIX,
     SnapshotState,
     READ_ONLY_TOOLS,
+)
+from .goal import (
+    GOAL_BUDGET_LIMIT_PREFIX,
+    GOAL_CONTINUATION_PREFIX,
+    GOAL_FINAL_ATTEMPT_PREFIX,
+    GOAL_RECAP_PREFIX,
+    GOAL_START_PREFIX,
+    GoalState,
+    GoalStatus,
 )
 from .thinking import ThinkingState
 from .todo import TodoState
@@ -116,6 +126,11 @@ SYNTHETIC_USER_PREFIXES: tuple[str, ...] = (
     "[REVIEWER FEEDBACK",
     _IMAGE_SYNTHETIC_PREFIX,
     _COMMAND_TOOL_CONTEXT_PREFIX,
+    GOAL_RECAP_PREFIX,
+    GOAL_CONTINUATION_PREFIX,
+    GOAL_BUDGET_LIMIT_PREFIX,
+    GOAL_START_PREFIX,
+    GOAL_FINAL_ATTEMPT_PREFIX,
 )
 
 _SUMMARIZE_SYSTEM_PROMPT = (
@@ -1239,7 +1254,15 @@ def compact_messages(messages: list) -> list:
     return [msg for turn in turns for msg in turn]
 
 
-_DROPPABLE_USER_PREFIXES = (_IMAGE_SYNTHETIC_PREFIX, _COMMAND_TOOL_CONTEXT_PREFIX)
+_DROPPABLE_USER_PREFIXES = (
+    _IMAGE_SYNTHETIC_PREFIX,
+    _COMMAND_TOOL_CONTEXT_PREFIX,
+    GOAL_CONTINUATION_PREFIX,
+    GOAL_BUDGET_LIMIT_PREFIX,
+    GOAL_RECAP_PREFIX,
+    GOAL_START_PREFIX,
+    GOAL_FINAL_ATTEMPT_PREFIX,
+)
 
 
 def is_pinned(turn: list) -> bool:
@@ -1363,6 +1386,20 @@ def _build_recap(
     return recap
 
 
+def _goal_recap_message(goal_state) -> dict | None:
+    """Build a synthetic user message carrying the deterministic goal recap.
+
+    Returns None when there is no current goal so callers can splice it in
+    only when needed.
+    """
+    if goal_state is None:
+        return None
+    text = goal_state.recap_text()
+    if not text:
+        return None
+    return {"role": "user", "content": text, "_swival_synthetic": True}
+
+
 def drop_middle_turns(
     messages: list,
     *,
@@ -1374,6 +1411,7 @@ def drop_middle_turns(
     seed=None,
     provider=None,
     compaction_state: "CompactionState | None" = None,
+    goal_state=None,
 ) -> list:
     """Drop lowest-importance middle turns; pin user turns, keep leading block + tail.
 
@@ -1381,6 +1419,10 @@ def drop_middle_turns(
     dropped turns are summarized into a compact recap injected as an
     ``assistant`` message.  If summarization fails, falls back to the
     checkpoint summary (if available), then to the static splice marker.
+
+    When *goal_state* has an active goal, a deterministic ``[goal state]``
+    recap is also spliced in so old continuation prompts that get dropped
+    still leave the latest objective/usage/blocker visible to the model.
     """
     turns = group_into_turns(messages)
 
@@ -1427,6 +1469,9 @@ def drop_middle_turns(
     for turn in leading:
         result.extend(turn)
     result.append(recap)
+    goal_recap = _goal_recap_message(goal_state)
+    if goal_recap is not None:
+        result.append(goal_recap)
     # Reassemble kept middle turns in original order
     kept_set = set(id(t) for t in kept) | set(id(t) for t in pinned)
     for turn in middle:
@@ -1449,11 +1494,14 @@ def aggressive_drop_turns(
     seed=None,
     provider=None,
     compaction_state: "CompactionState | None" = None,
+    goal_state=None,
 ) -> list:
     """Aggressive compaction: keep only system prompt + recap + last 2 turns.
 
     This is the last resort before giving up. All middle content is dropped
     and replaced with a summary (or static marker if summarization fails).
+    A deterministic ``[goal state]`` recap is also spliced in when an active
+    goal exists so the current objective survives the drop.
     """
     turns = group_into_turns(messages)
 
@@ -1484,6 +1532,9 @@ def aggressive_drop_turns(
     for turn in leading:
         result.extend(turn)
     result.append(recap)
+    goal_recap = _goal_recap_message(goal_state)
+    if goal_recap is not None:
+        result.append(goal_recap)
     for turn in tail:
         result.extend(turn)
     return result
@@ -2147,7 +2198,9 @@ def load_memory(
     return f"<memory>\n{_MEMORY_PREAMBLE}\n\n{content}\n</memory>"
 
 
-def _show_state_summaries(thinking_state, todo_state, snapshot_state) -> None:
+def _show_state_summaries(
+    thinking_state, todo_state, snapshot_state, goal_state=None
+) -> None:
     summary = thinking_state.summary_line()
     if summary:
         fmt.think_summary(summary)
@@ -2159,6 +2212,48 @@ def _show_state_summaries(thinking_state, todo_state, snapshot_state) -> None:
         summary = snapshot_state.summary_line()
         if summary:
             fmt.info(summary)
+    if goal_state is not None:
+        summary = goal_state.summary_line()
+        if summary:
+            fmt.info(summary)
+
+
+def _maybe_make_continuation_message(
+    goal_state,
+    *,
+    last_turn_was_continuation: bool,
+    last_turn_used_tools: bool,
+) -> tuple[str, str] | None:
+    """Decide whether to inject a goal continuation message.
+
+    Returns ``(kind, content)`` where kind is "continuation" or "budget_limit",
+    or None if no injection is needed.
+    """
+    if goal_state is None:
+        return None
+    rec = goal_state.get()
+    if rec is None:
+        return None
+
+    if rec.status == GoalStatus.BUDGET_LIMITED:
+        if goal_state.budget_limit_reported_goal_id == rec.goal_id:
+            return None
+        return ("budget_limit", goal_state.budget_limit_prompt())
+
+    if rec.status != GoalStatus.ACTIVE:
+        return None
+
+    # Don't inject Ralph continuations if we already gave up.
+    if goal_state.continuation_suppressed:
+        return None
+
+    # If the previous turn was already a continuation that produced no tool
+    # calls, suppress further continuations to avoid an infinite final-text
+    # loop. The caller handles the suppression flag.
+    if last_turn_was_continuation and not last_turn_used_tools:
+        return None
+
+    return ("continuation", goal_state.continuation_prompt())
 
 
 def _post_tool_bookkeeping(
@@ -2259,6 +2354,7 @@ def handle_tool_call(
     file_tracker=None,
     todo_state=None,
     snapshot_state=None,
+    goal_state=None,
     mcp_manager=None,
     a2a_manager=None,
     messages=None,
@@ -2314,6 +2410,7 @@ def handle_tool_call(
             thinking_state=thinking_state,
             todo_state=todo_state,
             snapshot_state=snapshot_state,
+            goal_state=goal_state,
             resolved_commands=resolved_commands or {},
             skills_catalog=skills_catalog or {},
             skill_read_roots=skill_read_roots if skill_read_roots is not None else [],
@@ -4680,6 +4777,7 @@ def main():
         review_rounds=0,
         todo_state=None,
         snapshot_state=None,
+        goal_state=None,
         task=None,
         mode="oneshot",
     ):
@@ -4699,6 +4797,16 @@ def main():
             total = snapshot_state.stats["restores"] + snapshot_state.stats["saves"]
             if total > 0:
                 snapshot_stats = dict(snapshot_state.stats)
+        goal_stats = None
+        if goal_state is not None:
+            payload = goal_state.to_report_dict()
+            if payload is not None or goal_state.created_count > 0:
+                goal_stats = {
+                    "created_count": goal_state.created_count,
+                    "completed_count": goal_state.completed_count,
+                }
+                if payload is not None:
+                    goal_stats["current"] = payload
         _session = get_agentfs_session()
         _diff = diff_hint(_session)
         report.finalize(
@@ -4714,6 +4822,7 @@ def main():
             review_rounds=review_rounds,
             todo_stats=todo_stats,
             snapshot_stats=snapshot_stats,
+            goal_stats=goal_stats,
             sandbox_mode=args.sandbox,
             sandbox_session=_session or args.sandbox_session,
             sandbox_strict_read=args.sandbox_strict_read,
@@ -5089,9 +5198,20 @@ def build_tools(
     commands_unrestricted: bool,
     shell_allowed: bool = False,
     subagents: bool = False,
+    *,
+    goal_tools: bool = False,
 ) -> list:
-    """Construct the tools list from base + conditionals."""
+    """Construct the tools list from base + conditionals.
+
+    ``goal_tools`` registers ``complete_goal`` when True. The normal path leaves
+    it out until the user starts `/goal`; subagents also keep it disabled since
+    v1 keeps goals parent-session-only.
+    """
     tools = list(TOOLS)
+    if goal_tools:
+        from .tools import GOAL_TOOLS
+
+        tools.extend(copy.deepcopy(t) for t in GOAL_TOOLS)
     if skills_catalog:
         skill_tool = copy.deepcopy(USE_SKILL_TOOL)
         names_list = sorted(skills_catalog)
@@ -5140,6 +5260,39 @@ def build_tools(
 
         tools.extend([SPAWN_SUBAGENT_TOOL, CHECK_SUBAGENTS_TOOL])
     return tools
+
+
+_GOAL_TOOL_NAMES = {"complete_goal"}
+_DEFAULT_MAX_TURNS = 100
+_GOAL_DEFAULT_MAX_TURNS = _DEFAULT_MAX_TURNS * 5
+
+
+def _ensure_goal_tools_enabled(tools: list) -> None:
+    """Append goal tool schemas to a live tool list once `/goal` is in use."""
+    existing = {t.get("function", {}).get("name") for t in tools}
+    missing = _GOAL_TOOL_NAMES - existing
+    if not missing:
+        return
+    from .tools import GOAL_TOOLS
+
+    for tool in GOAL_TOOLS:
+        if tool["function"]["name"] in missing:
+            tools.append(copy.deepcopy(tool))
+
+
+def _ensure_goal_tools_disabled(tools: list) -> None:
+    """Remove goal tool schemas from a live tool list when no goal is in flight."""
+    tools[:] = [
+        tool
+        for tool in tools
+        if tool.get("function", {}).get("name") not in _GOAL_TOOL_NAMES
+    ]
+
+
+def _raise_goal_default_max_turns(turn_state: dict) -> None:
+    """Give `/goal` runs a larger budget when the session is still at default."""
+    if turn_state.get("max_turns") == _DEFAULT_MAX_TURNS:
+        turn_state["max_turns"] = _GOAL_DEFAULT_MAX_TURNS
 
 
 _COMMAND_PROVIDER_SYSTEM_PROMPT = (
@@ -5783,6 +5936,7 @@ def _run_main(args, report, _write_report, parser):
     thinking_state = ThinkingState(verbose=args.verbose)
     todo_state = TodoState(verbose=args.verbose)
     snapshot_state = SnapshotState(verbose=args.verbose)
+    goal_state = GoalState(verbose=args.verbose)
     file_tracker = (
         None if getattr(args, "no_read_guard", False) else FileAccessTracker()
     )
@@ -5800,6 +5954,7 @@ def _run_main(args, report, _write_report, parser):
         thinking_state=thinking_state,
         todo_state=todo_state,
         snapshot_state=snapshot_state,
+        goal_state=goal_state,
         resolved_commands=resolved_commands,
         skills_catalog=skills_catalog,
         skill_read_roots=skill_read_roots,
@@ -5916,6 +6071,7 @@ def _run_main(args, report, _write_report, parser):
                     thinking_state=thinking_state,
                     todo_state=todo_state,
                     snapshot_state=snapshot_state,
+                    goal_state=goal_state,
                     file_tracker=file_tracker,
                     no_history=no_history,
                     continue_here=_continue_here,
@@ -5953,6 +6109,7 @@ def _run_main(args, report, _write_report, parser):
                         review_rounds=0,
                         todo_state=todo_state,
                         snapshot_state=snapshot_state,
+                        goal_state=goal_state,
                     )
                 _show_agentfs_diff_hint(args)
                 if exhausted:
@@ -6007,6 +6164,7 @@ def _run_main(args, report, _write_report, parser):
                             todo_state=todo_state,
                             snapshot_state=snapshot_state,
                             thinking_state=thinking_state,
+                            goal_state=goal_state,
                         )
                     sys.exit(exit_code)
 
@@ -6084,6 +6242,7 @@ def _run_main(args, report, _write_report, parser):
                     review_rounds=review_round,
                     todo_state=todo_state,
                     snapshot_state=snapshot_state,
+                    goal_state=goal_state,
                 )
             _show_agentfs_diff_hint(args)
             if exhausted:
@@ -6162,6 +6321,7 @@ def _run_main(args, report, _write_report, parser):
                 instructions_loaded=instructions_loaded,
                 todo_state=todo_state,
                 snapshot_state=snapshot_state,
+                goal_state=goal_state,
             )
 
         repl_loop(
@@ -6202,6 +6362,7 @@ def run_agent_loop(
     thinking_state: ThinkingState,
     todo_state: TodoState,
     snapshot_state: SnapshotState | None = None,
+    goal_state: "GoalState | None" = None,
     resolved_commands: dict,
     skills_catalog: dict,
     skill_read_roots: list,
@@ -6228,6 +6389,7 @@ def run_agent_loop(
     command_policy=None,
     command_middleware=None,
     is_subagent: bool = False,
+    goal_launch_turn: bool = False,
 ) -> tuple[str | None, bool]:
     """Run the tool-calling loop until a final answer or max turns.
 
@@ -6284,6 +6446,45 @@ def run_agent_loop(
     _provider_retries = 0
     loop_start = time.monotonic()
 
+    # Goal-loop bookkeeping. last_turn_was_goal_continuation tracks whether the
+    # current turn was driven by an automatic continuation prompt; this matters
+    # when deciding to suppress further continuations after a no-tool-call turn.
+    _last_turn_was_continuation = False
+    _last_turn_used_tools = False
+    # One-shot: a goal-launch turn (synthetic start_prompt appended by /goal)
+    # is treated as a continuation for *its own* turn only. Consumed when the
+    # first LLM response arrives, regardless of whether tools were called.
+    _goal_launch_pending = bool(goal_launch_turn)
+    _final_attempt_injected_for_goal: str | None = None
+    _turn_token_baseline: int | None = None
+
+    def _account_goal_usage(
+        prompt_tokens: int, cache_stats: tuple, elapsed_s: float
+    ) -> None:
+        """Account goal usage after a successful LLM call.
+
+        Called from every success path (initial, post-compaction retry,
+        drop-tools retry) so token accounting and budget transitions cannot
+        be skipped by the recovery branches.
+        """
+        if goal_state is None or not goal_state.has_active():
+            return
+        used = max(0, (prompt_tokens or 0) - ((cache_stats or (0, 0))[0] or 0))
+        budget_hit = goal_state.account(
+            tokens_delta=used,
+            seconds_delta=elapsed_s,
+            estimated=True,
+        )
+        if not budget_hit:
+            return
+        if verbose:
+            fmt.warning("goal token budget reached — entering wrap-up mode")
+        if report is not None and hasattr(report, "record_goal_event"):
+            rec = goal_state.get()
+            report.record_goal_event(
+                "budget_limited", rec.to_json() if rec is not None else None
+            )
+
     def _emit(kind: str, data: dict) -> None:
         if event_callback is not None:
             try:
@@ -6330,6 +6531,7 @@ def run_agent_loop(
             file_tracker=file_tracker,
             todo_state=todo_state,
             snapshot_state=snapshot_state,
+            goal_state=goal_state,
             mcp_manager=mcp_manager,
             a2a_manager=a2a_manager,
             subagent_manager=subagent_manager,
@@ -6444,6 +6646,31 @@ def run_agent_loop(
             _write_turns()
             return None, True
 
+        # Mark the start of a new agent turn for goal accounting.
+        if goal_state is not None:
+            goal_state.turn_started()
+            _turn_token_baseline = (
+                goal_state.current.tokens_used if goal_state.current else None
+            )
+            _last_turn_used_tools = False
+            rec = goal_state.get()
+            if (
+                turns == max_turns
+                and rec is not None
+                and rec.status in (GoalStatus.ACTIVE, GoalStatus.BUDGET_LIMITED)
+                and _final_attempt_injected_for_goal != rec.goal_id
+            ):
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": goal_state.final_attempt_prompt(max_turns=max_turns),
+                        "_swival_synthetic": True,
+                    }
+                )
+                _final_attempt_injected_for_goal = rec.goal_id
+                if verbose:
+                    fmt.info("goal final allowed turn — injecting final-attempt prompt")
+
         _emit(
             EVENT_STATUS_UPDATE,
             {
@@ -6545,12 +6772,16 @@ def run_agent_loop(
                 (
                     "drop_middle_turns",
                     "dropping low-importance turns...",
-                    lambda: drop_middle_turns(messages, **_llm_summary_kwargs),
+                    lambda: drop_middle_turns(
+                        messages, goal_state=goal_state, **_llm_summary_kwargs
+                    ),
                 ),
                 (
                     "aggressive_drop",
                     "aggressive compaction (last resort)...",
-                    lambda: aggressive_drop_turns(messages, **_llm_summary_kwargs),
+                    lambda: aggressive_drop_turns(
+                        messages, goal_state=goal_state, **_llm_summary_kwargs
+                    ),
                 ),
             ]
 
@@ -6669,6 +6900,7 @@ def run_agent_loop(
                             cached_tokens=_cache_stats[0],
                             cache_write_tokens=_cache_stats[1],
                         )
+                    _account_goal_usage(tokens_after, _cache_stats, elapsed)
                     break  # success
             else:
                 # All compaction levels exhausted.  Last resort: if we still
@@ -6763,11 +6995,12 @@ def run_agent_loop(
                         elapsed = time.monotonic() - t0
                         if verbose:
                             fmt.llm_timing(elapsed, finish_reason)
+                        _post_drop_tokens = estimate_tokens(messages, None)
                         if report:
                             report.record_llm_call(
                                 turns + turn_offset,
                                 elapsed,
-                                estimate_tokens(messages, None),
+                                _post_drop_tokens,
                                 finish_reason,
                                 is_retry=True,
                                 retry_reason="drop_tools",
@@ -6775,6 +7008,7 @@ def run_agent_loop(
                                 cached_tokens=_cache_stats[0],
                                 cache_write_tokens=_cache_stats[1],
                             )
+                        _account_goal_usage(_post_drop_tokens, _cache_stats, elapsed)
                         _drop_tools_ok = True
                         break
 
@@ -6788,6 +7022,7 @@ def run_agent_loop(
                             todo_state=todo_state,
                             snapshot_state=snapshot_state,
                             thinking_state=thinking_state,
+                            goal_state=goal_state,
                         )
                     raise ContextOverflowError(
                         "context window exceeded even after compaction"
@@ -6842,6 +7077,7 @@ def run_agent_loop(
                     **_tools_retry_kwargs(_is_tools_retry),
                 )
             _is_tools_retry = False
+            _account_goal_usage(token_est, _cache_stats, elapsed)
         # Handle empty assistant response (no content, no tool_calls).
         # Some providers return these occasionally; appending them as-is
         # would poison the history and cause BadRequestError on the next call.
@@ -6919,15 +7155,78 @@ def run_agent_loop(
                         ),
                     }
                 )
+
+            # Goal-driven automatic continuation. The active goal stays in the
+            # loop as long as turns remain and progress is being made. A pending
+            # goal-launch counts as a continuation for *this* turn so a no-tool
+            # first response suppresses further auto-continuations immediately.
+            _effective_was_continuation = (
+                _last_turn_was_continuation or _goal_launch_pending
+            )
+            _goal_launch_pending = False
+            if turns >= max_turns:
+                _continuation_msg = None
+            else:
+                _continuation_msg = _maybe_make_continuation_message(
+                    goal_state,
+                    last_turn_was_continuation=_effective_was_continuation,
+                    last_turn_used_tools=_last_turn_used_tools,
+                )
+            if _continuation_msg is not None:
+                kind, content = _continuation_msg
+                if kind == "budget_limit" and goal_state is not None:
+                    rec = goal_state.get()
+                    if rec is not None:
+                        goal_state.budget_limit_reported_goal_id = rec.goal_id
+                if goal_state is not None:
+                    goal_state.record_next_step(msg.content)
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": content,
+                        "_swival_synthetic": True,
+                    }
+                )
+                _last_turn_was_continuation = kind == "continuation"
+                _last_turn_used_tools = False
+                if verbose:
+                    fmt.info(
+                        "goal active — injecting continuation prompt"
+                        if kind == "continuation"
+                        else "goal budget limit reached — injecting wrap-up prompt"
+                    )
+                continue
+
+            # No continuation: return final text. Mark suppression if this
+            # was a no-tool continuation turn so future turns won't keep looping.
+            if (
+                goal_state is not None
+                and _effective_was_continuation
+                and not _last_turn_used_tools
+            ):
+                goal_state.continuation_suppressed = True
+                if verbose:
+                    fmt.info(
+                        "goal continuation produced no tool calls — "
+                        "suppressing further automatic continuations"
+                    )
+            if goal_state is not None and msg.content:
+                # Treat the model's final text as a blocker/progress note.
+                goal_state.record_blocker(msg.content)
+
             if verbose:
                 fmt.completion(turns, "ok")
-                _show_state_summaries(thinking_state, todo_state, snapshot_state)
+                _show_state_summaries(
+                    thinking_state, todo_state, snapshot_state, goal_state
+                )
             _write_turns()
             return msg.content or "", False
 
         interventions: list[str] = []
         all_tools_readonly = True
         image_stash: list[dict] = []
+        _last_turn_used_tools = True
+        _goal_launch_pending = False
         for tool_call in msg.tool_calls:
             # Check cancellation before each tool call
             if cancel_flag is not None and cancel_flag.is_set():
@@ -6955,6 +7254,7 @@ def run_agent_loop(
                 file_tracker=file_tracker,
                 todo_state=todo_state,
                 snapshot_state=snapshot_state,
+                goal_state=goal_state,
                 mcp_manager=mcp_manager,
                 a2a_manager=a2a_manager,
                 messages=messages,
@@ -7113,7 +7413,7 @@ def run_agent_loop(
                 last_text = content
                 break
     if verbose:
-        _show_state_summaries(thinking_state, todo_state, snapshot_state)
+        _show_state_summaries(thinking_state, todo_state, snapshot_state, goal_state)
 
     # Save continue file (with LLM enhancement since we're not in a hurry)
     if continue_here:
@@ -7125,6 +7425,7 @@ def run_agent_loop(
             todo_state=todo_state,
             snapshot_state=snapshot_state,
             thinking_state=thinking_state,
+            goal_state=goal_state,
             call_llm_fn=_call_llm_for_secondary,
             model_id=model_id,
             base_url=api_base,
@@ -7476,6 +7777,7 @@ def _repl_status(
     compaction_state,
     command_policy,
     current_profile: str | None = None,
+    goal_state=None,
 ) -> str:
     """Build a compact session overview."""
     from .continue_here import load_continue_file
@@ -7516,7 +7818,7 @@ def _repl_status(
     )
 
     state_lines = []
-    for obj in (thinking_state, todo_state, snapshot_state):
+    for obj in (thinking_state, todo_state, snapshot_state, goal_state):
         if obj:
             s = obj.summary_line()
             if s:
@@ -7527,6 +7829,10 @@ def _repl_status(
     if state_lines:
         lines.append("")
         lines.extend(state_lines)
+
+    if goal_state is not None and goal_state.get() is not None:
+        lines.append("")
+        lines.append(goal_state.status_block())
 
     content = load_continue_file(base_dir, delete=False)
     if content:
@@ -7721,12 +8027,137 @@ def _repl_tools(tools: list, mcp_manager=None, a2a_manager=None) -> str:
     return "\n".join(parts) if parts else "No tools available."
 
 
+@dataclass
+class GoalCommandResult:
+    """Outcome of a `/goal ...` slash invocation.
+
+    ``should_start_loop`` and ``history_label`` are populated only for
+    successful create/replace in REPL mode — those are the cases where the
+    caller appends a synthetic start prompt and enters the agent loop.
+    """
+
+    text: str
+    is_error: bool = False
+    should_start_loop: bool = False
+    should_disable_tools: bool = False
+    history_label: str | None = None
+
+
+def _repl_goal(
+    cmd_arg: str,
+    goal_state: GoalState | None,
+    *,
+    oneshot_mode: bool,
+    verbose: bool = False,
+    report=None,
+) -> GoalCommandResult:
+    """Handle the `/goal ...` command. Pure mutation of goal_state only.
+
+    Does not touch the conversation messages — appending the synthetic
+    start prompt is the caller's responsibility (see execute_input()).
+    """
+    from .goal import goal_set_message
+
+    if goal_state is None:
+        return GoalCommandResult(
+            text="error: goal state is not available in this session",
+            is_error=True,
+        )
+
+    def _emit(action: str) -> None:
+        if report is not None and hasattr(report, "record_goal_event"):
+            rec = goal_state.get()
+            report.record_goal_event(action, rec.to_json() if rec is not None else None)
+
+    arg = (cmd_arg or "").strip()
+
+    if not arg:
+        return GoalCommandResult(text=goal_state.status_block())
+
+    parts = arg.split(None, 1)
+    sub = parts[0].lower()
+    rest = parts[1].strip() if len(parts) > 1 else ""
+
+    if sub in ("clear", "remove", "drop"):
+        if rest:
+            return GoalCommandResult(
+                text="/goal clear takes no argument", is_error=True
+            )
+        had = goal_state.clear()
+        if had:
+            _emit("cleared")
+        return GoalCommandResult(
+            text="goal cleared" if had else "no goal to clear",
+            should_disable_tools=True,
+        )
+
+    if sub == "pause":
+        if rest:
+            return GoalCommandResult(
+                text="/goal pause takes no argument", is_error=True
+            )
+        if goal_state.pause():
+            _emit("paused")
+            return GoalCommandResult(text="goal paused")
+        return GoalCommandResult(text="no active goal to pause", is_error=True)
+
+    if sub == "resume":
+        if rest:
+            return GoalCommandResult(
+                text="/goal resume takes no argument", is_error=True
+            )
+        if goal_state.resume():
+            _emit("resumed")
+            return GoalCommandResult(text="goal resumed")
+        return GoalCommandResult(text="no paused goal to resume", is_error=True)
+
+    if sub == "replace":
+        if not rest:
+            return GoalCommandResult(
+                text="/goal replace requires an objective", is_error=True
+            )
+        if oneshot_mode:
+            return GoalCommandResult(text=_ONESHOT_GOAL_SLASH_REFUSAL, is_error=True)
+        try:
+            rec = goal_state.create(rest, replace=True)
+        except ValueError as e:
+            return GoalCommandResult(text=f"error: {e}", is_error=True)
+        _emit("replaced")
+        return GoalCommandResult(
+            text=goal_set_message("replaced", rec),
+            should_start_loop=True,
+            history_label=f"/goal replace {rec.objective}",
+        )
+
+    if oneshot_mode:
+        return GoalCommandResult(text=_ONESHOT_GOAL_SLASH_REFUSAL, is_error=True)
+    try:
+        rec = goal_state.create(arg)
+    except ValueError as e:
+        return GoalCommandResult(text=f"error: {e}", is_error=True)
+    _emit("created")
+    return GoalCommandResult(
+        text=goal_set_message("created", rec),
+        should_start_loop=True,
+        history_label=f"/goal {rec.objective}",
+    )
+
+
+_ONESHOT_GOAL_SLASH_REFUSAL = (
+    "/goal cannot be set from the slash command in one-shot mode: there is no "
+    "syntax for a token budget in v1, so the budget ceiling required for "
+    "unattended runs cannot be satisfied. Run --repl and start the goal with "
+    "/goal <objective>."
+)
+
+
 def _repl_clear(
     messages: list,
     thinking_state: ThinkingState,
     file_tracker: FileAccessTracker | None = None,
     todo_state: TodoState | None = None,
     snapshot_state: SnapshotState | None = None,
+    goal_state: GoalState | None = None,
 ) -> str:
     """Clear conversation history, keeping only the leading system messages."""
     leading = []
@@ -7752,6 +8183,9 @@ def _repl_clear(
 
     if snapshot_state is not None:
         snapshot_state.reset()
+
+    if goal_state is not None:
+        goal_state.reset()
 
     fmt.reset_state()
     return f"context cleared ({dropped} messages removed)"
@@ -7798,13 +8232,14 @@ def _repl_compact(
     context_length: int | None,
     arg: str,
     snapshot_state: "SnapshotState | None" = None,
+    goal_state: "GoalState | None" = None,
 ) -> str:
     """Manually compact conversation context."""
     before = estimate_tokens(messages, tools)
 
     messages[:] = compact_messages(messages)
     if arg.strip() == "--drop":
-        messages[:] = drop_middle_turns(messages)
+        messages[:] = drop_middle_turns(messages, goal_state=goal_state)
 
     if snapshot_state is not None:
         snapshot_state.invalidate_index_checkpoint()
@@ -7992,6 +8427,8 @@ def _repl_remember(
 def _invoke_agent_turn(
     content: str | None,
     ctx: InputContext,
+    *,
+    goal_launch: bool = False,
 ) -> tuple[str | None, bool, bool]:
     """Append content and run the agent loop.
 
@@ -8004,10 +8441,15 @@ def _invoke_agent_turn(
             ctx.messages,
             ctx.tools,
             max_turns=ctx.turn_state["max_turns"],
+            goal_launch_turn=goal_launch,
             **ctx.loop_kwargs,
         )
     except KeyboardInterrupt:
         _reset_subagent(ctx)
+        # Pause any active goal so subsequent `/continue` can resume from a
+        # consistent baseline. Accounting was rolled in by the loop.
+        if ctx.goal_state is not None and ctx.goal_state.has_active():
+            ctx.goal_state.pause()
         if ctx.continue_here:
             from .continue_here import write_continue_file
 
@@ -8017,6 +8459,7 @@ def _invoke_agent_turn(
                 todo_state=ctx.todo_state,
                 snapshot_state=ctx.snapshot_state,
                 thinking_state=ctx.thinking_state,
+                goal_state=ctx.goal_state,
             )
         return None, False, True
     except AgentError as e:
@@ -8058,6 +8501,7 @@ def _run_agent_step(
     ctx: InputContext,
     *,
     interrupt_label: str = "question",
+    goal_launch: bool = False,
 ) -> StepResult:
     """Invoke the agent loop, handle interrupts, finalize history.
 
@@ -8065,11 +8509,17 @@ def _run_agent_step(
     pattern used by ``/simplify``, ``/learn``, ``/continue``, bang commands,
     and plain text input.
     """
-    answer, exhausted, interrupted = _invoke_agent_turn(content, ctx)
+    answer, exhausted, interrupted = _invoke_agent_turn(
+        content, ctx, goal_launch=goal_launch
+    )
     if interrupted:
         fmt.warning(f"interrupted, {interrupt_label} aborted.")
         return StepResult(kind="agent_turn")
     step = _finalize_agent_step(answer, exhausted, history_label, ctx)
+    if ctx.goal_state is not None:
+        rec = ctx.goal_state.get()
+        if rec is None or rec.status == GoalStatus.COMPLETE:
+            _ensure_goal_tools_disabled(ctx.tools)
     if exhausted and ctx.verbose:
         fmt.warning(
             f"max turns reached for {interrupt_label}. Use /continue to resume."
@@ -8190,7 +8640,9 @@ def execute_input(
                 file_tracker=ctx.file_tracker,
                 todo_state=ctx.todo_state,
                 snapshot_state=ctx.snapshot_state,
+                goal_state=ctx.goal_state,
             )
+            _ensure_goal_tools_disabled(ctx.tools)
             _rpt = ctx.loop_kwargs.get("report")
             if _rpt is not None:
                 _rpt.record_session_clear()
@@ -8203,11 +8655,16 @@ def execute_input(
                 ctx.loop_kwargs.get("context_length"),
                 cmd_arg,
                 ctx.snapshot_state,
+                ctx.goal_state,
             )
             return StepResult(kind="state_change", text=msg)
 
         if cmd == "/continue":
             fmt.info("continuing agent loop...")
+            if ctx.goal_state is not None:
+                rec = ctx.goal_state.get()
+                if rec is not None and rec.status == GoalStatus.PAUSED:
+                    ctx.goal_state.resume()
             return _run_agent_step(
                 None, "(continued)", ctx, interrupt_label="continuation"
             )
@@ -8215,6 +8672,39 @@ def execute_input(
         if cmd == "/extend":
             msg, err = _repl_extend(cmd_arg, ctx.turn_state)
             return StepResult(kind="state_change", text=msg, is_error=err)
+
+        if cmd == "/goal":
+            result = _repl_goal(
+                cmd_arg,
+                ctx.goal_state,
+                oneshot_mode=(mode == "oneshot"),
+                verbose=ctx.verbose,
+                report=ctx.loop_kwargs.get("report"),
+            )
+            if result.should_disable_tools:
+                _ensure_goal_tools_disabled(ctx.tools)
+            if not result.should_start_loop:
+                return StepResult(
+                    kind="state_change", text=result.text, is_error=result.is_error
+                )
+            if result.text:
+                fmt.info(result.text)
+            _ensure_goal_tools_enabled(ctx.tools)
+            _raise_goal_default_max_turns(ctx.turn_state)
+            ctx.messages.append(
+                {
+                    "role": "user",
+                    "content": ctx.goal_state.start_prompt(),
+                    "_swival_synthetic": True,
+                }
+            )
+            return _run_agent_step(
+                None,
+                result.history_label or "/goal",
+                ctx,
+                interrupt_label="goal",
+                goal_launch=True,
+            )
 
         if cmd == "/profile":
             new_profile, msg, err = _repl_profile(
@@ -8282,6 +8772,7 @@ def execute_input(
                 compaction_state=ctx.loop_kwargs.get("compaction_state"),
                 command_policy=ctx.loop_kwargs.get("command_policy"),
                 current_profile=ctx.current_profile,
+                goal_state=ctx.goal_state,
             )
             return StepResult(kind="info", text=msg)
 
@@ -8357,6 +8848,7 @@ def _execute_init(cmd_arg: str, ctx: InputContext) -> StepResult:
             file_tracker=ctx.file_tracker,
             todo_state=ctx.todo_state,
             snapshot_state=ctx.snapshot_state,
+            goal_state=ctx.goal_state,
         )
     )
 
@@ -8497,6 +8989,7 @@ def repl_loop(
     thinking_state: ThinkingState,
     todo_state: TodoState,
     snapshot_state: SnapshotState | None = None,
+    goal_state: GoalState | None = None,
     resolved_commands: dict,
     skills_catalog: dict,
     skill_read_roots: list,
@@ -8587,6 +9080,7 @@ def repl_loop(
         thinking_state=thinking_state,
         todo_state=todo_state,
         snapshot_state=snapshot_state,
+        goal_state=goal_state,
         resolved_commands=resolved_commands,
         skills_catalog=skills_catalog,
         skill_read_roots=skill_read_roots,
@@ -8620,6 +9114,7 @@ def repl_loop(
         thinking_state=thinking_state,
         todo_state=todo_state,
         snapshot_state=snapshot_state,
+        goal_state=goal_state,
         file_tracker=file_tracker,
         no_history=no_history,
         continue_here=continue_here,
@@ -8659,6 +9154,7 @@ def repl_loop(
                         todo_state=todo_state,
                         snapshot_state=snapshot_state,
                         thinking_state=thinking_state,
+                        goal_state=goal_state,
                     )
                 break
 

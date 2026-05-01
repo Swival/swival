@@ -14,6 +14,8 @@ from .tracker import FileAccessTracker
 
 
 _SUBAGENT_TOOLS = {"spawn_subagent", "check_subagents"}
+_PARENT_ONLY_TOOLS = {"complete_goal"}
+_SUBAGENT_OMITTED_TOOLS = _SUBAGENT_TOOLS | _PARENT_ONLY_TOOLS
 _MAX_CONCURRENT = 4
 _WAIT_TIMEOUT = 60
 _WAIT_POLL_INTERVAL = 0.25
@@ -25,6 +27,7 @@ SA_TEMPLATE_EXCLUDE = frozenset(
         "thinking_state",
         "todo_state",
         "snapshot_state",
+        "goal_state",
         "file_tracker",
         "compaction_state",
         "cache",
@@ -177,7 +180,9 @@ class SubagentManager:
     ):
         self._template = loop_kwargs_template
         self._tools = [
-            t for t in tools if t.get("function", {}).get("name") not in _SUBAGENT_TOOLS
+            t
+            for t in tools
+            if t.get("function", {}).get("name") not in _SUBAGENT_OMITTED_TOOLS
         ]
         self._system_content = resolved_system_content
         self._parent_cancel_flag = parent_cancel_flag
@@ -394,6 +399,7 @@ def _subagent_thread_fn(
             thinking_state=thinking_state,
             todo_state=todo_state,
             snapshot_state=snapshot_state,
+            goal_state=None,
             file_tracker=file_tracker,
             max_turns=max_turns,
             verbose=False,

@@ -43,12 +43,22 @@ class ReportCollector:
         self.skills_used: list[str] = []
         self.memory_stats: dict | None = None
         self.lifecycle_events: list[dict] = []
+        self.goal_events: list[dict] = []
         self._last_report: dict | None = None
         self.security_stats: dict[str, int] = {
             "command_policy_blocks": 0,
             "command_policy_approvals": 0,
             "untrusted_inputs": 0,
         }
+
+    def record_goal_event(self, action: str, goal_payload: dict | None) -> None:
+        """Log goal lifecycle events (created, replaced, paused, resumed,
+        budget_limited, completed, cleared) for the JSON report."""
+        event = {"type": "goal_event", "action": action}
+        if goal_payload is not None:
+            event["goal"] = goal_payload
+        self.goal_events.append(event)
+        self.events.append(event)
 
     @property
     def is_finalized(self) -> bool:
@@ -245,6 +255,7 @@ class ReportCollector:
         review_rounds: int = 0,
         todo_stats: dict | None = None,
         snapshot_stats: dict | None = None,
+        goal_stats: dict | None = None,
         sandbox_mode: str = "builtin",
         sandbox_session: str | None = None,
         sandbox_strict_read: bool = False,
@@ -310,6 +321,7 @@ class ReportCollector:
                 "review_rounds": review_rounds,
                 **({"todo": todo_stats} if todo_stats else {}),
                 **({"snapshot": snapshot_stats} if snapshot_stats else {}),
+                **({"goal": goal_stats} if goal_stats else {}),
                 **({"memory": self.memory_stats} if self.memory_stats else {}),
                 **(
                     {"lifecycle": self.lifecycle_events}
@@ -349,6 +361,7 @@ class ReportCollector:
         review_rounds: int = 0,
         todo_stats: dict | None = None,
         snapshot_stats: dict | None = None,
+        goal_stats: dict | None = None,
         sandbox_mode: str = "builtin",
         sandbox_session: str | None = None,
         sandbox_strict_read: bool = False,
@@ -370,6 +383,7 @@ class ReportCollector:
             review_rounds=review_rounds,
             todo_stats=todo_stats,
             snapshot_stats=snapshot_stats,
+            goal_stats=goal_stats,
             sandbox_mode=sandbox_mode,
             sandbox_session=sandbox_session,
             sandbox_strict_read=sandbox_strict_read,

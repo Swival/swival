@@ -418,6 +418,21 @@ class TestSessionApprovedBuckets:
 
 
 class TestSessionShellAllowed:
+    @pytest.mark.parametrize("commands", ["none", "ask", "all"])
+    def test_goal_tools_omitted_from_session_setup(
+        self, tmp_path, monkeypatch, commands
+    ):
+        monkeypatch.setattr(agent, "call_llm", _simple_llm)
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+        s = Session(base_dir=str(tmp_path), commands=commands, history=False)
+        s._setup()
+        tool_names = {t["function"]["name"] for t in s._tools}
+        assert "complete_goal" not in tool_names
+        assert "get_goal" not in tool_names
+        assert "create_goal" not in tool_names
+        assert "update_goal" not in tool_names
+
     def test_ask_mode_shell_not_allowed(self, tmp_path, monkeypatch):
         """ask mode sets _shell_allowed=False and excludes run_shell_command."""
         monkeypatch.setattr(agent, "call_llm", _simple_llm)

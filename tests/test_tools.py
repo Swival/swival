@@ -688,6 +688,26 @@ class TestBuildTools:
         desc = rc["function"]["description"]
         assert "run_shell_command" in desc
 
+    def test_goal_tools_omitted_by_default(self):
+        from swival.agent import build_tools
+
+        tools = build_tools({}, {}, commands_unrestricted=True)
+        names = {t["function"]["name"] for t in tools}
+        assert "complete_goal" not in names
+        assert "get_goal" not in names
+        assert "create_goal" not in names
+        assert "update_goal" not in names
+
+    def test_goal_tools_can_be_enabled(self):
+        from swival.agent import build_tools
+
+        tools = build_tools({}, {}, commands_unrestricted=True, goal_tools=True)
+        names = {t["function"]["name"] for t in tools}
+        assert "complete_goal" in names
+        assert "get_goal" not in names
+        assert "create_goal" not in names
+        assert "update_goal" not in names
+
 
 # Sandbox tests
 # =========================================================================
@@ -1030,3 +1050,209 @@ class TestOutlineDispatch:
             dispatch("code_outline", {}, str(tmp_path))
         with pytest.raises(KeyError, match="Did you mean 'outline'"):
             dispatch("file_outline", {}, str(tmp_path))
+
+
+# =========================================================================
+# Goal tool (complete_goal)
+# =========================================================================
+
+
+class TestGoalTools:
+    """Goal completion tool dispatch and the budget-limited gate."""
+
+    def _state(self):
+        from swival.goal import GoalState
+
+        return GoalState()
+
+    def test_complete_goal_schema_exists(self):
+        from swival.tools import COMPLETE_GOAL_TOOL
+
+        assert COMPLETE_GOAL_TOOL["type"] == "function"
+        assert COMPLETE_GOAL_TOOL["function"]["name"] == "complete_goal"
+        assert "description" in COMPLETE_GOAL_TOOL["function"]
+        assert COMPLETE_GOAL_TOOL["function"]["parameters"]["properties"] == {}
+
+    def test_only_complete_goal_registered_in_schema_index(self):
+        from swival.tools import get_tool_schema
+
+        assert get_tool_schema("complete_goal") is not None
+        assert get_tool_schema("get_goal") is None
+        assert get_tool_schema("create_goal") is None
+        assert get_tool_schema("update_goal") is None
+
+    def test_complete_goal_rejects_args(self, tmp_path):
+        state = self._state()
+        state.create("x")
+        result = dispatch(
+            "complete_goal", {"status": "complete"}, str(tmp_path), goal_state=state
+        )
+        assert result.startswith("error:")
+        assert "no arguments" in result
+
+    def test_complete_goal_includes_budget_report(self, tmp_path):
+        import json
+
+        state = self._state()
+        state.create("ship", token_budget=1000)
+        state.account(tokens_delta=250)
+        result = dispatch("complete_goal", {}, str(tmp_path), goal_state=state)
+        payload = json.loads(result)
+        assert payload["goal"]["status"] == "complete"
+        assert "completion_budget_report" in payload
+        assert "250" in payload["completion_budget_report"]
+        assert "1000" in payload["completion_budget_report"]
+
+    def test_complete_goal_no_goal(self, tmp_path):
+        result = dispatch("complete_goal", {}, str(tmp_path), goal_state=self._state())
+        assert result.startswith("error:")
+
+    def test_removed_goal_tools_are_unknown(self, tmp_path):
+        state = self._state()
+        state.create("x")
+        for name in ("get_goal", "create_goal", "update_goal"):
+            with pytest.raises(KeyError, match="Unknown tool"):
+                dispatch(name, {}, str(tmp_path), goal_state=state)
+
+    def test_budget_exhausted_blocks_mutating_tools(self, tmp_path):
+        state = self._state()
+        state.create("x", token_budget=100)
+        state.account(tokens_delta=200)
+        assert state.budget_exhausted()
+
+        # Mutating tools rejected with the canonical wrap-up message.
+        f = tmp_path / "x.txt"
+        result = dispatch(
+            "write_file",
+            {"file_path": str(f), "content": "x"},
+            str(tmp_path),
+            goal_state=state,
+            files_mode="all",
+        )
+        assert "budget" in result and result.startswith("error:")
+
+    def test_budget_exhausted_allows_read_only_tools(self, tmp_path):
+        f = tmp_path / "x.txt"
+        f.write_text("hi\n")
+
+        state = self._state()
+        state.create("x", token_budget=100)
+        state.account(tokens_delta=200)
+
+        result = dispatch(
+            "read_file",
+            {"file_path": "x.txt"},
+            str(tmp_path),
+            goal_state=state,
+        )
+        assert not result.startswith("error:")
+        assert "hi" in result
+
+    def test_budget_exhausted_allows_complete_goal(self, tmp_path):
+        state = self._state()
+        state.create("x", token_budget=100)
+        state.account(tokens_delta=200)
+        result = dispatch("complete_goal", {}, str(tmp_path), goal_state=state)
+        assert not result.startswith("error:")
+
+
+class TestBudgetGateActionLevel:
+    """Action-level gating for stateful tools after budget exhaustion."""
+
+    def _budget_exhausted_state(self):
+        from swival.goal import GoalState
+
+        gs = GoalState()
+        gs.create("x", token_budget=10)
+        gs.account(tokens_delta=999)
+        assert gs.budget_exhausted()
+        return gs
+
+    def test_todo_list_allowed_after_budget(self, tmp_path):
+        from swival.todo import TodoState
+
+        ts = TodoState()
+        ts.process({"action": "add", "tasks": ["a"]})
+        result = dispatch(
+            "todo",
+            {"action": "list"},
+            str(tmp_path),
+            goal_state=self._budget_exhausted_state(),
+            todo_state=ts,
+        )
+        assert not result.startswith("error:")
+
+    def test_todo_add_blocked_after_budget(self, tmp_path):
+        from swival.todo import TodoState
+
+        result = dispatch(
+            "todo",
+            {"action": "add", "tasks": ["sneaky"]},
+            str(tmp_path),
+            goal_state=self._budget_exhausted_state(),
+            todo_state=TodoState(),
+        )
+        assert "budget" in result and result.startswith("error:")
+
+    def test_todo_done_blocked_after_budget(self, tmp_path):
+        from swival.todo import TodoState
+
+        result = dispatch(
+            "todo",
+            {"action": "done", "tasks": ["a"]},
+            str(tmp_path),
+            goal_state=self._budget_exhausted_state(),
+            todo_state=TodoState(),
+        )
+        assert result.startswith("error:") and "budget" in result
+
+    def test_todo_clear_blocked_after_budget(self, tmp_path):
+        from swival.todo import TodoState
+
+        result = dispatch(
+            "todo",
+            {"action": "clear"},
+            str(tmp_path),
+            goal_state=self._budget_exhausted_state(),
+            todo_state=TodoState(),
+        )
+        assert result.startswith("error:") and "budget" in result
+
+    def test_snapshot_status_allowed_after_budget(self, tmp_path):
+        from swival.snapshot import SnapshotState
+
+        result = dispatch(
+            "snapshot",
+            {"action": "status"},
+            str(tmp_path),
+            goal_state=self._budget_exhausted_state(),
+            snapshot_state=SnapshotState(),
+            messages=[],
+        )
+        assert not result.startswith("error:")
+
+    def test_snapshot_save_blocked_after_budget(self, tmp_path):
+        from swival.snapshot import SnapshotState
+
+        result = dispatch(
+            "snapshot",
+            {"action": "save", "label": "wrap"},
+            str(tmp_path),
+            goal_state=self._budget_exhausted_state(),
+            snapshot_state=SnapshotState(),
+            messages=[],
+        )
+        assert result.startswith("error:") and "budget" in result
+
+    def test_snapshot_restore_blocked_after_budget(self, tmp_path):
+        from swival.snapshot import SnapshotState
+
+        result = dispatch(
+            "snapshot",
+            {"action": "restore", "summary": "x"},
+            str(tmp_path),
+            goal_state=self._budget_exhausted_state(),
+            snapshot_state=SnapshotState(),
+            messages=[],
+        )
+        assert result.startswith("error:") and "budget" in result

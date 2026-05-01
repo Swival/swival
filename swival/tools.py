@@ -682,9 +682,31 @@ RUN_SHELL_COMMAND_TOOL = {
     },
 }
 
+COMPLETE_GOAL_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "complete_goal",
+        "description": (
+            "Mark the active goal complete. ONLY call this after running a "
+            "completion audit that maps every explicit requirement in the "
+            "objective to real evidence in the workspace (files, command "
+            "output, test results). If you are blocked or need user input, "
+            "do NOT call this — return final text explaining the blocker instead."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+}
+
+GOAL_TOOLS = (COMPLETE_GOAL_TOOL,)
+
+
 _TOOL_NAMES = [t["function"]["name"] for t in TOOLS] + [
     USE_SKILL_TOOL["function"]["name"],
     RUN_COMMAND_TOOL["function"]["name"],
+    COMPLETE_GOAL_TOOL["function"]["name"],
 ]
 
 _TOOL_SCHEMA_INDEX: dict[str, dict] = {}
@@ -704,6 +726,9 @@ def _build_schema_index() -> None:
     _TOOL_SCHEMA_INDEX[RUN_SHELL_COMMAND_TOOL["function"]["name"]] = (
         RUN_SHELL_COMMAND_TOOL["function"].get("parameters", {})
     )
+    for goal_tool in GOAL_TOOLS:
+        fn = goal_tool["function"]
+        _TOOL_SCHEMA_INDEX[fn["name"]] = fn.get("parameters", {})
 
 
 _build_schema_index()
@@ -2818,6 +2843,68 @@ def _check_command_policy(
     return verdict
 
 
+_BUDGET_LIMITED_REJECT_MSG = (
+    "error: goal token budget is exhausted; only read-only wrap-up tools "
+    "and complete_goal are available"
+)
+
+
+def _dispatch_goal_tool(name: str, args: dict, kwargs: dict) -> str:
+    """Handle complete_goal tool calls.
+
+    Returns a JSON string on success (per the tool-result contract) or an
+    'error: ...' string on failure. Also reflects runtime gating: goal tools
+    are only registered for parent sessions; if no goal_state is threaded
+    through, the call returns an explicit 'not available' error.
+    """
+    from .goal import GoalState, GoalStatus, encode_tool_response
+
+    goal_state: GoalState | None = kwargs.get("goal_state")
+    if goal_state is None:
+        return "error: goal tools are not available in this session"
+
+    report = kwargs.get("report")
+    verbose = bool(kwargs.get("verbose", False))
+
+    if name == "complete_goal":
+        if args:
+            return "error: complete_goal takes no arguments"
+        rec = goal_state.get()
+        if rec is None:
+            return "error: no goal to complete"
+        if rec.status == GoalStatus.COMPLETE:
+            return "error: goal is already complete"
+        # Account current usage before completion (deltas come from the loop
+        # via account(); here we just transition the status.)
+        try:
+            goal_state.set_status(GoalStatus.COMPLETE)
+        except ValueError as e:
+            return f"error: {e}"
+        rec = goal_state.get()
+        payload: dict = {"goal": rec.to_json()}
+        if rec.token_budget is not None:
+            payload["completion_budget_report"] = (
+                f"used {rec.tokens_used} of {rec.token_budget} budgeted tokens "
+                f"in {rec.time_used_seconds:.1f}s"
+                + (" (estimated)" if rec.usage_estimated else "")
+            )
+        else:
+            payload["completion_budget_report"] = (
+                f"used {rec.tokens_used} tokens in {rec.time_used_seconds:.1f}s"
+                + (" (estimated)" if rec.usage_estimated else "")
+            )
+        if report is not None and hasattr(report, "record_goal_event"):
+            report.record_goal_event("completed", rec.to_json())
+        if verbose:
+            from . import fmt as _fmt
+            from .goal import goal_set_message
+
+            _fmt.info(goal_set_message("completed", rec))
+        return encode_tool_response(payload)
+
+    return f"error: unknown goal tool {name!r}"
+
+
 def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
     """Route a tool call to the appropriate implementation.
 
@@ -2840,6 +2927,17 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
     scratch_dir = kwargs.get("scratch_dir")
 
     _report = kwargs.get("report")
+
+    goal_state = kwargs.get("goal_state")
+    if goal_state is not None and goal_state.budget_exhausted():
+        from .goal import budget_gate_decision
+
+        rejection = budget_gate_decision(name, args)
+        if rejection is not None:
+            return rejection
+
+    if name == "complete_goal":
+        return _dispatch_goal_tool(name, args, kwargs)
 
     # MCP / A2A tool dispatch
     for prefix, manager_key, guard_fn in (

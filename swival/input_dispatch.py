@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from .goal import GoalState
     from .snapshot import SnapshotState
     from .thinking import ThinkingState
     from .todo import TodoState
@@ -31,6 +32,8 @@ class InputContext:
     verbose: bool
     # Provider / loop kwargs passed through to run_agent_loop.
     loop_kwargs: dict
+    # Goal state — defaulted so existing test fixtures don't need updating.
+    goal_state: "GoalState | None" = None
     # Profile state.
     current_profile: str | None = None
     profiles: dict = field(default_factory=dict)

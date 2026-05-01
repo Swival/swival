@@ -198,3 +198,30 @@ See [MCP](mcp.md) for configuration and details.
 Swival can connect to remote agents via the [Agent-to-Agent (A2A) protocol](https://google.github.io/A2A/). A2A tools are discovered at startup and exposed alongside built-in tools. Unlike MCP tools, A2A tools always accept a natural-language `message` plus optional `context_id` and `task_id` for multi-turn conversations. A2A tool output is size-guarded the same way as MCP output, with continuation metadata preserved across size limits and context compaction. All A2A output is wrapped with an `[UNTRUSTED EXTERNAL CONTENT]` header, including spill files.
 
 See [A2A](a2a.md) for configuration and details.
+
+## Goal Tool (`complete_goal`)
+
+Goal state is started and controlled by the operator through `/goal`; the model cannot create, replace, pause, resume, or inspect goals through tools. Swival exposes exactly one goal tool during active goal work: `complete_goal`.
+
+`complete_goal` takes no arguments and marks the active goal complete. Before calling it, the model is expected to run an evidence-based audit that maps every requirement in the objective to real files, command output, or tests. If the model is blocked or needs user input, it should return final text describing the blocker instead of calling `complete_goal`.
+
+After a turn that produces a final text answer with an active goal, the runtime injects a synthetic user message containing a continuation prompt. The continuation includes the objective verbatim as inert data, current usage, and remaining budget. Goal continuation turns count against `--max-turns` exactly like any other turn — the loop never bypasses the user's hard ceiling. If a continuation produces a final text answer with no tool calls, further continuations are suppressed to avoid a final-text loop, and the model's text is returned as a blocker/progress note.
+
+When the optional `token_budget` is reached, the goal transitions to `budget_limited`. The runtime injects a wrap-up steering prompt, and the dispatcher rejects mutating or work-starting tool calls (write/edit, command execution, subagents, MCP/A2A) with a fixed error string. Read-only tools (`read_file`, `grep`, `list_files`, `fetch_url`, `view_image`, `think`, `todo`, `snapshot`, `outline`) and `complete_goal` remain available for a coherent wrap-up.
+
+In one-shot mode (`swival "..."` with no `--repl`), `/goal <objective>` refuses because v1 has no slash syntax for `token_budget`. Use `--repl` for goal-driven continuation.
+
+Subagents do not receive the goal tools. Goals stay parent-session-only in v1.
+
+The session goal is wiped by `/clear`. Goals are not persisted across processes; crash recovery flows through `.swival/continue.md`, which records the active goal alongside todos, snapshots, and recent activity.
+
+The `/goal` slash command exposes the same state to the user:
+
+| Command | Effect |
+|---|---|
+| `/goal` | Show current goal status, or "No goal is currently set." |
+| `/goal <objective>` | Create a goal (refused if one already exists). |
+| `/goal replace <objective>` | Replace the existing goal and reset counters. |
+| `/goal pause` | Pause the active goal. |
+| `/goal resume` | Resume a paused goal. |
+| `/goal clear` | Remove the current goal. |

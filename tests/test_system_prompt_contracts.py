@@ -216,6 +216,13 @@ class TestToolEconomyContract:
             text,
         ), "prompt must allow direct answers when tools are unnecessary"
 
+    def test_goal_tools_not_in_default_prompt(self):
+        text = _read_prompt()
+        assert "complete_goal" not in text
+        assert "create_goal" not in text
+        assert "update_goal" not in text
+        assert "get_goal" not in text
+
     def test_no_blind_searching_for_ambiguity(self):
         text = _normalize(_read_prompt())
         assert re.search(

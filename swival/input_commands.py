@@ -76,6 +76,12 @@ INPUT_COMMANDS: dict[str, CommandInfo] = {
         arg="[N]",
         kind="state_change",
     ),
+    "/goal": CommandInfo(
+        desc="Set, replace, pause, resume, or clear the persisted thread goal",
+        arg="[<objective>|replace <objective>|pause|resume|clear]",
+        kind="state_change",
+        modes=("repl", "oneshot"),
+    ),
     "/help": CommandInfo(
         desc="Show this help message",
         kind="info",

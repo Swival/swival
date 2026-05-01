@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .agent import _InteractionPolicy, _apply_interaction_policy
 from .config import _UNSET
+from .goal import GoalState
 from .report import ConfigError, ReportCollector
 from .snapshot import SnapshotState
 from .thinking import ThinkingState
@@ -487,6 +488,7 @@ class Session:
             "thinking_state": ThinkingState(verbose=self.verbose),
             "todo_state": TodoState(verbose=self.verbose),
             "snapshot_state": SnapshotState(verbose=self.verbose),
+            "goal_state": GoalState(verbose=self.verbose),
             "file_tracker": FileAccessTracker() if self.read_guard else None,
             "skill_read_roots": list(self._allowed_dir_ro_paths),
             "messages": self._make_initial_messages(system_content),
@@ -511,6 +513,7 @@ class Session:
             thinking_state=state["thinking_state"],
             todo_state=state["todo_state"],
             snapshot_state=state["snapshot_state"],
+            goal_state=state["goal_state"],
             resolved_commands=self._resolved_commands,
             skills_catalog=self._skills_catalog,
             skill_read_roots=state["skill_read_roots"],
@@ -604,6 +607,17 @@ class Session:
 
         report_dict = None
         if collector:
+            _gs = state.get("goal_state")
+            goal_stats = None
+            if _gs is not None:
+                payload = _gs.to_report_dict()
+                if payload is not None or _gs.created_count > 0:
+                    goal_stats = {
+                        "created_count": _gs.created_count,
+                        "completed_count": _gs.completed_count,
+                    }
+                    if payload is not None:
+                        goal_stats["current"] = payload
             report_dict = collector.build_report(
                 task=question,
                 model=self._model_id or "unknown",
@@ -620,6 +634,7 @@ class Session:
                 answer=answer,
                 exit_code=exit_code,
                 turns=collector.max_turn_seen,
+                goal_stats=goal_stats,
                 sandbox_mode=self.sandbox,
                 sandbox_session=self.sandbox_session,
                 sandbox_strict_read=self.sandbox_strict_read,
