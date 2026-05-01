@@ -137,7 +137,7 @@ Calling `save` before `restore` is not required. The system automatically create
 
 ### Dirty Scopes
 
-Tools are classified as read-only or mutating. Read-only tools (`read_file`, `read_multiple_files`, `list_files`, `grep`, `fetch_url`, `view_image`, `think`, `todo`, `snapshot`) are safe to collapse because they don't change anything on disk. Mutating tools (`write_file`, `edit_file`, `delete_file`, `run_command`, unknown MCP tools, and A2A tools) dirty the scope.
+Tools are classified as read-only or mutating. Read-only tools (`read_file`, `read_multiple_files`, `list_files`, `grep`, `outline`, `fetch_url`, `view_image`, `think`, `todo`, `snapshot`) are safe to collapse because they don't change anything on disk. Mutating tools (`write_file`, `edit_file`, `delete_file`, `run_command`, unknown MCP tools, and A2A tools) dirty the scope.
 
 If the scope contains mutating tool calls, `restore` fails with a list of the dirty tools. Pass `force=true` to override when you are confident the summary captures the mutations.
 
@@ -217,11 +217,11 @@ The session goal is wiped by `/clear`. Goals are not persisted across processes;
 
 The `/goal` slash command exposes the same state to the user:
 
-| Command | Effect |
-|---|---|
-| `/goal` | Show current goal status, or "No goal is currently set." |
-| `/goal <objective>` | Create a goal (refused if one already exists). |
-| `/goal replace <objective>` | Replace the existing goal and reset counters. |
-| `/goal pause` | Pause the active goal. |
-| `/goal resume` | Resume a paused goal. |
-| `/goal clear` | Remove the current goal. |
+| Command                     | Effect                                                   |
+| --------------------------- | -------------------------------------------------------- |
+| `/goal`                     | Show current goal status, or "No goal is currently set." |
+| `/goal <objective>`         | Create a goal (refused if one already exists).           |
+| `/goal replace <objective>` | Replace the existing goal and reset counters.            |
+| `/goal pause`               | Pause the active goal.                                   |
+| `/goal resume`              | Resume a paused goal.                                    |
+| `/goal clear`               | Remove the current goal.                                 |

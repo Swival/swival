@@ -163,7 +163,7 @@ swival --commands ask &quot;Run the tests&quot;
 <h3 id="implicit-checkpoints">Implicit Checkpoints</h3>
 <p>Calling <code>save</code> before <code>restore</code> is not required. The system automatically creates implicit checkpoints at every user message, after each successful restore, and on conversation reset. When <code>restore</code> is called without a prior <code>save</code>, it collapses everything since the last implicit checkpoint, which is typically the most recent user message.</p>
 <h3 id="dirty-scopes">Dirty Scopes</h3>
-<p>Tools are classified as read-only or mutating. Read-only tools (<code>read_file</code>, <code>read_multiple_files</code>, <code>list_files</code>, <code>grep</code>, <code>fetch_url</code>, <code>view_image</code>, <code>think</code>, <code>todo</code>, <code>snapshot</code>) are safe to collapse because they don't change anything on disk. Mutating tools (<code>write_file</code>, <code>edit_file</code>, <code>delete_file</code>, <code>run_command</code>, unknown MCP tools, and A2A tools) dirty the scope.</p>
+<p>Tools are classified as read-only or mutating. Read-only tools (<code>read_file</code>, <code>read_multiple_files</code>, <code>list_files</code>, <code>grep</code>, <code>outline</code>, <code>fetch_url</code>, <code>view_image</code>, <code>think</code>, <code>todo</code>, <code>snapshot</code>) are safe to collapse because they don't change anything on disk. Mutating tools (<code>write_file</code>, <code>edit_file</code>, <code>delete_file</code>, <code>run_command</code>, unknown MCP tools, and A2A tools) dirty the scope.</p>
 <p>If the scope contains mutating tool calls, <code>restore</code> fails with a list of the dirty tools. Pass <code>force=true</code> to override when you are confident the summary captures the mutations.</p>
 <h3 id="snapshot-history">Snapshot History</h3>
 <p>Completed snapshots are preserved across context compaction. Up to 10 past summaries are retained and injected into the system prompt so knowledge survives aggressive compaction.</p>
@@ -199,6 +199,49 @@ swival --commands ask &quot;Run the tests&quot;
 <h2 id="a2a-tools">A2A Tools</h2>
 <p>Swival can connect to remote agents via the <a href="https://google.github.io/A2A/">Agent-to-Agent (A2A) protocol</a>. A2A tools are discovered at startup and exposed alongside built-in tools. Unlike MCP tools, A2A tools always accept a natural-language <code>message</code> plus optional <code>context_id</code> and <code>task_id</code> for multi-turn conversations. A2A tool output is size-guarded the same way as MCP output, with continuation metadata preserved across size limits and context compaction. All A2A output is wrapped with an <code>[UNTRUSTED EXTERNAL CONTENT]</code> header, including spill files.</p>
 <p>See <a href="a2a.html">A2A</a> for configuration and details.</p>
+<h2 id="goal-tool-complete_goal">Goal Tool (<code>complete_goal</code>)</h2>
+<p>Goal state is started and controlled by the operator through <code>/goal</code>; the model cannot create, replace, pause, resume, or inspect goals through tools. Swival exposes exactly one goal tool during active goal work: <code>complete_goal</code>.</p>
+<p><code>complete_goal</code> takes no arguments and marks the active goal complete. Before calling it, the model is expected to run an evidence-based audit that maps every requirement in the objective to real files, command output, or tests. If the model is blocked or needs user input, it should return final text describing the blocker instead of calling <code>complete_goal</code>.</p>
+<p>After a turn that produces a final text answer with an active goal, the runtime injects a synthetic user message containing a continuation prompt. The continuation includes the objective verbatim as inert data, current usage, and remaining budget. Goal continuation turns count against <code>--max-turns</code> exactly like any other turn — the loop never bypasses the user's hard ceiling. If a continuation produces a final text answer with no tool calls, further continuations are suppressed to avoid a final-text loop, and the model's text is returned as a blocker/progress note.</p>
+<p>When the optional <code>token_budget</code> is reached, the goal transitions to <code>budget_limited</code>. The runtime injects a wrap-up steering prompt, and the dispatcher rejects mutating or work-starting tool calls (write/edit, command execution, subagents, MCP/A2A) with a fixed error string. Read-only tools (<code>read_file</code>, <code>grep</code>, <code>list_files</code>, <code>fetch_url</code>, <code>view_image</code>, <code>think</code>, <code>todo</code>, <code>snapshot</code>, <code>outline</code>) and <code>complete_goal</code> remain available for a coherent wrap-up.</p>
+<p>In one-shot mode (<code>swival "..."</code> with no <code>--repl</code>), <code>/goal &lt;objective&gt;</code> refuses because v1 has no slash syntax for <code>token_budget</code>. Use <code>--repl</code> for goal-driven continuation.</p>
+<p>Subagents do not receive the goal tools. Goals stay parent-session-only in v1.</p>
+<p>The session goal is wiped by <code>/clear</code>. Goals are not persisted across processes; crash recovery flows through <code>.swival/continue.md</code>, which records the active goal alongside todos, snapshots, and recent activity.</p>
+<p>The <code>/goal</code> slash command exposes the same state to the user:</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/goal</code></td>
+<td>Show current goal status, or "No goal is currently set."</td>
+</tr>
+<tr>
+<td><code>/goal &lt;objective&gt;</code></td>
+<td>Create a goal (refused if one already exists).</td>
+</tr>
+<tr>
+<td><code>/goal replace &lt;objective&gt;</code></td>
+<td>Replace the existing goal and reset counters.</td>
+</tr>
+<tr>
+<td><code>/goal pause</code></td>
+<td>Pause the active goal.</td>
+</tr>
+<tr>
+<td><code>/goal resume</code></td>
+<td>Resume a paused goal.</td>
+</tr>
+<tr>
+<td><code>/goal clear</code></td>
+<td>Remove the current goal.</td>
+</tr>
+</tbody>
+</table>
         </article>
     </div>
     <footer class="site-footer">

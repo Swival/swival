@@ -5,7 +5,7 @@ The `/audit` command runs a multi-phase security audit over committed Git-tracke
 It triages files by attack surface, performs deep review on escalated files, verifies each finding with an isolated proof-of-concept agent, generates patches, and writes structured reports. Only provable bugs survive to the final output.
 
 ```text
-/audit [path|glob ...] [--resume] [--regen] [--workers N]
+/audit [path|glob ...] [--resume] [--regen] [--workers N] [--debug]
 ```
 
 Works in both interactive (REPL) and one-shot mode (requires `--oneshot-commands`). Runs against `HEAD`, so dirty working-directory changes are ignored.
@@ -152,6 +152,12 @@ swival> /audit --regen
 
 ```text
 swival> /audit --workers 8
+```
+
+`--debug` writes a real-time JSONL trace of every audit step to `.swival/audit/debug.jsonl`. Useful when investigating a stuck phase, a missing finding, or unexpected resume behavior.
+
+```text
+swival> /audit --debug
 ```
 
 All options can be combined with a focus path:

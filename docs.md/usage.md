@@ -76,11 +76,13 @@ Without `--oneshot-commands`, input that looks like a command script is treated 
 
 `/extend` doubles the current turn budget. `/extend <N>` sets the turn budget to an exact value.
 
+`/goal` manages a persisted thread goal. With no argument, it prints the current goal status. `/goal <objective>` creates a goal and immediately starts the agent loop on it; the runtime then keeps issuing continuation prompts after each final answer until the model calls `complete_goal`, the goal is paused or cleared, or `--max-turns` is hit. `/goal replace <objective>` swaps in a new objective and resets the counters. `/goal pause`, `/goal resume`, and `/goal clear` adjust state without starting a turn. The set/replace forms are REPL-only — they refuse in one-shot mode because v1 has no slash syntax for the token budget required for unattended runs. See [Goal Tool](tools.md#goal-tool-complete_goal) for the full lifecycle.
+
 `/continue` restarts the agent loop for the existing conversation without adding a new user message.
 
 `/status` shows a compact session overview: model, endpoint, context usage, message/turn counts, file access, mode flags, and state summaries (thinking, todo, snapshot, checkpoints, continue file).
 
-`/audit [path|glob]` runs a staged security audit over committed Git-tracked code. It triages files by attack surface, deep-reviews escalated files, verifies each finding with an isolated proof-of-concept agent, and writes patches and reports to `audit-findings/`. Pass `--resume` to continue a previous run, `--regen` to regenerate reports and patches for a completed run, `--workers N` to control parallelism. REPL-only. See [Security Audit](audit.md) for the full walkthrough.
+`/audit [path|glob]` runs a staged security audit over committed Git-tracked code. It triages files by attack surface, deep-reviews escalated files, verifies each finding with an isolated proof-of-concept agent, and writes patches and reports to `audit-findings/`. Pass `--resume` to continue a previous run, `--regen` to regenerate reports and patches for a completed run, `--workers N` to control parallelism, and `--debug` to write a real-time JSONL debug log to `.swival/audit/debug.jsonl`. Works in interactive (REPL) mode and in one-shot mode when `--oneshot-commands` is set. See [Security Audit](audit.md) for the full walkthrough.
 
 `/learn` reviews the current session for mistakes and confusions, then persists notes to `.swival/memory/MEMORY.md` for future sessions to learn from. On subsequent runs, memory entries are parsed by heading and selectively injected into the prompt using BM25 retrieval keyed from the user's question, keeping memory token cost bounded.
 
@@ -140,7 +142,7 @@ When `--profile` is combined with explicit flags like `--provider` or `--model`,
 
 `--temperature` controls sampling temperature and defaults to the provider default when omitted.
 
-`--top-p` controls nucleus sampling and defaults to `1.0`.
+`--top-p` controls nucleus sampling and defaults to the provider default when omitted.
 
 `--seed` passes a random seed for providers that support reproducible sampling.
 

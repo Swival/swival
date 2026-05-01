@@ -84,7 +84,6 @@ Session(
     lifecycle_fail_closed: bool = False,
     lifecycle_enabled: bool = True,
     command_middleware: str | None = None,
-    aws_profile: str | None = None,
     approved_buckets: set[str] | None = None,
 )
 ```

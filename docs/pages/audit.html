@@ -96,7 +96,7 @@
             <h1 id="swival-security-scanner">Swival Security Scanner</h1>
 <p>The <code>/audit</code> command runs a multi-phase security audit over committed Git-tracked code.</p>
 <p>It triages files by attack surface, performs deep review on escalated files, verifies each finding with an isolated proof-of-concept agent, generates patches, and writes structured reports. Only provable bugs survive to the final output.</p>
-<pre><code class="language-text">/audit [path|glob ...] [--resume] [--regen] [--workers N]
+<pre><code class="language-text">/audit [path|glob ...] [--resume] [--regen] [--workers N] [--debug]
 </code></pre>
 <p>Works in both interactive (REPL) and one-shot mode (requires <code>--oneshot-commands</code>). Runs against <code>HEAD</code>, so dirty working-directory changes are ignored.</p>
 <h2 id="quick-start">Quick Start</h2>
@@ -187,6 +187,9 @@ Audit complete. 2 finding(s) written to audit-findings/. Run `ls audit-findings/
 </code></pre>
 <p><code>--workers N</code> sets the number of parallel workers for triage and verification (default: 4). Verification is always capped at 2 regardless of this value.</p>
 <pre><code class="language-text">swival&gt; /audit --workers 8
+</code></pre>
+<p><code>--debug</code> writes a real-time JSONL trace of every audit step to <code>.swival/audit/debug.jsonl</code>. Useful when investigating a stuck phase, a missing finding, or unexpected resume behavior.</p>
+<pre><code class="language-text">swival&gt; /audit --debug
 </code></pre>
 <p>All options can be combined with a focus path:</p>
 <pre><code class="language-text">swival&gt; /audit src/api/ --resume --workers 6
