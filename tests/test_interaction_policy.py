@@ -53,7 +53,7 @@ class TestAutonomousMode:
     def test_renders_autonomous_directives(self, tmp_path):
         content, _ = _build(tmp_path)
         result = _apply_interaction_policy(content, "autonomous")
-        assert "do not stop to ask for confirmation" in result
+        assert "autonomously" in result
         assert "pick the most likely intent" in result
         assert "optimal" in result
 
@@ -74,7 +74,7 @@ class TestInteractiveMode:
     def test_no_autonomous_phrases(self, tmp_path):
         content, _ = _build(tmp_path)
         result = _apply_interaction_policy(content, "interactive")
-        assert "do not stop to ask for confirmation" not in result
+        assert "autonomously" not in result
 
 
 class TestNoPlaceholdersRemain:
@@ -97,7 +97,7 @@ class TestCustomSystemPrompt:
         content, _ = _build(tmp_path, system_prompt="My custom prompt.")
         result = _apply_interaction_policy(content, policy)
         assert result.startswith("My custom prompt.")
-        assert "do not stop to ask for confirmation" not in result
+        assert "autonomously" not in result
         assert "ask the user to clarify" not in result
 
 
@@ -114,7 +114,7 @@ class TestCommandProvider:
         assert result.startswith(_COMMAND_PROVIDER_SYSTEM_PROMPT)
         assert "{{AUTONOMY_DIRECTIVE}}" not in result
         assert "{{AMBIGUITY_DIRECTIVE}}" not in result
-        assert "do not stop to ask for confirmation" not in result
+        assert "autonomously" not in result
         assert "ask the user to clarify" not in result
 
 
@@ -140,7 +140,7 @@ class TestSessionRunPolicy:
         s.run("test question")
 
         system = captured["system"]
-        assert "do not stop to ask for confirmation" in system
+        assert "autonomously" in system
         assert "ask the user to clarify" not in system
         assert "{{AUTONOMY_DIRECTIVE}}" not in system
 
@@ -163,5 +163,5 @@ class TestSessionAskPolicy:
 
         system = captured["system"]
         assert "ask the user to clarify" in system
-        assert "do not stop to ask for confirmation" not in system
+        assert "autonomously" not in system
         assert "{{AUTONOMY_DIRECTIVE}}" not in system
