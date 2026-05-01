@@ -1,6 +1,6 @@
 .PHONY: all install test lint format check website clean dist
 
-all: check test
+all: check
 
 install:
 	uv sync
