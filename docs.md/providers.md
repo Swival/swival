@@ -74,7 +74,7 @@ For HuggingFace, `--model` is required and must be in `org/model` format. Authen
 
 ```sh
 export HF_TOKEN=hf_your_token_here
-swival --provider huggingface --model zai-org/GLM-5 "task"
+swival --provider huggingface --model zai-org/GLM-5.1 "task"
 ```
 
 Serverless HuggingFace endpoints often expose smaller context windows than local deployments, so long multi-turn coding sessions can hit context pressure sooner.
@@ -83,7 +83,7 @@ For dedicated endpoints, keep the same model identifier and pass your endpoint U
 
 ```sh
 swival --provider huggingface \
-    --model zai-org/GLM-5 \
+    --model zai-org/GLM-5.1 \
     --base-url https://xyz.endpoints.huggingface.cloud \
     --api-key hf_your_key \
     "task"

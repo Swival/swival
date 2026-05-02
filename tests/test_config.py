@@ -978,7 +978,7 @@ class TestCLIIntegration:
 
         assert "Examples:" in help_text
         assert "swival -q < task.md" in help_text
-        assert "--provider huggingface --model zai-org/GLM-5" in help_text
+        assert "--provider huggingface --model zai-org/GLM-5.1" in help_text
         assert "swival --yolo --self-review" in help_text
         assert "--self-review" in help_text
 

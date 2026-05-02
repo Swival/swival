@@ -141,12 +141,12 @@ swival --profile gpt5 &quot;hard task&quot;
 <h2 id="huggingface-inference-api">HuggingFace Inference API</h2>
 <p>For HuggingFace, <code>--model</code> is required and must be in <code>org/model</code> format. Authentication comes from <code>HF_TOKEN</code> by default or <code>--api-key</code> if you pass one explicitly.</p>
 <pre><code class="language-sh">export HF_TOKEN=hf_your_token_here
-swival --provider huggingface --model zai-org/GLM-5 &quot;task&quot;
+swival --provider huggingface --model zai-org/GLM-5.1 &quot;task&quot;
 </code></pre>
 <p>Serverless HuggingFace endpoints often expose smaller context windows than local deployments, so long multi-turn coding sessions can hit context pressure sooner.</p>
 <p>For dedicated endpoints, keep the same model identifier and pass your endpoint URL and key.</p>
 <pre><code class="language-sh">swival --provider huggingface \
-    --model zai-org/GLM-5 \
+    --model zai-org/GLM-5.1 \
     --base-url https://xyz.endpoints.huggingface.cloud \
     --api-key hf_your_key \
     &quot;task&quot;

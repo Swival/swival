@@ -83,7 +83,7 @@ If you omit the positional task and pipe stdin, Swival reads the task from stdin
 ```sh
 swival -q < objective.md
 
-cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5
+cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5.1
 ```
 
 This is useful for longer prompts, reusable task files, and avoiding shell quoting.
@@ -99,7 +99,7 @@ export HF_TOKEN=hf_your_token_here
 Pick a model that supports tool calling and pass it in `org/model` format.
 
 ```sh
-swival "Hello world" --provider huggingface --model zai-org/GLM-5
+swival "Hello world" --provider huggingface --model zai-org/GLM-5.1
 ```
 
 This uses HuggingFace's serverless inference, which is the fastest way to try hosted models without provisioning anything. Serverless endpoints often have smaller context windows than local deployments, so long multi-turn sessions can hit context pressure sooner.
@@ -109,7 +109,7 @@ If you need more headroom, you can provision a dedicated HuggingFace endpoint an
 ```sh
 swival "Hello world" \
     --provider huggingface \
-    --model zai-org/GLM-5 \
+    --model zai-org/GLM-5.1 \
     --base-url https://xyz.endpoints.huggingface.cloud \
     --api-key hf_your_key
 ```

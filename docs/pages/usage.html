@@ -102,7 +102,7 @@
 <p>If you omit the positional task and pipe stdin, Swival reads the task from stdin instead.</p>
 <pre><code class="language-sh">swival -q &lt; objective.md
 
-cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5
+cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5.1
 </code></pre>
 <p>The final answer is written to standard output. Diagnostics such as turn logs, timing, and tool traces are written to standard error.</p>
 <p>If you want a clean output stream for scripting, use <code>--quiet</code> or <code>-q</code>.</p>

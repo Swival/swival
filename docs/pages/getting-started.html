@@ -187,7 +187,7 @@ brew uninstall swival     # if installed with Homebrew
 <p>If you omit the positional task and pipe stdin, Swival reads the task from stdin. On an interactive terminal with no task, Swival enters REPL mode automatically.</p>
 <pre><code class="language-sh">swival -q &lt; objective.md
 
-cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5
+cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5.1
 </code></pre>
 <p>This is useful for longer prompts, reusable task files, and avoiding shell quoting.</p>
 <h2 id="running-with-huggingface">Running with HuggingFace</h2>
@@ -195,13 +195,13 @@ cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5
 <pre><code class="language-sh">export HF_TOKEN=hf_your_token_here
 </code></pre>
 <p>Pick a model that supports tool calling and pass it in <code>org/model</code> format.</p>
-<pre><code class="language-sh">swival &quot;Hello world&quot; --provider huggingface --model zai-org/GLM-5
+<pre><code class="language-sh">swival &quot;Hello world&quot; --provider huggingface --model zai-org/GLM-5.1
 </code></pre>
 <p>This uses HuggingFace's serverless inference, which is the fastest way to try hosted models without provisioning anything. Serverless endpoints often have smaller context windows than local deployments, so long multi-turn sessions can hit context pressure sooner.</p>
 <p>If you need more headroom, you can provision a dedicated HuggingFace endpoint and pass its URL directly. Dedicated endpoints let you use the full deployed context window.</p>
 <pre><code class="language-sh">swival &quot;Hello world&quot; \
     --provider huggingface \
-    --model zai-org/GLM-5 \
+    --model zai-org/GLM-5.1 \
     --base-url https://xyz.endpoints.huggingface.cloud \
     --api-key hf_your_key
 </code></pre>

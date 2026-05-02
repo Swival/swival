@@ -29,7 +29,7 @@ Pick the provider that matches how you want to run models:
 | ---------------- | --------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | LM Studio        | none                                                | none                                              | `swival "Refactor src/api.py"`                                                       |
 | llama.cpp        | none                                                | `--provider llamacpp`                             | `swival --provider llamacpp "Refactor src/api.py"`                                   |
-| HuggingFace      | `HF_TOKEN` or `--api-key`                           | `--provider huggingface --model ORG/MODEL`        | `swival --provider huggingface --model zai-org/GLM-5 "task"`                         |
+| HuggingFace      | `HF_TOKEN` or `--api-key`                           | `--provider huggingface --model ORG/MODEL`        | `swival --provider huggingface --model zai-org/GLM-5.1 "task"`                       |
 | OpenRouter       | `OPENROUTER_API_KEY` or `--api-key`                 | `--provider openrouter --model MODEL`             | `swival --provider openrouter --model z-ai/glm-5 "task"`                             |
 | Google Gemini    | `GEMINI_API_KEY`, `OPENAI_API_KEY`, or `--api-key`  | `--provider google --model MODEL`                 | `swival --provider google --model gemini-2.5-flash "task"`                           |
 | ChatGPT Plus/Pro | browser auth on first run or `CHATGPT_API_KEY`      | `--provider chatgpt --model MODEL`                | `swival --provider chatgpt --model gpt-5.4 "task"`                                   |
@@ -88,7 +88,7 @@ The default base URL is `http://127.0.0.1:8080`. Override with `--base-url`.
 export HF_TOKEN=hf_...
 uv tool install swival
 swival "Refactor the error handling in src/api.py" \
-    --provider huggingface --model zai-org/GLM-5
+    --provider huggingface --model zai-org/GLM-5.1
 ```
 
 You can also point it at a dedicated endpoint with `--base-url` and `--api-key`.
@@ -156,7 +156,7 @@ stdin.
 ```sh
 swival -q < objective.md
 
-cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5
+cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5.1
 ```
 
 Useful for long prompts, shell-quoting avoidance, and scripted workflows.

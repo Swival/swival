@@ -114,15 +114,15 @@
 <p>When <code>--reviewer-mode</code> is active, Swival reads the base directory from the first positional argument (as passed by the outer instance), reads the agent's answer from standard input, reads the task from <code>SWIVAL_TASK</code> (or a <code>--objective</code> file), calls the LLM to evaluate the answer, parses the verdict, and exits with the appropriate code.</p>
 <h3 id="self-review">Self-Review</h3>
 <p>The <code>--self-review</code> flag is a shorthand that automatically builds the reviewer command by mirroring the current invocation's provider, model, and other settings. Instead of writing the reviewer command by hand:</p>
-<pre><code class="language-sh">swival --provider huggingface --model zai-org/GLM-5 --yolo \
+<pre><code class="language-sh">swival --provider huggingface --model zai-org/GLM-5.1 --yolo \
     --skills-dir ~/skills \
     --reviewer 'swival --reviewer-mode \
-        --provider huggingface --model zai-org/GLM-5 \
+        --provider huggingface --model zai-org/GLM-5.1 \
         --quiet --yolo --skills-dir ~/skills' \
     &quot;task&quot;
 </code></pre>
 <p>Use <code>--self-review</code>:</p>
-<pre><code class="language-sh">swival --provider huggingface --model zai-org/GLM-5 --yolo \
+<pre><code class="language-sh">swival --provider huggingface --model zai-org/GLM-5.1 --yolo \
     --skills-dir ~/skills \
     --self-review \
     &quot;task&quot;

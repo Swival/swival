@@ -3680,7 +3680,7 @@ def build_parser():
         "Examples:\n"
         '  swival --yolo "Refactor the auth module"\n'
         '  swival --files all "Refactor the auth module"\n'
-        '  swival --provider huggingface --model zai-org/GLM-5 "Write parser tests"\n'
+        '  swival --provider huggingface --model zai-org/GLM-5.1 "Write parser tests"\n'
         '  swival --yolo --self-review "Add input validation"\n'
         "  swival -q < task.md"
     )
@@ -5027,7 +5027,7 @@ def resolve_provider(
         bare_model = model.removeprefix("huggingface/")
         if "/" not in bare_model:
             raise ConfigError(
-                "HuggingFace model must be in org/model format (e.g. zai-org/GLM-5)"
+                "HuggingFace model must be in org/model format (e.g. zai-org/GLM-5.1)"
             )
         api_base = base_url
         model_id = model
