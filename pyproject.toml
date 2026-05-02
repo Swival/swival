@@ -33,7 +33,7 @@ dependencies = [
     "starlette>=1.0.0",
     "uvicorn>=0.46.0",
     "fast-cipher>=0.2.1",
-    "boto3>=1.42.97",
+    "boto3>=1.43.2",
 ]
 
 [project.urls]
