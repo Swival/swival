@@ -93,25 +93,48 @@ class TestQuestionTruncation:
 
 
 class TestSizeCap:
-    def test_size_cap_skips_write(self, tmp_path):
+    def test_size_cap_trims_unrecognized_content(self, tmp_path):
+        """File past the cap with no recognizable entries gets cleared, then the new entry is written."""
         history = tmp_path / ".swival" / "HISTORY.md"
         history.parent.mkdir(parents=True)
-        # Pre-populate past the cap
         history.write_text("x" * (MAX_HISTORY_SIZE + 100))
-        original_size = history.stat().st_size
 
         append_history(str(tmp_path), "new q", "new a")
-        assert history.stat().st_size == original_size
+        content = history.read_text()
+        assert "x" not in content
+        assert "new q" in content
+        assert "new a" in content
+        assert history.stat().st_size < MAX_HISTORY_SIZE
 
-    def test_size_cap_exact_boundary(self, tmp_path):
+    def test_size_cap_trims_keeping_recent_entries(self, tmp_path):
+        """When the file already sits above the cap with structured entries, oldest entries get dropped."""
         history = tmp_path / ".swival" / "HISTORY.md"
         history.parent.mkdir(parents=True)
-        # Exactly at the cap — should be rejected (>=)
-        history.write_text("x" * MAX_HISTORY_SIZE)
-        original_size = history.stat().st_size
 
-        append_history(str(tmp_path), "new q", "new a")
-        assert history.stat().st_size == original_size
+        # Pre-populate with structured entries totaling more than MAX_HISTORY_SIZE
+        parts: list[str] = []
+        i = 0
+        total = 0
+        while total < MAX_HISTORY_SIZE + 1024:
+            entry = (
+                f"---\n\n**2024-01-01 12:00:{i % 60:02d}** — *q{i}*\n\n{'a' * 500}\n\n"
+            )
+            parts.append(entry)
+            total += len(entry.encode("utf-8"))
+            i += 1
+        history.write_text("".join(parts))
+        size_before = history.stat().st_size
+        assert size_before >= MAX_HISTORY_SIZE
+
+        append_history(str(tmp_path), "fresh q", "fresh a", diagnostics=False)
+        size_after = history.stat().st_size
+        content = history.read_text()
+
+        assert size_after < size_before
+        assert size_after <= MAX_HISTORY_SIZE
+        assert "fresh q" in content
+        assert "fresh a" in content
+        assert "*q0*" not in content
 
     def test_under_cap_writes(self, tmp_path):
         history = tmp_path / ".swival" / "HISTORY.md"
@@ -120,6 +143,53 @@ class TestSizeCap:
 
         append_history(str(tmp_path), "new q", "new a")
         assert history.stat().st_size > MAX_HISTORY_SIZE - 1000
+
+    def test_size_cap_large_entry_keeps_file_bounded(self, tmp_path):
+        """An append larger than half the cap still leaves the file within MAX_HISTORY_SIZE."""
+        history = tmp_path / ".swival" / "HISTORY.md"
+        history.parent.mkdir(parents=True)
+
+        parts: list[str] = []
+        i = 0
+        total = 0
+        while total < MAX_HISTORY_SIZE - 2048:
+            entry = (
+                f"---\n\n**2024-01-01 12:00:{i % 60:02d}** — *q{i}*\n\n{'a' * 500}\n\n"
+            )
+            parts.append(entry)
+            total += len(entry.encode("utf-8"))
+            i += 1
+        history.write_text("".join(parts))
+        assert history.stat().st_size < MAX_HISTORY_SIZE
+
+        big_answer = "z" * (MAX_HISTORY_SIZE * 6 // 10)
+        append_history(str(tmp_path), "big q", big_answer, diagnostics=False)
+        size_after = history.stat().st_size
+        content = history.read_text()
+
+        assert size_after <= MAX_HISTORY_SIZE
+        assert big_answer in content
+
+    def test_size_cap_boundary_crossing_triggers_trim(self, tmp_path):
+        """An append that would push the file across the cap triggers a trim, not a silent overflow."""
+        base = str(tmp_path)
+        history = tmp_path / ".swival" / "HISTORY.md"
+        # Fill with structured entries up to just under the cap
+        for _ in range(2000):
+            append_history(base, "filler", "x" * 500, diagnostics=False)
+            if history.stat().st_size >= MAX_HISTORY_SIZE - 2048:
+                break
+
+        size_before = history.stat().st_size
+        assert size_before < MAX_HISTORY_SIZE
+        assert size_before >= MAX_HISTORY_SIZE - 2048
+
+        append_history(base, "q", "a" * 4000, diagnostics=False)
+        size_after = history.stat().st_size
+        content = history.read_text()
+
+        assert size_after <= MAX_HISTORY_SIZE
+        assert "a" * 4000 in content
 
     def test_large_single_entry_written(self, tmp_path):
         """File is empty, single entry exceeds cap — written because cap is checked before writing."""

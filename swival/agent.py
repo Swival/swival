@@ -847,6 +847,28 @@ def remember_agents_fact(base_dir: str, text: str) -> tuple[str, bool, bool]:
     return msg, True, False
 
 
+_HISTORY_ENTRY_HEADER_RE = re.compile(
+    rb"---\n\n\*\*\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\*\*"
+)
+
+
+def _trim_history_file(history_path: Path, target_size: int) -> None:
+    """Drop oldest entries so the file fits within target_size bytes.
+
+    If no suffix of entries fits the budget (or the file has no recognizable
+    headers), the file is cleared.
+    """
+    content = history_path.read_bytes()
+    starts = [m.start() for m in _HISTORY_ENTRY_HEADER_RE.finditer(content)]
+
+    cutoff = len(content)
+    for s in starts:
+        if len(content) - s <= target_size:
+            cutoff = s
+            break
+    history_path.write_bytes(content[cutoff:])
+
+
 def append_history(
     base_dir: str, question: str, answer: str, *, diagnostics: bool = True
 ) -> None:
@@ -878,16 +900,16 @@ def append_history(
             if fcntl is not None and lock_fd is not None:
                 fcntl.flock(lock_fd, fcntl.LOCK_EX)
 
-            current_size = history_path.stat().st_size if history_path.exists() else 0
-            if current_size >= MAX_HISTORY_SIZE:
-                if diagnostics:
-                    fmt.warning("history file at capacity, skipping write")
-                return
-
-            # Truncate question for the header
             q_display = question[:200] + "..." if len(question) > 200 else question
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             entry = f"---\n\n**{timestamp}** — *{q_display}*\n\n{answer}\n\n"
+            entry_bytes = len(entry.encode("utf-8"))
+
+            current_size = history_path.stat().st_size if history_path.exists() else 0
+            if current_size > 0 and current_size + entry_bytes > MAX_HISTORY_SIZE:
+                _trim_history_file(history_path, max(0, MAX_HISTORY_SIZE - entry_bytes))
+                if diagnostics:
+                    fmt.warning("history file at capacity, trimmed older entries")
 
             with history_path.open("a", encoding="utf-8") as f:
                 f.write(entry)

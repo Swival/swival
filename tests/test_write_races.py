@@ -252,7 +252,7 @@ class TestHistoryContention:
                 assert f"answer-{tid}-{i}" in content
 
     def test_capacity_respected(self, tmp_path):
-        """History stops growing beyond MAX_HISTORY_SIZE."""
+        """History stays bounded by MAX_HISTORY_SIZE: hitting the cap trims older entries."""
         from swival.agent import append_history, MAX_HISTORY_SIZE
 
         # Write until capacity
@@ -270,13 +270,13 @@ class TestHistoryContention:
             ):
                 break
 
-        # One more write should be skipped
-        append_history(str(tmp_path), "extra", "should not appear", diagnostics=False)
+        # One more write triggers a trim; the new entry is appended to the trimmed file
+        append_history(str(tmp_path), "extra", "fresh entry", diagnostics=False)
         size_after = history_path.stat().st_size
+        content = history_path.read_text()
 
-        # Allow tolerance of one entry (the lock makes the check atomic,
-        # but the entry that pushed us over the cap is already written)
-        assert size_after <= MAX_HISTORY_SIZE + 1024
+        assert size_after <= MAX_HISTORY_SIZE
+        assert "fresh entry" in content
 
 
 # ---------------------------------------------------------------------------
