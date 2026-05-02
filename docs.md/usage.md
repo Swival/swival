@@ -76,7 +76,17 @@ Without `--oneshot-commands`, input that looks like a command script is treated 
 
 `/extend` doubles the current turn budget. `/extend <N>` sets the turn budget to an exact value.
 
-`/goal` manages a persisted thread goal. With no argument, it prints the current goal status. `/goal <objective>` creates a goal and immediately starts the agent loop on it; the runtime then keeps issuing continuation prompts after each final answer until the model calls `complete_goal`, the goal is paused or cleared, or `--max-turns` is hit. `/goal replace <objective>` swaps in a new objective and resets the counters. `/goal pause`, `/goal resume`, and `/goal clear` adjust state without starting a turn. The set/replace forms are REPL-only — they refuse in one-shot mode because v1 has no slash syntax for the token budget required for unattended runs. See [Goal Tool](tools.md#goal-tool-complete_goal) for the full lifecycle.
+`/goal <objective>` puts the REPL into a persistent goal mode and starts driving toward that objective. Use a regular prompt for "answer or do this now"; use `/goal` for "keep working on this until it is actually done." After each turn finishes, Swival re-prompts the model with the standing objective and pushes it back to work, trying new approaches, recovering from failures, and refusing to settle for a partial answer, until the model calls `complete_goal` to declare the goal achieved, you intervene, or `--max-turns` is hit. This makes `/goal` a highly effective Ralph Loop: a single objective, repeatedly hammered on across as many turns as it takes, hours if necessary.
+
+```
+/goal make the permute() function faster
+```
+
+On a goal like that, Swival will write benchmarks, try variant after variant of `permute()`, measure, discard regressions, keep the wins, and continue iterating until it has produced a measurably faster implementation, without you needing to babysit each round.
+
+Goals are best given as outcomes that can be recognized as done ("get the test suite green," "reduce p99 latency of /search below 50ms," "port module X to async without breaking any caller"), not open-ended directions. The clearer the success condition, the less likely the loop is to declare victory early.
+
+`/goal` with no argument prints the current goal status. `/goal replace <objective>` swaps in a new objective and resets counters. `/goal pause` and `/goal resume` stop and restart the auto-continuation without losing the goal. `/goal clear` drops the goal entirely. The set/replace forms are REPL-only. See [Goal Tool](tools.md#goal-tool-complete_goal) for the full lifecycle.
 
 `/continue` restarts the agent loop for the existing conversation without adding a new user message.
 
