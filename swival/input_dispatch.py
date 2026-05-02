@@ -145,7 +145,5 @@ def is_command_script(text: str) -> bool:
             return True
         if parsed.is_command and parsed.cmd == "!!":
             return False
-        if parsed.is_command:
-            return True
-        return False
+        return bool(parsed.is_command)
     return False

@@ -163,11 +163,10 @@ class A2aManager:
         timeout = config.get("timeout", _DEFAULT_TIMEOUT)
 
         try:
-            result = self._run_sync(
+            return self._run_sync(
                 self._send_message(agent_name, arguments, config),
                 timeout=timeout,
             )
-            return result
         except A2aShutdownError:
             raise
         except TimeoutError:
@@ -449,9 +448,7 @@ def _is_message_response(data: dict) -> bool:
 
     Tasks have "id" and "status" fields; Messages have "role" and "parts".
     """
-    if "role" in data and "parts" in data and "status" not in data:
-        return True
-    return False
+    return "role" in data and "parts" in data and "status" not in data
 
 
 def _skill_to_tool(agent_name: str, skill: AgentSkill) -> dict:

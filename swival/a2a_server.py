@@ -1112,8 +1112,7 @@ class A2aServer:
                 self._remove_context(ctx_id)
             logger.info("A2A server shut down, all sessions closed")
 
-        app = Starlette(routes=routes, lifespan=lifespan)
-        return app
+        return Starlette(routes=routes, lifespan=lifespan)
 
     @property
     def app(self) -> Starlette:

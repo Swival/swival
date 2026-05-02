@@ -484,7 +484,7 @@ class Session:
         """Create fresh per-run state: thinking, tracker, skill roots, messages."""
         from .agent import CompactionState
 
-        state = {
+        return {
             "thinking_state": ThinkingState(verbose=self.verbose),
             "todo_state": TodoState(verbose=self.verbose),
             "snapshot_state": SnapshotState(verbose=self.verbose),
@@ -495,7 +495,6 @@ class Session:
             "compaction_state": CompactionState() if self.proactive_summaries else None,
             "resolved_system_content": system_content,
         }
-        return state
 
     def _build_loop_kwargs(self, state: dict) -> dict:
         """Build kwargs for run_agent_loop() from setup + per-run state."""

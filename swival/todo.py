@@ -47,9 +47,12 @@ def _normalize_tasks(args: dict) -> list[str] | str:
     has_tasks = "tasks" in args
     has_task = "task" in args
 
-    if has_tasks and has_task:
-        if _to_stripped_list(args["tasks"]) != _to_stripped_list(args["task"]):
-            return "error: provide either 'tasks' or legacy alias 'task', not conflicting values"
+    if (
+        has_tasks
+        and has_task
+        and _to_stripped_list(args["tasks"]) != _to_stripped_list(args["task"])
+    ):
+        return "error: provide either 'tasks' or legacy alias 'task', not conflicting values"
 
     if not has_tasks and not has_task:
         return "error: action requires a 'tasks' parameter"

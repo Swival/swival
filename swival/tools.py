@@ -2513,9 +2513,7 @@ def _is_root_path(p: str) -> bool:
     s = p.strip()
     if s in ("/", "\\"):
         return True
-    if len(s) == 3 and s[0].isalpha() and s[1] == ":" and s[2] in ("/", "\\"):
-        return True
-    return False
+    return len(s) == 3 and s[0].isalpha() and s[1] == ":" and s[2] in ("/", "\\")
 
 
 def _run_shell_command(

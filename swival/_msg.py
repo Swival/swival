@@ -71,10 +71,7 @@ def _is_synthetic(msg) -> bool:
     if not isinstance(msg, str) and _msg_get(msg, "_swival_synthetic"):
         return True
     content = msg if isinstance(msg, str) else _msg_content(msg)
-    for prefix in _ALWAYS_SYNTHETIC_PREFIXES:
-        if content.startswith(prefix):
-            return True
-    return False
+    return content.startswith(_ALWAYS_SYNTHETIC_PREFIXES)
 
 
 def _find_current_turn_boundary(messages: list) -> int:
