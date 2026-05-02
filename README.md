@@ -219,6 +219,18 @@ turns, context overflow — Swival saves its state to disk. Next time you run it
 in the same directory, it picks up where it left off: what it was doing, what
 it had figured out, and what was left.
 
+**Stick with a goal until it's done.** Set an objective with `/goal <objective>`
+in the REPL and Swival keeps the agent on task across turns. It's a structured
+spin on the Ralph-style "keep prompting until it's done" loop. The agent
+doesn't get to declare victory and walk away after one turn: the original
+objective is fed back to the model after every answer, and the loop only ends
+when the agent itself signals the goal is complete after a real evidence-based
+audit, declares a blocker, or hits the optional token budget. This makes it
+practical to point Swival at ambitious, long-running tasks like refactors,
+audits, or end-to-end fixes, and let it grind for hours without giving up
+halfway. Pause, resume, replace, or clear the goal at any time. See
+[Goals](docs.md/tools.md#goal-tool-complete_goal) for details.
+
 **A2A server mode.** Run `swival --serve` and your agent becomes an A2A
 endpoint that other agents can call over HTTP. Multi-turn context, streaming,
 rate limiting, and bearer auth are built in.

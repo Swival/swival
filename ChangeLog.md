@@ -2,6 +2,11 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.13
+
+- A goal-driven mode has been added: a structured spin on the Ralph-style "keep prompting until it's done" loop. Set an objective with `/goal <objective>` in the REPL and the agent doesn't get to declare victory and walk away after one turn. The original objective is fed back to the model after every answer, and the loop only ends when the agent itself signals the goal is complete after a real evidence-based audit, declares a blocker, or hits the optional token budget. This makes it practical to point Swival at ambitious, long-running tasks like refactors, audits, or end-to-end fixes, and let it grind for hours without giving up halfway. `/goal pause`, `/goal resume`, `/goal replace`, and `/goal clear` give you full control.
+- First-run setup now writes a `[profiles.default]` block to the generated config, so the freshly created file lines up with the profile structure used everywhere else.
+
 ## 1.0.12
 
 - The system prompt has been optimized for efficiency, and small models may enjoy a significant reduction in token usage.
