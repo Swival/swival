@@ -2,6 +2,7 @@
 
 import argparse
 import io
+import tomllib
 import types
 from swival.onboarding import (
     run_onboarding,
@@ -19,7 +20,7 @@ from swival.onboarding import (
     _ask_bedrock,
 )
 from swival.agent import _should_try_onboarding
-from swival.config import _UNSET, _toml_escape
+from swival.config import _UNSET, _toml_escape, load_config, resolve_profile_config
 
 
 def _make_args(**overrides):
@@ -42,6 +43,15 @@ def _capture_stderr(monkeypatch):
     console = Console(file=buf, no_color=True, width=120)
     monkeypatch.setattr("swival.onboarding._console", console)
     return buf
+
+
+def _parse_default_profile(content: str) -> dict:
+    """Parse onboarding output and return the default profile table."""
+    data = tomllib.loads(content)
+    assert data["active_profile"] == "default"
+    for key in ("provider", "model", "base_url", "api_key"):
+        assert key not in data
+    return data["profiles"]["default"]
 
 
 class TestShouldTryOnboarding:
@@ -126,17 +136,19 @@ class TestShouldTryOnboarding:
 class TestRenderMinimalConfig:
     def test_basic_provider_only(self):
         result = render_minimal_config({"provider": "lmstudio"})
-        assert 'provider = "lmstudio"' in result
+        profile = _parse_default_profile(result)
+        assert profile["provider"] == "lmstudio"
         assert result.startswith("# Swival config")
 
     def test_header_comment(self):
         result = render_minimal_config({"provider": "lmstudio"})
         assert "# Run `swival --init-config` to see all available options." in result
+        assert "# Add more profiles with [profiles.<name>]" in result
 
     def test_multiple_keys_ordered(self):
         settings = {
             "provider": "openrouter",
-            "model": "openai/gpt-4.1",
+            "model": "openai/gpt-5.5",
             "api_key": "sk-123",
             "max_context_tokens": 131072,
         }
@@ -144,24 +156,46 @@ class TestRenderMinimalConfig:
         config_lines = [
             ln for ln in result.split("\n") if ln and not ln.startswith("#")
         ]
-        assert config_lines[0] == 'provider = "openrouter"'
-        assert config_lines[1] == 'model = "openai/gpt-4.1"'
-        assert config_lines[2] == 'api_key = "sk-123"'
-        assert config_lines[3] == "max_context_tokens = 131072"
+        assert config_lines[0] == 'active_profile = "default"'
+        assert config_lines[1] == "[profiles.default]"
+        assert config_lines[2] == 'provider = "openrouter"'
+        assert config_lines[3] == 'model = "openai/gpt-5.5"'
+        assert config_lines[4] == 'api_key = "sk-123"'
+        assert config_lines[5] == "max_context_tokens = 131072"
 
     def test_integer_values(self):
         result = render_minimal_config(
             {"provider": "generic", "max_context_tokens": 65536}
         )
-        assert "max_context_tokens = 65536" in result
+        profile = _parse_default_profile(result)
+        assert profile["max_context_tokens"] == 65536
 
     def test_omits_unknown_keys(self):
         result = render_minimal_config({"provider": "lmstudio", "unknown_key": "val"})
-        assert "unknown_key" not in result
+        profile = _parse_default_profile(result)
+        assert "unknown_key" not in profile
 
     def test_toml_escaping(self):
         result = render_minimal_config({"provider": "generic", "model": 'a"b\\c'})
-        assert r'model = "a\"b\\c"' in result
+        profile = _parse_default_profile(result)
+        assert profile["model"] == 'a"b\\c'
+
+    def test_round_trip_resolves_default_profile(self, tmp_path, monkeypatch):
+        cfg_dir = tmp_path / "cfg"
+        cfg_dir.mkdir()
+        (cfg_dir / "config.toml").write_text(
+            render_minimal_config({"provider": "openrouter", "model": "openai/gpt-5.5"})
+        )
+        monkeypatch.setattr("swival.config.global_config_dir", lambda: cfg_dir)
+
+        config = load_config(tmp_path)
+        active_profile = resolve_profile_config(
+            argparse.Namespace(profile=None), config
+        )
+
+        assert active_profile == "default"
+        assert config["provider"] == "openrouter"
+        assert config["model"] == "openai/gpt-5.5"
 
     def test_trailing_newline(self):
         result = render_minimal_config({"provider": "lmstudio"})
@@ -246,9 +280,9 @@ class TestRunOnboarding:
         result = run_onboarding()
         assert result is not None
         assert result.exists()
-        content = result.read_text()
-        assert 'provider = "lmstudio"' in content
-        assert "model" not in content
+        profile = _parse_default_profile(result.read_text())
+        assert profile["provider"] == "lmstudio"
+        assert "model" not in profile
         output = buf.getvalue()
         assert "You're all set" in output
 
@@ -270,8 +304,8 @@ class TestRunOnboarding:
         result = run_onboarding()
         assert result is not None
         assert result.exists()
-        content = result.read_text()
-        assert 'provider = "lmstudio"' in content
+        profile = _parse_default_profile(result.read_text())
+        assert profile["provider"] == "lmstudio"
         output = buf.getvalue()
         assert "Why Swival feels different" in output
         assert "correctness" in output.lower()
@@ -334,6 +368,7 @@ class TestRunOnboarding:
         assert "Want to switch model stacks quickly?" in output
         assert "swival --profile" in output
         assert "swival --list-profiles" in output
+        assert "/profile" in output
         assert "swival --init-config --project" in output
         assert "Want agent-to-agent collaboration?" in output
         assert "A2A" in output
@@ -349,7 +384,7 @@ class TestRunOnboarding:
             [
                 "2",  # Quick setup
                 "4",  # OpenRouter
-                "openai/gpt-4.1",  # model
+                "openai/gpt-5.5",  # model
                 "1",  # I'll set OPENROUTER_API_KEY myself
                 "",  # skip context window
                 "1",  # Yes, write config
@@ -357,10 +392,10 @@ class TestRunOnboarding:
         )
         result = run_onboarding()
         assert result is not None
-        content = result.read_text()
-        assert 'provider = "openrouter"' in content
-        assert 'model = "openai/gpt-4.1"' in content
-        assert "api_key" not in content
+        profile = _parse_default_profile(result.read_text())
+        assert profile["provider"] == "openrouter"
+        assert profile["model"] == "openai/gpt-5.5"
+        assert "api_key" not in profile
 
     def test_successful_llamacpp_with_optional_model(self, tmp_path, monkeypatch):
         cfg_dir = tmp_path / "cfg"
@@ -377,10 +412,10 @@ class TestRunOnboarding:
         )
         result = run_onboarding()
         assert result is not None
-        content = result.read_text()
-        assert 'provider = "llamacpp"' in content
-        assert "model" not in content
-        assert "base_url" not in content
+        profile = _parse_default_profile(result.read_text())
+        assert profile["provider"] == "llamacpp"
+        assert "model" not in profile
+        assert "base_url" not in profile
 
     def test_successful_generic_with_api_key(self, tmp_path, monkeypatch):
         cfg_dir = tmp_path / "cfg"
@@ -400,11 +435,11 @@ class TestRunOnboarding:
         )
         result = run_onboarding()
         assert result is not None
-        content = result.read_text()
-        assert 'provider = "generic"' in content
-        assert 'base_url = "http://localhost:11434"' in content
-        assert 'model = "qwen3:32b"' in content
-        assert 'api_key = "sk-test-key"' in content
+        profile = _parse_default_profile(result.read_text())
+        assert profile["provider"] == "generic"
+        assert profile["base_url"] == "http://localhost:11434"
+        assert profile["model"] == "qwen3:32b"
+        assert profile["api_key"] == "sk-test-key"
 
     def test_cancel_at_confirmation_no_skip_marker(self, tmp_path, monkeypatch):
         cfg_dir = tmp_path / "cfg"
@@ -443,9 +478,9 @@ class TestRunOnboarding:
         )
         result = run_onboarding()
         assert result is not None
-        content = result.read_text()
-        assert 'provider = "chatgpt"' in content
-        assert 'model = "gpt-4.1"' in content
+        profile = _parse_default_profile(result.read_text())
+        assert profile["provider"] == "chatgpt"
+        assert profile["model"] == "gpt-4.1"
 
     def test_no_overwrite_existing_config(self, tmp_path, monkeypatch):
         cfg_dir = tmp_path / "cfg"

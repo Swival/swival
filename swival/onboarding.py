@@ -94,6 +94,7 @@ _CONFIG_KEY_ORDER = [
 ]
 
 _SKIP_MARKER = ".onboarding-skipped"
+_DEFAULT_PROFILE_NAME = "default"
 
 _SUCCESS_SECTIONS = [
     (
@@ -134,6 +135,7 @@ _SUCCESS_SECTIONS = [
         [
             ('swival --profile gpt5 "review this patch"', "Named profile"),
             ("swival --list-profiles", "See configured profiles"),
+            ("/profile", "List or switch profiles in the REPL"),
             ("swival --init-config --project", "Project-local config template"),
         ],
     ),
@@ -543,7 +545,7 @@ def _ask_generic(s: dict) -> None:
 
 def _ask_huggingface(s: dict) -> None:
     while True:
-        model = _prompt_text_required("Model (org/model, e.g. zai-org/GLM-5)")
+        model = _prompt_text_required("Model (org/model, e.g. zai-org/GLM-5.1)")
         if "/" in model:
             break
         _console.print(Text("  Must be in org/model format.", style="red"))
@@ -617,7 +619,11 @@ def render_minimal_config(settings: dict) -> str:
     lines = [
         "# Swival config, created by first-run setup.",
         "# Run `swival --init-config` to see all available options.",
+        "# Add more profiles with [profiles.<name>] and switch with `/profile <name>`.",
         "",
+        f'active_profile = "{_DEFAULT_PROFILE_NAME}"',
+        "",
+        f"[profiles.{_DEFAULT_PROFILE_NAME}]",
     ]
     for key in _CONFIG_KEY_ORDER:
         if key not in settings:
