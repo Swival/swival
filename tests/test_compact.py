@@ -1357,6 +1357,112 @@ class TestToolsNotSupportedLoop:
 
 
 # ---------------------------------------------------------------------------
+# Drop-tools fallback: emergency-truncate retry when server still rejects
+# ---------------------------------------------------------------------------
+
+
+class TestDropToolsEmergencyRetry:
+    """When every compaction level *and* the no-tools clamp succeed locally
+    but the server still raises ContextOverflowError, the agent must run
+    _emergency_truncate and retry instead of giving up.
+
+    Regression for: model rejects clamped prompt because our local tiktoken
+    estimate undercounts vs. the model's real tokenizer."""
+
+    @staticmethod
+    def _loop_kwargs(tmp_path, **overrides):
+        from swival.thinking import ThinkingState
+        from swival.todo import TodoState
+
+        defaults = dict(
+            api_base="http://127.0.0.1:1234",
+            model_id="test-model",
+            max_turns=1,
+            max_output_tokens=1024,
+            temperature=0.5,
+            top_p=None,
+            seed=None,
+            context_length=8000,
+            base_dir=str(tmp_path),
+            thinking_state=ThinkingState(verbose=False),
+            resolved_commands={},
+            skills_catalog={},
+            skill_read_roots=[],
+            extra_write_roots=[],
+            files_mode="some",
+            verbose=False,
+            llm_kwargs={"provider": "lmstudio", "api_key": None},
+            file_tracker=None,
+            todo_state=TodoState(verbose=False),
+        )
+        defaults.update(overrides)
+        return defaults
+
+    def test_recovers_when_server_rejects_after_drop_tools(self, tmp_path):
+        from swival.agent import run_agent_loop
+
+        call_count = 0
+
+        def fake_call_llm(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            tools_arg = args[7] if len(args) > 7 else kwargs.get("tools")
+            # Every call up to and including the drop-tools attempt fails
+            # with COE.  The first emergency-truncate retry succeeds.
+            if call_count <= 5:
+                raise ContextOverflowError(f"too long (call {call_count})")
+            assert tools_arg is None
+            return (
+                SimpleNamespace(
+                    content="recovered after truncation",
+                    tool_calls=None,
+                    role="assistant",
+                ),
+                "stop",
+                [],
+                0,
+                (0, 0),
+            )
+
+        messages = [_sys("system prompt"), _user("hello")]
+        with patch("swival.agent.call_llm", side_effect=fake_call_llm):
+            answer, exhausted = run_agent_loop(
+                messages,
+                _DUMMY_TOOLS,
+                **self._loop_kwargs(tmp_path),
+            )
+
+        assert answer == "recovered after truncation"
+        assert exhausted is False
+        assert call_count == 6
+
+    def test_eventual_failure_writes_continue_file(self, tmp_path):
+        """If even the most aggressive emergency-truncate retry fails, we
+        still raise ContextOverflowError (no infinite loop)."""
+        from swival.agent import run_agent_loop
+
+        call_count = 0
+
+        def fake_call_llm(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            raise ContextOverflowError(f"too long (call {call_count})")
+
+        messages = [_sys("system prompt"), _user("hello")]
+        with patch("swival.agent.call_llm", side_effect=fake_call_llm):
+            with pytest.raises(ContextOverflowError):
+                run_agent_loop(
+                    messages,
+                    _DUMMY_TOOLS,
+                    **self._loop_kwargs(tmp_path),
+                )
+
+        # Bounded: initial + 3 compaction levels + 1 drop-tools + 3
+        # emergency-truncate retries = 8 calls maximum.
+        assert call_count <= 8
+
+
+# ---------------------------------------------------------------------------
 # summarize_turns
 # ---------------------------------------------------------------------------
 

@@ -7035,6 +7035,92 @@ def run_agent_loop(
                         break
 
                 if not _drop_tools_ok:
+                    # The server still rejects us even after dropping tools
+                    # and trying every clamped budget.  This usually means
+                    # our local token estimate (tiktoken cl100k_base) is
+                    # under-counting against the model's real tokenizer.
+                    # Progressively shrink the prompt with _emergency_truncate
+                    # at ever-tighter targets, retrying each time, before
+                    # giving up.
+                    _base_ctx = context_length or estimate_tokens(messages, None)
+                    if _base_ctx <= 0:
+                        _base_ctx = 4096
+                    for _ratio in (0.5, 0.25, 0.1):
+                        _target = max(int(_base_ctx * _ratio), MIN_OUTPUT_TOKENS * 4)
+                        if verbose:
+                            fmt.warning(
+                                f"server still rejects prompt — emergency "
+                                f"truncating to ~{_target} tokens and retrying"
+                            )
+                        _emergency_truncate(messages, _target)
+                        if snapshot_state is not None:
+                            snapshot_state.invalidate_index_checkpoint()
+                        try:
+                            _retry_budget = clamp_output_tokens(
+                                messages, None, context_length, max_output_tokens
+                            )
+                        except ContextOverflowError:
+                            _retry_budget = MIN_OUTPUT_TOKENS
+                        _llm_args = (
+                            api_base,
+                            model_id,
+                            messages,
+                            _retry_budget,
+                            temperature,
+                            top_p,
+                            seed,
+                            None,
+                            verbose,
+                        )
+                        t0 = time.monotonic()
+                        try:
+                            with (
+                                fmt.llm_spinner(
+                                    f"Thinking (turn {turns}/{max_turns}, truncated)"
+                                )
+                                if verbose
+                                else nullcontext()
+                            ):
+                                _llm_result = call_llm(*_llm_args, **llm_kwargs)
+                                msg, finish_reason = (
+                                    _llm_result[0],
+                                    _llm_result[1],
+                                )
+                                cmd_activity = (
+                                    _llm_result[2] if len(_llm_result) > 2 else []
+                                )
+                                _provider_retries = (
+                                    _llm_result[3] if len(_llm_result) > 3 else 0
+                                )
+                                _cache_stats = (
+                                    _llm_result[4] if len(_llm_result) > 4 else (0, 0)
+                                )
+                        except ContextOverflowError:
+                            continue
+                        else:
+                            elapsed = time.monotonic() - t0
+                            if verbose:
+                                fmt.llm_timing(elapsed, finish_reason)
+                            _post_drop_tokens = estimate_tokens(messages, None)
+                            if report:
+                                report.record_llm_call(
+                                    turns + turn_offset,
+                                    elapsed,
+                                    _post_drop_tokens,
+                                    finish_reason,
+                                    is_retry=True,
+                                    retry_reason="emergency_truncate",
+                                    provider_retries=_provider_retries,
+                                    cached_tokens=_cache_stats[0],
+                                    cache_write_tokens=_cache_stats[1],
+                                )
+                            _account_goal_usage(
+                                _post_drop_tokens, _cache_stats, elapsed
+                            )
+                            _drop_tools_ok = True
+                            break
+
+                if not _drop_tools_ok:
                     if continue_here:
                         from .continue_here import write_continue_file
 
