@@ -5,7 +5,7 @@ The `/audit` command runs a multi-phase security audit over committed Git-tracke
 It triages files by attack surface, performs deep review on escalated files, verifies each finding with an isolated proof-of-concept agent, generates patches, and writes structured reports. Only provable bugs survive to the final output.
 
 ```text
-/audit [path|glob ...] [--resume] [--regen] [--all] [--workers N] [--debug]
+/audit [path|glob ...] [--resume] [--regen] [--all] [--measure-triage] [--workers N] [--debug]
 ```
 
 Works in both interactive (REPL) and one-shot mode (requires `--oneshot-commands`). Runs against `HEAD`, so dirty working-directory changes are ignored.
@@ -63,9 +63,9 @@ Files are ordered by an attack-surface heuristic that scores keywords like `exec
 
 Each auditable file is triaged independently. The LLM sees the file contents, its attack-surface score, import/dependency context, and the repository profile. It returns one of three labels:
 
-- **ESCALATE_HIGH** — concrete suspicious path or invariant break worth deep review
-- **ESCALATE_MEDIUM** — plausible concern, lower confidence
-- **SKIP** — no evidence for escalation
+- **ESCALATE_HIGH**: concrete suspicious path or invariant break worth deep review
+- **ESCALATE_MEDIUM**: plausible concern, lower confidence
+- **SKIP**: no evidence for escalation
 
 The triage prompt is intentionally precision-biased: it prefers SKIP under uncertainty. To recover false negatives, several deterministic signals override SKIP after the LLM verdict:
 
@@ -83,9 +83,9 @@ Triage runs in parallel with configurable worker count. The end-of-phase output 
 
 Each escalated file goes through a two-step deep review.
 
-**Inventory (3a):** The LLM produces a compact list of finding stubs — title, severity, exact `path:line` location, and a one-line claim under 20 words. At most 3 findings per file. Speculative findings are explicitly rejected.
+**Inventory (3a):** The LLM produces a compact list of finding stubs (title, severity, exact `path:line` location, and a one-line claim under 20 words). At most 3 findings per file. Speculative findings are explicitly rejected.
 
-**Expansion (3b):** Each finding stub is expanded with proof details — finding type, preconditions, a propagation-path proof, and a minimal fix outline. Expansion runs in parallel (up to 2 workers per file).
+**Expansion (3b):** Each finding stub is expanded with proof details: finding type, preconditions, a propagation-path proof, and a minimal fix outline. Expansion runs in parallel (up to 2 workers per file).
 
 The two are merged into canonical `FindingRecord` objects. JSON parse failures trigger an automatic LLM repair pass; if repair also fails, the entire file gets one analytical retry.
 
@@ -95,8 +95,8 @@ Each proposed finding is treated as a hypothesis. A verifier agent runs in an is
 
 The verifier can inspect code and optionally compile or run small proof-of-concept programs. It must end with one of two verdicts:
 
-- **REPRODUCED** — the finding is real and the verifier demonstrated it
-- **NOTREPRODUCED** — the code does not support a practical trigger path
+- **REPRODUCED**: the finding is real and the verifier demonstrated it
+- **NOTREPRODUCED**: the code does not support a practical trigger path
 
 Verified findings advance to artifact generation. Discarded findings are dropped. Failed verifications (infrastructure errors, timeouts) are retried once for transient errors and can be resumed with `--resume`.
 
@@ -168,7 +168,7 @@ The flag composes with focus paths and is best paired with one: bare `/audit --a
 
 Triage occasionally catches that a file is vendored or generated and skips it. With `--all`, those files reach Phase 3 anyway and burn LLM calls there; scope `--all` to directories you actually wrote.
 
-`--measure-triage` is a calibration mode for the Phase 2 selector. It runs Phase 2 normally, snapshots which files were escalated, then deep-reviews every file in scope (the `--all` set). Each verified finding is tagged with whether its source file was escalated or skipped by triage. The Phase 5 output ends with a recall section that counts findings on skipped files: those are the false negatives. Use this to quantify recall before or after tuning promotion thresholds. The mode is expensive — it pays the full `--all` cost plus an extra Phase 2 — so it is a calibration tool, not a default. A run started with `--measure-triage` cannot be resumed without it (and vice versa); start a fresh run instead.
+`--measure-triage` is a calibration mode for the Phase 2 selector. It runs Phase 2 normally, snapshots which files were escalated, then deep-reviews every file in scope (the `--all` set). Each verified finding is tagged with whether its source file was escalated or skipped by triage. The Phase 5 output ends with a recall section that counts findings on skipped files: those are the false negatives. Use this to quantify recall before or after tuning promotion thresholds. The mode is expensive (it pays the full `--all` cost plus an extra Phase 2), so it is a calibration tool, not a default. A run started with `--measure-triage` cannot be resumed without it (and vice versa); start a fresh run instead.
 
 ```text
 swival> /audit --measure-triage swival/
@@ -202,11 +202,11 @@ swival> /audit src/api/ --regen
 force_review = ["swival/audit.py", "swival/edit.py", "swival/sandbox_*.py"]
 ```
 
-`force_review` is a list of fnmatch globs evaluated against repo-relative paths from `git ls-files`. A trailing `/` on an entry expands to the directory and everything below it (`src/` matches `src/a.py`, `src/sub/b.py`, and so on). Matching files are unconditionally promoted into Phase 3, regardless of what triage decides — a surgical alternative to `--all` for paths you always want deep-reviewed.
+`force_review` is a list of fnmatch globs evaluated against repo-relative paths from `git ls-files`. A trailing `/` on an entry expands to the directory and everything below it (`src/` matches `src/a.py`, `src/sub/b.py`, and so on). Matching files are unconditionally promoted into Phase 3, regardless of what triage decides. It is the surgical alternative to `--all` for paths you always want deep-reviewed.
 
 A glob in the project file that matches zero paths in scope produces a warning, since it usually means a stale entry after a rename. Globs in the global file are silent on zero matches, on the assumption that a global glob like `swival/audit.py` will trivially miss in unrelated repositories. Globs from both files are merged: project entries layer on top of global entries.
 
-Adding a glob between runs takes effect on resume — if a saved run has a SKIP record for a path that now matches `force_review`, the resume promotes that record before Phase 3 sees it. Removing a glob is *not* honored on resume; rescinding mid-audit is more confusing than it is worth, so re-run from scratch instead.
+Adding a glob between runs takes effect on resume: if a saved run has a SKIP record for a path that now matches `force_review`, the resume promotes that record before Phase 3 sees it. Removing a glob is *not* honored on resume; rescinding mid-audit is more confusing than it is worth, so re-run from scratch instead.
 
 ## Scope
 
@@ -227,12 +227,13 @@ When a focus argument is provided, it works as both an fnmatch pattern and a pre
 Audit state is persisted in `.swival/audit/<run_id>/state.json`. This includes:
 
 - Scope (branch, commit, file list, focus)
-- All triage records
+- All triage records, including the LLM verdict, promotion reasons, any infrastructure-failure tag, and the confirmation-pass outcome
 - Proposed and verified findings
 - Verification status for each finding (pending, running, verified, discarded, failed)
 - Metrics (parse failures, repair successes, analytical retries)
+- Per-file attack-surface scores cached from Phase 1
 - Current phase and next artifact index
-- `select_all` flag (whether the run was started with `--all`)
+- `select_all` flag (whether the run was started with `--all`) and `measure_triage` flag (whether the run was started with `--measure-triage`)
 
 LLM interactions are traced to `.swival/audit/<run_id>/traces/` when `--trace-dir` is set on the outer session.
 
