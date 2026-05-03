@@ -29,6 +29,10 @@ INPUT_COMMANDS: dict[str, CommandInfo] = {
         options=(
             ("--resume", "Resume a previous audit run from its last checkpoint"),
             ("--regen", "Regenerate reports and patches for a completed audit run"),
+            (
+                "--all",
+                "Deep-review every file in scope; skip the triage selection",
+            ),
             ("--workers N", "Number of parallel verification workers (default: 4)"),
             (
                 "--debug",

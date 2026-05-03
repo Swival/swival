@@ -96,7 +96,7 @@
             <h1 id="swival-security-scanner">Swival Security Scanner</h1>
 <p>The <code>/audit</code> command runs a multi-phase security audit over committed Git-tracked code.</p>
 <p>It triages files by attack surface, performs deep review on escalated files, verifies each finding with an isolated proof-of-concept agent, generates patches, and writes structured reports. Only provable bugs survive to the final output.</p>
-<pre><code class="language-text">/audit [path|glob ...] [--resume] [--regen] [--workers N] [--debug]
+<pre><code class="language-text">/audit [path|glob ...] [--resume] [--regen] [--all] [--workers N] [--debug]
 </code></pre>
 <p>Works in both interactive (REPL) and one-shot mode (requires <code>--oneshot-commands</code>). Runs against <code>HEAD</code>, so dirty working-directory changes are ignored.</p>
 <h2 id="quick-start">Quick Start</h2>
@@ -185,6 +185,11 @@ Audit complete. 2 finding(s) written to audit-findings/. Run `ls audit-findings/
 <p><code>--regen</code> regenerates reports and patches for a completed audit run. It reuses the verified findings from the original run and re-runs only phase 5 (artifact generation). This is useful when you want to improve patch quality without repeating the expensive triage, deep review, and verification phases.</p>
 <pre><code class="language-text">swival&gt; /audit --regen
 </code></pre>
+<p><code>--all</code> skips the Phase 2 triage selection and sends every file in scope straight to deep review. Useful when you have already narrowed scope to a subtree you want exhaustively reviewed and do not want the triage step deciding which files are worth a closer look.</p>
+<pre><code class="language-text">swival&gt; /audit --all swival/
+</code></pre>
+<p>The flag composes with focus paths and is best paired with one: bare <code>/audit --all</code> deep-reviews every auditable file in the repo, which on a non-tiny project is expensive. It is recorded on the run when it starts and is <em>not</em> part of the resume-matching key. A bare <code>/audit --resume</code> will pick up an <code>--all</code> run, and passing <code>--all</code> on a resume invocation has no effect (the persisted value wins). When more than one matching run exists, <code>--resume</code> picks the most recently modified one, so a fresh <code>--all</code> run shadows an older non-<code>--all</code> run with the same scope.</p>
+<p>Triage occasionally catches that a file is vendored or generated and skips it. With <code>--all</code>, those files reach Phase 3 anyway and burn LLM calls there; scope <code>--all</code> to directories you actually wrote.</p>
 <p><code>--workers N</code> sets the number of parallel workers for triage and verification (default: 4). Verification is always capped at 2 regardless of this value.</p>
 <pre><code class="language-text">swival&gt; /audit --workers 8
 </code></pre>

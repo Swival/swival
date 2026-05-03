@@ -244,6 +244,7 @@ class AuditRunState:
     next_index: int = 1
     phase: str = "init"
     metrics: dict[str, int] = field(default_factory=lambda: dict(_DEFAULT_METRICS))
+    select_all: bool = False
 
     def save(self) -> None:
         d = self.state_dir / self.run_id
@@ -273,6 +274,7 @@ class AuditRunState:
             "next_index": self.next_index,
             "phase": self.phase,
             "metrics": self.metrics,
+            "select_all": self.select_all,
         }
         state_path = d / "state.json"
         tmp = state_path.with_suffix(".tmp")
@@ -316,6 +318,7 @@ class AuditRunState:
             next_index=blob.get("next_index", 1),
             phase=blob.get("phase", "init"),
             metrics=blob.get("metrics", dict(_DEFAULT_METRICS)),
+            select_all=bool(blob.get("select_all", False)),
         )
         return state
 
@@ -2506,6 +2509,7 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
     resume = False
     regen = False
     debug = False
+    select_all = False
     focus: list[str] | None = None
 
     parts = arg.split()
@@ -2518,6 +2522,8 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
             regen = True
         elif parts[i] == "--debug":
             debug = True
+        elif parts[i] == "--all":
+            select_all = True
         elif parts[i] == "--workers" and i + 1 < len(parts):
             i += 1
             try:
@@ -2543,7 +2549,15 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
 
     try:
         return _run_audit_phases(
-            cmd_arg, ctx, base_dir, state_dir, workers, resume, regen, focus
+            cmd_arg,
+            ctx,
+            base_dir,
+            state_dir,
+            workers,
+            resume,
+            regen,
+            focus,
+            select_all,
         )
     finally:
         _debug_log_path = None
@@ -2558,6 +2572,7 @@ def _run_audit_phases(
     resume: bool,
     regen: bool,
     focus: list[str] | None,
+    select_all: bool = False,
 ) -> str:
     if resume or regen:
         try:
@@ -2597,17 +2612,29 @@ def _run_audit_phases(
             scope=scope,
             queued_files=list(scope.mandatory_files),
             state_dir=state_dir,
+            select_all=select_all,
         )
+        all_marker = " --all" if state.select_all else ""
         fmt.info(
             f"audit {state.run_id}: {len(scope.mandatory_files)} files, "
-            f"branch={scope.branch}, commit={scope.commit[:8]}"
+            f"branch={scope.branch}, commit={scope.commit[:8]}{all_marker}"
         )
         if len(scope.mandatory_files) > _LARGE_SCOPE_THRESHOLD:
+            n = len(scope.mandatory_files)
+            if state.select_all:
+                preamble = f"{n} files in scope with --all (triage selection skipped)"
+                detail = (
+                    "phase 3 will deep-review every file in scope, "
+                    "issuing at least one LLM call per file"
+                )
+                hint = "/audit --all <subdir>"
+            else:
+                preamble = f"{n} files in scope"
+                detail = f"phase 2 may issue up to {n} LLM calls"
+                hint = "/audit <subdir>"
             fmt.warning(
-                f"{len(scope.mandatory_files)} files in scope. "
-                f"phase 2 may issue up to {len(scope.mandatory_files)} LLM calls. "
-                f"consider narrowing with `/audit <subdir>` "
-                f"(one or more paths/globs)."
+                f"{preamble}. {detail}. "
+                f"consider narrowing with `{hint}` (one or more paths/globs)."
             )
 
     # Phase 1: scope + profile
@@ -2632,7 +2659,16 @@ def _run_audit_phases(
             f"phase 1 complete. profile: {state.repo_profile.get('summary', '')[:80]}"
         )
 
-    # Phase 2: triage
+    if state.phase == "triage" and state.select_all:
+        state.candidate_files = list(state.queued_files)
+        state.reviewed_files.update(state.queued_files)
+        state.phase = "deep_review"
+        state.save()
+        fmt.info(
+            f"phase 2: skipped (--all); {len(state.candidate_files)} files "
+            f"queued for deep review"
+        )
+
     if state.phase == "triage":
 
         def _triage(path):

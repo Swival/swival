@@ -77,6 +77,36 @@ def _commit_file(tmp_path: Path, rel_path: str, content: str) -> None:
     )
 
 
+def _make_ctx(tmp_path: Path):
+    """Build a minimal InputContext stand-in for parser/dispatch tests."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        base_dir=str(tmp_path),
+        tools=[],
+        verbose=False,
+        no_history=True,
+        loop_kwargs={},
+    )
+
+
+def _capture_run_audit_phases(monkeypatch) -> dict:
+    """Replace `_run_audit_phases` with a recorder; return the kwargs dict."""
+    import inspect
+
+    from swival.audit import _run_audit_phases
+
+    sig = inspect.signature(_run_audit_phases)
+    captured: dict = {}
+
+    def fake_phases(*args, **kwargs):
+        captured.update(sig.bind(*args, **kwargs).arguments)
+        return "captured"
+
+    monkeypatch.setattr("swival.audit._run_audit_phases", fake_phases)
+    return captured
+
+
 # ---------------------------------------------------------------------------
 # Command registration
 # ---------------------------------------------------------------------------
@@ -4330,37 +4360,11 @@ class TestMultiFocusPaths:
 class TestAuditCommandParser:
     """Parser-level tests: capture kwargs passed to _run_audit_phases."""
 
-    def _capture(self, monkeypatch):
-        import inspect
-
-        from swival.audit import _run_audit_phases
-
-        sig = inspect.signature(_run_audit_phases)
-        captured: dict = {}
-
-        def fake_phases(*args, **kwargs):
-            captured.update(sig.bind(*args, **kwargs).arguments)
-            return "captured"
-
-        monkeypatch.setattr("swival.audit._run_audit_phases", fake_phases)
-        return captured
-
-    def _make_ctx(self, tmp_path: Path):
-        from types import SimpleNamespace
-
-        return SimpleNamespace(
-            base_dir=str(tmp_path),
-            tools=[],
-            verbose=False,
-            no_history=True,
-            loop_kwargs={},
-        )
-
     def test_no_args_passes_focus_none(self, monkeypatch, tmp_path):
         from swival.audit import run_audit_command
 
-        captured = self._capture(monkeypatch)
-        run_audit_command("", self._make_ctx(tmp_path))
+        captured = _capture_run_audit_phases(monkeypatch)
+        run_audit_command("", _make_ctx(tmp_path))
         assert captured["focus"] is None
         assert captured["workers"] == 4
         assert captured["resume"] is False
@@ -4369,8 +4373,8 @@ class TestAuditCommandParser:
     def test_two_paths_collected_as_list(self, monkeypatch, tmp_path):
         from swival.audit import run_audit_command
 
-        captured = self._capture(monkeypatch)
-        run_audit_command("src/a src/b --workers 2 --resume", self._make_ctx(tmp_path))
+        captured = _capture_run_audit_phases(monkeypatch)
+        run_audit_command("src/a src/b --workers 2 --resume", _make_ctx(tmp_path))
         assert captured["focus"] == ["src/a", "src/b"]
         assert captured["workers"] == 2
         assert captured["resume"] is True
@@ -4378,15 +4382,330 @@ class TestAuditCommandParser:
     def test_dedupes_repeated_paths(self, monkeypatch, tmp_path):
         from swival.audit import run_audit_command
 
-        captured = self._capture(monkeypatch)
-        run_audit_command("src/a src/a/", self._make_ctx(tmp_path))
+        captured = _capture_run_audit_phases(monkeypatch)
+        run_audit_command("src/a src/a/", _make_ctx(tmp_path))
         assert captured["focus"] == ["src/a"]
 
     def test_flag_intermixing(self, monkeypatch, tmp_path):
         from swival.audit import run_audit_command
 
-        captured = self._capture(monkeypatch)
-        run_audit_command("--resume src/a --workers 4 src/b", self._make_ctx(tmp_path))
+        captured = _capture_run_audit_phases(monkeypatch)
+        run_audit_command("--resume src/a --workers 4 src/b", _make_ctx(tmp_path))
         assert captured["focus"] == ["src/a", "src/b"]
         assert captured["workers"] == 4
         assert captured["resume"] is True
+
+
+class TestSelectAll:
+    """Tests for the /audit --all flag (skip Phase 2 triage)."""
+
+    def _scope(self, files):
+        return AuditScope(
+            branch="main",
+            commit="abc123",
+            tracked_files=list(files),
+            mandatory_files=list(files),
+            focus=[],
+        )
+
+    def test_select_all_round_trips_through_save_load(self, tmp_path):
+        scope = self._scope(["a.py"])
+        state = AuditRunState(
+            run_id="ra",
+            scope=scope,
+            queued_files=["a.py"],
+            state_dir=tmp_path / ".swival" / "audit",
+            select_all=True,
+        )
+        state.save()
+
+        loaded = AuditRunState.load(state.state_dir, "ra")
+        assert loaded.select_all is True
+
+    def test_select_all_default_false_when_absent_from_legacy_state(self, tmp_path):
+        import json
+
+        state_dir = tmp_path / ".swival" / "audit"
+        run_dir = state_dir / "legacy"
+        run_dir.mkdir(parents=True)
+        blob = {
+            "run_id": "legacy",
+            "scope": {
+                "branch": "main",
+                "commit": "abc",
+                "tracked_files": ["a.py"],
+                "mandatory_files": ["a.py"],
+                "focus": [],
+            },
+            "queued_files": ["a.py"],
+            "phase": "triage",
+        }
+        (run_dir / "state.json").write_text(json.dumps(blob))
+
+        loaded = AuditRunState.load(state_dir, "legacy")
+        assert loaded.select_all is False
+
+    # -- Parser plumbing -----------------------------------------------------
+
+    def test_parser_sets_select_all_true_with_flag(self, monkeypatch, tmp_path):
+        from swival.audit import run_audit_command
+
+        captured = _capture_run_audit_phases(monkeypatch)
+        run_audit_command("--all src/foo", _make_ctx(tmp_path))
+        assert captured["select_all"] is True
+        assert captured["focus"] == ["src/foo"]
+
+    def test_parser_select_all_false_by_default(self, monkeypatch, tmp_path):
+        from swival.audit import run_audit_command
+
+        captured = _capture_run_audit_phases(monkeypatch)
+        run_audit_command("src/foo", _make_ctx(tmp_path))
+        assert captured["select_all"] is False
+        assert captured["focus"] == ["src/foo"]
+
+    # -- Phase 2 bypass ------------------------------------------------------
+
+    def _stub_pipeline(self, monkeypatch, triage_calls: list):
+        """Stub Phase 1 and Phase 3-5 so the pipeline is driven without LLM calls.
+        Phase 2's triage worker is stubbed to record any unexpected invocation."""
+        from swival.audit import DeepReviewResult
+
+        monkeypatch.setattr(
+            "swival.audit._phase1_repo_profile",
+            lambda state, ctx: {"summary": "stub"},
+        )
+
+        def record_triage(path, state, ctx):
+            triage_calls.append(path)
+            return None
+
+        monkeypatch.setattr("swival.audit._phase2_triage_one", record_triage)
+        monkeypatch.setattr(
+            "swival.audit._deep_review_one",
+            lambda path, state, ctx: DeepReviewResult(path=path, findings=[]),
+        )
+        monkeypatch.setattr(
+            "swival.audit._verify_one_finding",
+            lambda item, state, ctx: VerificationResult(
+                finding_key=item[0], discarded=True
+            ),
+        )
+        monkeypatch.setattr(
+            "swival.audit._phase5_patch", lambda vf, ctx, state: "--- patch ---"
+        )
+        monkeypatch.setattr(
+            "swival.audit._phase5_report",
+            lambda vf, patch_fn, patch_text, ctx: "# Report",
+        )
+
+    def test_select_all_skips_phase2_triage(self, monkeypatch, tmp_path):
+        from swival.audit import run_audit_command
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "import os")
+        _commit_file(tmp_path, "b.py", "import sys")
+
+        triage_calls: list[str] = []
+        self._stub_pipeline(monkeypatch, triage_calls)
+
+        result = run_audit_command("--all", _make_ctx(tmp_path))
+
+        assert triage_calls == []
+        assert "Audit incomplete" not in result
+
+        state_dir = Path(tmp_path) / ".swival" / "audit"
+        run_dir = next(p for p in state_dir.iterdir() if (p / "state.json").exists())
+        loaded = AuditRunState.load(state_dir, run_dir.name)
+        assert loaded.phase == "done"
+        assert loaded.select_all is True
+        assert set(loaded.candidate_files) == set(loaded.queued_files)
+        assert set(loaded.scope.mandatory_files).issubset(loaded.reviewed_files)
+
+    # -- Diagnostics ---------------------------------------------------------
+
+    def test_select_all_emits_skip_line_and_banner(self, monkeypatch, tmp_path):
+        from swival.audit import run_audit_command
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "pass")
+
+        info_lines: list[str] = []
+        warning_lines: list[str] = []
+        monkeypatch.setattr("swival.audit.fmt.info", info_lines.append)
+        monkeypatch.setattr("swival.audit.fmt.warning", warning_lines.append)
+
+        triage_calls: list[str] = []
+        self._stub_pipeline(monkeypatch, triage_calls)
+
+        run_audit_command("--all", _make_ctx(tmp_path))
+
+        assert any(" --all" in line for line in info_lines), info_lines
+        assert any("phase 2: skipped (--all)" in line for line in info_lines), (
+            info_lines
+        )
+
+    def test_select_all_sharpens_large_scope_warning(self, monkeypatch, tmp_path):
+        import swival.audit as audit_mod
+        from swival.audit import run_audit_command
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "pass")
+
+        warning_lines: list[str] = []
+        monkeypatch.setattr("swival.audit.fmt.warning", warning_lines.append)
+        monkeypatch.setattr(audit_mod, "_LARGE_SCOPE_THRESHOLD", 0)
+
+        self._stub_pipeline(monkeypatch, [])
+
+        run_audit_command("--all", _make_ctx(tmp_path))
+
+        assert any("--all" in line for line in warning_lines), warning_lines
+        assert any("triage selection skipped" in line for line in warning_lines), (
+            warning_lines
+        )
+
+    # -- Phase 3 with no triage record ---------------------------------------
+
+    def test_phase3a_inventory_handles_missing_triage_record(
+        self, monkeypatch, tmp_path
+    ):
+        from types import SimpleNamespace
+
+        from swival.audit import _phase3a_inventory
+
+        scope = self._scope(["a.py"])
+        state = AuditRunState(
+            run_id="r",
+            scope=scope,
+            queued_files=["a.py"],
+            triage_records={},
+            repo_profile={"summary": "tiny repo"},
+            state_dir=tmp_path,
+            select_all=True,
+        )
+        ctx = SimpleNamespace(base_dir=str(tmp_path), loop_kwargs={})
+
+        captured: dict = {}
+
+        def fake_call(ctx, messages, temperature=0.0, trace_task=None):
+            captured["user"] = messages[1]["content"]
+            return "@@ none @@"
+
+        monkeypatch.setattr("swival.audit._call_audit_llm", fake_call)
+
+        _phase3a_inventory("a.py", state, ctx, content="print('x')")
+
+        assert "Focus bug classes: all" in captured["user"]
+        assert "Phase 2 triage result:\n{}" in captured["user"]
+
+    # -- Resume preservation -------------------------------------------------
+
+    def test_resume_preserves_persisted_select_all_true(self, monkeypatch, tmp_path):
+        """A persisted select_all=True survives resume even if --all isn't passed."""
+        from swival.audit import _run_audit_phases
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "pass")
+
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+        state_dir = Path(tmp_path) / ".swival" / "audit"
+        scope = AuditScope(
+            branch="main",
+            commit=commit,
+            tracked_files=["a.py"],
+            mandatory_files=["a.py"],
+            focus=[],
+        )
+        state = AuditRunState(
+            run_id="ra",
+            scope=scope,
+            queued_files=["a.py"],
+            candidate_files=["a.py"],
+            reviewed_files={"a.py"},
+            deep_reviewed_files={"a.py"},
+            state_dir=state_dir,
+            phase="verification",
+            select_all=True,
+        )
+        state.save()
+
+        triage_calls: list[str] = []
+        self._stub_pipeline(monkeypatch, triage_calls)
+
+        _run_audit_phases(
+            "--resume",
+            _make_ctx(tmp_path),
+            str(tmp_path),
+            state_dir,
+            workers=1,
+            resume=True,
+            regen=False,
+            focus=None,
+            select_all=False,
+        )
+
+        loaded = AuditRunState.load(state_dir, "ra")
+        assert loaded.select_all is True
+
+    def test_resume_ignores_runtime_select_all_when_persisted_false(
+        self, monkeypatch, tmp_path
+    ):
+        """Runtime --all on resume does not flip a persisted select_all=False."""
+        from swival.audit import _run_audit_phases
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "pass")
+
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+        state_dir = Path(tmp_path) / ".swival" / "audit"
+        scope = AuditScope(
+            branch="main",
+            commit=commit,
+            tracked_files=["a.py"],
+            mandatory_files=["a.py"],
+            focus=[],
+        )
+        state = AuditRunState(
+            run_id="rb",
+            scope=scope,
+            queued_files=["a.py"],
+            candidate_files=["a.py"],
+            reviewed_files={"a.py"},
+            deep_reviewed_files={"a.py"},
+            state_dir=state_dir,
+            phase="verification",
+            select_all=False,
+        )
+        state.save()
+
+        triage_calls: list[str] = []
+        self._stub_pipeline(monkeypatch, triage_calls)
+
+        _run_audit_phases(
+            "--all --resume",
+            _make_ctx(tmp_path),
+            str(tmp_path),
+            state_dir,
+            workers=1,
+            resume=True,
+            regen=False,
+            focus=None,
+            select_all=True,
+        )
+
+        loaded = AuditRunState.load(state_dir, "rb")
+        assert loaded.select_all is False

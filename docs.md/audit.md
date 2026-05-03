@@ -5,7 +5,7 @@ The `/audit` command runs a multi-phase security audit over committed Git-tracke
 It triages files by attack surface, performs deep review on escalated files, verifies each finding with an isolated proof-of-concept agent, generates patches, and writes structured reports. Only provable bugs survive to the final output.
 
 ```text
-/audit [path|glob ...] [--resume] [--regen] [--workers N] [--debug]
+/audit [path|glob ...] [--resume] [--regen] [--all] [--workers N] [--debug]
 ```
 
 Works in both interactive (REPL) and one-shot mode (requires `--oneshot-commands`). Runs against `HEAD`, so dirty working-directory changes are ignored.
@@ -148,6 +148,16 @@ swival> /audit --resume
 swival> /audit --regen
 ```
 
+`--all` skips the Phase 2 triage selection and sends every file in scope straight to deep review. Useful when you have already narrowed scope to a subtree you want exhaustively reviewed and do not want the triage step deciding which files are worth a closer look.
+
+```text
+swival> /audit --all swival/
+```
+
+The flag composes with focus paths and is best paired with one: bare `/audit --all` deep-reviews every auditable file in the repo, which on a non-tiny project is expensive. It is recorded on the run when it starts and is *not* part of the resume-matching key. A bare `/audit --resume` will pick up an `--all` run, and passing `--all` on a resume invocation has no effect (the persisted value wins). When more than one matching run exists, `--resume` picks the most recently modified one, so a fresh `--all` run shadows an older non-`--all` run with the same scope.
+
+Triage occasionally catches that a file is vendored or generated and skips it. With `--all`, those files reach Phase 3 anyway and burn LLM calls there; scope `--all` to directories you actually wrote.
+
 `--workers N` sets the number of parallel workers for triage and verification (default: 4). Verification is always capped at 2 regardless of this value.
 
 ```text
@@ -191,6 +201,7 @@ Audit state is persisted in `.swival/audit/<run_id>/state.json`. This includes:
 - Verification status for each finding (pending, running, verified, discarded, failed)
 - Metrics (parse failures, repair successes, analytical retries)
 - Current phase and next artifact index
+- `select_all` flag (whether the run was started with `--all`)
 
 LLM interactions are traced to `.swival/audit/<run_id>/traces/` when `--trace-dir` is set on the outer session.
 
