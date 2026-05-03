@@ -2,6 +2,11 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.14
+
+- `/audit` now accepts an `--all` flag that skips Phase 2 triage and sends every file in scope straight to deep review. Useful when you have already narrowed scope to a subtree you want exhaustively reviewed and do not want triage second-guessing which files are worth a closer look. The flag is recorded with the run, so a bare `/audit --resume` picks up an `--all` run without needing the flag again.
+- Server-side context overflow is now recoverable. When the local tiktoken estimate under-counts against the model's real tokenizer, the agent used to give up after the no-tools clamp also got rejected. It now progressively truncates the prompt at tighter targets (50%, 25%, 10% of the context window) and retries each one before declaring the turn lost.
+
 ## 1.0.13
 
 - A goal-driven mode has been added: a structured spin on the Ralph-style "keep prompting until it's done" loop. Set an objective with `/goal <objective>` in the REPL and the agent doesn't get to declare victory and walk away after one turn. The original objective is fed back to the model after every answer, and the loop only ends when the agent itself signals the goal is complete after a real evidence-based audit, declares a blocker, or hits the optional token budget. This makes it practical to point Swival at ambitious, long-running tasks like refactors, audits, or end-to-end fixes, and let it grind for hours without giving up halfway. `/goal pause`, `/goal resume`, `/goal replace`, and `/goal clear` give you full control.
