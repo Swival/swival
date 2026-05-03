@@ -713,6 +713,25 @@ class TestConfigToSessionKwargs:
         assert "oneshot_commands" not in kwargs
         assert kwargs["provider"] == "lmstudio"
 
+    def test_drops_audit(self):
+        """[audit] is not a Session concern; passing it would crash Session().
+
+        Session itself doesn't accept an `audit` kwarg, so config_to_session_kwargs
+        must strip it. The /audit command reads the section directly via load_config
+        on demand.
+        """
+        from swival.session import Session
+
+        kwargs = config_to_session_kwargs(
+            {
+                "audit": {"force_review": ["a.py"]},
+                "provider": "lmstudio",
+            }
+        )
+        assert "audit" not in kwargs
+        # Smoke-test: Session(**kwargs) must not raise.
+        Session(**kwargs)
+
 
 # ===========================================================================
 # resolve_commands accepts both types

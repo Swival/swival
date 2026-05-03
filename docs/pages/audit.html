@@ -126,13 +126,23 @@ Audit complete. 2 finding(s) written to audit-findings/. Run `ls audit-findings/
 <p>Reads manifests (<code>package.json</code>, <code>pyproject.toml</code>, <code>Cargo.toml</code>, <code>Makefile</code>, etc.) and entry-point candidates from committed code, then calls the LLM to produce a compact repository profile: detected languages, frameworks, entry points, trust boundaries, persistence layers, auth surfaces, and dangerous operations. This profile is reused as context in every subsequent phase.</p>
 <p>Files are ordered by an attack-surface heuristic that scores keywords like <code>exec</code>, <code>eval</code>, <code>auth</code>, <code>token</code>, <code>sql</code>, <code>template</code>, and <code>socket</code>. Higher-scoring files are processed first.</p>
 <h3 id="phase-2-triage">Phase 2: Triage</h3>
-<p>Each auditable file is triaged independently. The LLM sees the file contents, its attack-surface score, import/caller context, and the repository profile. It returns one of three labels:</p>
+<p>Each auditable file is triaged independently. The LLM sees the file contents, its attack-surface score, import/dependency context, and the repository profile. It returns one of three labels:</p>
 <ul>
 <li><strong>ESCALATE_HIGH</strong> — concrete suspicious path or invariant break worth deep review</li>
 <li><strong>ESCALATE_MEDIUM</strong> — plausible concern, lower confidence</li>
 <li><strong>SKIP</strong> — no evidence for escalation</li>
 </ul>
-<p>Files labeled SKIP are not reviewed further. Triage runs in parallel with configurable worker count.</p>
+<p>The triage prompt is intentionally precision-biased: it prefers SKIP under uncertainty. To recover false negatives, several deterministic signals override SKIP after the LLM verdict:</p>
+<ul>
+<li>A file with an attack-surface score of 8 or more is escalated regardless of the LLM verdict.</li>
+<li>A file listed by Phase 1 as an entry point or trust boundary is escalated.</li>
+<li>A file that an entry point references directly (one-hop dependency) and that has a non-zero attack-surface score is escalated.</li>
+<li>A triage record with <code>needs_followup: true</code> is escalated outright. Triage already produces this signal; we now act on it.</li>
+<li>A file whose triage call timed out, raised a network error, or produced an unparseable response is escalated. This is fail-open behavior: the model never gave a real verdict, so we err on the side of looking.</li>
+<li>Any file matched by a <code>[audit] force_review</code> glob in <code>swival.toml</code> (see Configuration, below).</li>
+<li>A second confirmation pass for any file the LLM marked SKIP with low confidence: the same file is re-triaged with richer evidence (its dependency list and the contents of its highest-scoring dependency). The confirmation pass typically affects 10 to 20 percent of triage targets.</li>
+</ul>
+<p>Triage runs in parallel with configurable worker count. The end-of-phase output breaks down the escalated count by reason and prints the top five SKIPped files by attack-surface score, so a wrong call is catchable before Phase 3 begins.</p>
 <h3 id="phase-3-deep-review">Phase 3: Deep Review</h3>
 <p>Each escalated file goes through a two-step deep review.</p>
 <p><strong>Inventory (3a):</strong> The LLM produces a compact list of finding stubs — title, severity, exact <code>path:line</code> location, and a one-line claim under 20 words. At most 3 findings per file. Speculative findings are explicitly rejected.</p>
@@ -190,6 +200,9 @@ Audit complete. 2 finding(s) written to audit-findings/. Run `ls audit-findings/
 </code></pre>
 <p>The flag composes with focus paths and is best paired with one: bare <code>/audit --all</code> deep-reviews every auditable file in the repo, which on a non-tiny project is expensive. It is recorded on the run when it starts and is <em>not</em> part of the resume-matching key. A bare <code>/audit --resume</code> will pick up an <code>--all</code> run, and passing <code>--all</code> on a resume invocation has no effect (the persisted value wins). When more than one matching run exists, <code>--resume</code> picks the most recently modified one, so a fresh <code>--all</code> run shadows an older non-<code>--all</code> run with the same scope.</p>
 <p>Triage occasionally catches that a file is vendored or generated and skips it. With <code>--all</code>, those files reach Phase 3 anyway and burn LLM calls there; scope <code>--all</code> to directories you actually wrote.</p>
+<p><code>--measure-triage</code> is a calibration mode for the Phase 2 selector. It runs Phase 2 normally, snapshots which files were escalated, then deep-reviews every file in scope (the <code>--all</code> set). Each verified finding is tagged with whether its source file was escalated or skipped by triage. The Phase 5 output ends with a recall section that counts findings on skipped files: those are the false negatives. Use this to quantify recall before or after tuning promotion thresholds. The mode is expensive — it pays the full <code>--all</code> cost plus an extra Phase 2 — so it is a calibration tool, not a default. A run started with <code>--measure-triage</code> cannot be resumed without it (and vice versa); start a fresh run instead.</p>
+<pre><code class="language-text">swival&gt; /audit --measure-triage swival/
+</code></pre>
 <p><code>--workers N</code> sets the number of parallel workers for triage and verification (default: 4). Verification is always capped at 2 regardless of this value.</p>
 <pre><code class="language-text">swival&gt; /audit --workers 8
 </code></pre>
@@ -200,6 +213,14 @@ Audit complete. 2 finding(s) written to audit-findings/. Run `ls audit-findings/
 <pre><code class="language-text">swival&gt; /audit src/api/ --resume --workers 6
 swival&gt; /audit src/api/ --regen
 </code></pre>
+<h2 id="configuration">Configuration</h2>
+<p><code>swival.toml</code> (or the global <code>~/.config/swival/config.toml</code>) accepts an <code>[audit]</code> section:</p>
+<pre><code class="language-toml">[audit]
+force_review = [&quot;swival/audit.py&quot;, &quot;swival/edit.py&quot;, &quot;swival/sandbox_*.py&quot;]
+</code></pre>
+<p><code>force_review</code> is a list of fnmatch globs evaluated against repo-relative paths from <code>git ls-files</code>. A trailing <code>/</code> on an entry expands to the directory and everything below it (<code>src/</code> matches <code>src/a.py</code>, <code>src/sub/b.py</code>, and so on). Matching files are unconditionally promoted into Phase 3, regardless of what triage decides — a surgical alternative to <code>--all</code> for paths you always want deep-reviewed.</p>
+<p>A glob in the project file that matches zero paths in scope produces a warning, since it usually means a stale entry after a rename. Globs in the global file are silent on zero matches, on the assumption that a global glob like <code>swival/audit.py</code> will trivially miss in unrelated repositories. Globs from both files are merged: project entries layer on top of global entries.</p>
+<p>Adding a glob between runs takes effect on resume — if a saved run has a SKIP record for a path that now matches <code>force_review</code>, the resume promotes that record before Phase 3 sees it. Removing a glob is <em>not</em> honored on resume; rescinding mid-audit is more confusing than it is worth, so re-run from scratch instead.</p>
 <h2 id="scope">Scope</h2>
 <p>The audit examines only committed Git-tracked files at HEAD. Unstaged or uncommitted changes are invisible to the audit.</p>
 <p>Only files with recognized source or configuration extensions are auditable:</p>
@@ -216,6 +237,7 @@ swival&gt; /audit src/api/ --regen
 <li>Verification status for each finding (pending, running, verified, discarded, failed)</li>
 <li>Metrics (parse failures, repair successes, analytical retries)</li>
 <li>Current phase and next artifact index</li>
+<li><code>select_all</code> flag (whether the run was started with <code>--all</code>)</li>
 </ul>
 <p>LLM interactions are traced to <code>.swival/audit/&lt;run_id&gt;/traces/</code> when <code>--trace-dir</code> is set on the outer session.</p>
 <p>Temporary worktrees for verification and patch generation are created under <code>.swival/audit/&lt;run_id&gt;/verify/</code> and <code>.swival/audit/&lt;run_id&gt;/patch-gen/</code>, and cleaned up automatically.</p>

@@ -472,6 +472,7 @@ def _load_single(path: Path, label: str) -> dict:
     encrypt_patterns = config.pop("encrypt_secrets_patterns", None)
     profiles = config.pop("profiles", None)
     active_profile = config.pop("active_profile", None)
+    audit_section = config.pop("audit", None)
 
     # Strip unknown keys after warning (keep only known ones for downstream)
     _validate_config(config, label)
@@ -528,6 +529,29 @@ def _load_single(path: Path, label: str) -> dict:
                 f"got {type(active_profile).__name__}"
             )
         known["active_profile"] = active_profile
+
+    # Re-attach audit if present
+    if audit_section is not None:
+        if not isinstance(audit_section, dict):
+            raise ConfigError(f"{label}: 'audit' must be a table")
+        for key in audit_section:
+            if key != "force_review":
+                raise ConfigError(
+                    f"{label}: unknown key 'audit.{key}'. Allowed keys: force_review"
+                )
+        force_review = audit_section.get("force_review", [])
+        if not isinstance(force_review, list):
+            raise ConfigError(
+                f"{label}: 'audit.force_review' must be a list of strings, "
+                f"got {type(force_review).__name__}"
+            )
+        for i, glob in enumerate(force_review):
+            if not isinstance(glob, str):
+                raise ConfigError(
+                    f"{label}: audit.force_review[{i}]: expected string, "
+                    f"got {type(glob).__name__}"
+                )
+        known["audit"] = audit_section
 
     return known
 
@@ -630,6 +654,27 @@ def merge_mcp_configs(
     if toml_servers:
         merged.update(toml_servers)  # toml wins
     return merged
+
+
+def merge_audit_force_review(
+    global_audit: dict | None,
+    project_audit: dict | None,
+) -> tuple[list[str], dict[str, str]]:
+    """Merge ``[audit] force_review`` lists from global and project config.
+
+    Returns ``(globs, sources)`` where ``sources[glob]`` is ``"global"`` or
+    ``"project"``. Project entries take precedence on duplicate globs and
+    override their origin tag.
+    """
+    tagged: list[tuple[str, str]] = []
+    if global_audit:
+        for g in global_audit.get("force_review", []):
+            tagged.append((g, "global"))
+    if project_audit:
+        for g in project_audit.get("force_review", []):
+            tagged = [(t, src) for t, src in tagged if t != g]
+            tagged.append((g, "project"))
+    return [g for g, _ in tagged], dict(tagged)
 
 
 # --- A2A config helpers ---
@@ -796,7 +841,15 @@ def load_config(base_dir: Path) -> dict:
     global_active_profile = global_config.pop("active_profile", None)
     project_active_profile = project_config.pop("active_profile", None)
 
+    # Handle audit section separately
+    global_audit = global_config.pop("audit", None)
+    project_audit = project_config.pop("audit", None)
+
     merged = {**global_config, **project_config}
+
+    audit_globs, _ = merge_audit_force_review(global_audit, project_audit)
+    if audit_globs:
+        merged["audit"] = {"force_review": audit_globs}
 
     mcp_servers = merge_mcp_configs(project_mcp, global_mcp)
     if mcp_servers:
@@ -1094,6 +1147,7 @@ def config_to_session_kwargs(config: dict) -> dict:
         "serve_skills",
         "approved_buckets",
         "oneshot_commands",
+        "audit",
     }
     for key, value in config.items():
         if key in _DROP_KEYS:

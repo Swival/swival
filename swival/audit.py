@@ -186,6 +186,9 @@ class TriageRecord:
     relevant_symbols: list[str]
     suspicious_flows: list[str]
     needs_followup: bool
+    promotion_reasons: list[str] = field(default_factory=list)
+    triage_failure_mode: str | None = None
+    confirmation_outcome: str | None = None
 
 
 @dataclass
@@ -198,6 +201,7 @@ class FindingRecord:
     proof: list[str]
     fix_outline: str
     source_file: str
+    triage_decision: str | None = None  # "escalated" | "skipped" | None
 
 
 @dataclass
@@ -237,7 +241,12 @@ class AuditRunState:
     verified_findings: list[VerifiedFinding] = field(default_factory=list)
     repo_profile: dict | None = None
     import_index: dict[str, list[str]] = field(default_factory=dict)
+    # Despite the name, caller_index[f] is the set of files exporting symbols
+    # that f references — i.e. f's dependencies, not f's callers. Use
+    # `dependency_index` for new code; preserved as caller_index in saved state
+    # for backward compatibility.
     caller_index: dict[str, list[str]] = field(default_factory=dict)
+    attack_scores: dict[str, int] = field(default_factory=dict)
     artifact_dir: Path = field(default_factory=lambda: Path("audit-findings"))
     state_dir: Path = field(default_factory=lambda: Path(".swival/audit"))
     verification_state: dict[str, dict] = field(default_factory=dict)
@@ -245,6 +254,22 @@ class AuditRunState:
     phase: str = "init"
     metrics: dict[str, int] = field(default_factory=lambda: dict(_DEFAULT_METRICS))
     select_all: bool = False
+    measure_triage: bool = False
+    # When ``measure_triage`` is set, this records the candidate set that
+    # *real* triage produced after Phase 2. Phase 3 then expands to the full
+    # mandatory set; findings whose source path is not in this set are
+    # tagged as having been a triage SKIP.
+    measurement_escalated_paths: set[str] = field(default_factory=set)
+
+    @property
+    def dependency_index(self) -> dict[str, list[str]]:
+        """Accurate-name alias for caller_index.
+
+        caller_index[f] holds files that export symbols f references — i.e.
+        f's dependencies — not callers of f. This alias avoids confusion in
+        new code without invalidating saved state.
+        """
+        return self.caller_index
 
     def save(self) -> None:
         d = self.state_dir / self.run_id
@@ -270,11 +295,14 @@ class AuditRunState:
             "repo_profile": self.repo_profile,
             "import_index": self.import_index,
             "caller_index": self.caller_index,
+            "attack_scores": self.attack_scores,
             "verification_state": self.verification_state,
             "next_index": self.next_index,
             "phase": self.phase,
             "metrics": self.metrics,
             "select_all": self.select_all,
+            "measure_triage": self.measure_triage,
+            "measurement_escalated_paths": sorted(self.measurement_escalated_paths),
         }
         state_path = d / "state.json"
         tmp = state_path.with_suffix(".tmp")
@@ -313,12 +341,17 @@ class AuditRunState:
             repo_profile=blob.get("repo_profile"),
             import_index=blob.get("import_index", {}),
             caller_index=blob.get("caller_index", {}),
+            attack_scores=blob.get("attack_scores", {}),
             verification_state=blob.get("verification_state", {}),
             state_dir=state_dir,
             next_index=blob.get("next_index", 1),
             phase=blob.get("phase", "init"),
             metrics=blob.get("metrics", dict(_DEFAULT_METRICS)),
             select_all=bool(blob.get("select_all", False)),
+            measure_triage=bool(blob.get("measure_triage", False)),
+            measurement_escalated_paths=set(
+                blob.get("measurement_escalated_paths", [])
+            ),
         )
         return state
 
@@ -386,16 +419,7 @@ def _resolve_scope(base_dir: str, focus: list[str]) -> AuditScope:
 
     focus = _normalize_focus(focus)
     if focus:
-        import fnmatch
-
-        pats = [(p, p if p.endswith("/") else p + "/") for p in focus]
-
-        def matches(f: str) -> bool:
-            return any(
-                fnmatch.fnmatch(f, p) or f == p or f.startswith(pre) for p, pre in pats
-            )
-
-        tracked = [f for f in tracked if matches(f)]
+        tracked = [f for f in tracked if any(_match_path_glob(f, p) for p in focus)]
 
     mandatory = [f for f in tracked if _is_auditable(f)]
     return AuditScope(
@@ -405,6 +429,25 @@ def _resolve_scope(base_dir: str, focus: list[str]) -> AuditScope:
         mandatory_files=mandatory,
         focus=focus,
     )
+
+
+def _match_path_glob(file: str, glob: str) -> bool:
+    """True when ``file`` (a repo-relative path) is selected by ``glob``.
+
+    Selection rules:
+    - exact match
+    - fnmatch wildcard (``*``, ``?``, ``[...]``)
+    - prefix match: a trailing ``/`` (or no slash on a non-wildcard entry)
+      means "this path or anything inside this directory"
+    """
+    import fnmatch
+
+    if file == glob:
+        return True
+    if fnmatch.fnmatch(file, glob):
+        return True
+    prefix = glob if glob.endswith("/") else glob + "/"
+    return file.startswith(prefix)
 
 
 def _is_auditable(path: str) -> bool:
@@ -440,13 +483,16 @@ def _score_attack_surface(content: str) -> int:
 
 def _order_by_attack_surface(
     files: list[str], content_cache: dict[str, str]
-) -> list[str]:
+) -> tuple[list[str], dict[str, int]]:
+    """Return (files ordered by descending score, score map)."""
+    score_map: dict[str, int] = {}
     scored: list[tuple[int, str]] = []
     for f in files:
         score = _score_attack_surface(content_cache.get(f, ""))
+        score_map[f] = score
         scored.append((-score, f))
     scored.sort(key=lambda t: (t[0], t[1]))
-    return [f for _, f in scored]
+    return [f for _, f in scored], score_map
 
 
 # ---------------------------------------------------------------------------
@@ -1450,6 +1496,19 @@ Rules:
 - Prefer SKIP if escalation cannot be justified.
 - Use ESCALATE_HIGH only when the evidence bundle contains a concrete suspicious path or invariant break worth deep review."""
 
+
+_PHASE2_CONFIRM_SYSTEM = (
+    _PHASE2_SYSTEM
+    + """
+
+This is a confirmation pass. The first triage marked the file SKIP with low
+confidence. You now have additional evidence (file-level dependencies plus,
+when available, the contents of the highest-attack-surface dependency, and
+any direct entry-point reachability hint). Re-evaluate. Do not flip to
+ESCALATE unless the new evidence reveals a concrete attacker-controlled path
+that was not visible before."""
+)
+
 _SEVERITIES = ("low", "medium", "high", "critical")
 
 _PHASE3A_FINDING_SCHEMA = PhaseSchema(
@@ -1843,6 +1902,20 @@ def _phase1_repo_profile(state: AuditRunState, ctx: InputContext) -> dict:
     return records[0]
 
 
+def _triage_record_from_parsed(path: str, parsed: dict) -> TriageRecord:
+    """Build a TriageRecord from a parsed Phase-2 LLM record dict."""
+    return TriageRecord(
+        path=path,
+        priority=parsed["priority"].upper(),
+        confidence=parsed["confidence"].lower(),
+        bug_classes=parsed.get("bug_classes", []),
+        summary=parsed["summary"],
+        relevant_symbols=parsed.get("relevant_symbols", []),
+        suspicious_flows=parsed.get("suspicious_flows", []),
+        needs_followup=parsed.get("needs_followup", False),
+    )
+
+
 def _phase2_triage_one(
     path: str,
     state: AuditRunState,
@@ -1865,7 +1938,14 @@ def _phase2_triage_one(
 
     imports_summary = ", ".join(state.import_index.get(path, [])[:20]) or "(none)"
     callers_summary = ", ".join(state.caller_index.get(path, [])[:10]) or "(none)"
-    score = _score_attack_surface(content)
+    # Read from the cached score map populated in Phase 1 so the prompt and
+    # the promotion gate at _apply_promotions agree. Fall back to a fresh
+    # score if the cache is empty (legacy state files predate the cache).
+    if path in state.attack_scores:
+        score = state.attack_scores[path]
+    else:
+        score = _score_attack_surface(content)
+        state.attack_scores[path] = score
 
     profile_json = _repo_profile_json(state)
 
@@ -1881,7 +1961,28 @@ def _phase2_triage_one(
         {"role": "system", "content": _PHASE2_SYSTEM},
         {"role": "user", "content": suffix},
     ]
-    raw = _call_audit_llm(ctx, messages, trace_task=f"audit: phase 2 triage {path}")
+    try:
+        raw = _call_audit_llm(ctx, messages, trace_task=f"audit: phase 2 triage {path}")
+    except Exception as e:
+        kind = type(e).__name__
+        _debug_log(
+            "triage_llm_failed",
+            path=path,
+            error=str(e),
+            kind=kind,
+        )
+        return TriageRecord(
+            path=path,
+            priority="SKIP",
+            confidence="low",
+            bug_classes=[],
+            summary=f"triage failed (llm call failed: {kind})",
+            relevant_symbols=[],
+            suspicious_flows=[],
+            needs_followup=False,
+            triage_failure_mode=f"llm_call_failed:{kind}",
+        )
+
     try:
         records = _parse_records(raw, _PHASE2_TRIAGE_SCHEMA, metrics=state.metrics)
     except ValueError as e:
@@ -1903,19 +2004,334 @@ def _phase2_triage_one(
             relevant_symbols=[],
             suspicious_flows=[],
             needs_followup=False,
+            triage_failure_mode="parse_error",
         )
 
-    parsed = records[0]
-    return TriageRecord(
-        path=path,
-        priority=parsed["priority"].upper(),
-        confidence=parsed["confidence"].lower(),
-        bug_classes=parsed.get("bug_classes", []),
-        summary=parsed["summary"],
-        relevant_symbols=parsed.get("relevant_symbols", []),
-        suspicious_flows=parsed.get("suspicious_flows", []),
-        needs_followup=parsed.get("needs_followup", False),
+    return _triage_record_from_parsed(path, records[0])
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 confirmation pass (low-confidence SKIPs)
+# ---------------------------------------------------------------------------
+
+
+def _phase2_confirm_one(
+    path: str,
+    state: AuditRunState,
+    ctx: InputContext,
+) -> TriageRecord | None:
+    """Re-triage one path with richer evidence.
+
+    Returns a new record when the second pass produces a verdict; returns
+    None when the call itself fails so the caller can preserve the
+    original SKIP record (the file is no worse off for the failed retry).
+    """
+    deps = state.dependency_index.get(path, [])[:30]
+    deps_summary = ", ".join(deps) or "(none)"
+
+    top_dep = ""
+    top_dep_score = -1
+    for d in deps:
+        s = state.attack_scores.get(d, 0)
+        if s > top_dep_score:
+            top_dep_score = s
+            top_dep = d
+
+    paths_to_load = [path] + ([top_dep] if top_dep else [])
+    cache = _load_file_contents(paths_to_load, ctx.base_dir)
+    if path not in cache:
+        return None
+    content = cache[path]
+    top_dep_excerpt = ""
+    if top_dep:
+        dep_content = cache.get(top_dep)
+        if dep_content is None:
+            top_dep = ""
+        else:
+            top_dep_excerpt = dep_content[:3000]
+
+    entries = _entry_point_paths(state)
+    reachable_from: list[str] = []
+    for entry in entries:
+        if path in state.dependency_index.get(entry, []):
+            reachable_from.append(entry)
+    reach_summary = (
+        ", ".join(reachable_from) if reachable_from else "(no direct entry-point reach)"
     )
+
+    score = state.attack_scores.get(path, 0)
+    profile_json = _repo_profile_json(state)
+
+    suffix = (
+        f"Repository profile:\n{profile_json}\n\n"
+        f"Attack-surface metadata:\nscore={score}\n\n"
+        f"Files this calls into / depends on:\n{deps_summary}\n\n"
+        f"Direct entry-point reachability:\n{reach_summary}\n\n"
+    )
+    if top_dep_excerpt:
+        suffix += (
+            f"Top dependency by score: {top_dep} (score={top_dep_score}). "
+            f"Excerpt (first 3000 chars):\n{top_dep_excerpt}\n\n"
+        )
+    suffix += (
+        f"Committed primary file contents:\n{content}\n\n"
+        f"The file is: {path}\n\n"
+        "First-pass triage marked this file SKIP with low confidence."
+    )
+
+    messages = [
+        {"role": "system", "content": _PHASE2_CONFIRM_SYSTEM},
+        {"role": "user", "content": suffix},
+    ]
+    try:
+        raw = _call_audit_llm(
+            ctx, messages, trace_task=f"audit: phase 2 confirm {path}"
+        )
+    except Exception as e:
+        _debug_log("triage_confirm_failed", path=path, error=str(e))
+        return None
+
+    try:
+        records = _parse_records(raw, _PHASE2_TRIAGE_SCHEMA, metrics=state.metrics)
+    except ValueError as e:
+        _debug_log("triage_confirm_parse_failed", path=path, error=str(e))
+        return None
+
+    return _triage_record_from_parsed(path, records[0])
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 promotion (recover false negatives from triage)
+# ---------------------------------------------------------------------------
+
+_PROMOTION_SCORE_THRESHOLD = 8
+
+
+def _trust_boundary_paths(state: AuditRunState) -> set[str]:
+    """Return paths flagged as trust boundaries by Phase 1.
+
+    The ``trust_boundary`` field is free-form text. Treat any value that
+    matches a mandatory file path (or ends with one) as a path reference.
+    """
+    profile = state.repo_profile or {}
+    boundaries = profile.get("trust_boundaries", []) or []
+    mandatory = set(state.scope.mandatory_files)
+    paths: set[str] = set()
+    for entry in boundaries:
+        if not isinstance(entry, str):
+            continue
+        if entry in mandatory:
+            paths.add(entry)
+            continue
+        for f in mandatory:
+            if entry.endswith(f) or f in entry.split():
+                paths.add(f)
+    return paths
+
+
+def _entry_point_paths(state: AuditRunState) -> list[str]:
+    profile = state.repo_profile or {}
+    entries = profile.get("entry_points", []) or []
+    mandatory = set(state.scope.mandatory_files)
+    return [e for e in entries if isinstance(e, str) and e in mandatory]
+
+
+def _compute_promotion_reasons(
+    state: AuditRunState,
+    force_review_matches: dict[str, str],
+) -> dict[str, list[str]]:
+    """Return ``{path: [reason, ...]}`` for files that should be promoted
+    out of any SKIP verdict by deterministic signals."""
+    reasons: dict[str, list[str]] = {}
+
+    def _add(p: str, msg: str) -> None:
+        reasons.setdefault(p, []).append(msg)
+
+    # Score-based promotion.
+    for p in state.queued_files:
+        score = state.attack_scores.get(p, 0)
+        if score >= _PROMOTION_SCORE_THRESHOLD:
+            _add(p, f"attack-surface score {score}")
+
+    # Entry points.
+    entries = _entry_point_paths(state)
+    for p in entries:
+        _add(p, "phase 1 entry point")
+
+    # Trust boundaries.
+    for p in _trust_boundary_paths(state):
+        _add(p, "phase 1 trust boundary")
+
+    # One-hop reverse from each entry point: caller_index[entry] holds the
+    # files that entry references. Anything an entry point reaches with a
+    # non-zero attack score deserves a look.
+    for entry in entries:
+        for dep in state.caller_index.get(entry, []):
+            if state.attack_scores.get(dep, 0) > 0:
+                _add(dep, f"reached from entry point {entry}")
+
+    # Triage said "needs followup" — promote outright.
+    for p, rec in state.triage_records.items():
+        if rec.needs_followup:
+            _add(p, "triage needs_followup")
+
+    # Triage infrastructure failure (LLM call failed, parse error, etc.).
+    for p, rec in state.triage_records.items():
+        if rec.triage_failure_mode is not None:
+            _add(p, f"triage infrastructure failure: {rec.triage_failure_mode}")
+
+    # Force-review (user override from swival.toml).
+    for p, source in force_review_matches.items():
+        _add(p, f"forced via swival.toml ({source})")
+
+    return reasons
+
+
+def _apply_promotions(
+    state: AuditRunState,
+    force_review_matches: dict[str, str],
+) -> dict[str, list[str]]:
+    """Compute promotions and apply them to ``state.triage_records``.
+
+    Synthesizes a record for any queued path missing from triage_records
+    (belt-and-suspenders against silent drops). Returns the per-path
+    promotion reasons that fired.
+    """
+    # Belt-and-suspenders: every queued file must have a record. If one
+    # is missing here it means a worker silently dropped it; synthesize
+    # a record marked as missing so it can be promoted on the same rule
+    # as other infrastructure failures.
+    for p in state.queued_files:
+        if p not in state.triage_records:
+            state.triage_records[p] = TriageRecord(
+                path=p,
+                priority="SKIP",
+                confidence="low",
+                bug_classes=[],
+                summary="triage record missing after retries",
+                relevant_symbols=[],
+                suspicious_flows=[],
+                needs_followup=False,
+                triage_failure_mode="missing",
+            )
+            state.reviewed_files.add(p)
+
+    promotions = _compute_promotion_reasons(state, force_review_matches)
+
+    for path, why in promotions.items():
+        rec = state.triage_records.get(path)
+        if rec is None:
+            continue
+        for r in why:
+            if r not in rec.promotion_reasons:
+                rec.promotion_reasons.append(r)
+        if rec.priority == "SKIP":
+            rec.priority = "ESCALATE_MEDIUM"
+
+    return promotions
+
+
+def _emit_measure_triage_recall(state: AuditRunState) -> None:
+    """Print the calibration mode recall section.
+
+    Counts verified findings by ``triage_decision`` and breaks them out by
+    severity. Findings whose source file was a Phase-2 SKIP are the false
+    negatives this mode exists to surface.
+    """
+    by_decision_severity: dict[tuple[str, str], int] = {}
+    for vf in state.verified_findings:
+        decision = vf.finding.triage_decision or "unknown"
+        sev = vf.finding.severity or "unknown"
+        by_decision_severity[(decision, sev)] = (
+            by_decision_severity.get((decision, sev), 0) + 1
+        )
+
+    fmt.info("--- triage recall (--measure-triage) ---")
+    fmt.info(
+        f"  candidate set after triage: {len(state.measurement_escalated_paths)} files"
+    )
+    fmt.info(f"  expanded deep-review set:   {len(state.candidate_files)} files")
+    n_escalated = sum(
+        n for (d, _s), n in by_decision_severity.items() if d == "escalated"
+    )
+    n_skipped = sum(n for (d, _s), n in by_decision_severity.items() if d == "skipped")
+    fmt.info(f"  verified findings on escalated files: {n_escalated}")
+    fmt.info(f"  verified findings on SKIPped files:   {n_skipped} (false negatives)")
+    if n_skipped:
+        for sev in _SEVERITIES + ("unknown",):
+            n = by_decision_severity.get(("skipped", sev), 0)
+            if n:
+                fmt.info(f"    skipped × {sev}: {n}")
+        for vf in state.verified_findings:
+            if vf.finding.triage_decision == "skipped":
+                fmt.info(
+                    f"    - {vf.finding.source_file}: "
+                    f"[{vf.finding.severity}] {vf.finding.title}"
+                )
+
+
+# (reason_prefix, label, emitter). The emitter is fmt.warning for
+# infrastructure-failure promotions because they signal a flaky model or
+# upstream rather than a routine selection.
+_PROMOTION_REASON_LABELS: tuple[tuple[str, str, str], ...] = (
+    ("attack-surface score", "promoted by attack-surface score", "info"),
+    ("phase 1 entry point", "promoted as phase 1 entry point", "info"),
+    ("reached from entry point", "promoted by entry-point reachability", "info"),
+    ("phase 1 trust boundary", "promoted as phase 1 trust boundary", "info"),
+    ("triage needs_followup", "promoted by triage needs_followup", "info"),
+    (
+        "triage infrastructure failure",
+        "promoted due to triage infrastructure failure",
+        "warning",
+    ),
+    ("forced via swival.toml", "force-listed in swival.toml", "info"),
+)
+
+
+def _emit_phase2_summary(
+    state: AuditRunState,
+    promotions: dict[str, list[str]],
+) -> None:
+    """Write the end-of-phase-2 status lines, broken down by promotion reason."""
+    records = state.triage_records
+    n_high = sum(1 for r in records.values() if r.priority == "ESCALATE_HIGH")
+    n_medium = sum(1 for r in records.values() if r.priority == "ESCALATE_MEDIUM")
+    candidate_set = set(state.candidate_files)
+    by_llm = sum(
+        1 for p, r in records.items() if p in candidate_set and not r.promotion_reasons
+    )
+    promotion_only = [p for p in candidate_set if records[p].promotion_reasons]
+
+    counts: dict[str, int] = {}
+    for prefix, _label, _emit in _PROMOTION_REASON_LABELS:
+        counts[prefix] = sum(
+            1
+            for p in promotion_only
+            if any(r.startswith(prefix) for r in records[p].promotion_reasons)
+        )
+    by_confirm = sum(
+        1 for p in candidate_set if records[p].confirmation_outcome == "promoted"
+    )
+
+    fmt.info(
+        f"phase 2 complete. {len(state.candidate_files)} files escalated "
+        f"({n_high} high, {n_medium} medium)"
+    )
+    if promotions or by_confirm:
+        fmt.info(f"  - {by_llm} by LLM triage")
+        for prefix, label, emit in _PROMOTION_REASON_LABELS:
+            n = counts[prefix]
+            if not n:
+                continue
+            (fmt.warning if emit == "warning" else fmt.info)(f"  - {n} {label}")
+        if by_confirm:
+            fmt.info(f"  - {by_confirm} recovered by confirmation pass")
+
+    skipped = [p for p, r in records.items() if r.priority == "SKIP"]
+    if skipped:
+        ranked = sorted(skipped, key=lambda p: (-state.attack_scores.get(p, 0), p))[:5]
+        top = ", ".join(f"{p}:{state.attack_scores.get(p, 0)}" for p in ranked)
+        fmt.info(f"  {len(skipped)} files SKIPped (top by score: {top})")
 
 
 def _phase3a_inventory(
@@ -2498,6 +2914,59 @@ def _make_slug(title: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _load_force_review(base_dir: str) -> tuple[list[str], dict[str, str]]:
+    """Load merged ``[audit] force_review`` from global+project config.
+
+    Returns ``(globs, sources)`` where ``sources[glob]`` is ``"global"`` or
+    ``"project"``. Returns empty values if no config or the section is
+    missing. Errors loading config are non-fatal here: the rest of swival
+    has already validated the file at startup, so any failure to re-parse
+    is reported as a warning and treated as "no force-review."
+    """
+    try:
+        from .config import (
+            _load_single,
+            global_config_dir,
+            merge_audit_force_review,
+        )
+
+        global_path = global_config_dir() / "config.toml"
+        project_path = Path(base_dir).resolve() / "swival.toml"
+        global_audit = _load_single(global_path, str(global_path)).get("audit")
+        project_audit = _load_single(project_path, str(project_path)).get("audit")
+    except Exception as e:
+        fmt.warning(f"audit: ignoring swival.toml force_review (load failed: {e})")
+        return [], {}
+    return merge_audit_force_review(global_audit, project_audit)
+
+
+def _resolve_force_review(
+    globs: list[str],
+    sources: dict[str, str],
+    mandatory_files: list[str],
+) -> tuple[dict[str, str], list[str]]:
+    """Match force_review globs against the mandatory file list.
+
+    Returns ``(matches, warnings)`` where ``matches[path]`` is the
+    *strongest* origin tag of any glob that matched (project beats
+    global on ties). ``warnings`` contains text for project-origin
+    globs that matched zero files.
+    """
+    matches: dict[str, str] = {}
+    warnings: list[str] = []
+    for g in globs:
+        source = sources.get(g, "project")
+        matched = [f for f in mandatory_files if _match_path_glob(f, g)]
+        for f in matched:
+            if matches.get(f) != "project":
+                matches[f] = source
+        if not matched and source == "project":
+            warnings.append(
+                f"audit: swival.toml force_review glob {g!r} matched zero files"
+            )
+    return matches, warnings
+
+
 def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
     """Entry point for the /audit command. Returns summary text."""
     global _debug_log_path
@@ -2510,6 +2979,7 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
     regen = False
     debug = False
     select_all = False
+    measure_triage = False
     focus: list[str] | None = None
 
     parts = arg.split()
@@ -2524,6 +2994,8 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
             debug = True
         elif parts[i] == "--all":
             select_all = True
+        elif parts[i] == "--measure-triage":
+            measure_triage = True
         elif parts[i] == "--workers" and i + 1 < len(parts):
             i += 1
             try:
@@ -2535,6 +3007,8 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
         i += 1
     if filtered:
         focus = _normalize_focus(filtered)
+
+    force_review, force_review_sources = _load_force_review(base_dir)
 
     if debug:
         log_dir = Path(base_dir) / ".swival" / "audit"
@@ -2558,6 +3032,9 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
             regen,
             focus,
             select_all,
+            force_review=force_review,
+            force_review_sources=force_review_sources,
+            measure_triage=measure_triage,
         )
     finally:
         _debug_log_path = None
@@ -2573,7 +3050,13 @@ def _run_audit_phases(
     regen: bool,
     focus: list[str] | None,
     select_all: bool = False,
+    *,
+    force_review: list[str] | None = None,
+    force_review_sources: dict[str, str] | None = None,
+    measure_triage: bool = False,
 ) -> str:
+    force_review = list(force_review or [])
+    force_review_sources = dict(force_review_sources or {})
     if resume or regen:
         try:
             commit = _git(["rev-parse", "HEAD"], base_dir)
@@ -2586,6 +3069,14 @@ def _run_audit_phases(
         if state is None:
             label = "regenerable" if regen else "resumable"
             return f"error: no {label} audit found for current commit and scope."
+        if measure_triage != state.measure_triage:
+            return (
+                f"error: --measure-triage mismatch. saved run was "
+                f"{'measure-triage' if state.measure_triage else 'normal'}; "
+                f"this invocation is "
+                f"{'measure-triage' if measure_triage else 'normal'}. "
+                f"Start a fresh run instead of resuming."
+            )
         if regen:
             if not state.verified_findings:
                 return "error: no verified findings to regenerate artifacts for."
@@ -2613,11 +3104,14 @@ def _run_audit_phases(
             queued_files=list(scope.mandatory_files),
             state_dir=state_dir,
             select_all=select_all,
+            measure_triage=measure_triage,
         )
         all_marker = " --all" if state.select_all else ""
+        measure_marker = " --measure-triage" if state.measure_triage else ""
         fmt.info(
             f"audit {state.run_id}: {len(scope.mandatory_files)} files, "
-            f"branch={scope.branch}, commit={scope.commit[:8]}{all_marker}"
+            f"branch={scope.branch}, commit={scope.commit[:8]}"
+            f"{all_marker}{measure_marker}"
         )
         if len(scope.mandatory_files) > _LARGE_SCOPE_THRESHOLD:
             n = len(scope.mandatory_files)
@@ -2648,7 +3142,7 @@ def _run_audit_phases(
             state.scope.mandatory_files, content_cache
         )
         fmt.info("phase 1: ordering by attack surface...")
-        state.queued_files = _order_by_attack_surface(
+        state.queued_files, state.attack_scores = _order_by_attack_surface(
             state.scope.mandatory_files, content_cache
         )
         fmt.info("phase 1: calling LLM for repo profile...")
@@ -2658,6 +3152,37 @@ def _run_audit_phases(
         fmt.info(
             f"phase 1 complete. profile: {state.repo_profile.get('summary', '')[:80]}"
         )
+
+    # Resume rule: if force_review changed since the run was saved, apply
+    # any new matches before the Phase-2 gate. New matches re-promote saved
+    # SKIPs; removed entries are not honored (rescinding mid-audit causes
+    # more confusion than it fixes — re-run from scratch instead).
+    if resume and state.phase in ("triage", "deep_review") and force_review:
+        force_matches, force_warnings = _resolve_force_review(
+            force_review, force_review_sources, state.scope.mandatory_files
+        )
+        for w in force_warnings:
+            fmt.warning(w)
+        re_promoted = 0
+        for path, source in force_matches.items():
+            rec = state.triage_records.get(path)
+            if rec is None:
+                continue
+            reason = f"forced via swival.toml ({source})"
+            if reason in rec.promotion_reasons:
+                continue
+            rec.promotion_reasons.append(reason)
+            if rec.priority == "SKIP":
+                rec.priority = "ESCALATE_MEDIUM"
+                if path not in state.candidate_files:
+                    state.candidate_files.append(path)
+                re_promoted += 1
+        if re_promoted:
+            fmt.info(
+                f"resume: {re_promoted} file(s) promoted via updated "
+                f"swival.toml force_review"
+            )
+            state.save()
 
     if state.phase == "triage" and state.select_all:
         state.candidate_files = list(state.queued_files)
@@ -2704,18 +3229,60 @@ def _run_audit_phases(
             _collect_triage(_run_batch(_triage, still_pending, max_workers=workers))
             state.save()
 
+        force_matches, force_warnings = _resolve_force_review(
+            force_review, force_review_sources, state.scope.mandatory_files
+        )
+        for w in force_warnings:
+            fmt.warning(w)
+        promotions = _apply_promotions(state, force_matches)
+
+        # Confirmation pass for low-confidence SKIPs that promotion did not
+        # already rescue. Runs in parallel; bounded ~10-20% of triage cost.
+        confirm_targets = [
+            p
+            for p, r in state.triage_records.items()
+            if r.priority == "SKIP" and r.confidence == "low"
+        ]
+        if confirm_targets:
+            fmt.info(
+                f"phase 2: confirmation pass on {len(confirm_targets)} "
+                f"low-confidence SKIP(s)..."
+            )
+
+            def _confirm(p):
+                return _phase2_confirm_one(p, state, ctx)
+
+            results = _run_batch(_confirm, confirm_targets, max_workers=workers)
+            for original_path, new_rec in zip(confirm_targets, results):
+                old = state.triage_records[original_path]
+                if new_rec is None:
+                    old.confirmation_outcome = "kept"
+                    continue
+                if new_rec.priority in ("ESCALATE_HIGH", "ESCALATE_MEDIUM"):
+                    new_rec.confirmation_outcome = "promoted"
+                    new_rec.promotion_reasons = list(old.promotion_reasons)
+                    state.triage_records[original_path] = new_rec
+                else:
+                    old.confirmation_outcome = "kept"
+            state.save()
+
         state.candidate_files = [
             path
             for path, rec in state.triage_records.items()
             if rec.priority in ("ESCALATE_HIGH", "ESCALATE_MEDIUM")
         ]
+        if state.measure_triage:
+            state.measurement_escalated_paths = set(state.candidate_files)
+            state.candidate_files = list(state.queued_files)
+            fmt.info(
+                f"phase 2 (measure-triage): expanding deep-review set from "
+                f"{len(state.measurement_escalated_paths)} to "
+                f"{len(state.candidate_files)} files"
+            )
         state.phase = "deep_review"
         state.save()
-        fmt.info(
-            f"phase 2 complete. {len(state.candidate_files)} files escalated "
-            f"({sum(1 for r in state.triage_records.values() if r.priority == 'ESCALATE_HIGH')} high, "
-            f"{sum(1 for r in state.triage_records.values() if r.priority == 'ESCALATE_MEDIUM')} medium)"
-        )
+
+        _emit_phase2_summary(state, promotions)
 
     # Phase 3: deep review
     if state.phase == "deep_review":
@@ -2736,6 +3303,14 @@ def _run_audit_phases(
                     continue
                 n = len(result.findings) if result.findings else 0
                 if result.findings:
+                    if state.measure_triage:
+                        decision = (
+                            "escalated"
+                            if result.path in state.measurement_escalated_paths
+                            else "skipped"
+                        )
+                        for f in result.findings:
+                            f.triage_decision = decision
                     state.proposed_findings.extend(result.findings)
                 state.deep_reviewed_files.add(result.path)
                 done = len(state.deep_reviewed_files)
@@ -2982,6 +3557,9 @@ def _run_audit_phases(
                 f"Audit incomplete: {len(undeep_reviewed)} escalated files failed "
                 f"deep review. Use /audit --resume to continue."
             )
+
+        if state.measure_triage:
+            _emit_measure_triage_recall(state)
 
         state.phase = "done"
         state.save()

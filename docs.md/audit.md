@@ -61,13 +61,23 @@ Files are ordered by an attack-surface heuristic that scores keywords like `exec
 
 ### Phase 2: Triage
 
-Each auditable file is triaged independently. The LLM sees the file contents, its attack-surface score, import/caller context, and the repository profile. It returns one of three labels:
+Each auditable file is triaged independently. The LLM sees the file contents, its attack-surface score, import/dependency context, and the repository profile. It returns one of three labels:
 
 - **ESCALATE_HIGH** — concrete suspicious path or invariant break worth deep review
 - **ESCALATE_MEDIUM** — plausible concern, lower confidence
 - **SKIP** — no evidence for escalation
 
-Files labeled SKIP are not reviewed further. Triage runs in parallel with configurable worker count.
+The triage prompt is intentionally precision-biased: it prefers SKIP under uncertainty. To recover false negatives, several deterministic signals override SKIP after the LLM verdict:
+
+- A file with an attack-surface score of 8 or more is escalated regardless of the LLM verdict.
+- A file listed by Phase 1 as an entry point or trust boundary is escalated.
+- A file that an entry point references directly (one-hop dependency) and that has a non-zero attack-surface score is escalated.
+- A triage record with `needs_followup: true` is escalated outright. Triage already produces this signal; we now act on it.
+- A file whose triage call timed out, raised a network error, or produced an unparseable response is escalated. This is fail-open behavior: the model never gave a real verdict, so we err on the side of looking.
+- Any file matched by a `[audit] force_review` glob in `swival.toml` (see Configuration, below).
+- A second confirmation pass for any file the LLM marked SKIP with low confidence: the same file is re-triaged with richer evidence (its dependency list and the contents of its highest-scoring dependency). The confirmation pass typically affects 10 to 20 percent of triage targets.
+
+Triage runs in parallel with configurable worker count. The end-of-phase output breaks down the escalated count by reason and prints the top five SKIPped files by attack-surface score, so a wrong call is catchable before Phase 3 begins.
 
 ### Phase 3: Deep Review
 
@@ -158,6 +168,12 @@ The flag composes with focus paths and is best paired with one: bare `/audit --a
 
 Triage occasionally catches that a file is vendored or generated and skips it. With `--all`, those files reach Phase 3 anyway and burn LLM calls there; scope `--all` to directories you actually wrote.
 
+`--measure-triage` is a calibration mode for the Phase 2 selector. It runs Phase 2 normally, snapshots which files were escalated, then deep-reviews every file in scope (the `--all` set). Each verified finding is tagged with whether its source file was escalated or skipped by triage. The Phase 5 output ends with a recall section that counts findings on skipped files: those are the false negatives. Use this to quantify recall before or after tuning promotion thresholds. The mode is expensive — it pays the full `--all` cost plus an extra Phase 2 — so it is a calibration tool, not a default. A run started with `--measure-triage` cannot be resumed without it (and vice versa); start a fresh run instead.
+
+```text
+swival> /audit --measure-triage swival/
+```
+
 `--workers N` sets the number of parallel workers for triage and verification (default: 4). Verification is always capped at 2 regardless of this value.
 
 ```text
@@ -176,6 +192,21 @@ All options can be combined with a focus path:
 swival> /audit src/api/ --resume --workers 6
 swival> /audit src/api/ --regen
 ```
+
+## Configuration
+
+`swival.toml` (or the global `~/.config/swival/config.toml`) accepts an `[audit]` section:
+
+```toml
+[audit]
+force_review = ["swival/audit.py", "swival/edit.py", "swival/sandbox_*.py"]
+```
+
+`force_review` is a list of fnmatch globs evaluated against repo-relative paths from `git ls-files`. A trailing `/` on an entry expands to the directory and everything below it (`src/` matches `src/a.py`, `src/sub/b.py`, and so on). Matching files are unconditionally promoted into Phase 3, regardless of what triage decides — a surgical alternative to `--all` for paths you always want deep-reviewed.
+
+A glob in the project file that matches zero paths in scope produces a warning, since it usually means a stale entry after a rename. Globs in the global file are silent on zero matches, on the assumption that a global glob like `swival/audit.py` will trivially miss in unrelated repositories. Globs from both files are merged: project entries layer on top of global entries.
+
+Adding a glob between runs takes effect on resume — if a saved run has a SKIP record for a path that now matches `force_review`, the resume promotes that record before Phase 3 sees it. Removing a glob is *not* honored on resume; rescinding mid-audit is more confusing than it is worth, so re-run from scratch instead.
 
 ## Scope
 

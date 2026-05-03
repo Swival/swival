@@ -33,6 +33,11 @@ INPUT_COMMANDS: dict[str, CommandInfo] = {
                 "--all",
                 "Deep-review every file in scope; skip the triage selection",
             ),
+            (
+                "--measure-triage",
+                "Calibration mode: run triage normally, then deep-review every "
+                "file. Tags findings to expose Phase-2 false negatives.",
+            ),
             ("--workers N", "Number of parallel verification workers (default: 4)"),
             (
                 "--debug",

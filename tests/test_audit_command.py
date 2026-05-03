@@ -253,8 +253,10 @@ class TestAttackSurface:
         _commit_file(tmp_path, "danger.py", "subprocess.run(cmd)\neval(data)")
 
         cache = _load_file_contents(["safe.py", "danger.py"], str(tmp_path))
-        ordered = _order_by_attack_surface(["safe.py", "danger.py"], cache)
+        ordered, scores = _order_by_attack_surface(["safe.py", "danger.py"], cache)
         assert ordered[0] == "danger.py"
+        assert scores["danger.py"] > scores["safe.py"]
+        assert scores["safe.py"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -4002,6 +4004,7 @@ class TestAutoRetry:
             scope=scope,
             queued_files=["a.py", "b.py"],
             reviewed_files={"a.py"},  # b.py missing
+            triage_records={"a.py": self._triage_skip("a.py")},
             candidate_files=[],
             deep_reviewed_files=set(),
             state_dir=state_dir,
@@ -4709,3 +4712,797 @@ class TestSelectAll:
 
         loaded = AuditRunState.load(state_dir, "rb")
         assert loaded.select_all is False
+
+
+# ---------------------------------------------------------------------------
+# Triage recall: promotion, confirmation pass, force_review, measure-triage
+# ---------------------------------------------------------------------------
+
+
+def _bare_triage(path, *, priority="SKIP", confidence="medium", needs_followup=False):
+    return TriageRecord(
+        path=path,
+        priority=priority,
+        confidence=confidence,
+        bug_classes=[],
+        summary=f"{priority} {path}",
+        relevant_symbols=[],
+        suspicious_flows=[],
+        needs_followup=needs_followup,
+    )
+
+
+class TestTriageRecordFields:
+    """New fields on TriageRecord round-trip through save/load."""
+
+    def test_dataclass_defaults(self):
+        rec = TriageRecord(
+            path="a.py",
+            priority="SKIP",
+            confidence="medium",
+            bug_classes=[],
+            summary="x",
+            relevant_symbols=[],
+            suspicious_flows=[],
+            needs_followup=False,
+        )
+        assert rec.promotion_reasons == []
+        assert rec.triage_failure_mode is None
+        assert rec.confirmation_outcome is None
+
+    def test_round_trip(self, tmp_path):
+        scope = AuditScope(
+            branch="main",
+            commit="c1",
+            tracked_files=["a.py"],
+            mandatory_files=["a.py"],
+            focus=[],
+        )
+        rec = _bare_triage("a.py")
+        rec.promotion_reasons = ["attack-surface score 9"]
+        rec.triage_failure_mode = "parse_error"
+        rec.confirmation_outcome = "promoted"
+        state = AuditRunState(
+            run_id="t1",
+            scope=scope,
+            queued_files=["a.py"],
+            triage_records={"a.py": rec},
+            state_dir=tmp_path,
+        )
+        state.save()
+        loaded = AuditRunState.load(state.state_dir, "t1")
+        loaded_rec = loaded.triage_records["a.py"]
+        assert loaded_rec.promotion_reasons == ["attack-surface score 9"]
+        assert loaded_rec.triage_failure_mode == "parse_error"
+        assert loaded_rec.confirmation_outcome == "promoted"
+
+    def test_legacy_state_load(self, tmp_path):
+        import json
+
+        run_dir = tmp_path / "legacy"
+        run_dir.mkdir(parents=True)
+        blob = {
+            "run_id": "legacy",
+            "scope": {
+                "branch": "m",
+                "commit": "c",
+                "tracked_files": ["a.py"],
+                "mandatory_files": ["a.py"],
+                "focus": [],
+            },
+            "queued_files": ["a.py"],
+            "triage_records": {
+                "a.py": {
+                    "path": "a.py",
+                    "priority": "SKIP",
+                    "confidence": "medium",
+                    "bug_classes": [],
+                    "summary": "old",
+                    "relevant_symbols": [],
+                    "suspicious_flows": [],
+                    "needs_followup": False,
+                }
+            },
+            "phase": "deep_review",
+        }
+        (run_dir / "state.json").write_text(json.dumps(blob))
+        loaded = AuditRunState.load(tmp_path, "legacy")
+        rec = loaded.triage_records["a.py"]
+        assert rec.promotion_reasons == []
+        assert rec.triage_failure_mode is None
+        assert rec.confirmation_outcome is None
+
+
+class TestAttackScoreCache:
+    """Phase 1 caches attack-surface scores; dependency_index aliases caller_index."""
+
+    def test_order_returns_score_map(self, tmp_path):
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "danger.py", "subprocess.run(cmd)\neval(data)")
+        _commit_file(tmp_path, "safe.py", "x = 1")
+
+        cache = _load_file_contents(["safe.py", "danger.py"], str(tmp_path))
+        ordered, scores = _order_by_attack_surface(["safe.py", "danger.py"], cache)
+        assert ordered[0] == "danger.py"
+        assert scores["danger.py"] >= 5
+        assert scores["safe.py"] == 0
+
+    def test_attack_scores_round_trip(self, tmp_path):
+        scope = AuditScope(
+            branch="m",
+            commit="c",
+            tracked_files=["a.py"],
+            mandatory_files=["a.py"],
+            focus=[],
+        )
+        state = AuditRunState(
+            run_id="r",
+            scope=scope,
+            queued_files=["a.py"],
+            attack_scores={"a.py": 12},
+            state_dir=tmp_path,
+        )
+        state.save()
+        loaded = AuditRunState.load(state.state_dir, "r")
+        assert loaded.attack_scores == {"a.py": 12}
+
+    def test_dependency_index_aliases_caller_index(self):
+        scope = AuditScope(
+            branch="m",
+            commit="c",
+            tracked_files=["a.py"],
+            mandatory_files=["a.py"],
+            focus=[],
+        )
+        state = AuditRunState(
+            run_id="r",
+            scope=scope,
+            queued_files=["a.py"],
+            caller_index={"a.py": ["b.py"]},
+        )
+        assert state.dependency_index == {"a.py": ["b.py"]}
+
+
+class TestPromotion:
+    """Deterministic promotion rules in _apply_promotions."""
+
+    def _state(self, tmp_path, **kwargs):
+        scope = AuditScope(
+            branch="m",
+            commit="c",
+            tracked_files=["a.py", "b.py", "c.py"],
+            mandatory_files=["a.py", "b.py", "c.py"],
+            focus=[],
+        )
+        defaults = dict(
+            run_id="r",
+            scope=scope,
+            queued_files=["a.py", "b.py", "c.py"],
+            state_dir=tmp_path,
+        )
+        defaults.update(kwargs)
+        return AuditRunState(**defaults)
+
+    def test_score_threshold_promotes_skip(self, tmp_path):
+        from swival.audit import _apply_promotions
+
+        state = self._state(
+            tmp_path,
+            attack_scores={"a.py": 12, "b.py": 0, "c.py": 0},
+            triage_records={
+                "a.py": _bare_triage("a.py"),
+                "b.py": _bare_triage("b.py"),
+                "c.py": _bare_triage("c.py"),
+            },
+        )
+        promotions = _apply_promotions(state, force_review_matches={})
+        assert "attack-surface score 12" in promotions["a.py"]
+        assert state.triage_records["a.py"].priority == "ESCALATE_MEDIUM"
+        assert state.triage_records["b.py"].priority == "SKIP"
+
+    def test_entry_point_promotes(self, tmp_path):
+        from swival.audit import _apply_promotions
+
+        state = self._state(
+            tmp_path,
+            triage_records={p: _bare_triage(p) for p in ["a.py", "b.py", "c.py"]},
+            repo_profile={"entry_points": ["a.py"], "trust_boundaries": []},
+        )
+        promotions = _apply_promotions(state, {})
+        assert "phase 1 entry point" in promotions["a.py"]
+        assert state.triage_records["a.py"].priority == "ESCALATE_MEDIUM"
+
+    def test_one_hop_reach_from_entry_point(self, tmp_path):
+        from swival.audit import _apply_promotions
+
+        state = self._state(
+            tmp_path,
+            triage_records={p: _bare_triage(p) for p in ["a.py", "b.py", "c.py"]},
+            attack_scores={"a.py": 0, "b.py": 3, "c.py": 0},
+            caller_index={"a.py": ["b.py"]},  # b.py is what a.py depends on
+            repo_profile={"entry_points": ["a.py"], "trust_boundaries": []},
+        )
+        _apply_promotions(state, {})
+        assert state.triage_records["b.py"].priority == "ESCALATE_MEDIUM"
+        assert any(
+            "reached from entry point a.py" in r
+            for r in state.triage_records["b.py"].promotion_reasons
+        )
+
+    def test_needs_followup_promotes(self, tmp_path):
+        from swival.audit import _apply_promotions
+
+        state = self._state(
+            tmp_path,
+            triage_records={
+                "a.py": _bare_triage("a.py", needs_followup=True),
+                "b.py": _bare_triage("b.py"),
+                "c.py": _bare_triage("c.py"),
+            },
+        )
+        _apply_promotions(state, {})
+        assert state.triage_records["a.py"].priority == "ESCALATE_MEDIUM"
+        assert state.triage_records["b.py"].priority == "SKIP"
+
+    def test_failure_mode_promotes(self, tmp_path):
+        from swival.audit import _apply_promotions
+
+        rec = _bare_triage("a.py")
+        rec.triage_failure_mode = "parse_error"
+        state = self._state(
+            tmp_path,
+            triage_records={
+                "a.py": rec,
+                "b.py": _bare_triage("b.py"),
+                "c.py": _bare_triage("c.py"),
+            },
+        )
+        _apply_promotions(state, {})
+        assert state.triage_records["a.py"].priority == "ESCALATE_MEDIUM"
+        assert any(
+            "infrastructure failure" in r
+            for r in state.triage_records["a.py"].promotion_reasons
+        )
+
+    def test_missing_record_synthesized(self, tmp_path):
+        from swival.audit import _apply_promotions
+
+        state = self._state(
+            tmp_path,
+            triage_records={"a.py": _bare_triage("a.py")},
+        )
+        _apply_promotions(state, {})
+        # Both b.py and c.py were missing — synthesized + promoted
+        assert state.triage_records["b.py"].triage_failure_mode == "missing"
+        assert state.triage_records["b.py"].priority == "ESCALATE_MEDIUM"
+        assert state.triage_records["c.py"].priority == "ESCALATE_MEDIUM"
+
+
+class TestForceReviewConfig:
+    """[audit] force_review TOML schema and merge logic."""
+
+    def _write(self, path, body):
+        path.write_text(body)
+
+    def test_loads_project_force_review(self, tmp_path, monkeypatch):
+        from swival.config import load_config
+
+        # Force a fresh global dir so we don't pick up real ~/.config/swival
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+
+        (tmp_path / "swival.toml").write_text(
+            '[audit]\nforce_review = ["swival/audit.py", "swival/edit.py"]\n'
+        )
+        cfg = load_config(tmp_path)
+        assert cfg["audit"]["force_review"] == [
+            "swival/audit.py",
+            "swival/edit.py",
+        ]
+        # sources are not exposed in the public config dict; query them via
+        # the dedicated helper.
+        from swival.audit import _load_force_review
+
+        globs, sources = _load_force_review(str(tmp_path))
+        assert sources["swival/audit.py"] == "project"
+        assert "_force_review_sources" not in cfg["audit"]
+
+    def test_merges_global_and_project(self, tmp_path, monkeypatch):
+        from swival.audit import _load_force_review
+        from swival.config import load_config
+
+        xdg = tmp_path / "xdg"
+        (xdg / "swival").mkdir(parents=True)
+        (xdg / "swival" / "config.toml").write_text(
+            '[audit]\nforce_review = ["always.py"]\n'
+        )
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+
+        (tmp_path / "swival.toml").write_text('[audit]\nforce_review = ["here.py"]\n')
+
+        cfg = load_config(tmp_path)
+        assert set(cfg["audit"]["force_review"]) == {"always.py", "here.py"}
+        _, sources = _load_force_review(str(tmp_path))
+        assert sources["always.py"] == "global"
+        assert sources["here.py"] == "project"
+
+    def test_unknown_audit_subkey_raises(self, tmp_path, monkeypatch):
+        from swival.config import load_config, ConfigError
+
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+        (tmp_path / "swival.toml").write_text(
+            '[audit]\nforce_review = []\nbogus = "x"\n'
+        )
+        with pytest.raises(ConfigError, match="audit.bogus"):
+            load_config(tmp_path)
+
+    def test_non_string_glob_raises(self, tmp_path, monkeypatch):
+        from swival.config import load_config, ConfigError
+
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+        (tmp_path / "swival.toml").write_text('[audit]\nforce_review = ["ok.py", 42]\n')
+        with pytest.raises(ConfigError, match="force_review"):
+            load_config(tmp_path)
+
+
+class TestForceReviewMatching:
+    """_resolve_force_review glob behavior and warnings."""
+
+    def test_match_exact_path(self):
+        from swival.audit import _resolve_force_review
+
+        matches, warns = _resolve_force_review(
+            ["a.py"], {"a.py": "project"}, ["a.py", "b.py"]
+        )
+        assert matches == {"a.py": "project"}
+        assert warns == []
+
+    def test_directory_trailing_slash(self):
+        from swival.audit import _resolve_force_review
+
+        matches, _ = _resolve_force_review(
+            ["src/"],
+            {"src/": "project"},
+            ["src/a.py", "src/sub/b.py", "other.py"],
+        )
+        assert "src/a.py" in matches
+        assert "src/sub/b.py" in matches
+        assert "other.py" not in matches
+
+    def test_zero_match_project_warns(self):
+        from swival.audit import _resolve_force_review
+
+        matches, warns = _resolve_force_review(
+            ["missing.py"], {"missing.py": "project"}, ["a.py"]
+        )
+        assert matches == {}
+        assert any("missing.py" in w for w in warns)
+
+    def test_zero_match_global_silent(self):
+        from swival.audit import _resolve_force_review
+
+        matches, warns = _resolve_force_review(
+            ["missing.py"], {"missing.py": "global"}, ["a.py"]
+        )
+        assert matches == {}
+        assert warns == []
+
+    def test_project_overrides_global_origin(self):
+        from swival.audit import _resolve_force_review
+
+        matches, _ = _resolve_force_review(
+            ["a.py", "a.py"],
+            {"a.py": "project"},  # last-write wins on same glob
+            ["a.py"],
+        )
+        assert matches["a.py"] == "project"
+
+
+class TestForceReviewPromotion:
+    def test_force_review_promotes_skip(self, tmp_path):
+        from swival.audit import _apply_promotions
+
+        scope = AuditScope(
+            branch="m",
+            commit="c",
+            tracked_files=["a.py"],
+            mandatory_files=["a.py"],
+            focus=[],
+        )
+        rec = _bare_triage("a.py")
+        state = AuditRunState(
+            run_id="r",
+            scope=scope,
+            queued_files=["a.py"],
+            triage_records={"a.py": rec},
+            state_dir=tmp_path,
+        )
+        _apply_promotions(state, {"a.py": "project"})
+        assert state.triage_records["a.py"].priority == "ESCALATE_MEDIUM"
+        assert any(
+            "forced via swival.toml" in r
+            for r in state.triage_records["a.py"].promotion_reasons
+        )
+
+
+class TestPhase2PromptScoreCache:
+    """The triage prompt score must come from state.attack_scores so that
+    the prompt and the promotion gate can never disagree."""
+
+    def test_uses_cached_score(self, tmp_path, monkeypatch):
+        from swival.audit import _phase2_triage_one
+        from types import SimpleNamespace
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "subprocess.run(cmd)\neval(data)")
+
+        scope = AuditScope(
+            branch="m",
+            commit="c",
+            tracked_files=["a.py"],
+            mandatory_files=["a.py"],
+            focus=[],
+        )
+        # Prime the cache with a sentinel value that does NOT equal what
+        # _score_attack_surface(content) would return for this file.
+        state = AuditRunState(
+            run_id="r",
+            scope=scope,
+            queued_files=["a.py"],
+            attack_scores={"a.py": 999},
+            state_dir=tmp_path,
+        )
+
+        captured = {}
+
+        def fake_call(ctx, msgs, temperature=0.0, trace_task=None):
+            captured["user"] = msgs[1]["content"]
+            return (
+                "@@ triage @@\n"
+                "priority: SKIP\n"
+                "confidence: medium\n"
+                "summary: x\n"
+                "needs_followup: false\n"
+            )
+
+        monkeypatch.setattr("swival.audit._call_audit_llm", fake_call)
+        ctx = SimpleNamespace(base_dir=str(tmp_path), loop_kwargs={})
+
+        _phase2_triage_one("a.py", state, ctx)
+        assert "score=999" in captured["user"], captured["user"]
+
+    def test_falls_back_to_compute_when_cache_empty(self, tmp_path, monkeypatch):
+        """Legacy state files predate attack_scores. The prompt must still
+        receive a real score, and the cache must be backfilled."""
+        from swival.audit import _phase2_triage_one
+        from types import SimpleNamespace
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "subprocess.run(cmd)\neval(data)")
+
+        scope = AuditScope(
+            branch="m",
+            commit="c",
+            tracked_files=["a.py"],
+            mandatory_files=["a.py"],
+            focus=[],
+        )
+        state = AuditRunState(
+            run_id="r",
+            scope=scope,
+            queued_files=["a.py"],
+            attack_scores={},  # legacy: empty
+            state_dir=tmp_path,
+        )
+
+        monkeypatch.setattr(
+            "swival.audit._call_audit_llm",
+            lambda ctx, msgs, temperature=0.0, trace_task=None: (
+                "@@ triage @@\n"
+                "priority: SKIP\n"
+                "confidence: medium\n"
+                "summary: x\n"
+                "needs_followup: false\n"
+            ),
+        )
+        ctx = SimpleNamespace(base_dir=str(tmp_path), loop_kwargs={})
+
+        _phase2_triage_one("a.py", state, ctx)
+        assert "a.py" in state.attack_scores
+        assert state.attack_scores["a.py"] >= 5  # subprocess+eval scores
+
+    def test_confirmation_pass_uses_cached_score(self, tmp_path, monkeypatch):
+        from swival.audit import _phase2_confirm_one
+        from types import SimpleNamespace
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "x = 1")
+
+        scope = AuditScope(
+            branch="m",
+            commit="c",
+            tracked_files=["a.py"],
+            mandatory_files=["a.py"],
+            focus=[],
+        )
+        state = AuditRunState(
+            run_id="r",
+            scope=scope,
+            queued_files=["a.py"],
+            attack_scores={"a.py": 777},
+            repo_profile={"summary": "tiny"},
+            state_dir=tmp_path,
+        )
+
+        captured = {}
+
+        def fake_call(ctx, msgs, temperature=0.0, trace_task=None):
+            captured["user"] = msgs[1]["content"]
+            return (
+                "@@ triage @@\n"
+                "priority: SKIP\n"
+                "confidence: low\n"
+                "summary: x\n"
+                "needs_followup: false\n"
+            )
+
+        monkeypatch.setattr("swival.audit._call_audit_llm", fake_call)
+        ctx = SimpleNamespace(base_dir=str(tmp_path), loop_kwargs={})
+        _phase2_confirm_one("a.py", state, ctx)
+        assert "score=777" in captured["user"]
+
+
+class TestPhase2TriageFailureRecord:
+    def test_llm_call_failure_returns_record(self, tmp_path, monkeypatch):
+        from swival.audit import _phase2_triage_one
+        from types import SimpleNamespace
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "x = 1")
+
+        scope = AuditScope(
+            branch="m",
+            commit="c",
+            tracked_files=["a.py"],
+            mandatory_files=["a.py"],
+            focus=[],
+        )
+        state = AuditRunState(
+            run_id="r",
+            scope=scope,
+            queued_files=["a.py"],
+            state_dir=tmp_path,
+        )
+
+        def _boom(*a, **kw):
+            raise TimeoutError("upstream timed out")
+
+        monkeypatch.setattr("swival.audit._call_audit_llm", _boom)
+
+        ctx = SimpleNamespace(base_dir=str(tmp_path), loop_kwargs={})
+        rec = _phase2_triage_one("a.py", state, ctx)
+        assert rec.priority == "SKIP"
+        assert rec.triage_failure_mode == "llm_call_failed:TimeoutError"
+
+    def test_parse_error_tagged(self, tmp_path, monkeypatch):
+        from swival.audit import _phase2_triage_one
+        from types import SimpleNamespace
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "x = 1")
+
+        scope = AuditScope(
+            branch="m",
+            commit="c",
+            tracked_files=["a.py"],
+            mandatory_files=["a.py"],
+            focus=[],
+        )
+        state = AuditRunState(
+            run_id="r",
+            scope=scope,
+            queued_files=["a.py"],
+            state_dir=tmp_path,
+        )
+
+        monkeypatch.setattr(
+            "swival.audit._call_audit_llm",
+            lambda ctx, msgs, temperature=0.0, trace_task=None: "garbage no record",
+        )
+
+        ctx = SimpleNamespace(base_dir=str(tmp_path), loop_kwargs={})
+        rec = _phase2_triage_one("a.py", state, ctx)
+        assert rec.priority == "SKIP"
+        assert rec.triage_failure_mode == "parse_error"
+
+
+class TestConfirmationPass:
+    def test_promotes_low_confidence_skip(self, tmp_path, monkeypatch):
+        from swival.audit import _phase2_confirm_one
+        from types import SimpleNamespace
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "x = 1")
+
+        scope = AuditScope(
+            branch="m",
+            commit="c",
+            tracked_files=["a.py"],
+            mandatory_files=["a.py"],
+            focus=[],
+        )
+        state = AuditRunState(
+            run_id="r",
+            scope=scope,
+            queued_files=["a.py"],
+            attack_scores={"a.py": 0},
+            repo_profile={"summary": "tiny"},
+            state_dir=tmp_path,
+        )
+
+        monkeypatch.setattr(
+            "swival.audit._call_audit_llm",
+            lambda ctx, msgs, temperature=0.0, trace_task=None: (
+                "@@ triage @@\n"
+                "priority: ESCALATE_MEDIUM\n"
+                "confidence: medium\n"
+                "summary: confirmed worth a look\n"
+                "needs_followup: false\n"
+            ),
+        )
+
+        ctx = SimpleNamespace(base_dir=str(tmp_path), loop_kwargs={})
+        rec = _phase2_confirm_one("a.py", state, ctx)
+        assert rec is not None
+        assert rec.priority == "ESCALATE_MEDIUM"
+
+
+class TestMeasureTriage:
+    def test_parser_sets_measure_triage(self, monkeypatch, tmp_path):
+        from swival.audit import run_audit_command
+
+        captured = _capture_run_audit_phases(monkeypatch)
+        run_audit_command("--measure-triage src/foo", _make_ctx(tmp_path))
+        assert captured["measure_triage"] is True
+
+    def test_round_trip(self, tmp_path):
+        scope = AuditScope(
+            branch="m",
+            commit="c",
+            tracked_files=["a.py"],
+            mandatory_files=["a.py"],
+            focus=[],
+        )
+        state = AuditRunState(
+            run_id="r",
+            scope=scope,
+            queued_files=["a.py"],
+            measure_triage=True,
+            measurement_escalated_paths={"a.py"},
+            state_dir=tmp_path,
+        )
+        state.save()
+        loaded = AuditRunState.load(state.state_dir, "r")
+        assert loaded.measure_triage is True
+        assert loaded.measurement_escalated_paths == {"a.py"}
+
+    def test_resume_mismatch_rejected(self, tmp_path, monkeypatch):
+        from swival.audit import run_audit_command
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "pass")
+        commit = (
+            subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path)
+            .decode()
+            .strip()
+        )
+        scope = AuditScope(
+            branch="main",
+            commit=commit,
+            tracked_files=["a.py"],
+            mandatory_files=["a.py"],
+            focus=[],
+        )
+        state_dir = Path(tmp_path) / ".swival" / "audit"
+        state = AuditRunState(
+            run_id="m1",
+            scope=scope,
+            queued_files=["a.py"],
+            state_dir=state_dir,
+            measure_triage=False,
+            phase="deep_review",
+        )
+        state.save()
+
+        result = run_audit_command("--measure-triage --resume", _make_ctx(tmp_path))
+        assert "measure-triage mismatch" in result
+
+    def test_recall_only_emits_inside_phase5(self, tmp_path, monkeypatch):
+        """Recall emission belongs inside the artifacts (Phase 5) block.
+
+        The bug: ``artifacts_written`` is a local that resets to 0, and the
+        old code emitted recall after the artifacts block unconditionally —
+        so a measurement run that enters ``_run_audit_phases`` with state
+        already past Phase 5 (e.g. via ``--regen``, which forces phase back
+        to artifacts and re-runs only that block) would still print recall,
+        and the trailing ``artifacts_written == 0`` fallback could fire on
+        cold paths and print "No provable security bugs" despite real
+        findings on disk.
+
+        The fix moves recall emission inside the Phase-5 block so it only
+        fires when artifacts actually run. This test pins the structural
+        invariant: in source, the recall call must appear before the
+        ``state.phase = "done"`` assignment, inside the
+        ``if state.phase == "artifacts":`` body.
+        """
+        import inspect
+
+        from swival.audit import _run_audit_phases
+
+        src = inspect.getsource(_run_audit_phases)
+        recall_idx = src.find("_emit_measure_triage_recall(state)")
+        done_idx = src.find('state.phase = "done"')
+        artifacts_gate = src.find('if state.phase == "artifacts":')
+        assert recall_idx > 0, "recall call missing from _run_audit_phases"
+        assert recall_idx > artifacts_gate, (
+            "recall must be inside the artifacts block, not before it"
+        )
+        assert recall_idx < done_idx, (
+            "recall must run before phase=done so it only emits on successful Phase-5 completion"
+        )
+
+
+class TestResumeForceReview:
+    def test_added_force_review_promotes_saved_skip_on_resume(
+        self, tmp_path, monkeypatch
+    ):
+        """Adding a glob to swival.toml after Phase 2 should promote a saved
+        SKIP on the next resume."""
+        from swival.audit import run_audit_command
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "a.py", "pass")
+        commit = (
+            subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path)
+            .decode()
+            .strip()
+        )
+        scope = AuditScope(
+            branch="main",
+            commit=commit,
+            tracked_files=["a.py"],
+            mandatory_files=["a.py"],
+            focus=[],
+        )
+        state_dir = Path(tmp_path) / ".swival" / "audit"
+        state = AuditRunState(
+            run_id="rf",
+            scope=scope,
+            queued_files=["a.py"],
+            triage_records={"a.py": _bare_triage("a.py")},  # SKIP
+            candidate_files=[],
+            reviewed_files={"a.py"},
+            deep_reviewed_files={"a.py"},
+            state_dir=state_dir,
+            phase="deep_review",
+        )
+        state.save()
+
+        # Now add force_review for a.py
+        (tmp_path / "swival.toml").write_text('[audit]\nforce_review = ["a.py"]\n')
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+
+        # Stub heavy phases
+        monkeypatch.setattr(
+            "swival.audit._deep_review_one",
+            lambda path, state, ctx: DeepReviewResult(path=path, findings=[]),
+        )
+
+        run_audit_command("--resume", _make_ctx(tmp_path))
+
+        loaded = AuditRunState.load(state_dir, "rf")
+        assert loaded.triage_records["a.py"].priority == "ESCALATE_MEDIUM"
+        assert "a.py" in loaded.candidate_files
+        assert any(
+            "forced via swival.toml" in r
+            for r in loaded.triage_records["a.py"].promotion_reasons
+        )
