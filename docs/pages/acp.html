@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ACP — Swival</title>
+    <meta name="description" content="ACP: Driving Swival from ACP-aware editors like Zed and agent-client-protocol.nvim">
+    <link rel="canonical" href="https://swival.dev/pages/acp.html">
+    <meta property="og:type" content="article">
+    <meta property="og:title" content="ACP — Swival">
+    <meta property="og:description" content="ACP: Driving Swival from ACP-aware editors like Zed and agent-client-protocol.nvim">
+    <meta property="og:image" content="https://swival.dev/img/logo.png">
+    <meta property="og:url" content="https://swival.dev/pages/acp.html">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="ACP — Swival">
+    <meta name="twitter:description" content="ACP: Driving Swival from ACP-aware editors like Zed and agent-client-protocol.nvim">
+    <meta name="twitter:image" content="https://swival.dev/img/logo.png">
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "TechArticle",
+        "headline": "ACP — Swival",
+        "description": "ACP: Driving Swival from ACP-aware editors like Zed and agent-client-protocol.nvim",
+        "url": "https://swival.dev/pages/acp.html",
+        "publisher": {
+            "@type": "Organization",
+            "name": "Swival",
+            "logo": { "@type": "ImageObject", "url": "https://swival.dev/img/logo.png" }
+        },
+        "isPartOf": {
+            "@type": "WebSite",
+            "name": "Swival",
+            "url": "https://swival.dev/"
+        }
+    }
+    </script>
+    <link rel="icon" href="../favicon.ico">
+    <link rel="stylesheet" href="../css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../" class="header-logo">
+                <img src="../img/logo.png" alt="Swival">
+            </a>
+            <nav class="header-nav">
+                <a href="./">Docs</a>
+                <a href="https://github.com/swival/swival">GitHub</a>
+            </nav>
+        </div>
+    </header>
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <div class="sidebar-section">
+<h4>Basics</h4>
+<ul>
+<li><a href="getting-started.html">Getting Started</a></li>
+<li><a href="usage.html">Usage</a></li>
+<li><a href="tools.html">Tools</a></li>
+<li><a href="audit.html">Security Audit</a></li>
+<li><a href="context-management.html">Context Management</a></li>
+<li><a href="open-models.html">Not Just for Frontier Models</a></li>
+</ul>
+</div>
+<div class="sidebar-section">
+<h4>Configuration & Deployment</h4>
+<ul>
+<li><a href="safety-and-sandboxing.html">Safety & Sandboxing</a></li>
+<li><a href="secrets.html">Secret Encryption</a></li>
+<li><a href="llm-filter.html">Outbound LLM Filter</a></li>
+<li><a href="command-middleware.html">Command Middleware</a></li>
+<li><a href="skills.html">Skills</a></li>
+<li><a href="web-browsing.html">Web Browsing</a></li>
+<li><a href="mcp.html">MCP</a></li>
+<li><a href="a2a.html">A2A</a></li>
+<li><a href="acp.html" class="active">ACP</a></li>
+<li><a href="lifecycle-hooks.html">Lifecycle Hooks</a></li>
+<li><a href="custom-commands.html">Custom Commands</a></li>
+<li><a href="customization.html">Customization</a></li>
+<li><a href="providers.html">Providers</a></li>
+<li><a href="reports.html">Reports</a></li>
+<li><a href="reviews.html">Reviews</a></li>
+<li><a href="agentfs.html">AgentFS</a></li>
+</ul>
+</div>
+<div class="sidebar-section">
+<h4>Reference</h4>
+<ul>
+<li><a href="python-api.html">Python API</a></li>
+</ul>
+</div>
+        </aside>
+        <article class="docs-content">
+            <h1 id="acp">ACP</h1>
+<p>Swival speaks the <a href="https://agentclientprotocol.com">Agent Client Protocol</a> on <code>stdio</code>, so editors that act as ACP clients (Zed, the <code>agent-client-protocol.nvim</code> plugin, and similar) can drive a swival agent the same way they drive Claude Code, Gemini CLI, or codex.</p>
+<p>The editor is the client; swival is the agent. Pass <code>--acp</code> and swival reads newline-delimited JSON-RPC 2.0 requests on stdin and writes responses and notifications on stdout. Nothing else gets written to stdout, ever, so the JSON-RPC framing stays intact.</p>
+<h2 id="quick-start">Quick start</h2>
+<p>Launch swival in ACP mode against your usual provider:</p>
+<pre><code class="language-sh">swival --acp --provider lmstudio
+</code></pre>
+<p>There is no question argument. The editor opens sessions and sends prompts; swival replies with text and tool-call updates as the agent loop runs.</p>
+<p>If you accidentally launch this from a real terminal, swival prints a warning to stderr because nothing will read its stdout. Pipe stdout into a JSON-RPC client, or use the editor configurations below.</p>
+<p>To capture the wire traffic and any internal diagnostics for debugging, add <code>--acp-log</code>:</p>
+<pre><code class="language-sh">swival --acp --acp-log /tmp/swival-acp.log
+</code></pre>
+<p>The log file is the only place swival writes anything other than JSON-RPC frames.</p>
+<h2 id="editor-setup">Editor setup</h2>
+<h3 id="zed">Zed</h3>
+<p>Add an <code>agent_servers</code> entry to <code>~/.config/zed/settings.json</code>:</p>
+<pre><code class="language-json">{
+  &quot;agent_servers&quot;: {
+    &quot;swival&quot;: {
+      &quot;type&quot;: &quot;custom&quot;,
+      &quot;command&quot;: &quot;swival&quot;,
+      &quot;args&quot;: [&quot;--acp&quot;]
+    }
+  }
+}
+</code></pre>
+<p>Open the agent panel with <code>cmd-?</code>, and then use the <code>+</code> button in the top right to start a new Swival thread.</p>
+<p>Zed spawns one swival process per agent connection and tears it down when the panel closes. Use any provider/model flags you would normally pass to swival, including <code>--yolo</code>, <code>--files</code>, <code>--commands</code>, <code>--mcp-config</code>, and <code>--a2a-config</code>. The CLI surface is the same as one-shot mode, with a few exceptions: <code>--repl</code>, <code>--serve</code>, and a positional question are rejected because they conflict with ACP.</p>
+<h3 id="neovim-agent-client-protocolnvim">Neovim (<code>agent-client-protocol.nvim</code>)</h3>
+<p>If you use the <code>agent-client-protocol.nvim</code> plugin, register swival as a server in your config:</p>
+<pre><code class="language-lua">require(&quot;agent-client-protocol&quot;).setup({
+  servers = {
+    swival = {
+      command = &quot;swival&quot;,
+      args = { &quot;--acp&quot;, &quot;--provider&quot;, &quot;lmstudio&quot; },
+    },
+  },
+})
+</code></pre>
+<p>The exact field names depend on your plugin version; consult its README. The shape is always the same: a command and a list of arguments that produce a process speaking ACP on <code>stdio</code>.</p>
+<h2 id="what-is-currently-supported">What is currently supported</h2>
+<ul>
+<li><code>initialize</code>, with version negotiation and capability echo</li>
+<li><code>authenticate</code> (no-op; provider credentials live in your swival config, not in ACP)</li>
+<li><code>session/new</code> with a working directory</li>
+<li><code>session/prompt</code> for a single text turn, returning when the model finishes or hits the turn limit</li>
+<li><code>session/cancel</code> to interrupt a running prompt; the prompt response then carries <code>stopReason: "cancelled"</code></li>
+<li><code>session/update</code> notifications: <code>agent_message_chunk</code> for assistant text, <code>tool_call</code> and <code>tool_call_update</code> for tool activity (with kinds <code>read</code>, <code>edit</code>, <code>execute</code>, <code>search</code>, <code>think</code>, <code>delete</code>, <code>fetch</code>, <code>other</code>)</li>
+</ul>
+<p>Each ACP session is backed by a swival <code>Session</code>, so all your normal swival features are active: skills, MCP servers, A2A clients, the safety policy you chose with <code>--files</code> and <code>--commands</code>, snapshots, todos, and so on. The editor sees them as tool calls and renders them however it likes.</p>
+<h2 id="troubleshooting">Troubleshooting</h2>
+<p>If the editor says "agent not responding" or hangs on initialize, run swival the same way the editor does and check stderr:</p>
+<pre><code class="language-sh">swival --acp --acp-log /tmp/swival-acp.log &lt; /dev/null
+echo &quot;$?&quot;
+cat /tmp/swival-acp.log
+</code></pre>
+<p>A clean exit with no log entries means swival never received a request. A log with a parse error means the editor is sending something other than newline-delimited JSON-RPC. A log with a Python traceback is a swival bug; please file an issue with the log attached.</p>
+<p>If you want to drive swival by hand to confirm the protocol works, three lines of JSON are enough:</p>
+<pre><code class="language-sh">{
+  echo '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:1,&quot;method&quot;:&quot;initialize&quot;,&quot;params&quot;:{&quot;protocolVersion&quot;:1,&quot;clientCapabilities&quot;:{}}}'
+  echo '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:2,&quot;method&quot;:&quot;session/new&quot;,&quot;params&quot;:{&quot;cwd&quot;:&quot;'&quot;$PWD&quot;'&quot;,&quot;mcpServers&quot;:[]}}'
+  echo '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:3,&quot;method&quot;:&quot;session/prompt&quot;,&quot;params&quot;:{&quot;sessionId&quot;:&quot;REPLACE_AFTER_NEW&quot;,&quot;prompt&quot;:[{&quot;type&quot;:&quot;text&quot;,&quot;text&quot;:&quot;hello&quot;}]}}'
+} | swival --acp --provider lmstudio
+</code></pre>
+<p>You will need to fill in the session id from the <code>session/new</code> response before sending the prompt; the easiest way is to do it in two passes or use a small script.</p>
+        </article>
+    </div>
+    <footer class="site-footer">
+        <div class="footer-inner">
+            <div class="footer-grid">
+                <div class="footer-col">
+                    <img src="../img/logo.png" alt="Swival" class="footer-logo">
+                    <p class="footer-tagline">A coding agent for any model.<br>Free, open-source, and easy to set up.</p>
+                </div>
+                <div class="footer-col">
+                    <h4>Resources</h4>
+                    <ul>
+                        <li><a href="getting-started.html">Getting Started</a></li>
+                        <li><a href="usage.html">Usage</a></li>
+                        <li><a href="tools.html">Tools</a></li>
+                        <li><a href="context-management.html">Context Management</a></li>
+                    </ul>
+                </div>
+                <div class="footer-col">
+                    <h4>Guides</h4>
+                    <ul>
+                        <li><a href="providers.html">Providers</a></li>
+                        <li><a href="safety-and-sandboxing.html">Safety &amp; Sandboxing</a></li>
+                        <li><a href="python-api.html">Python API</a></li>
+                        <li><a href="open-models.html">Open Models</a></li>
+                    </ul>
+                </div>
+                <div class="footer-col">
+                    <h4>Community</h4>
+                    <ul>
+                        <li><a href="https://github.com/swival/swival">GitHub</a></li>
+                        <li><a href="https://calibra.swival.dev">Calibra</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2025 Swival &middot; MIT License</p>
+            </div>
+        </div>
+    </footer>
+    <button class="back-to-top" aria-label="Back to top">&uarr;</button>
+    <script src="../js/site.js"></script>
+</body>
+</html>

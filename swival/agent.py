@@ -2300,16 +2300,31 @@ def _post_tool_bookkeeping(
     """
     interventions = []
     name = tool_meta["name"]
+    tool_call_id = tool_msg.get("tool_call_id")
+    arguments = tool_meta.get("arguments")
 
     if tool_meta["succeeded"]:
         _emit(
             EVENT_TOOL_FINISH,
-            {"name": name, "turn": turn, "elapsed": tool_meta["elapsed"]},
+            {
+                "id": tool_call_id,
+                "name": name,
+                "turn": turn,
+                "elapsed": tool_meta["elapsed"],
+                "arguments": arguments,
+                "content": tool_msg["content"][:4096],
+            },
         )
     else:
         _emit(
             EVENT_TOOL_ERROR,
-            {"name": name, "turn": turn, "error": tool_msg["content"][:500]},
+            {
+                "id": tool_call_id,
+                "name": name,
+                "turn": turn,
+                "error": tool_msg["content"][:500],
+                "arguments": arguments,
+            },
         )
 
     if report:
@@ -3027,7 +3042,15 @@ def _call_command_with_tools(
                 }
             else:
                 tc = _make_tool_call_obj(call_id, name, args)
-                _emit(EVENT_TOOL_START, {"name": name, "turn": outer_turn})
+                _emit(
+                    EVENT_TOOL_START,
+                    {
+                        "id": call_id,
+                        "name": name,
+                        "turn": outer_turn,
+                        "arguments_raw": None,
+                    },
+                )
                 tool_msg, tool_meta = handle_tool_call(tc, **handle_tool_call_kwargs)
 
             intv = _post_tool_bookkeeping(
@@ -4254,6 +4277,19 @@ def build_parser():
         default=_UNSET,
         help="Custom agent description for the A2A agent card. Only used with --serve.",
     )
+    server_group.add_argument(
+        "--acp",
+        action="store_true",
+        default=False,
+        help="Speak the Agent Client Protocol on stdio (for editor integration: Zed, agent-client-protocol.nvim, etc.).",
+    )
+    server_group.add_argument(
+        "--acp-log",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Log JSON-RPC traffic and diagnostics to PATH. Only used with --acp.",
+    )
     review_group.add_argument(
         "--verify",
         type=str,
@@ -4633,11 +4669,22 @@ def main():
 
     # --- A2A serve mode ---
     _is_serve = getattr(args, "serve", False)
+    _is_acp = getattr(args, "acp", False)
+
+    if _is_acp and _is_serve:
+        parser.error("--acp and --serve cannot be used together")
+    if _is_acp and args.repl:
+        parser.error("--acp and --repl cannot be used together")
+    if _is_acp and args.question is not None:
+        parser.error(
+            "--acp does not accept a positional question; the editor drives prompts"
+        )
 
     # Read question from stdin if not provided and stdin is piped
     if (
         not args.repl
         and not _is_serve
+        and not _is_acp
         and args.question is None
         and not sys.stdin.isatty()
     ):
@@ -4645,7 +4692,7 @@ def main():
         if not args.question:
             parser.error("question is required (stdin was empty)")
 
-    if not args.repl and not _is_serve and args.question is None:
+    if not args.repl and not _is_serve and not _is_acp and args.question is None:
         if args.self_review:
             parser.error("--self-review requires a task")
         if args.report:
@@ -4756,6 +4803,35 @@ def main():
         )
         server.serve()
         sys.exit(0)
+
+    if _is_acp:
+        from .acp_server import AcpServer, acp_stdout_is_tty
+        from .config import args_to_session_kwargs
+
+        if acp_stdout_is_tty() and not args.acp_log:
+            print(
+                "warning: --acp expects stdout to be piped to a JSON-RPC client. "
+                "If you launched this from a terminal, you probably want --acp-log <path>.",
+                file=sys.stderr,
+            )
+
+        session_kwargs = args_to_session_kwargs(args, str(base_dir))
+
+        if not getattr(args, "no_mcp", False):
+            mcp_servers = _resolve_mcp_servers(args, base_dir)
+            if mcp_servers:
+                session_kwargs["mcp_servers"] = mcp_servers
+
+        if not getattr(args, "no_a2a", False):
+            a2a_servers = _resolve_a2a_servers(args)
+            if a2a_servers:
+                session_kwargs["a2a_servers"] = a2a_servers
+
+        acp_server = AcpServer(
+            session_kwargs=session_kwargs,
+            log_path=args.acp_log,
+        )
+        sys.exit(acp_server.serve())
 
     report = ReportCollector() if args.report else None
 
@@ -7345,7 +7421,15 @@ def run_agent_loop(
                 return None, True
 
             _tc_name = tool_call.function.name
-            _emit(EVENT_TOOL_START, {"name": _tc_name, "turn": turns})
+            _emit(
+                EVENT_TOOL_START,
+                {
+                    "id": tool_call.id,
+                    "name": _tc_name,
+                    "turn": turns,
+                    "arguments_raw": getattr(tool_call.function, "arguments", None),
+                },
+            )
 
             tool_msg, tool_meta = handle_tool_call(
                 tool_call,

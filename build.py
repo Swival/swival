@@ -102,6 +102,11 @@ NAV = [
                 "Connecting to remote agents via the Agent-to-Agent protocol",
             ),
             (
+                "acp",
+                "ACP",
+                "Driving Swival from ACP-aware editors like Zed and agent-client-protocol.nvim",
+            ),
+            (
                 "lifecycle-hooks",
                 "Lifecycle Hooks",
                 "Run commands at startup and exit to sync .swival/ state with remote storage",
