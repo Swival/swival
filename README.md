@@ -229,7 +229,7 @@ audit, declares a blocker, or hits the optional token budget. This makes it
 practical to point Swival at ambitious, long-running tasks like refactors,
 audits, or end-to-end fixes, and let it grind for hours without giving up
 halfway. Pause, resume, replace, or clear the goal at any time. See
-[Goals](docs.md/tools.md#goal-tool-complete_goal) for details.
+[Goals](docs.md/goal.md) for details.
 
 **A2A server mode.** Run `swival --serve` and your agent becomes an A2A
 endpoint that other agents can call over HTTP. Multi-turn context, streaming,

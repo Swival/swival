@@ -51,6 +51,11 @@ NAV = [
                 "Multi-phase security audit with triage, verification, and patch generation",
             ),
             (
+                "goal",
+                "Goals",
+                "Persistent goal mode that keeps the agent on task across turns until the objective is done",
+            ),
+            (
                 "context-management",
                 "Context Management",
                 "How Swival fits large tasks into small context windows",

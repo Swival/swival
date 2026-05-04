@@ -61,6 +61,7 @@
 <li><a href="usage.html">Usage</a></li>
 <li><a href="tools.html" class="active">Tools</a></li>
 <li><a href="audit.html">Security Audit</a></li>
+<li><a href="goal.html">Goals</a></li>
 <li><a href="context-management.html">Context Management</a></li>
 <li><a href="open-models.html">Not Just for Frontier Models</a></li>
 </ul>
@@ -201,48 +202,7 @@ swival --commands ask &quot;Run the tests&quot;
 <p>Swival can connect to remote agents via the <a href="https://google.github.io/A2A/">Agent-to-Agent (A2A) protocol</a>. A2A tools are discovered at startup and exposed alongside built-in tools. Unlike MCP tools, A2A tools always accept a natural-language <code>message</code> plus optional <code>context_id</code> and <code>task_id</code> for multi-turn conversations. A2A tool output is size-guarded the same way as MCP output, with continuation metadata preserved across size limits and context compaction. All A2A output is wrapped with an <code>[UNTRUSTED EXTERNAL CONTENT]</code> header, including spill files.</p>
 <p>See <a href="a2a.html">A2A</a> for configuration and details.</p>
 <h2 id="goal-tool-complete_goal">Goal Tool (<code>complete_goal</code>)</h2>
-<p>Goal state is started and controlled by the operator through <code>/goal</code>; the model cannot create, replace, pause, resume, or inspect goals through tools. Swival exposes exactly one goal tool during active goal work: <code>complete_goal</code>.</p>
-<p><code>complete_goal</code> takes no arguments and marks the active goal complete. Before calling it, the model is expected to run an evidence-based audit that maps every requirement in the objective to real files, command output, or tests. If the model is blocked or needs user input, it should return final text describing the blocker instead of calling <code>complete_goal</code>.</p>
-<p>After a turn that produces a final text answer with an active goal, the runtime injects a synthetic user message containing a continuation prompt. The continuation includes the objective verbatim as inert data, current usage, and remaining budget. Goal continuation turns count against <code>--max-turns</code> exactly like any other turn — the loop never bypasses the user's hard ceiling. If a continuation produces a final text answer with no tool calls, further continuations are suppressed to avoid a final-text loop, and the model's text is returned as a blocker/progress note.</p>
-<p>When the optional <code>token_budget</code> is reached, the goal transitions to <code>budget_limited</code>. The runtime injects a wrap-up steering prompt, and the dispatcher rejects mutating or work-starting tool calls (write/edit, command execution, subagents, MCP/A2A) with a fixed error string. Read-only tools (<code>read_file</code>, <code>grep</code>, <code>list_files</code>, <code>fetch_url</code>, <code>view_image</code>, <code>think</code>, <code>todo</code>, <code>snapshot</code>, <code>outline</code>) and <code>complete_goal</code> remain available for a coherent wrap-up.</p>
-<p>In one-shot mode (<code>swival "..."</code> with no <code>--repl</code>), <code>/goal &lt;objective&gt;</code> refuses because v1 has no slash syntax for <code>token_budget</code>. Use <code>--repl</code> for goal-driven continuation.</p>
-<p>Subagents do not receive the goal tools. Goals stay parent-session-only in v1.</p>
-<p>The session goal is wiped by <code>/clear</code>. Goals are not persisted across processes; crash recovery flows through <code>.swival/continue.md</code>, which records the active goal alongside todos, snapshots, and recent activity.</p>
-<p>The <code>/goal</code> slash command exposes the same state to the user:</p>
-<table>
-<thead>
-<tr>
-<th>Command</th>
-<th>Effect</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>/goal</code></td>
-<td>Show current goal status, or "No goal is currently set."</td>
-</tr>
-<tr>
-<td><code>/goal &lt;objective&gt;</code></td>
-<td>Create a goal (refused if one already exists).</td>
-</tr>
-<tr>
-<td><code>/goal replace &lt;objective&gt;</code></td>
-<td>Replace the existing goal and reset counters.</td>
-</tr>
-<tr>
-<td><code>/goal pause</code></td>
-<td>Pause the active goal.</td>
-</tr>
-<tr>
-<td><code>/goal resume</code></td>
-<td>Resume a paused goal.</td>
-</tr>
-<tr>
-<td><code>/goal clear</code></td>
-<td>Remove the current goal.</td>
-</tr>
-</tbody>
-</table>
+<p>When a goal is active, Swival exposes a single <code>complete_goal</code> tool that the model uses to declare the objective achieved after an evidence-based audit. The tool takes no arguments and is the only way out of the goal loop other than a blocker note or hitting <code>--max-turns</code>. See <a href="goal.html">Goals</a> for the full lifecycle, slash command reference, and budget behavior.</p>
         </article>
     </div>
     <footer class="site-footer">

@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Goals — Swival</title>
+    <meta name="description" content="Goals: Persistent goal mode that keeps the agent on task across turns until the objective is done">
+    <link rel="canonical" href="https://swival.dev/pages/goal.html">
+    <meta property="og:type" content="article">
+    <meta property="og:title" content="Goals — Swival">
+    <meta property="og:description" content="Goals: Persistent goal mode that keeps the agent on task across turns until the objective is done">
+    <meta property="og:image" content="https://swival.dev/img/logo.png">
+    <meta property="og:url" content="https://swival.dev/pages/goal.html">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="Goals — Swival">
+    <meta name="twitter:description" content="Goals: Persistent goal mode that keeps the agent on task across turns until the objective is done">
+    <meta name="twitter:image" content="https://swival.dev/img/logo.png">
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "TechArticle",
+        "headline": "Goals — Swival",
+        "description": "Goals: Persistent goal mode that keeps the agent on task across turns until the objective is done",
+        "url": "https://swival.dev/pages/goal.html",
+        "publisher": {
+            "@type": "Organization",
+            "name": "Swival",
+            "logo": { "@type": "ImageObject", "url": "https://swival.dev/img/logo.png" }
+        },
+        "isPartOf": {
+            "@type": "WebSite",
+            "name": "Swival",
+            "url": "https://swival.dev/"
+        }
+    }
+    </script>
+    <link rel="icon" href="../favicon.ico">
+    <link rel="stylesheet" href="../css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../" class="header-logo">
+                <img src="../img/logo.png" alt="Swival">
+            </a>
+            <nav class="header-nav">
+                <a href="./">Docs</a>
+                <a href="https://github.com/swival/swival">GitHub</a>
+            </nav>
+        </div>
+    </header>
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <div class="sidebar-section">
+<h4>Basics</h4>
+<ul>
+<li><a href="getting-started.html">Getting Started</a></li>
+<li><a href="usage.html">Usage</a></li>
+<li><a href="tools.html">Tools</a></li>
+<li><a href="audit.html">Security Audit</a></li>
+<li><a href="goal.html" class="active">Goals</a></li>
+<li><a href="context-management.html">Context Management</a></li>
+<li><a href="open-models.html">Not Just for Frontier Models</a></li>
+</ul>
+</div>
+<div class="sidebar-section">
+<h4>Configuration & Deployment</h4>
+<ul>
+<li><a href="safety-and-sandboxing.html">Safety & Sandboxing</a></li>
+<li><a href="secrets.html">Secret Encryption</a></li>
+<li><a href="llm-filter.html">Outbound LLM Filter</a></li>
+<li><a href="command-middleware.html">Command Middleware</a></li>
+<li><a href="skills.html">Skills</a></li>
+<li><a href="web-browsing.html">Web Browsing</a></li>
+<li><a href="mcp.html">MCP</a></li>
+<li><a href="a2a.html">A2A</a></li>
+<li><a href="acp.html">ACP</a></li>
+<li><a href="lifecycle-hooks.html">Lifecycle Hooks</a></li>
+<li><a href="custom-commands.html">Custom Commands</a></li>
+<li><a href="customization.html">Customization</a></li>
+<li><a href="providers.html">Providers</a></li>
+<li><a href="reports.html">Reports</a></li>
+<li><a href="reviews.html">Reviews</a></li>
+<li><a href="agentfs.html">AgentFS</a></li>
+</ul>
+</div>
+<div class="sidebar-section">
+<h4>Reference</h4>
+<ul>
+<li><a href="python-api.html">Python API</a></li>
+</ul>
+</div>
+        </aside>
+        <article class="docs-content">
+            <h1 id="goals">Goals</h1>
+<p>Set an objective with <code>/goal &lt;objective&gt;</code> in the REPL and Swival keeps the agent on task across turns. It is a structured spin on the Ralph-style "keep prompting until it's done" loop. The agent does not get to declare victory and walk away after one turn: the original objective is fed back to the model after every answer, and the loop only ends when the agent itself signals the goal is complete after a real evidence-based audit, declares a blocker, or hits the optional token budget. This makes it practical to point Swival at ambitious, long-running tasks like refactors, audits, or end-to-end fixes, and let it grind for hours without giving up halfway. Pause, resume, replace, or clear the goal at any time.</p>
+<h2 id="when-to-use-a-goal">When to Use a Goal</h2>
+<p>Use a regular prompt for "answer or do this now". Use <code>/goal</code> for "keep working on this until it is actually done."</p>
+<pre><code>/goal make the permute() function faster
+</code></pre>
+<p>On a goal like that, Swival will write benchmarks, try variant after variant of <code>permute()</code>, measure, discard regressions, keep the wins, and continue iterating until it has produced a measurably faster implementation, without you needing to babysit each round.</p>
+<p>Goals are best given as outcomes that can be recognized as done ("get the test suite green," "reduce p99 latency of /search below 50ms," "port module X to async without breaking any caller"), not open-ended directions. The clearer the success condition, the less likely the loop is to declare victory early.</p>
+<h2 id="how-the-loop-works">How the Loop Works</h2>
+<p>After each turn that produces a final text answer with an active goal, the runtime injects a synthetic user message containing a continuation prompt. The continuation includes the objective verbatim as inert data, current usage, and remaining budget. Goal continuation turns count against <code>--max-turns</code> exactly like any other turn, so the loop never bypasses the user's hard ceiling.</p>
+<p>If a continuation produces a final text answer with no tool calls, further continuations are suppressed to avoid a final-text loop, and the model's text is returned as a blocker or progress note.</p>
+<h2 id="the-complete_goal-tool">The <code>complete_goal</code> Tool</h2>
+<p>Goal state is started and controlled by the operator through <code>/goal</code>. The model cannot create, replace, pause, resume, or inspect goals through tools. Swival exposes exactly one goal tool during active goal work: <code>complete_goal</code>.</p>
+<p><code>complete_goal</code> takes no arguments and marks the active goal complete. Before calling it, the model is expected to run an evidence-based audit that maps every requirement in the objective to real files, command output, or tests. If the model is blocked or needs user input, it should return final text describing the blocker instead of calling <code>complete_goal</code>.</p>
+<h2 id="token-budget-wrap-up">Token Budget Wrap-Up</h2>
+<p>When the optional <code>token_budget</code> is reached, the goal transitions to <code>budget_limited</code>. The runtime injects a wrap-up steering prompt, and the dispatcher rejects mutating or work-starting tool calls (write, edit, command execution, subagents, MCP, A2A) with a fixed error string. Read-only tools (<code>read_file</code>, <code>grep</code>, <code>list_files</code>, <code>fetch_url</code>, <code>view_image</code>, <code>think</code>, <code>todo</code>, <code>snapshot</code>, <code>outline</code>) and <code>complete_goal</code> remain available for a coherent wrap-up.</p>
+<h2 id="slash-command-reference">Slash Command Reference</h2>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/goal</code></td>
+<td>Show current goal status, or "No goal is currently set."</td>
+</tr>
+<tr>
+<td><code>/goal &lt;objective&gt;</code></td>
+<td>Create a goal (refused if one already exists).</td>
+</tr>
+<tr>
+<td><code>/goal replace &lt;objective&gt;</code></td>
+<td>Replace the existing goal and reset counters.</td>
+</tr>
+<tr>
+<td><code>/goal pause</code></td>
+<td>Pause the active goal.</td>
+</tr>
+<tr>
+<td><code>/goal resume</code></td>
+<td>Resume a paused goal.</td>
+</tr>
+<tr>
+<td><code>/goal clear</code></td>
+<td>Remove the current goal.</td>
+</tr>
+</tbody>
+</table>
+<p>The set and replace forms are REPL-only.</p>
+<h2 id="constraints-and-persistence">Constraints and Persistence</h2>
+<p>In one-shot mode (<code>swival "..."</code> with no <code>--repl</code>), <code>/goal &lt;objective&gt;</code> refuses because v1 has no slash syntax for <code>token_budget</code>. Use <code>--repl</code> for goal-driven continuation.</p>
+<p>Subagents do not receive the goal tools. Goals stay parent-session-only in v1.</p>
+<p>The session goal is wiped by <code>/clear</code>. Goals are not persisted across processes; crash recovery flows through <code>.swival/continue.md</code>, which records the active goal alongside todos, snapshots, and recent activity.</p>
+        </article>
+    </div>
+    <footer class="site-footer">
+        <div class="footer-inner">
+            <div class="footer-grid">
+                <div class="footer-col">
+                    <img src="../img/logo.png" alt="Swival" class="footer-logo">
+                    <p class="footer-tagline">A coding agent for any model.<br>Free, open-source, and easy to set up.</p>
+                </div>
+                <div class="footer-col">
+                    <h4>Resources</h4>
+                    <ul>
+                        <li><a href="getting-started.html">Getting Started</a></li>
+                        <li><a href="usage.html">Usage</a></li>
+                        <li><a href="tools.html">Tools</a></li>
+                        <li><a href="context-management.html">Context Management</a></li>
+                    </ul>
+                </div>
+                <div class="footer-col">
+                    <h4>Guides</h4>
+                    <ul>
+                        <li><a href="providers.html">Providers</a></li>
+                        <li><a href="safety-and-sandboxing.html">Safety &amp; Sandboxing</a></li>
+                        <li><a href="python-api.html">Python API</a></li>
+                        <li><a href="open-models.html">Open Models</a></li>
+                    </ul>
+                </div>
+                <div class="footer-col">
+                    <h4>Community</h4>
+                    <ul>
+                        <li><a href="https://github.com/swival/swival">GitHub</a></li>
+                        <li><a href="https://calibra.swival.dev">Calibra</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2025 Swival &middot; MIT License</p>
+            </div>
+        </div>
+    </footer>
+    <button class="back-to-top" aria-label="Back to top">&uarr;</button>
+    <script src="../js/site.js"></script>
+</body>
+</html>
