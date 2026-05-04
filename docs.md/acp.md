@@ -55,7 +55,7 @@ require("agent-client-protocol").setup({
   servers = {
     swival = {
       command = "swival",
-      args = { "--acp", "--provider", "lmstudio" },
+      args = { "--acp" },
     },
   },
 })
