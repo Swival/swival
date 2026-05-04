@@ -26,6 +26,8 @@ After each turn that produces a final text answer with an active goal, the runti
 
 If a continuation produces a final text answer with no tool calls, further continuations are suppressed to avoid a final-text loop, and the model's text is returned as a blocker or progress note.
 
+While the goal loop is running, hit `Ctrl+C` at any time to interject. Swival pauses at the next safe point and prompts for a new line of input, which is folded in as an extra user message before the loop resumes. This is the way to redirect the agent mid-flight, supply a missing piece of context, or correct course without clearing the goal.
+
 ## The `complete_goal` Tool
 
 Goal state is started and controlled by the operator through `/goal`. The model cannot create, replace, pause, resume, or inspect goals through tools. Swival exposes exactly one goal tool during active goal work: `complete_goal`.
