@@ -6,15 +6,15 @@ The editor is the client; swival is the agent. Pass `--acp` and swival reads new
 
 ## Quick start
 
-Launch swival in ACP mode against your usual provider:
+Launch swival in ACP mode:
 
 ```sh
-swival --acp --provider lmstudio
+swival --acp
 ```
 
 There is no question argument. The editor opens sessions and sends prompts; swival replies with text and tool-call updates as the agent loop runs.
 
-If you accidentally launch this from a real terminal, swival prints a warning to stderr because nothing will read its stdout. Pipe stdout into a JSON-RPC client, or use the editor configurations below.
+Pipe stdout into a JSON-RPC client, or use the editor configurations below.
 
 To capture the wire traffic and any internal diagnostics for debugging, add `--acp-log`:
 
@@ -44,7 +44,9 @@ Add an `agent_servers` entry to `~/.config/zed/settings.json`:
 
 Open the agent panel with `cmd-?`, and then use the `+` button in the top right to start a new Swival thread.
 
-Zed spawns one swival process per agent connection and tears it down when the panel closes. Use any provider/model flags you would normally pass to swival, including `--yolo`, `--files`, `--commands`, `--mcp-config`, and `--a2a-config`. The CLI surface is the same as one-shot mode, with a few exceptions: `--repl`, `--serve`, and a positional question are rejected because they conflict with ACP.
+Zed spawns one swival process per agent connection and tears it down when the panel closes. Use any provider/model flags you would normally pass to swival, including `--yolo`, `--files`, `--commands`, `--mcp-config`, and `--a2a-config`.
+
+The CLI surface is the same as one-shot mode, with a few exceptions: `--repl`, `--serve`, and a positional question are rejected because they conflict with ACP.
 
 ### Neovim (`agent-client-protocol.nvim`)
 

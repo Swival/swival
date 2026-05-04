@@ -99,11 +99,11 @@
 <p>Swival speaks the <a href="https://agentclientprotocol.com">Agent Client Protocol</a> on <code>stdio</code>, so editors that act as ACP clients (Zed, the <code>agent-client-protocol.nvim</code> plugin, and similar) can drive a swival agent the same way they drive Claude Code, Gemini CLI, or codex.</p>
 <p>The editor is the client; swival is the agent. Pass <code>--acp</code> and swival reads newline-delimited JSON-RPC 2.0 requests on stdin and writes responses and notifications on stdout. Nothing else gets written to stdout, ever, so the JSON-RPC framing stays intact.</p>
 <h2 id="quick-start">Quick start</h2>
-<p>Launch swival in ACP mode against your usual provider:</p>
-<pre><code class="language-sh">swival --acp --provider lmstudio
+<p>Launch swival in ACP mode:</p>
+<pre><code class="language-sh">swival --acp
 </code></pre>
 <p>There is no question argument. The editor opens sessions and sends prompts; swival replies with text and tool-call updates as the agent loop runs.</p>
-<p>If you accidentally launch this from a real terminal, swival prints a warning to stderr because nothing will read its stdout. Pipe stdout into a JSON-RPC client, or use the editor configurations below.</p>
+<p>Pipe stdout into a JSON-RPC client, or use the editor configurations below.</p>
 <p>To capture the wire traffic and any internal diagnostics for debugging, add <code>--acp-log</code>:</p>
 <pre><code class="language-sh">swival --acp --acp-log /tmp/swival-acp.log
 </code></pre>
@@ -122,7 +122,8 @@
 }
 </code></pre>
 <p>Open the agent panel with <code>cmd-?</code>, and then use the <code>+</code> button in the top right to start a new Swival thread.</p>
-<p>Zed spawns one swival process per agent connection and tears it down when the panel closes. Use any provider/model flags you would normally pass to swival, including <code>--yolo</code>, <code>--files</code>, <code>--commands</code>, <code>--mcp-config</code>, and <code>--a2a-config</code>. The CLI surface is the same as one-shot mode, with a few exceptions: <code>--repl</code>, <code>--serve</code>, and a positional question are rejected because they conflict with ACP.</p>
+<p>Zed spawns one swival process per agent connection and tears it down when the panel closes. Use any provider/model flags you would normally pass to swival, including <code>--yolo</code>, <code>--files</code>, <code>--commands</code>, <code>--mcp-config</code>, and <code>--a2a-config</code>.</p>
+<p>The CLI surface is the same as one-shot mode, with a few exceptions: <code>--repl</code>, <code>--serve</code>, and a positional question are rejected because they conflict with ACP.</p>
 <h3 id="neovim-agent-client-protocolnvim">Neovim (<code>agent-client-protocol.nvim</code>)</h3>
 <p>If you use the <code>agent-client-protocol.nvim</code> plugin, register swival as a server in your config:</p>
 <pre><code class="language-lua">require(&quot;agent-client-protocol&quot;).setup({
