@@ -158,7 +158,7 @@ cat /tmp/swival-acp.log
   echo '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:1,&quot;method&quot;:&quot;initialize&quot;,&quot;params&quot;:{&quot;protocolVersion&quot;:1,&quot;clientCapabilities&quot;:{}}}'
   echo '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:2,&quot;method&quot;:&quot;session/new&quot;,&quot;params&quot;:{&quot;cwd&quot;:&quot;'&quot;$PWD&quot;'&quot;,&quot;mcpServers&quot;:[]}}'
   echo '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:3,&quot;method&quot;:&quot;session/prompt&quot;,&quot;params&quot;:{&quot;sessionId&quot;:&quot;REPLACE_AFTER_NEW&quot;,&quot;prompt&quot;:[{&quot;type&quot;:&quot;text&quot;,&quot;text&quot;:&quot;hello&quot;}]}}'
-} | swival --acp --provider lmstudio
+} | swival --acp
 </code></pre>
 <p>You will need to fill in the session id from the <code>session/new</code> response before sending the prompt; the easiest way is to do it in two passes or use a small script.</p>
         </article>

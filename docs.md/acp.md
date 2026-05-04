@@ -95,7 +95,7 @@ If you want to drive swival by hand to confirm the protocol works, three lines o
   echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}'
   echo '{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"'"$PWD"'","mcpServers":[]}}'
   echo '{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"REPLACE_AFTER_NEW","prompt":[{"type":"text","text":"hello"}]}}'
-} | swival --acp --provider lmstudio
+} | swival --acp
 ```
 
 You will need to fill in the session id from the `session/new` response before sending the prompt; the easiest way is to do it in two passes or use a small script.
