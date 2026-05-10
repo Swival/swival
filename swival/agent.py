@@ -520,10 +520,6 @@ def _patch_chatgpt_responses_empty_output():
 
     _original = ChatGPTResponsesAPIConfig.transform_response_api_response
 
-    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-
-    _strip = CustomStreamWrapper._strip_sse_data_from_chunk
-
     def _patched_transform(self, model, raw_response, logging_obj):
         result = _original(self, model, raw_response, logging_obj)
         if getattr(result, "output", None):
@@ -532,10 +528,11 @@ def _patch_chatgpt_responses_empty_output():
         body_text = getattr(raw_response, "text", None) or ""
         done_items = []
         for line in body_text.splitlines():
-            stripped = _strip(line)
-            if not stripped:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("event:"):
                 continue
-            stripped = stripped.strip()
+            if stripped.startswith("data:"):
+                stripped = stripped[5:].lstrip()
             if not stripped:
                 continue
             try:
