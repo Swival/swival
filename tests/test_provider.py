@@ -11,6 +11,7 @@ from swival.agent import (
     resolve_provider,
     _pick_best_choice,
     _sanitize_assistant_content,
+    _strip_leaked_think_head,
 )
 from swival.report import AgentError
 
@@ -506,6 +507,67 @@ class TestAssistantContentSanitization:
             )
 
         assert msg.content == "Answer"
+
+    def test_strip_leaked_think_head_basic(self):
+        text = "</think>\n\nHere is the answer."
+        assert _strip_leaked_think_head(text) == "Here is the answer."
+
+    def test_strip_leaked_think_head_with_leading_whitespace(self):
+        text = "  \n</think>\n\nAnswer."
+        assert _strip_leaked_think_head(text) == "Answer."
+
+    def test_strip_leaked_think_head_preserves_mid_content_tag(self):
+        """Narrow always-on strip only touches the head; mid-document tags need --sanitize-thinking."""
+        text = "Some preface.\n</think>\nMore content."
+        assert _strip_leaked_think_head(text) == text
+
+    def test_strip_leaked_think_head_preserves_inline_tag(self):
+        text = "Use `</think>` to close the example tag."
+        assert _strip_leaked_think_head(text) == text
+
+    def test_strip_leaked_think_head_preserves_inline_block(self):
+        text = "<think>Plan</think>\n\nAnswer"
+        assert _strip_leaked_think_head(text) == text
+
+    def test_strip_leaked_think_head_preserves_fenced_code(self):
+        """A </think> line inside a fenced code block must survive — it's a literal example."""
+        text = (
+            "Here's an example of the tag:\n"
+            "```xml\n"
+            "<think>\n"
+            "</think>\n"
+            "```\n"
+            "That's how it works."
+        )
+        assert _strip_leaked_think_head(text) == text
+
+    def test_call_llm_strips_leaked_close_tag_without_sanitize_flag(self):
+        """A bare leading </think> is always stripped, even with sanitize_thinking off."""
+        message = types.SimpleNamespace(
+            role="assistant",
+            content="</think>\n\nHere are your services.",
+            tool_calls=None,
+        )
+        response = types.SimpleNamespace(
+            choices=[types.SimpleNamespace(message=message, finish_reason="stop")]
+        )
+
+        with patch("litellm.completion", return_value=response):
+            msg, *_ = call_llm(
+                "http://localhost:8080/v1",
+                "my-model",
+                [{"role": "user", "content": "hi"}],
+                100,
+                0.5,
+                1.0,
+                None,
+                None,
+                False,
+                provider="generic",
+                api_key="sk-test",
+            )
+
+        assert msg.content == "Here are your services."
 
     def test_call_llm_preserves_inline_literal_think_tag(self):
         message = types.SimpleNamespace(

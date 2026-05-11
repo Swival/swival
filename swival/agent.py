@@ -616,6 +616,11 @@ _THINK_LINE_PREFIX_RE = re.compile(
     r"^.*?\n\s*</think>\s*\n*", re.IGNORECASE | re.DOTALL
 )
 _THINK_TAG_LINE_RE = re.compile(r"(?mi)^\s*</?think>\s*$\n?")
+# Stray <think>/</think> at the very start of content, followed by blank
+# lines. This is what slips through when a reasoning-model server already
+# streamed the hidden reasoning separately but still emits the closing tag
+# in the visible content channel.
+_LEAKED_THINK_HEAD_RE = re.compile(r"\A\s*</?think>\s*\n+", re.IGNORECASE)
 
 
 def _sanitize_assistant_messages(messages: list) -> bool:
@@ -705,11 +710,49 @@ def _sanitize_assistant_content(text: str) -> str:
     return cleaned.strip()
 
 
-def _sanitize_assistant_message(msg) -> None:
-    """Normalize assistant content in-place for dict-or-namespace messages."""
+def _apply_to_msg_content(msg, fn) -> None:
+    """If msg.content is a string, replace it with fn(content) in place."""
     content = _msg_get(msg, "content")
     if isinstance(content, str):
-        _set_msg_content(msg, _sanitize_assistant_content(content))
+        _set_msg_content(msg, fn(content))
+
+
+def _sanitize_assistant_message(msg) -> None:
+    """Normalize assistant content in-place for dict-or-namespace messages."""
+    _apply_to_msg_content(msg, _sanitize_assistant_content)
+
+
+def _strip_leaked_think_head(text: str) -> str:
+    """Remove a leaked <think>/</think> tag at the very start of assistant
+    content. Some reasoning-model servers strip the opening <think> into a
+    separate channel but leave the closing tag in the visible content
+    stream, producing answers that begin with a stray </think>. This head
+    pattern is unambiguous: no real answer starts that way.
+
+    Distinct from --sanitize-thinking, which is more aggressive (whole
+    <think>...</think> blocks, tokenizer special tokens, standalone tag
+    lines elsewhere) and can occasionally touch prose that legitimately
+    mentions tags (e.g. lines inside fenced code).
+    """
+    if not text or "think>" not in text[:64].lower():
+        return text
+    return _LEAKED_THINK_HEAD_RE.sub("", text, count=1)
+
+
+def _strip_leaked_think_head_message(msg) -> None:
+    _apply_to_msg_content(msg, _strip_leaked_think_head)
+
+
+def _post_process_assistant_message(msg, sanitize_thinking: bool) -> None:
+    """Apply post-processing to an assistant message before it leaves call_llm.
+
+    Always strips an unambiguous leaked </think> head; when
+    --sanitize-thinking is set, runs the broader sanitizer instead.
+    """
+    if sanitize_thinking:
+        _sanitize_assistant_message(msg)
+    else:
+        _strip_leaked_think_head_message(msg)
 
 
 _LITELLM_INTERNAL_KEYS = {
@@ -3234,18 +3277,17 @@ def call_llm(
 
     if provider == "command":
         if command_tool_kwargs is not None:
-            return (
-                *_call_command_with_tools(
-                    model_id,
-                    messages,
-                    verbose=verbose,
-                    max_output_tokens=max_output_tokens,
-                    **command_tool_kwargs,
-                ),
-                0,
-                (0, 0),
+            cmd_msg, cmd_stop, cmd_activity = _call_command_with_tools(
+                model_id,
+                messages,
+                verbose=verbose,
+                max_output_tokens=max_output_tokens,
+                **command_tool_kwargs,
             )
+            _post_process_assistant_message(cmd_msg, sanitize_thinking)
+            return cmd_msg, cmd_stop, cmd_activity, 0, (0, 0)
         msg, stop = _call_command(model_id, messages, verbose, max_output_tokens)
+        _post_process_assistant_message(msg, sanitize_thinking)
         return msg, stop, [], 0, (0, 0)
 
     # --- Outbound: escape special tokens in user/system messages ---
@@ -3421,8 +3463,7 @@ def call_llm(
             if verbose:
                 fmt.info("Cache hit")
             msg = _reconstruct_message(msg_dict)
-            if sanitize_thinking:
-                _sanitize_assistant_message(msg)
+            _post_process_assistant_message(msg, sanitize_thinking)
             # Note: cache is disabled when secret_shield is active, so no
             # decrypt needed here.  But guard defensively in case the logic
             # changes.
@@ -3482,6 +3523,7 @@ def call_llm(
                     api_key,
                 )
             )
+            _post_process_assistant_message(msg, sanitize_thinking)
             return msg, finish_reason, cmd_activity, retries, cache_stats
         if _EMPTY_ASSISTANT_RE.search(msg_text):
             # Provider rejected an assistant message with no content and no
@@ -3524,8 +3566,7 @@ def call_llm(
                 cache_stats = _log_cache_stats(response, verbose)
                 choice = _pick_best_choice(response.choices)
                 _promote_reasoning_content(choice.message)
-                if sanitize_thinking:
-                    _sanitize_assistant_message(choice.message)
+                _post_process_assistant_message(choice.message, sanitize_thinking)
                 _cache_store(choice)
                 return (
                     _decrypt_msg(choice.message),
@@ -3574,8 +3615,7 @@ def call_llm(
                 cache_stats = _log_cache_stats(response, verbose)
                 choice = _pick_best_choice(response.choices)
                 _promote_reasoning_content(choice.message)
-                if sanitize_thinking:
-                    _sanitize_assistant_message(choice.message)
+                _post_process_assistant_message(choice.message, sanitize_thinking)
                 _cache_store(choice)
                 return (
                     _decrypt_msg(choice.message),
@@ -3626,8 +3666,7 @@ def call_llm(
     cache_stats = _log_cache_stats(response, verbose)
     choice = _pick_best_choice(response.choices)
     _promote_reasoning_content(choice.message)
-    if sanitize_thinking:
-        _sanitize_assistant_message(choice.message)
+    _post_process_assistant_message(choice.message, sanitize_thinking)
     _cache_store(choice)
     return _decrypt_msg(choice.message), choice.finish_reason, [], retries, cache_stats
 
