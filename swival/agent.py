@@ -25,6 +25,7 @@ from importlib import metadata
 import tiktoken
 
 from . import fmt
+from ._env import child_env
 from ._msg import (
     IMAGE_TOKEN_ESTIMATE as _IMAGE_TOKEN_ESTIMATE,
     RECAP_MARKER,
@@ -3735,9 +3736,7 @@ def run_reviewer(
     import shlex
 
     argv = shlex.split(reviewer_cmd) + [base_dir]
-    env = os.environ.copy()
-    if env_extra:
-        env.update(env_extra)
+    env = child_env(env_extra)
     try:
         proc = subprocess.run(
             argv,

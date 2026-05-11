@@ -278,6 +278,12 @@ def maybe_reexec(
         swival_argv=child_argv,
     )
 
+    # Intentional: do NOT strip sys.prefix/bin from PATH here. The
+    # exec target is another swival process, which needs its bundled
+    # bin/ to be reachable on entry. The invariant that protects user
+    # tools is that every *user-facing* spawn inside the re-exec'd
+    # swival goes through swival._env.child_env(). See
+    # PLAN-subprocess-path-leak.md.
     env = os.environ.copy()
     env[_ENV_MARKER] = "1"
     env[_VERSION_ENV] = probe["version"]

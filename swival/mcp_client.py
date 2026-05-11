@@ -8,11 +8,11 @@ import asyncio
 import atexit
 import copy
 import json
-import os
 import re
 import threading
 from typing import Any
 
+from ._env import child_env
 from .report import ConfigError
 
 _SERVER_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
@@ -307,8 +307,7 @@ class McpManager:
                 )
             else:
                 # Stdio transport
-                env = os.environ.copy()
-                env.update(config.get("env") or {})
+                env = child_env(config.get("env"))
                 params = mcp.StdioServerParameters(
                     command=config["command"],
                     args=config.get("args", []),
