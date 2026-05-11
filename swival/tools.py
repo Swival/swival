@@ -2235,7 +2235,7 @@ def _extract_preview(output: str) -> _PreviewMeta:
     return _PreviewMeta(text=text, last_line=line_count, partial_line=partial)
 
 
-def _save_large_output(
+def _save_large_output_with_path(
     output: str,
     base_dir: str,
     *,
@@ -2244,16 +2244,11 @@ def _save_large_output(
     scratch_dir: str | None = None,
     untrusted_source: str | None = None,
     untrusted_origin: str = "",
-) -> str:
-    """Save large output to a temp file and return a summary message.
+) -> tuple[str, str | None]:
+    """Like `_save_large_output`, but also return the saved file path.
 
-    When *scratch_dir* is set (A2A serve mode), files are written there
-    instead of base_dir/.swival/ so each context gets its own temp space.
-    Falls back to inline-truncated output on disk write failure.
-
-    When *untrusted_source* is set, the untrusted-content header is
-    prepended to the file contents so that the label survives when the
-    agent reads the file back via read_file.
+    Returns `(notice, rel_path)`. `rel_path` is `None` when the disk-write
+    fallback fires (caller gets the inline-truncated notice with no path).
     """
     size_bytes = len(output.encode("utf-8"))
     size_kb = size_bytes / 1024
@@ -2268,22 +2263,20 @@ def _save_large_output(
     try:
         scratch.mkdir(parents=True, exist_ok=True)
     except OSError:
-        # Can't create dir — fall back to truncated inline
-        return _safe_truncate(
-            output,
-            MAX_INLINE_OUTPUT,
-            "\n[output truncated — failed to create .swival/ directory]",
+        return (
+            _safe_truncate(
+                output,
+                MAX_INLINE_OUTPUT,
+                "\n[output truncated — failed to create .swival/ directory]",
+            ),
+            None,
         )
 
     filename = f"cmd_output_{uuid.uuid4().hex[:12]}.txt"
     filepath = scratch / filename
-    # Compute the path the LLM should use with read_file.  When scratch_dir
-    # is set it may be outside .swival/, so we need the path relative to
-    # base_dir (which is what read_file resolves against).
     try:
         rel_path = str(filepath.resolve().relative_to(Path(base_dir).resolve()))
     except ValueError:
-        # scratch_dir is outside base_dir — use absolute path as fallback
         rel_path = str(filepath.resolve())
 
     try:
@@ -2292,10 +2285,13 @@ def _save_large_output(
                 f.write(_untrusted_hdr)
             f.write(output)
     except OSError:
-        return _safe_truncate(
-            output,
-            MAX_INLINE_OUTPUT,
-            "\n[output truncated — failed to write temp file]",
+        return (
+            _safe_truncate(
+                output,
+                MAX_INLINE_OUTPUT,
+                "\n[output truncated — failed to write temp file]",
+            ),
+            None,
         )
 
     def _cleanup():
@@ -2342,7 +2338,16 @@ def _save_large_output(
             )
     preview_parts.append("[/preview]")
 
-    return summary + "\n\n" + "\n".join(preview_parts)
+    return summary + "\n\n" + "\n".join(preview_parts), rel_path
+
+
+def _save_large_output(*args, **kwargs) -> str:
+    """Save large output to a temp file and return a summary message.
+
+    Thin wrapper around `_save_large_output_with_path` for callers that
+    don't need the path.
+    """
+    return _save_large_output_with_path(*args, **kwargs)[0]
 
 
 def _untrusted_header(source: str, origin: str = "") -> str:
@@ -3135,21 +3140,30 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             files_mode=files_mode,
         )
     elif name == "fetch_url":
-        from .fetch import fetch_url as _fetch_url
+        from .fetch import _fetch
 
         url = args.get("url", "")
-        result = _fetch_url(
+        fetch_result = _fetch(
             url=url,
             format=args.get("format", "markdown"),
             timeout=args.get("timeout", 30),
             base_dir=base_dir,
             scratch_dir=scratch_dir,
         )
-        if result.startswith("error:"):
-            return result
+        if fetch_result.body.startswith("error:"):
+            return fetch_result.body
+        if kwargs.get("verbose", False):
+            try:
+                from . import fmt
+
+                fmt.tool_fetch(fetch_result)
+            except Exception as exc:
+                import logging
+
+                logging.getLogger(__name__).debug("tool_fetch failed: %s", exc)
         if _report is not None:
             _report.record_untrusted_input("fetch_url", origin=url)
-        return _wrap_untrusted(result, "fetch_url", origin=url)
+        return _wrap_untrusted(fetch_result.body, "fetch_url", origin=url)
     elif name == "use_skill":
         from .skills import activate_skill
 

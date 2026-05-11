@@ -6,6 +6,8 @@ from rich.console import Console
 
 from swival import fmt
 from swival.todo import TodoItem
+from tests.conftest import capture_styled as _capture_styled
+from tests.conftest import styled_console as _styled_console
 
 
 def _capture(func, *args, **kwargs):
@@ -13,39 +15,6 @@ def _capture(func, *args, **kwargs):
     buf = StringIO()
     old = fmt._console
     fmt._console = Console(file=buf, no_color=True, width=80)
-    fmt.reset_state()
-    try:
-        func(*args, **kwargs)
-    finally:
-        fmt.reset_state()
-        fmt._console = old
-    return buf.getvalue()
-
-
-_FAKE_TTY_ENV = {"TERM": "xterm-256color"}
-
-
-def _styled_console(buf: StringIO) -> Console:
-    """Build a Rich console that always renders styled TTY output.
-
-    Forces terminal mode, truecolor, and a non-dumb TERM so the test asserts
-    Swival's formatting rather than whatever the host shell exports.
-    """
-    return Console(
-        file=buf,
-        force_terminal=True,
-        color_system="truecolor",
-        no_color=False,
-        width=80,
-        _environ=_FAKE_TTY_ENV,
-    )
-
-
-def _capture_styled(func, *args, **kwargs):
-    """Call a fmt function with color enabled and return ANSI-escaped output."""
-    buf = StringIO()
-    old = fmt._console
-    fmt._console = _styled_console(buf)
     fmt.reset_state()
     try:
         func(*args, **kwargs)
@@ -346,6 +315,68 @@ class TestMarkupEscaping:
         assert "[italic]markup[/]" in out
 
 
+class TestFramed:
+    def test_returns_false_when_not_tty(self):
+        buf = StringIO()
+        old = fmt._console
+        fmt._console = Console(file=buf, no_color=True, width=80)
+        try:
+            result = fmt._framed(fmt.Text("body"), title="t", subtitle="s")
+        finally:
+            fmt._console = old
+        assert result is False
+        assert buf.getvalue() == ""
+
+    def test_returns_true_in_tty(self):
+        buf = StringIO()
+        old = fmt._console
+        fmt._console = _styled_console(buf)
+        try:
+            result = fmt._framed(fmt.Text("body"), title="t", subtitle="s")
+        finally:
+            fmt._console = old
+        assert result is True
+        assert "body" in buf.getvalue()
+
+    def test_title_strips_newlines(self):
+        buf = StringIO()
+        old = fmt._console
+        fmt._console = _styled_console(buf)
+        try:
+            fmt._framed(fmt.Text("x"), title="line one\nline two\rthree")
+        finally:
+            fmt._console = old
+        out = buf.getvalue()
+        assert "line one line two three" in out
+        # the title must not introduce extra wrapping inside itself
+        assert "\nline two" not in out
+
+    def test_title_truncated_with_ellipsis(self):
+        buf = StringIO()
+        old = fmt._console
+        fmt._console = _styled_console(buf)
+        try:
+            fmt._framed(fmt.Text("body"), title="x" * 200)
+        finally:
+            fmt._console = old
+        out = buf.getvalue()
+        assert "…" in out
+        # body line count: top border, body, bottom border = 3 visible lines
+        # ensure title did not wrap into multiple border rows
+        border_lines = [ln for ln in out.splitlines() if "╮" in ln or "╭" in ln]
+        assert len(border_lines) == 1
+
+    def test_title_markup_escaped(self):
+        buf = StringIO()
+        old = fmt._console
+        fmt._console = _styled_console(buf)
+        try:
+            fmt._framed(fmt.Text("body"), title="[bold red]injected[/bold red]")
+        finally:
+            fmt._console = old
+        assert "[bold red]injected[/bold red]" in buf.getvalue()
+
+
 class TestToolDiff:
     def test_formatting(self):
         old = "aaa\nbbb\nccc\n"
@@ -534,3 +565,83 @@ class TestReplAnswer:
         output = buf.getvalue()
         assert "**bold text**" in output  # raw markers preserved for copy/paste
         assert "\x1b[" in output  # but with ANSI styling
+
+
+class TestReviewFeedback:
+    def test_non_terminal_keeps_round_header(self):
+        out = _capture(fmt.review_feedback, 2, "first line\nsecond line")
+        assert "[review round 2]" in out
+        assert "Reviewer requested changes:" in out
+        assert "first line" in out
+        assert "second line" in out
+
+    def test_terminal_renders_panel_with_round_title(self):
+        out = _capture_styled(fmt.review_feedback, 4, "needs work")
+        assert "review round 4" in out
+        assert "needs work" in out
+        # framed output draws border characters
+        assert "╭" in out and "╯" in out
+
+
+class TestToolFetch:
+    def _result(self, **overrides):
+        from swival.fetch import FetchResult
+
+        defaults = dict(
+            body="hello world",
+            final_url="https://example.com/page",
+            status=200,
+            content_type="text/html",
+            raw_bytes=42,
+            saved_path=None,
+        )
+        defaults.update(overrides)
+        return FetchResult(**defaults)
+
+    def test_non_terminal_is_silent(self):
+        out = _capture(fmt.tool_fetch, self._result())
+        assert out == ""
+
+    def test_terminal_shows_url_and_status(self):
+        out = _capture_styled(fmt.tool_fetch, self._result())
+        assert "https://example.com/page" in out
+        assert "200" in out
+        assert "42 B" in out
+        assert "text/html" in out
+        assert "hello world" in out
+
+    def test_truncation_by_lines(self):
+        body = "".join(f"line{i}\n" for i in range(80))
+        out = _capture_styled(fmt.tool_fetch, self._result(body=body))
+        assert "more lines" in out
+
+    def test_truncation_by_bytes(self):
+        body = ("x" * 500 + "\n") * 20
+        out = _capture_styled(fmt.tool_fetch, self._result(body=body))
+        assert "more lines" in out
+
+    def test_error_uses_red_border(self):
+        out = _capture_styled(
+            fmt.tool_fetch,
+            self._result(
+                body="error: HTTP 404 — Not Found",
+                status=None,
+                raw_bytes=0,
+                content_type=None,
+            ),
+        )
+        assert "error: HTTP 404" in out
+        # red border ansi code (CSI 31) appears around the box
+        assert "\x1b[31m" in out
+
+    def test_saved_path_in_subtitle(self):
+        out = _capture_styled(
+            fmt.tool_fetch,
+            self._result(saved_path=".swival/cmd_output_abc.txt"),
+        )
+        assert "saved .swival/cmd_output_abc.txt" in out
+
+    def test_single_long_line_marked_truncated(self):
+        body = "x" * 10000
+        out = _capture_styled(fmt.tool_fetch, self._result(body=body))
+        assert "truncated at" in out

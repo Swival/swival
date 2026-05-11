@@ -773,6 +773,78 @@ class TestRedirectSafety:
 
 
 # =========================================================================
+# _fetch metadata
+# =========================================================================
+
+
+class TestFetchMetadata:
+    @patch("swival.fetch.socket.getaddrinfo")
+    @patch("swival.fetch.urllib.request.build_opener")
+    def test_fetch_returns_metadata(self, mock_opener_factory, mock_dns):
+        from swival.fetch import FetchResult, _fetch
+
+        mock_dns.return_value = [(2, 1, 0, "", ("93.184.216.34", 0))]
+        resp = _make_response(b"<p>hi</p>", "text/html; charset=utf-8", status=200)
+        opener = MagicMock()
+        opener.open.return_value = resp
+        mock_opener_factory.return_value = opener
+
+        result = _fetch("http://example.com", format="html")
+        assert isinstance(result, FetchResult)
+        assert "<p>hi</p>" in result.body
+        assert result.final_url == "http://example.com"
+        assert result.status == 200
+        assert result.content_type and "text/html" in result.content_type
+        assert result.raw_bytes == len(b"<p>hi</p>")
+        assert result.saved_path is None
+
+    def test_validation_error_returns_result_with_no_metadata(self):
+        from swival.fetch import _fetch
+
+        result = _fetch("", format="markdown")
+        assert result.body.startswith("error:")
+        assert result.status is None
+        assert result.content_type is None
+        assert result.raw_bytes == 0
+
+    @patch("swival.fetch.socket.getaddrinfo")
+    @patch("swival.fetch.urllib.request.build_opener")
+    def test_fetch_url_string_compat(self, mock_opener_factory, mock_dns):
+        from swival.fetch import _fetch
+
+        mock_dns.return_value = [(2, 1, 0, "", ("93.184.216.34", 0))]
+
+        def make_resp():
+            return _make_response(b"<p>same</p>")
+
+        opener = MagicMock()
+        opener.open.side_effect = [make_resp(), make_resp()]
+        mock_opener_factory.return_value = opener
+
+        wrapped = fetch_url("http://example.com", format="html")
+        direct = _fetch("http://example.com", format="html").body
+        assert wrapped == direct
+
+    @patch("swival.fetch.socket.getaddrinfo")
+    @patch("swival.fetch.urllib.request.build_opener")
+    def test_saved_path_populated_for_large_output(
+        self, mock_opener_factory, mock_dns, tmp_path
+    ):
+        from swival.fetch import _fetch
+
+        mock_dns.return_value = [(2, 1, 0, "", ("93.184.216.34", 0))]
+        big = ("<p>chunk</p>" * (MAX_OUTPUT_BYTES // 12 + 200)).encode()
+        resp = _make_response(big, "text/html; charset=utf-8")
+        opener = MagicMock()
+        opener.open.return_value = resp
+        mock_opener_factory.return_value = opener
+
+        result = _fetch("http://example.com", format="html", base_dir=str(tmp_path))
+        assert result.saved_path is not None
+        assert "saved to" in result.body
+
+
+# =========================================================================
 # dispatch wiring
 # =========================================================================
 

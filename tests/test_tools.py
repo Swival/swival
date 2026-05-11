@@ -486,6 +486,107 @@ class TestEditFilePositive:
 
 
 # =========================================================================
+# fetch_url framing through dispatch
+# =========================================================================
+
+
+class TestFetchFraming:
+    """Verbose gating, body-vs-wrapper, and exception swallow for tool_fetch."""
+
+    def _patch_fetch(self, body: str = "<p>page content</p>"):
+        from unittest.mock import patch
+
+        from swival.fetch import FetchResult
+
+        result = FetchResult(
+            body=body,
+            final_url="http://example.com",
+            status=200,
+            content_type="text/html",
+            raw_bytes=len(body.encode()),
+            saved_path=None,
+        )
+        return patch("swival.fetch._fetch", return_value=result), result
+
+    def test_dispatch_fetch_quiet_no_panel(self, tmp_path):
+        from unittest.mock import patch
+
+        fetch_patch, _ = self._patch_fetch()
+        with fetch_patch, patch("swival.fmt.tool_fetch") as mock_fetch:
+            dispatch(
+                "fetch_url",
+                {"url": "http://example.com", "format": "html"},
+                str(tmp_path),
+                verbose=False,
+            )
+            mock_fetch.assert_not_called()
+
+    def test_dispatch_fetch_verbose_calls_panel(self, tmp_path):
+        from unittest.mock import patch
+
+        fetch_patch, fetch_result = self._patch_fetch()
+        with fetch_patch, patch("swival.fmt.tool_fetch") as mock_fetch:
+            dispatch(
+                "fetch_url",
+                {"url": "http://example.com", "format": "html"},
+                str(tmp_path),
+                verbose=True,
+            )
+            mock_fetch.assert_called_once_with(fetch_result)
+
+    def test_panel_receives_raw_body_not_wrapper(self, tmp_path):
+        """The panel must show the actual fetched content, not the
+        _wrap_untrusted banner that the LLM receives."""
+        from unittest.mock import patch
+
+        fetch_patch, fetch_result = self._patch_fetch(body="raw body marker")
+        with fetch_patch, patch("swival.fmt.tool_fetch") as mock_fetch:
+            llm_facing = dispatch(
+                "fetch_url",
+                {"url": "http://example.com", "format": "html"},
+                str(tmp_path),
+                verbose=True,
+            )
+        # The result returned to the LLM has the untrusted-content wrapper
+        assert "raw body marker" in llm_facing
+        assert "untrusted" in llm_facing.lower()
+        # But the panel sees the bare FetchResult, no wrapper
+        passed = mock_fetch.call_args.args[0]
+        assert passed.body == "raw body marker"
+        assert "untrusted" not in passed.body.lower()
+
+    def test_panel_skipped_for_error_body(self, tmp_path):
+        from unittest.mock import patch
+
+        fetch_patch, _ = self._patch_fetch(body="error: HTTP 404 — Not Found")
+        with fetch_patch, patch("swival.fmt.tool_fetch") as mock_fetch:
+            result = dispatch(
+                "fetch_url",
+                {"url": "http://example.com", "format": "html"},
+                str(tmp_path),
+                verbose=True,
+            )
+        mock_fetch.assert_not_called()
+        assert result.startswith("error:")
+
+    def test_fetch_panel_exception_swallowed(self, tmp_path):
+        from unittest.mock import patch
+
+        fetch_patch, _ = self._patch_fetch(body="ok body")
+        with (
+            fetch_patch,
+            patch("swival.fmt.tool_fetch", side_effect=RuntimeError("boom")),
+        ):
+            result = dispatch(
+                "fetch_url",
+                {"url": "http://example.com", "format": "html"},
+                str(tmp_path),
+                verbose=True,
+            )
+        assert "ok body" in result
+
+
+# =========================================================================
 # Error handling
 # =========================================================================
 

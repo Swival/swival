@@ -204,6 +204,68 @@ def tool_result(name: str, elapsed: float, preview: str) -> None:
 _DIFF_MAX_LINES = 50
 _DIFF_MAX_BYTES = 4096
 
+_FRAME_RESERVE = 8
+
+
+def _sanitize_title(title, *, max_width: int) -> Text:
+    """Return a single-line Text safe to use as a Panel title.
+
+    Strips newlines, drops markup interpretation, and truncates to roughly
+    ``max_width`` characters with an ellipsis if needed.
+    """
+    if isinstance(title, Text):
+        plain = title.plain
+        styled = title
+    else:
+        plain = str(title)
+        styled = Text(plain)
+
+    if "\n" in plain or "\r" in plain:
+        plain = plain.replace("\r", " ").replace("\n", " ")
+        styled = Text(plain)
+
+    if max_width > 1 and len(plain) > max_width:
+        styled = Text(plain[: max_width - 1] + "…")
+
+    return styled
+
+
+def _framed(
+    body,
+    *,
+    title,
+    subtitle=None,
+    border_style: str = "dim",
+) -> bool:
+    """Print ``body`` inside a Rich Panel with sanitized title/subtitle.
+
+    Returns True if a panel was printed, False when stderr is not a TTY
+    (callers should then emit their own plain-text fallback).
+    """
+    if not _console.is_terminal:
+        return False
+
+    subtitle_obj = subtitle
+    subtitle_width = 0
+    if subtitle is not None:
+        subtitle_obj = subtitle if isinstance(subtitle, Text) else Text(str(subtitle))
+        subtitle_width = len(subtitle_obj.plain)
+
+    available = max(_console.width - _FRAME_RESERVE - subtitle_width, 8)
+    safe_title = _sanitize_title(title, max_width=available)
+
+    panel = Panel(
+        body,
+        title=safe_title,
+        title_align="left",
+        subtitle=subtitle_obj,
+        subtitle_align="right",
+        border_style=border_style,
+        padding=(0, 1),
+    )
+    _console.print(panel)
+    return True
+
 
 def tool_diff(file_path: str, old: str, new: str) -> None:
     """Print a colored unified diff of an edit to stderr."""
@@ -225,6 +287,7 @@ def tool_diff(file_path: str, old: str, new: str) -> None:
         1 for dl in diff_lines if dl.startswith("-") and not dl.startswith("---")
     )
 
+    is_tty = _console.is_terminal
     output = Text()
     total_bytes = 0
     shown = 0
@@ -248,30 +311,79 @@ def tool_diff(file_path: str, old: str, new: str) -> None:
         if len(encoded) > budget:
             encoded = encoded[:budget]
             line = encoded.decode("utf-8", errors="ignore")
-        display = line if _console.is_terminal else f"    {line}"
+        display = line if is_tty else f"    {line}"
         output.append(display, style=style)
         if not display.endswith("\n"):
             output.append("\n")
         total_bytes += len(encoded)
         shown += 1
 
-    if _console.is_terminal:
-        subtitle = Text()
-        subtitle.append(f"+{additions}", style="green")
-        subtitle.append(" / ", style="dim")
-        subtitle.append(f"-{deletions}", style="red")
-        panel = Panel(
-            output,
-            title=file_path,
-            title_align="left",
-            subtitle=subtitle,
-            subtitle_align="right",
-            border_style="dim",
-            padding=(0, 1),
-        )
-        _console.print(panel)
-    else:
+    subtitle = Text()
+    subtitle.append(f"+{additions}", style="green")
+    subtitle.append(" / ", style="dim")
+    subtitle.append(f"-{deletions}", style="red")
+
+    if not _framed(output, title=file_path, subtitle=subtitle):
         _console.print(output, end="")
+
+
+_FETCH_MAX_LINES = 30
+_FETCH_MAX_BYTES = 4096
+
+
+def tool_fetch(result) -> None:
+    """Print a framed preview of a fetch_url result to stderr.
+
+    Body matches the string returned to the model (success content,
+    save-to-disk notice, or error). Subtitle carries status, raw size, and
+    content-type when known.
+    """
+    if not _console.is_terminal:
+        return
+
+    body_text = result.body
+    head = body_text[: _FETCH_MAX_BYTES * 2]
+    lines = head.splitlines(keepends=True)
+    has_tail = len(head) < len(body_text)
+    output = Text()
+    total_bytes = 0
+    shown = 0
+    truncated_inline = False
+    for line in lines:
+        if shown >= _FETCH_MAX_LINES or total_bytes >= _FETCH_MAX_BYTES:
+            remaining = len(lines) - shown + (1 if has_tail else 0)
+            output.append(f"... {remaining} more lines\n", style="dim")
+            break
+        encoded = line.encode("utf-8")
+        budget = _FETCH_MAX_BYTES - total_bytes
+        if len(encoded) > budget:
+            truncated_inline = True
+            encoded = encoded[:budget]
+            line = encoded.decode("utf-8", errors="ignore")
+        output.append(line)
+        if not line.endswith("\n"):
+            output.append("\n")
+        total_bytes += len(encoded)
+        shown += 1
+    else:
+        if truncated_inline or has_tail:
+            output.append(f"... truncated at {_FETCH_MAX_BYTES} bytes\n", style="dim")
+
+    parts = []
+    if result.status is not None:
+        parts.append(str(result.status))
+    if result.raw_bytes:
+        parts.append(f"{result.raw_bytes} B")
+    if result.content_type:
+        parts.append(result.content_type.split(";", 1)[0].strip())
+    if result.saved_path:
+        parts.append(f"saved {result.saved_path}")
+    subtitle = Text(" · ".join(parts), style="dim") if parts else None
+
+    is_error = result.body.startswith("error:")
+    border = "red" if is_error else "dim"
+
+    _framed(output, title=result.final_url, subtitle=subtitle, border_style=border)
 
 
 def tool_error(name: str, msg: str) -> None:
@@ -429,12 +541,16 @@ def repl_answer(text: str) -> None:
 
 
 def review_feedback(review_round: int, text: str) -> None:
-    header = Text()
-    header.append(f"  [review round {review_round}] ", style="bold magenta")
-    header.append("Reviewer requested changes:", style="magenta")
-    _console.print(header)
-    for line in text.splitlines():
-        _console.print(Text(f"    {line}", style="magenta"))
+    title = Text(f"review round {review_round}", style="bold magenta")
+    body = Text(text.rstrip("\n"), style="magenta")
+
+    if not _framed(body, title=title, border_style="magenta"):
+        header = Text()
+        header.append(f"  [review round {review_round}] ", style="bold magenta")
+        header.append("Reviewer requested changes:", style="magenta")
+        _console.print(header)
+        for line in text.splitlines():
+            _console.print(Text(f"    {line}", style="magenta"))
 
 
 def review_sending(review_round: int) -> None:
@@ -494,13 +610,24 @@ sandbox_hint = info
 
 
 def quick_shell(cmd: str, returncode: int, output: str) -> None:
-    header = Text()
-    header.append(f"  $ {cmd}", style="bold dim")
-    _console.print(header)
-    if output:
-        _console.print(output)
-    if returncode != 0:
-        _console.print(Text(f"  exit {returncode}", style="red dim"))
+    title = Text(f"$ {cmd}", style="bold")
+    subtitle = Text()
+    if returncode == 0:
+        subtitle.append("exit 0", style="green")
+    else:
+        subtitle.append(f"exit {returncode}", style="red")
+    border_style = "dim" if returncode == 0 else "red"
+
+    body = Text(output.rstrip("\n"))
+
+    if not _framed(body, title=title, subtitle=subtitle, border_style=border_style):
+        header = Text()
+        header.append(f"  $ {cmd}", style="bold dim")
+        _console.print(header)
+        if output:
+            _console.print(output)
+        if returncode != 0:
+            _console.print(Text(f"  exit {returncode}", style="red dim"))
 
 
 def repl_banner() -> None:

@@ -1,11 +1,47 @@
 """Shared test fixtures."""
 
 import shutil
+from io import StringIO
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 
 from swival.tools import _execute_command_call
+
+_FAKE_TTY_ENV = {"TERM": "xterm-256color"}
+
+
+def styled_console(buf: StringIO) -> Console:
+    """Build a Rich console that always renders styled TTY output.
+
+    Forces terminal mode, truecolor, and a non-dumb TERM so tests can assert
+    Swival's framing/coloring without depending on the host shell.
+    """
+    return Console(
+        file=buf,
+        force_terminal=True,
+        color_system="truecolor",
+        no_color=False,
+        width=80,
+        _environ=_FAKE_TTY_ENV,
+    )
+
+
+def capture_styled(func, *args, **kwargs) -> str:
+    """Call a fmt function with a forced-TTY console and return ANSI output."""
+    from swival import fmt
+
+    buf = StringIO()
+    old = fmt._console
+    fmt._console = styled_console(buf)
+    fmt.reset_state()
+    try:
+        func(*args, **kwargs)
+    finally:
+        fmt.reset_state()
+        fmt._console = old
+    return buf.getvalue()
 
 
 def run_command(

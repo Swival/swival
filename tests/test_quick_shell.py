@@ -127,7 +127,7 @@ class TestNoLlmContamination:
 
 
 class TestFormatting:
-    """Verify fmt.quick_shell output."""
+    """Verify fmt.quick_shell output (non-terminal fallback path)."""
 
     def test_success_output(self, capsys):
         from swival import fmt
@@ -154,3 +154,33 @@ class TestFormatting:
         assert "$ true" in captured.err
         lines = [x for x in captured.err.splitlines() if x.strip()]
         assert len(lines) == 1  # just the header
+
+
+class TestFormattingTerminal:
+    """Verify fmt.quick_shell output when stderr is a TTY (framed panel)."""
+
+    def test_success_panel(self):
+        from swival import fmt
+        from tests.conftest import capture_styled
+
+        out = capture_styled(fmt.quick_shell, "echo hello", 0, "hello")
+        assert "$ echo hello" in out
+        assert "hello" in out
+        assert "exit 0" in out
+        assert "╭" in out and "╯" in out
+
+    def test_failure_panel_uses_red(self):
+        from swival import fmt
+        from tests.conftest import capture_styled
+
+        out = capture_styled(fmt.quick_shell, "false", 1, "")
+        assert "exit 1" in out
+        assert "\x1b[31m" in out
+
+    def test_empty_output_still_draws_panel(self):
+        from swival import fmt
+        from tests.conftest import capture_styled
+
+        out = capture_styled(fmt.quick_shell, "true", 0, "")
+        assert "exit 0" in out
+        assert "╭" in out

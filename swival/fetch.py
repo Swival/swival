@@ -7,6 +7,25 @@ import re
 import socket
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
+
+
+@dataclass
+class FetchResult:
+    """Internal carrier for fetch metadata.
+
+    `body` always equals what `fetch_url()` returns: success content,
+    `_save_large_output` notice, or an `error: ...` string. Other fields are
+    populated when known and `None`/0 otherwise (e.g. validation errors).
+    """
+
+    body: str
+    final_url: str
+    status: int | None
+    content_type: str | None
+    raw_bytes: int
+    saved_path: str | None
+
 
 MAX_RESPONSE_SIZE = 5 * 1024 * 1024  # 5 MB raw download cap
 MAX_OUTPUT_BYTES = 50 * 1024  # 50 KB converted output cap (same as read_file)
@@ -169,66 +188,91 @@ def _decode_response(data: bytes, content_type: str | None) -> str:
     return data.decode("latin-1")
 
 
-def fetch_url(
+def _err(url: str, msg: str) -> FetchResult:
+    return FetchResult(
+        body=msg,
+        final_url=url,
+        status=None,
+        content_type=None,
+        raw_bytes=0,
+        saved_path=None,
+    )
+
+
+def _fetch(
     url: str,
     format: str = "markdown",
     timeout: int = 30,
     base_dir: str | None = None,
     scratch_dir: str | None = None,
-) -> str:
-    """Fetch a URL and return its content as markdown, text, or raw HTML.
+) -> FetchResult:
+    """Fetch a URL and return content plus metadata.
 
-    Returns content string on success, "error: ..." on failure.
-    When base_dir is provided and output exceeds the inline limit,
-    saves to .swival/ for pagination via read_file.
+    `body` matches what `fetch_url()` would return: success output, the
+    `_save_large_output` notice, or an `error: ...` string. Metadata fields
+    are populated when known.
     """
-    # Validate format
     if format not in ("markdown", "text", "html"):
-        return (
-            f"error: invalid format {format!r}, must be 'markdown', 'text', or 'html'"
+        return _err(
+            url,
+            f"error: invalid format {format!r}, must be 'markdown', 'text', or 'html'",
         )
 
-    # Validate URL is a string
     if not url or not isinstance(url, str):
-        return "error: url must be a non-empty string"
+        return _err(
+            url if isinstance(url, str) else "", "error: url must be a non-empty string"
+        )
 
-    # Validate and clamp timeout
     if not isinstance(timeout, (int, float)):
-        return f"error: timeout must be a number, got {type(timeout).__name__}"
+        return _err(
+            url, f"error: timeout must be a number, got {type(timeout).__name__}"
+        )
     timeout = max(1, min(int(timeout), 120))
 
     current_url = url
     opener = urllib.request.build_opener(_NoRedirectHandler)
 
     for _ in range(MAX_REDIRECTS + 1):
-        # Safety check every URL in the redirect chain
         err = _check_url_safety(current_url)
         if err:
-            return err
+            return _err(current_url, err)
 
         req = urllib.request.Request(current_url, headers=HEADERS)
         try:
             resp = opener.open(req, timeout=timeout)
-            break  # success, no redirect
+            break
         except _RedirectError as r:
             current_url = urllib.parse.urljoin(current_url, r.url)
         except urllib.error.HTTPError as e:
-            return f"error: HTTP {e.code} — {e.reason}"
+            return _err(current_url, f"error: HTTP {e.code} — {e.reason}")
         except urllib.error.URLError as e:
             reason = str(e.reason)
             if "timed out" in reason.lower() or "timeout" in reason.lower():
-                return f"error: request timed out after {timeout} seconds"
-            return f"error: could not connect to {urllib.parse.urlparse(current_url).hostname}: {reason}"
+                return _err(
+                    current_url, f"error: request timed out after {timeout} seconds"
+                )
+            return _err(
+                current_url,
+                f"error: could not connect to {urllib.parse.urlparse(current_url).hostname}: {reason}",
+            )
         except TimeoutError:
-            return f"error: request timed out after {timeout} seconds"
+            return _err(
+                current_url, f"error: request timed out after {timeout} seconds"
+            )
         except OSError as e:
-            return f"error: could not connect to {urllib.parse.urlparse(current_url).hostname}: {e}"
+            return _err(
+                current_url,
+                f"error: could not connect to {urllib.parse.urlparse(current_url).hostname}: {e}",
+            )
     else:
-        return f"error: too many redirects (limit is {MAX_REDIRECTS})"
+        return _err(
+            current_url, f"error: too many redirects (limit is {MAX_REDIRECTS})"
+        )
 
-    # Read and process response — always close when done
+    final_url = current_url
+    status = getattr(resp, "status", None)
+
     try:
-        # Check content type for binary
         content_type = resp.headers.get("Content-Type", "")
         mime = content_type.split(";")[0].strip().lower()
         if (
@@ -245,36 +289,53 @@ def fetch_url(
                 "application/atom+xml",
             )
         ):
-            return (
-                f"error: binary content (content-type: {mime}), cannot display as text"
+            return FetchResult(
+                body=f"error: binary content (content-type: {mime}), cannot display as text",
+                final_url=final_url,
+                status=status,
+                content_type=content_type or None,
+                raw_bytes=0,
+                saved_path=None,
             )
 
-        # Read response body with size limit
         try:
             data = resp.read(MAX_RESPONSE_SIZE + 1)
         except TimeoutError:
-            return f"error: request timed out after {timeout} seconds"
+            return _err(final_url, f"error: request timed out after {timeout} seconds")
         except OSError as e:
-            return f"error: failed to read response: {e}"
+            return _err(final_url, f"error: failed to read response: {e}")
 
         if len(data) > MAX_RESPONSE_SIZE:
-            return f"error: response too large ({len(data)} bytes, limit is 5MB)"
+            return FetchResult(
+                body=f"error: response too large ({len(data)} bytes, limit is 5MB)",
+                final_url=final_url,
+                status=status,
+                content_type=content_type or None,
+                raw_bytes=len(data),
+                saved_path=None,
+            )
 
-        # Check for binary content via null bytes
         if b"\x00" in data[:8192]:
-            return "error: binary content detected (null bytes found), cannot display as text"
+            return FetchResult(
+                body="error: binary content detected (null bytes found), cannot display as text",
+                final_url=final_url,
+                status=status,
+                content_type=content_type or None,
+                raw_bytes=len(data),
+                saved_path=None,
+            )
 
-        # Decode
         body = _decode_response(data, content_type)
     finally:
         resp.close()
 
-    # Convert to requested format
+    raw_bytes = len(data)
+
     if format == "html":
         output = body
     elif format == "text":
         output = _html_to_text(body)
-    else:  # markdown
+    else:
         if mime == "text/markdown":
             output = body
         else:
@@ -284,20 +345,33 @@ def fetch_url(
                 result = convert(body)
                 output = result.content
             except Exception as e:
-                return f"error: failed to convert HTML to markdown: {e}"
+                return FetchResult(
+                    body=f"error: failed to convert HTML to markdown: {e}",
+                    final_url=final_url,
+                    status=status,
+                    content_type=content_type or None,
+                    raw_bytes=raw_bytes,
+                    saved_path=None,
+                )
             if not isinstance(output, str):
-                return f"error: html-to-markdown returned {type(output).__name__}, expected str"
-            # Strip data-URI images (huge base64 blobs waste tokens)
+                return FetchResult(
+                    body=f"error: html-to-markdown returned {type(output).__name__}, expected str",
+                    final_url=final_url,
+                    status=status,
+                    content_type=content_type or None,
+                    raw_bytes=raw_bytes,
+                    saved_path=None,
+                )
             output = re.sub(
                 r"!\[([^\]]*)\]\(data:[^)]+\)", r"![image: \1](data: omitted)", output
             )
 
-    # Save large output to file for pagination, or truncate inline
     encoded = output.encode("utf-8")
+    saved_path: str | None = None
     if len(encoded) > MAX_OUTPUT_BYTES and base_dir:
-        from .tools import _save_large_output
+        from .tools import _save_large_output_with_path
 
-        return _save_large_output(
+        output, saved_path = _save_large_output_with_path(
             output,
             base_dir,
             scratch_dir=scratch_dir,
@@ -312,4 +386,27 @@ def fetch_url(
             + f"\n[content truncated at {MAX_OUTPUT_BYTES} bytes, total was {total} bytes]"
         )
 
-    return output
+    return FetchResult(
+        body=output,
+        final_url=final_url,
+        status=status,
+        content_type=content_type or None,
+        raw_bytes=raw_bytes,
+        saved_path=saved_path,
+    )
+
+
+def fetch_url(
+    url: str,
+    format: str = "markdown",
+    timeout: int = 30,
+    base_dir: str | None = None,
+    scratch_dir: str | None = None,
+) -> str:
+    """Fetch a URL and return its content as markdown, text, or raw HTML.
+
+    Returns content string on success, "error: ..." on failure.
+    When base_dir is provided and output exceeds the inline limit,
+    saves to .swival/ for pagination via read_file.
+    """
+    return _fetch(url, format, timeout, base_dir, scratch_dir).body
