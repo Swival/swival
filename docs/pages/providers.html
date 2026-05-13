@@ -117,7 +117,7 @@ model = &quot;qwen3-coder-next&quot;
 
 [profiles.gpt5]
 provider = &quot;chatgpt&quot;
-model = &quot;gpt-5.4&quot;
+model = &quot;gpt-5.5&quot;
 reasoning_effort = &quot;high&quot;
 </code></pre>
 <p>Then switch with <code>--profile</code> at startup, or <code>/profile</code> mid-session:</p>
@@ -259,18 +259,18 @@ swival --provider google \
 <p>Authentication uses an OAuth device-code flow — on first use, Swival prints a device code and a verification URL to your terminal. Open the URL, enter the code, and authorize with your ChatGPT account. The resulting tokens are cached locally and refreshed automatically on subsequent runs.</p>
 <p>If you need to pass an API key explicitly (for example, when using <code>--self-review</code> which passes credentials via environment variables), set <code>CHATGPT_API_KEY</code> or use <code>--api-key</code>.</p>
 <p><code>--model</code> is required. There is no default model.</p>
-<pre><code class="language-sh">swival --provider chatgpt --model gpt-5.4 &quot;task&quot;
+<pre><code class="language-sh">swival --provider chatgpt --model gpt-5.5 &quot;task&quot;
 </code></pre>
 <p>On the first run, you will see a device-code prompt with a URL and a code to enter in your browser. Once you complete the flow, the OAuth tokens are stored locally and refreshed automatically. To remove the cached tokens and force the device-code flow on the next run, use <code>swival --logout</code>.</p>
 <p>Supported model names may change over time. Check OpenAI's documentation for the current model list and naming conventions.</p>
 <p>Three environment variables are available for advanced use. <code>CHATGPT_TOKEN_DIR</code> overrides the default token storage directory, <code>CHATGPT_AUTH_FILE</code> overrides the token filename or path, and <code>CHATGPT_API_BASE</code> overrides the API base URL.</p>
 <pre><code class="language-sh">export CHATGPT_TOKEN_DIR=/path/to/tokens
-swival --provider chatgpt --model gpt-5.4 &quot;task&quot;
+swival --provider chatgpt --model gpt-5.5 &quot;task&quot;
 swival --logout
 </code></pre>
 <p>The <code>--top-p</code>, <code>--seed</code>, and <code>tool_choice</code> parameters are not supported by the ChatGPT Plus/Pro backend. Swival drops them automatically when using this provider.</p>
-<p>Models like <code>gpt-5.4</code> support tunable reasoning effort. Use <code>--reasoning-effort</code> to control how much the model thinks before responding:</p>
-<pre><code class="language-sh">swival --provider chatgpt --model gpt-5.4 --reasoning-effort high &quot;task&quot;
+<p>Models like <code>gpt-5.5</code> support tunable reasoning effort. Use <code>--reasoning-effort</code> to control how much the model thinks before responding:</p>
+<pre><code class="language-sh">swival --provider chatgpt --model gpt-5.5 --reasoning-effort high &quot;task&quot;
 </code></pre>
 <p>No other configuration is needed.</p>
 <h2 id="aws-bedrock">AWS Bedrock</h2>

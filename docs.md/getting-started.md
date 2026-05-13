@@ -180,7 +180,7 @@ For a deeper look at provider options and server-specific examples, see [Provide
 If you have a ChatGPT Plus or ChatGPT Pro subscription and want to use OpenAI's models without a separate API key, the `chatgpt` provider authenticates through an OAuth device-code flow using your existing subscription.
 
 ```sh
-swival "Hello world" --provider chatgpt --model gpt-5.4
+swival "Hello world" --provider chatgpt --model gpt-5.5
 ```
 
 On the first run, Swival will print a URL and a code. Open the URL in your browser, enter the code, and authorize. After that, tokens are cached locally and you won't be prompted again.

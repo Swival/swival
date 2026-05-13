@@ -181,8 +181,8 @@ swival --oneshot-commands '/loop 30s check git status and report unusual activit
 <pre><code class="language-sh">swival --extra-body '{&quot;chat_template_kwargs&quot;: {&quot;enable_thinking&quot;: false}}' &quot;task&quot;
 </code></pre>
 <p><code>--retries N</code> sets the maximum number of provider retries on transient network errors and defaults to <code>5</code>. Set to <code>1</code> to disable retries entirely.</p>
-<p><code>--reasoning-effort LEVEL</code> sets the reasoning effort for models that support tunable reasoning (e.g. gpt-5.4). Valid levels are <code>none</code>, <code>minimal</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, and <code>default</code>.</p>
-<pre><code class="language-sh">swival --provider chatgpt --model gpt-5.4 --reasoning-effort high &quot;task&quot;
+<p><code>--reasoning-effort LEVEL</code> sets the reasoning effort for models that support tunable reasoning (e.g. gpt-5.5). Valid levels are <code>none</code>, <code>minimal</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, and <code>default</code>.</p>
+<pre><code class="language-sh">swival --provider chatgpt --model gpt-5.5 --reasoning-effort high &quot;task&quot;
 </code></pre>
 <p><code>--proactive-summaries</code> enables periodic checkpoint summarization of the conversation. Every ten turns, recent turns are summarized and stored internally. These summaries survive context compaction and give the model a condensed record of earlier work that would otherwise be lost.</p>
 <p>Useful for long-running sessions.</p>

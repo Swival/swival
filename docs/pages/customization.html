@@ -168,7 +168,7 @@ auth_token = &quot;sk-...&quot;
 </code></pre>
 <p>For the <code>chatgpt</code> provider (ChatGPT Plus/Pro subscriptions), no API key is needed since authentication is handled through OAuth:</p>
 <pre><code class="language-toml">provider = &quot;chatgpt&quot;
-model = &quot;gpt-5.4&quot;
+model = &quot;gpt-5.5&quot;
 </code></pre>
 <p>Relative paths in <code>allowed_dirs</code>, <code>allowed_dirs_ro</code>, <code>skills_dir</code>, <code>cache_dir</code>, <code>objective</code>, and <code>verify</code> resolve against the config file's parent directory, not the working directory. Tilde paths like <code>~/projects</code> expand to the home directory.</p>
 <p>The <code>reviewer</code>, <code>llm_filter</code>, <code>lifecycle_command</code>, and <code>command_middleware</code> values are shell-split; only path-like first tokens — anything starting with <code>/</code>, <code>~</code>, or containing a <code>/</code> (e.g. <code>./</code>, <code>../</code>, <code>.rtk/</code>, <code>scripts/</code>) — are resolved against the config directory, while bare command names like <code>swival</code> are left for PATH lookup at runtime. The same resolution applies to <code>model</code> when <code>provider = "command"</code>.</p>
@@ -186,7 +186,7 @@ max_context_tokens = 65536
 
 [profiles.gpt5]
 provider = &quot;chatgpt&quot;
-model = &quot;gpt-5.4&quot;
+model = &quot;gpt-5.5&quot;
 reasoning_effort = &quot;high&quot;
 
 [profiles.router-main]
@@ -301,7 +301,7 @@ Don't add dependencies without asking.
 <h2 id="reasoning-effort">Reasoning Effort</h2>
 <p>Some models support a tunable reasoning level that controls how much effort the model puts into thinking before responding. This is a first-class parameter in Swival, separate from <code>extra_body</code>.</p>
 <p>On the command line:</p>
-<pre><code class="language-sh">swival --provider chatgpt --model gpt-5.4 --reasoning-effort high &quot;task&quot;
+<pre><code class="language-sh">swival --provider chatgpt --model gpt-5.5 --reasoning-effort high &quot;task&quot;
 </code></pre>
 <p>In a config file:</p>
 <pre><code class="language-toml">reasoning_effort = &quot;high&quot;

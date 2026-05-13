@@ -163,10 +163,10 @@ swival --extra-body '{"chat_template_kwargs": {"enable_thinking": false}}' "task
 
 `--retries N` sets the maximum number of provider retries on transient network errors and defaults to `5`. Set to `1` to disable retries entirely.
 
-`--reasoning-effort LEVEL` sets the reasoning effort for models that support tunable reasoning (e.g. gpt-5.4). Valid levels are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `default`.
+`--reasoning-effort LEVEL` sets the reasoning effort for models that support tunable reasoning (e.g. gpt-5.5). Valid levels are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `default`.
 
 ```sh
-swival --provider chatgpt --model gpt-5.4 --reasoning-effort high "task"
+swival --provider chatgpt --model gpt-5.5 --reasoning-effort high "task"
 ```
 
 `--proactive-summaries` enables periodic checkpoint summarization of the conversation. Every ten turns, recent turns are summarized and stored internally. These summaries survive context compaction and give the model a condensed record of earlier work that would otherwise be lost.

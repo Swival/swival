@@ -84,7 +84,7 @@ For the `chatgpt` provider (ChatGPT Plus/Pro subscriptions), no API key is neede
 
 ```toml
 provider = "chatgpt"
-model = "gpt-5.4"
+model = "gpt-5.5"
 ```
 
 Relative paths in `allowed_dirs`, `allowed_dirs_ro`, `skills_dir`, `cache_dir`, `objective`, and `verify` resolve against the config file's parent directory, not the working directory. Tilde paths like `~/projects` expand to the home directory.
@@ -111,7 +111,7 @@ max_context_tokens = 65536
 
 [profiles.gpt5]
 provider = "chatgpt"
-model = "gpt-5.4"
+model = "gpt-5.5"
 reasoning_effort = "high"
 
 [profiles.router-main]
@@ -307,7 +307,7 @@ Some models support a tunable reasoning level that controls how much effort the 
 On the command line:
 
 ```sh
-swival --provider chatgpt --model gpt-5.4 --reasoning-effort high "task"
+swival --provider chatgpt --model gpt-5.5 --reasoning-effort high "task"
 ```
 
 In a config file:

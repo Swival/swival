@@ -244,7 +244,7 @@ swival &quot;Hello world&quot; --provider google --model gemini-2.5-flash
 <p>For a deeper look at provider options and server-specific examples, see <a href="providers.html">Providers</a>.</p>
 <h2 id="running-with-chatgpt-pluspro">Running with ChatGPT Plus/Pro</h2>
 <p>If you have a ChatGPT Plus or ChatGPT Pro subscription and want to use OpenAI's models without a separate API key, the <code>chatgpt</code> provider authenticates through an OAuth device-code flow using your existing subscription.</p>
-<pre><code class="language-sh">swival &quot;Hello world&quot; --provider chatgpt --model gpt-5.4
+<pre><code class="language-sh">swival &quot;Hello world&quot; --provider chatgpt --model gpt-5.5
 </code></pre>
 <p>On the first run, Swival will print a URL and a code. Open the URL in your browser, enter the code, and authorize. After that, tokens are cached locally and you won't be prompted again.</p>
 <p><code>--model</code> is required -- there is no default. Supported model names can change over time, so check <a href="providers.html">Providers</a> if you need the current naming.</p>

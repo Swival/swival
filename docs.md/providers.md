@@ -23,7 +23,7 @@ model = "qwen3-coder-next"
 
 [profiles.gpt5]
 provider = "chatgpt"
-model = "gpt-5.4"
+model = "gpt-5.5"
 reasoning_effort = "high"
 ```
 
@@ -257,7 +257,7 @@ If you need to pass an API key explicitly (for example, when using `--self-revie
 `--model` is required. There is no default model.
 
 ```sh
-swival --provider chatgpt --model gpt-5.4 "task"
+swival --provider chatgpt --model gpt-5.5 "task"
 ```
 
 On the first run, you will see a device-code prompt with a URL and a code to enter in your browser. Once you complete the flow, the OAuth tokens are stored locally and refreshed automatically. To remove the cached tokens and force the device-code flow on the next run, use `swival --logout`.
@@ -268,16 +268,16 @@ Three environment variables are available for advanced use. `CHATGPT_TOKEN_DIR` 
 
 ```sh
 export CHATGPT_TOKEN_DIR=/path/to/tokens
-swival --provider chatgpt --model gpt-5.4 "task"
+swival --provider chatgpt --model gpt-5.5 "task"
 swival --logout
 ```
 
 The `--top-p`, `--seed`, and `tool_choice` parameters are not supported by the ChatGPT Plus/Pro backend. Swival drops them automatically when using this provider.
 
-Models like `gpt-5.4` support tunable reasoning effort. Use `--reasoning-effort` to control how much the model thinks before responding:
+Models like `gpt-5.5` support tunable reasoning effort. Use `--reasoning-effort` to control how much the model thinks before responding:
 
 ```sh
-swival --provider chatgpt --model gpt-5.4 --reasoning-effort high "task"
+swival --provider chatgpt --model gpt-5.5 --reasoning-effort high "task"
 ```
 
 No other configuration is needed.
