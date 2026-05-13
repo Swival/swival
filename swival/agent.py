@@ -79,6 +79,14 @@ from .input_dispatch import (
     StepResult,
     parse_input_line,
 )
+from . import loops as _loops_mod
+from .loops import (
+    CANCEL_FAILURES,
+    LoopRegistration,
+    LoopRegistry,
+    MAX_ACTIVE_LOOPS,
+    WARN_FAILURES,
+)
 from .mcp_client import McpShutdownError
 from .tools import (
     TOOLS,
@@ -8131,6 +8139,7 @@ def _repl_status(
     command_policy,
     current_profile: str | None = None,
     goal_state=None,
+    loop_registry=None,
 ) -> str:
     """Build a compact session overview."""
     from .continue_here import load_continue_file
@@ -8171,13 +8180,21 @@ def _repl_status(
     )
 
     state_lines = []
-    for obj in (thinking_state, todo_state, snapshot_state, goal_state):
+    for obj in (thinking_state, todo_state, snapshot_state, goal_state, loop_registry):
         if obj:
             s = obj.summary_line()
             if s:
                 state_lines.append(s)
     if compaction_state and compaction_state.summaries:
         state_lines.append(f"checkpoints: {len(compaction_state.summaries)}")
+
+    if verbose and loop_registry is not None and len(loop_registry):
+        for reg in loop_registry:
+            state_lines.append(
+                f"  {reg.id}: every "
+                f"{_format_loop_duration(reg.interval_seconds)}, "
+                f"{_loop_prompt_preview(reg.prompt)!r}"
+            )
 
     if state_lines:
         lines.append("")
@@ -8511,6 +8528,7 @@ def _repl_clear(
     todo_state: TodoState | None = None,
     snapshot_state: SnapshotState | None = None,
     goal_state: GoalState | None = None,
+    loop_registry: LoopRegistry | None = None,
 ) -> str:
     """Clear conversation history, keeping only the leading system messages."""
     leading = []
@@ -8539,6 +8557,11 @@ def _repl_clear(
 
     if goal_state is not None:
         goal_state.reset()
+
+    if loop_registry is not None:
+        cancelled = loop_registry.reset()
+        if cancelled:
+            fmt.info(f"[loops] cancelled {cancelled}")
 
     fmt.reset_state()
     return f"context cleared ({dropped} messages removed)"
@@ -8994,6 +9017,7 @@ def execute_input(
                 todo_state=ctx.todo_state,
                 snapshot_state=ctx.snapshot_state,
                 goal_state=ctx.goal_state,
+                loop_registry=ctx.loop_registry,
             )
             _ensure_goal_tools_disabled(ctx.tools)
             _rpt = ctx.loop_kwargs.get("report")
@@ -9126,6 +9150,7 @@ def execute_input(
                 command_policy=ctx.loop_kwargs.get("command_policy"),
                 current_profile=ctx.current_profile,
                 goal_state=ctx.goal_state,
+                loop_registry=ctx.loop_registry,
             )
             return StepResult(kind="info", text=msg)
 
@@ -9162,6 +9187,18 @@ def execute_input(
 
         if cmd == "/loop":
             return _execute_loop(cmd_arg, ctx, mode=mode)
+
+        if cmd == "/loops":
+            if ctx.loop_registry is None:
+                return StepResult(
+                    kind="info",
+                    text="error: /loops is only available in REPL mode",
+                    is_error=True,
+                )
+            return StepResult(kind="info", text=_format_loops_table(ctx.loop_registry))
+
+        if cmd == "/unloop":
+            return _execute_unloop(cmd_arg, ctx)
 
         # Unknown slash command.
         return StepResult(
@@ -9205,6 +9242,7 @@ def _execute_init(cmd_arg: str, ctx: InputContext) -> StepResult:
             todo_state=ctx.todo_state,
             snapshot_state=ctx.snapshot_state,
             goal_state=ctx.goal_state,
+            loop_registry=ctx.loop_registry,
         )
     )
 
@@ -9497,17 +9535,28 @@ def _loop_emit_oneshot(answer: str | None) -> None:
         print(flush=True)
 
 
-def _execute_loop(cmd_arg: str, ctx: InputContext, *, mode: str) -> StepResult:
-    """Run a prompt at a fixed cadence until interrupted.
+_LOOP_SLASH_BODY_ERROR = (
+    'error: /loop body must be a plain prompt, not a slash or "!" command. '
+    "Run those manually."
+)
 
-    ``--oneshot-commands`` gates the outer ``/loop`` invocation in main();
-    nested ``/audit``, ``!checks``, etc. dispatched inside the loop body
-    are not separately gated, by design — the outer gate already
-    authorized command dispatch for this script.
+
+def _loop_prompt_preview(prompt: str, max_len: int = 60) -> str:
+    return prompt if len(prompt) <= max_len else prompt[: max_len - 3] + "..."
+
+
+def _loop_tag(reg_id: int) -> str:
+    return f"[loop {reg_id}]"
+
+
+def _prepare_loop_registration(
+    cmd_arg: str,
+) -> tuple[int, str, "ParsedInput"] | StepResult:
+    """Parse, validate, and reject slash bodies.
+
+    Returns ``(interval_seconds, prompt, parsed_prompt)`` on success,
+    or a populated ``StepResult`` with ``is_error=True`` on failure.
     """
-    import signal as _signal
-    import threading
-
     try:
         interval_seconds, prompt = _parse_loop_args(cmd_arg)
     except ValueError as e:
@@ -9520,25 +9569,43 @@ def _execute_loop(cmd_arg: str, ctx: InputContext, *, mode: str) -> StepResult:
             text="error: /loop prompt parsed as empty",
             is_error=True,
         )
+    if parsed_prompt.is_command or parsed_prompt.is_custom_command:
+        return StepResult(kind="info", text=_LOOP_SLASH_BODY_ERROR, is_error=True)
+    return interval_seconds, prompt, parsed_prompt
 
-    emit = _loop_emit_oneshot if mode == "oneshot" else _loop_emit_repl
-    prompt_preview = prompt if len(prompt) <= 60 else prompt[:57] + "..."
+
+def _execute_loop(cmd_arg: str, ctx: InputContext, *, mode: str) -> StepResult:
+    if mode == "repl":
+        return _execute_loop_repl(cmd_arg, ctx)
+    return _execute_loop_oneshot(cmd_arg, ctx)
+
+
+def _execute_loop_oneshot(cmd_arg: str, ctx: InputContext) -> StepResult:
+    """Run a plain prompt at a fixed cadence until interrupted (one-shot mode)."""
+    import signal as _signal
+    import threading
+
+    prepared = _prepare_loop_registration(cmd_arg)
+    if isinstance(prepared, StepResult):
+        return prepared
+    interval_seconds, prompt, parsed_prompt = prepared
+
+    prompt_preview = _loop_prompt_preview(prompt)
     interval_label = _format_loop_duration(interval_seconds)
 
     stop_event = threading.Event()
     total_turns = 0
     prior_sigterm = None
-    if mode == "oneshot":
 
-        def _sigterm(_signum, _frame):
-            if stop_event.is_set():
-                raise SystemExit(143)
-            stop_event.set()
+    def _sigterm(_signum, _frame):
+        if stop_event.is_set():
+            raise SystemExit(143)
+        stop_event.set()
 
-        try:
-            prior_sigterm = _signal.signal(_signal.SIGTERM, _sigterm)
-        except (ValueError, OSError):
-            prior_sigterm = None
+    try:
+        prior_sigterm = _signal.signal(_signal.SIGTERM, _sigterm)
+    except (ValueError, OSError):
+        prior_sigterm = None
 
     interrupt_tracker = {"last": None}
 
@@ -9560,7 +9627,7 @@ def _execute_loop(cmd_arg: str, ctx: InputContext, *, mode: str) -> StepResult:
             )
 
             try:
-                step = execute_input(parsed_prompt, ctx, mode=mode)
+                step = execute_input(parsed_prompt, ctx, mode="oneshot")
             except KeyboardInterrupt:
                 if _is_double_tap():
                     fmt.warning("[loop] double-tap interrupt, exiting.")
@@ -9598,7 +9665,7 @@ def _execute_loop(cmd_arg: str, ctx: InputContext, *, mode: str) -> StepResult:
                     "the loop."
                 )
             else:
-                emit(step.text)
+                _loop_emit_oneshot(step.text)
                 if step.exhausted:
                     fmt.warning(f"[loop iter {iteration}] max turns reached.")
 
@@ -9616,10 +9683,311 @@ def _execute_loop(cmd_arg: str, ctx: InputContext, *, mode: str) -> StepResult:
                 pass
 
     summary = f"loop stopped after {iteration} iteration{'s' if iteration != 1 else ''}"
-    if mode == "oneshot":
-        fmt.info(summary)
-        return StepResult(kind="state_change", text=None)
-    return StepResult(kind="state_change", text=summary)
+    fmt.info(summary)
+    return StepResult(kind="state_change", text=None)
+
+
+def _execute_loop_repl(cmd_arg: str, ctx: InputContext) -> StepResult:
+    """Register a background /loop and run its first iteration in a snapshot."""
+    prepared = _prepare_loop_registration(cmd_arg)
+    if isinstance(prepared, StepResult):
+        return prepared
+    interval_seconds, prompt, parsed_prompt = prepared
+
+    if ctx.loop_registry is None:
+        return StepResult(
+            kind="info",
+            text="error: /loop registry unavailable in this context",
+            is_error=True,
+        )
+
+    if ctx.loop_registry.is_full():
+        return StepResult(
+            kind="info",
+            text=(f"error: already {MAX_ACTIVE_LOOPS} active loops, /unloop one first"),
+            is_error=True,
+        )
+
+    reg = ctx.loop_registry.register(
+        interval_seconds=interval_seconds,
+        prompt=prompt,
+        parsed_prompt=parsed_prompt,
+    )
+
+    fmt.info(
+        f"[loop {reg.id} registered] "
+        f"interval={_format_loop_duration(interval_seconds)} "
+        f"prompt={_loop_prompt_preview(prompt)!r}"
+    )
+
+    if interval_seconds < 60:
+        fmt.warning(
+            f"{_loop_tag(reg.id)} interval is below 60s, "
+            f"will fire ~{3600 // interval_seconds} times per hour"
+        )
+
+    _fire_loop_iteration(reg, ctx)
+    return StepResult(kind="state_change", text=None)
+
+
+def _fork_messages(messages: list) -> list:
+    """Per-message shallow copy: iterations only append, so dict-level copy
+    is enough and avoids deep-copying long tool-result strings."""
+    return [dict(m) if isinstance(m, dict) else copy.copy(m) for m in messages]
+
+
+def _build_iteration_ctx(
+    reg: "LoopRegistration", ctx: InputContext
+) -> tuple[InputContext, object]:
+    iter_messages = _fork_messages(ctx.messages)
+    # _run_agent_step ends every plain-prompt turn by calling
+    # _ensure_goal_tools_disabled(ctx.tools) when goal_state has no active
+    # goal; without this fork the live complete_goal tool would leak away.
+    iter_tools = list(ctx.tools)
+
+    iter_thinking = ThinkingState(verbose=ctx.verbose)
+    iter_todo = TodoState(verbose=ctx.verbose)
+    iter_snapshot = (
+        SnapshotState(verbose=ctx.verbose) if ctx.snapshot_state is not None else None
+    )
+    iter_tracker = FileAccessTracker() if ctx.file_tracker is not None else None
+    iter_goal = GoalState(verbose=ctx.verbose) if ctx.goal_state is not None else None
+
+    max_turns = ctx.turn_state.get("max_turns", 30)
+    iter_turn_state = {"max_turns": max_turns, "turns_used": 0}
+
+    if ctx.subagent_manager is not None and hasattr(ctx.subagent_manager, "fresh_copy"):
+        iter_subagent = ctx.subagent_manager.fresh_copy()
+    else:
+        iter_subagent = None
+
+    # use_skill tool can append to skill_read_roots mid-iteration.
+    iter_skill_read_roots = list(ctx.skill_read_roots)
+
+    iter_loop_kwargs = dict(ctx.loop_kwargs)
+    iter_loop_kwargs.update(
+        thinking_state=iter_thinking,
+        todo_state=iter_todo,
+        snapshot_state=iter_snapshot,
+        goal_state=iter_goal,
+        file_tracker=iter_tracker,
+        subagent_manager=iter_subagent,
+        turn_state=iter_turn_state,
+        continue_here=False,
+        skill_read_roots=iter_skill_read_roots,
+    )
+
+    iter_ctx = InputContext(
+        messages=iter_messages,
+        tools=iter_tools,
+        base_dir=ctx.base_dir,
+        start_dir=ctx.start_dir,
+        turn_state=iter_turn_state,
+        thinking_state=iter_thinking,
+        todo_state=iter_todo,
+        snapshot_state=iter_snapshot,
+        goal_state=iter_goal,
+        file_tracker=iter_tracker,
+        no_history=True,
+        continue_here=False,
+        verbose=ctx.verbose,
+        loop_kwargs=iter_loop_kwargs,
+        current_profile=ctx.current_profile,
+        profiles=ctx.profiles,
+        startup_profile=ctx.startup_profile,
+        raw_llm_baseline=ctx.raw_llm_baseline,
+        pre_profile_baseline=ctx.pre_profile_baseline,
+        mcp_manager=ctx.mcp_manager,
+        a2a_manager=ctx.a2a_manager,
+        subagent_manager=iter_subagent,
+        subagent_holder=None,
+        extra_write_roots=ctx.extra_write_roots,
+        skill_read_roots=iter_skill_read_roots,
+        skills_catalog=ctx.skills_catalog,
+        is_subagent=ctx.is_subagent,
+        trace_dir=ctx.trace_dir,
+        loop_registry=None,
+    )
+    return iter_ctx, iter_subagent
+
+
+def _short_error(text: str | None, limit: int = 120) -> str:
+    if not text:
+        return "(no detail)"
+    flat = " ".join(text.split())
+    return flat if len(flat) <= limit else flat[: limit - 3] + "..."
+
+
+def _record_loop_failure(
+    reg: "LoopRegistration", reason: str | None, ctx: InputContext
+) -> bool:
+    """Apply warn/auto-cancel policy after a failed iteration.
+
+    Returns True if the loop was auto-cancelled and removed from the registry.
+    """
+    reg.consecutive_failures += 1
+    reg.last_error = reason
+    tag = _loop_tag(reg.id)
+    if reg.consecutive_failures == WARN_FAILURES:
+        fmt.warning(
+            f"{tag} {WARN_FAILURES} consecutive failures, "
+            f"will auto-cancel at {CANCEL_FAILURES}"
+        )
+    if reg.consecutive_failures >= CANCEL_FAILURES:
+        if ctx.loop_registry is not None:
+            ctx.loop_registry.remove(reg.id)
+        fmt.warning(
+            f"{tag} auto-cancelled after {CANCEL_FAILURES} consecutive "
+            f"failures (last error: {reg.last_error or 'unknown'})"
+        )
+        return True
+    return False
+
+
+def _classify_step_outcome(
+    step: StepResult | None,
+) -> tuple[bool, str | None]:
+    if step is None:
+        return True, "interrupted"
+    if step.is_error:
+        return True, _short_error(step.text)
+    if step.interrupted:
+        return True, "interrupted"
+    return False, None
+
+
+def _run_loop_iteration_snapshot(reg: "LoopRegistration", ctx: InputContext) -> None:
+    """Fire one iteration of a registered loop in its own snapshot."""
+    if ctx.loop_registry is None:
+        return
+
+    tag = _loop_tag(reg.id)
+    fmt.info(f"[loop {reg.id} {time.strftime('%a %H:%M:%S')}] {reg.prompt}")
+
+    iter_ctx, iter_subagent = _build_iteration_ctx(reg, ctx)
+    step: StepResult | None = None
+    failure: bool
+    failure_reason: str | None
+
+    try:
+        try:
+            step = execute_input(reg.parsed_prompt, iter_ctx, mode="repl")
+        except KeyboardInterrupt:
+            failure, failure_reason = True, "interrupted"
+            fmt.warning(f"{tag} interrupted")
+        except Exception as e:
+            failure, failure_reason = True, _short_error(f"{type(e).__name__}: {e}")
+            fmt.warning(f"{tag} error: {failure_reason}")
+        else:
+            failure, failure_reason = _classify_step_outcome(step)
+            if failure:
+                fmt.warning(f"{tag} {failure_reason}")
+            else:
+                if step.text:
+                    _loop_emit_repl(step.text)
+                else:
+                    fmt.info(f"{tag} no output")
+                if step.exhausted:
+                    fmt.warning(f"{tag} max turns reached")
+
+        if step is not None and step.kind == "agent_turn":
+            report = ctx.loop_kwargs.get("report")
+            if report is not None:
+                ctx.loop_kwargs["turn_offset"] = report.max_turn_seen
+    finally:
+        if iter_subagent is not None and hasattr(iter_subagent, "shutdown"):
+            try:
+                iter_subagent.shutdown()
+            except Exception:
+                pass
+        reg.last_fire = _loops_mod.monotonic()
+
+    cancelled = False
+    if failure:
+        cancelled = _record_loop_failure(reg, failure_reason, ctx)
+    else:
+        reg.consecutive_failures = 0
+        reg.last_error = None
+    if not cancelled:
+        fmt.info(
+            f"{tag} done. next fire >= {_format_loop_duration(reg.interval_seconds)}."
+        )
+
+
+def _fire_loop_iteration(reg: "LoopRegistration", ctx: InputContext) -> None:
+    """Run one iteration, catching driver-level errors with the same policy."""
+    try:
+        _run_loop_iteration_snapshot(reg, ctx)
+    except Exception as e:
+        reason = f"driver: {type(e).__name__}: {e}"
+        fmt.warning(f"{_loop_tag(reg.id)} driver error: {type(e).__name__}: {e}")
+        reg.last_fire = _loops_mod.monotonic()
+        _record_loop_failure(reg, reason, ctx)
+
+
+def _fire_due_loops(ctx: InputContext) -> None:
+    if ctx.loop_registry is None or len(ctx.loop_registry) == 0:
+        return
+    for reg in ctx.loop_registry.due():
+        # An earlier iteration in this batch may have auto-cancelled this id.
+        if ctx.loop_registry.get(reg.id) is None:
+            continue
+        _fire_loop_iteration(reg, ctx)
+
+
+def _format_loops_table(registry: "LoopRegistry") -> str:
+    if len(registry) == 0:
+        return "no active loops"
+    now = _loops_mod.monotonic()
+    lines = ["active loops:"]
+    for reg in registry:
+        remaining = max(0, reg.interval_seconds - (now - reg.last_fire))
+        line = (
+            f"  {reg.id}: every {_format_loop_duration(reg.interval_seconds)}, "
+            f"next >= {_format_loop_duration(int(remaining))}, "
+            f"prompt={_loop_prompt_preview(reg.prompt)!r}"
+        )
+        if reg.consecutive_failures:
+            line += f"  (failures: {reg.consecutive_failures})"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _execute_unloop(cmd_arg: str, ctx: InputContext) -> StepResult:
+    if ctx.loop_registry is None:
+        return StepResult(
+            kind="info",
+            text="error: /unloop is only available in REPL mode",
+            is_error=True,
+        )
+    arg = cmd_arg.strip()
+    if not arg:
+        return StepResult(
+            kind="info",
+            text="usage: /unloop <id|all>",
+            is_error=True,
+        )
+    if arg == "all":
+        n = ctx.loop_registry.clear()
+        return StepResult(
+            kind="state_change",
+            text=f"cancelled {n} loop{'s' if n != 1 else ''}",
+        )
+    try:
+        loop_id = int(arg)
+    except ValueError:
+        return StepResult(
+            kind="info",
+            text=f"error: /unloop expected an id or 'all', got {arg!r}",
+            is_error=True,
+        )
+    if ctx.loop_registry.remove(loop_id):
+        return StepResult(kind="state_change", text=f"cancelled loop {loop_id}")
+    return StepResult(
+        kind="info",
+        text=f"error: no loop with id {loop_id}",
+        is_error=True,
+    )
 
 
 def _loop_interruptible_sleep(seconds: int, stop_event) -> bool:
@@ -9797,6 +10165,7 @@ def repl_loop(
         fmt.repl_banner()
 
     turn_state = {"max_turns": max_turns, "turns_used": 0}
+    loop_registry = LoopRegistry()
     _repl_loop_kwargs = dict(
         api_base=api_base,
         model_id=model_id,
@@ -9865,6 +10234,7 @@ def repl_loop(
         skills_catalog=skills_catalog,
         is_subagent=is_subagent,
         trace_dir=trace_dir,
+        loop_registry=loop_registry,
     )
 
     _exit_outcome = "error"
@@ -9872,6 +10242,7 @@ def repl_loop(
     try:
         while True:
             try:
+                _fire_due_loops(ctx)
                 print(file=sys.stderr)  # blank line before prompt
                 line = session.prompt(prompt_text)
             except (EOFError, KeyboardInterrupt):

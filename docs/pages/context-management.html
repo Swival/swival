@@ -123,7 +123,8 @@
 <p>At startup, Swival estimates the total token cost of all tool schemas. If they exceed 30% of the context window, it warns. If they exceed 50%, it starts dropping the most expensive MCP server's tools until the budget fits. This happens automatically — you don't need to manually curate which MCP tools are available.</p>
 <h2 id="proactive-collapse-the-snapshot-tool">Proactive Collapse: The Snapshot Tool</h2>
 <p>The snapshot tool is the centerpiece of Swival's context management. It lets the agent compress its own investigation history on demand.</p>
-<p>A typical workflow looks like this: the agent reads 8 files and greps through logs to debug an authentication failure. All those reads add up to maybe 12K tokens sitting in the conversation — content the agent has already processed and drawn conclusions from. The agent calls <code>snapshot restore</code> with a summary like "Root cause: missing null check in auth/parser.py:142. Fix: guard with <code>if token is None: return default_token</code>." The 12K tokens of reads collapse to about 200 tokens. The agent continues with a clean context window.</p>
+<p>A typical workflow looks like this: the agent reads 8 files and greps through logs to debug an authentication failure. All those reads add up to maybe 12K tokens sitting in the conversation, content the agent has already processed and drawn conclusions from.</p>
+<p>The agent calls <code>snapshot restore</code> with a summary like "Root cause: missing null check in auth/parser.py:142. Fix: guard with <code>if token is None: return default_token</code>." The 12K tokens of reads collapse to about 200 tokens. The agent continues with a clean context window.</p>
 <h3 id="save-and-restore">Save and Restore</h3>
 <p>The snapshot tool has four actions:</p>
 <ul>
@@ -142,7 +143,8 @@
 <h2 id="reactive-compaction">Reactive Compaction</h2>
 <p>When the context overflows — either detected before the LLM call or reported by the provider afterward — Swival runs up to four compaction levels in sequence.</p>
 <h3 id="level-1-shrink-tool-results">Level 1: Shrink Tool Results</h3>
-<p>The gentlest approach. Old tool results (everything except the two most recent turns) are replaced with structured summaries. A file read becomes <code>[read_file: path, N lines — content compacted]</code>. A batched read becomes <code>[read_multiple_files: path1, path2, …, N chars — compacted]</code>. A grep becomes <code>[grep: 'pattern' in path, ~N matches — compacted]</code>. Command output keeps its first and last 200 characters.</p>
+<p>The gentlest approach. Old tool results (everything except the two most recent turns) are replaced with structured summaries.</p>
+<p>A file read becomes <code>[read_file: path, N lines — content compacted]</code>. A batched read becomes <code>[read_multiple_files: path1, path2, …, N chars — compacted]</code>. A grep becomes <code>[grep: 'pattern' in path, ~N matches — compacted]</code>. Command output keeps its first and last 200 characters.</p>
 <p>The agent retains all its turns and the structure of what it did. It loses the detailed content but keeps the metadata.</p>
 <h3 id="level-2-drop-low-importance-turns">Level 2: Drop Low-Importance Turns</h3>
 <p>If shrinking results wasn't enough, Swival starts dropping entire turns from the middle of the conversation. Not all turns are equal — each one gets an importance score:</p>

@@ -334,63 +334,20 @@ class _Recorder:
 
 class TestLoopDispatch:
     def test_bad_args_returns_error(self):
-        result = agent._execute_loop("", _make_ctx(), mode="repl")
+        result = agent._execute_loop("", _make_ctx(), mode="oneshot")
         assert result.is_error
         assert result.kind == "info"
         assert "requires a prompt" in (result.text or "")
 
     def test_interval_only_returns_error(self):
-        result = agent._execute_loop("5m", _make_ctx(), mode="repl")
+        result = agent._execute_loop("5m", _make_ctx(), mode="oneshot")
         assert result.is_error
         assert "no prompt" in (result.text or "")
 
     def test_floor_violation_returns_error(self):
-        result = agent._execute_loop("1s foo", _make_ctx(), mode="repl")
+        result = agent._execute_loop("1s foo", _make_ctx(), mode="oneshot")
         assert result.is_error
         assert "floor" in (result.text or "")
-
-    def test_repl_renders_iteration_answers(self, monkeypatch):
-        rec = _Recorder(
-            monkeypatch,
-            [
-                StepResult(kind="agent_turn", text="answer 1"),
-                StepResult(kind="agent_turn", text="answer 2"),
-                StepResult(kind="agent_turn", text="answer 3"),
-            ],
-        )
-
-        rendered: list[str] = []
-        monkeypatch.setattr(agent.fmt, "repl_answer", lambda t: rendered.append(t))
-
-        ctx = _make_ctx()
-        result = agent._execute_loop("5s foo", ctx, mode="repl")
-
-        assert result.kind == "state_change"
-        assert "loop stopped" in (result.text or "")
-        assert rec.calls == ["foo", "foo", "foo"]
-        assert rendered == ["answer 1", "answer 2", "answer 3"]
-
-    def test_double_tap_interrupt_exits_loop(self, monkeypatch):
-        """Two interrupted steps within the double-tap window exit the loop."""
-        rec = _Recorder(
-            monkeypatch,
-            [
-                StepResult(kind="agent_turn", text="x", interrupted=True),
-                StepResult(kind="agent_turn", text="y", interrupted=True),
-                StepResult(kind="agent_turn", text="never"),
-            ],
-            target_iterations=10,  # ample budget; double-tap should exit first
-        )
-        # Freeze monotonic at 0 so both interrupts are within the window.
-        monkeypatch.setattr(agent.time, "monotonic", lambda: 0.0)
-        monkeypatch.setattr(agent.fmt, "repl_answer", lambda t: None)
-
-        ctx = _make_ctx()
-        result = agent._execute_loop("5s foo", ctx, mode="repl")
-
-        assert result.kind == "state_change"
-        # Loop should exit after the 2nd interrupted iteration.
-        assert len(rec.calls) == 2
 
     def test_oneshot_streams_stdout_and_final_text_none(self, monkeypatch, capsys):
         rec = _Recorder(
@@ -417,37 +374,6 @@ class TestLoopDispatch:
         assert "loop stopped" not in captured.out
 
         assert rec.calls == ["probe", "probe", "probe"]
-
-    def test_single_interrupt_skips_iteration(self, monkeypatch):
-        """A single interrupted step skips that iteration; loop continues."""
-        rec = _Recorder(
-            monkeypatch,
-            [
-                StepResult(kind="agent_turn", text="ok"),
-                StepResult(kind="agent_turn", text=None, interrupted=True),
-                StepResult(kind="agent_turn", text="ok 2"),
-            ],
-        )
-
-        # Advance monotonic by 10s per call so consecutive interrupts are
-        # well outside the double-tap window.
-        clock = {"t": 0.0}
-
-        def fake_monotonic():
-            clock["t"] += 10.0
-            return clock["t"]
-
-        monkeypatch.setattr(agent.time, "monotonic", fake_monotonic)
-        monkeypatch.setattr(agent.fmt, "repl_answer", lambda t: None)
-
-        ctx = _make_ctx()
-        result = agent._execute_loop("5s foo", ctx, mode="repl")
-
-        assert result.kind == "state_change"
-        # All three iterations dispatched; the middle one is a single-tap
-        # interrupt which only skips, not exits.
-        assert len(rec.calls) == 3
-        _ = rec
 
     def test_sigterm_exits_between_iterations(self, monkeypatch):
         """SIGTERM in one-shot mode should stop the loop cleanly."""
@@ -480,54 +406,6 @@ class TestLoopDispatch:
         assert len(call_log) == 2
         assert signal.getsignal(signal.SIGTERM) is prior
 
-    def test_turns_accumulate_across_iterations(self, monkeypatch):
-        """Per-iteration turn counts should sum into ctx.turn_state."""
-        per_iter_turns = iter([3, 5, 2])
-        responses = [StepResult(kind="agent_turn", text=f"r{i}") for i in range(3)]
-        ctx = _make_ctx()
-
-        def fake_execute_input(parsed, ctx_arg, *, mode="repl"):
-            # Simulate what run_agent_loop does: overwrite turns_used with
-            # this iteration's count.
-            ctx_arg.turn_state["turns_used"] = next(per_iter_turns)
-            return responses.pop(0)
-
-        monkeypatch.setattr(agent, "execute_input", fake_execute_input)
-        monkeypatch.setattr(
-            agent,
-            "_loop_interruptible_sleep",
-            lambda seconds, stop_flag: bool(responses),  # exit when empty
-        )
-        monkeypatch.setattr(agent.fmt, "repl_answer", lambda t: None)
-
-        agent._execute_loop("5s foo", ctx, mode="repl")
-
-        # 3 + 5 + 2 = 10
-        assert ctx.turn_state["turns_used"] == 10
-
-    def test_turn_offset_advances_with_report(self, monkeypatch):
-        """The report's max_turn_seen should propagate to loop_kwargs."""
-        responses = [StepResult(kind="agent_turn", text="x") for _ in range(2)]
-        ctx = _make_ctx()
-        max_turn_seen_seq = iter([4, 9])
-        report = types.SimpleNamespace()
-
-        def fake_execute_input(parsed, ctx_arg, *, mode="repl"):
-            report.max_turn_seen = next(max_turn_seen_seq)
-            return responses.pop(0)
-
-        ctx.loop_kwargs["report"] = report
-        monkeypatch.setattr(agent, "execute_input", fake_execute_input)
-        monkeypatch.setattr(
-            agent,
-            "_loop_interruptible_sleep",
-            lambda seconds, stop_flag: bool(responses),
-        )
-        monkeypatch.setattr(agent.fmt, "repl_answer", lambda t: None)
-
-        agent._execute_loop("5s foo", ctx, mode="repl")
-        assert ctx.loop_kwargs["turn_offset"] == 9
-
     def test_oneshot_error_does_not_appear_on_stdout(self, monkeypatch, capsys):
         """An is_error iteration result must not be streamed to stdout."""
         rec = _Recorder(
@@ -548,24 +426,6 @@ class TestLoopDispatch:
         assert "error: provider exploded" not in captured.out
         assert "error: provider exploded" in captured.err
         _ = rec
-
-    def test_step_stop_exits_loop(self, monkeypatch):
-        """A loop-body step with stop=True (e.g. /exit) must end the loop."""
-        rec = _Recorder(
-            monkeypatch,
-            [
-                StepResult(kind="agent_turn", text="first"),
-                StepResult(kind="flow_control", text=None, stop=True),
-                StepResult(kind="agent_turn", text="never"),
-            ],
-            target_iterations=10,
-        )
-        monkeypatch.setattr(agent.fmt, "repl_answer", lambda t: None)
-
-        ctx = _make_ctx()
-        result = agent._execute_loop("5s foo", ctx, mode="repl")
-        assert result.kind == "state_change"
-        assert len(rec.calls) == 2
 
     def test_second_sigterm_raises_system_exit(self, monkeypatch):
         """A second SIGTERM during an iteration should raise SystemExit(143)."""

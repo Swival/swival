@@ -99,7 +99,9 @@ With `--commands all` or `--yolo`, both `run_command` and `run_shell_command` ar
 
 ### Ask Mode
 
-In ask mode (`--commands ask`), Swival prompts you before running each new command category. Commands are grouped into buckets by their base name (e.g. `ls`, `git push`, `python3 -m pytest`). Only `run_command` is available — commands must be passed as argument arrays, which prevents shell injection. Once you approve a bucket, subsequent commands in the same bucket run without asking again.
+In ask mode (`--commands ask`), Swival prompts you before running each new command category. Commands are grouped into buckets by their base name (e.g. `ls`, `git push`, `python3 -m pytest`).
+
+Only `run_command` is available, so commands must be passed as argument arrays, which prevents shell injection. Once you approve a bucket, subsequent commands in the same bucket run without asking again.
 
 High-risk buckets (`rm`, `git push`, `docker`, `curl`, interpreter inline-code like `bash -c` or `python3 -c`) default to deny — you must explicitly type `y` to allow them. Non-high-risk buckets default to allow on Enter.
 
@@ -178,7 +180,9 @@ swival --no-read-guard "task"
 
 ## URL Fetching And SSRF Protections
 
-The `fetch_url` tool only allows `http` and `https`. It resolves each hostname with `socket.getaddrinfo`, blocks private and internal address classes through `ipaddress`, and re-runs those checks on every redirect hop. Loopback addresses are allowed when the hostname is explicitly `localhost`, `127.0.0.1`, or `::1`, so agents can test locally running servers. Arbitrary hostnames that resolve to loopback addresses are still blocked to prevent DNS rebinding attacks. Redirect chains are handled manually and capped at ten hops.
+The `fetch_url` tool only allows `http` and `https`. It resolves each hostname with `socket.getaddrinfo`, blocks private and internal address classes through `ipaddress`, and re-runs those checks on every redirect hop.
+
+Loopback addresses are allowed when the hostname is explicitly `localhost`, `127.0.0.1`, or `::1`, so agents can test locally running servers. Arbitrary hostnames that resolve to loopback addresses are still blocked to prevent DNS rebinding attacks. Redirect chains are handled manually and capped at ten hops.
 
 Binary MIME types are rejected. Response bodies are capped at 5 MB before conversion, and converted inline output is capped at 50 KB.
 

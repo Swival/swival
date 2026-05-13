@@ -67,15 +67,21 @@ The JSON below is from a verified local run using `--model dummy-model --max-tur
 
 ### Top-Level Fields
 
-`version` is the schema version and is currently `1`. `mode` is `"oneshot"` for single-task runs or `"repl"` for interactive sessions. `timestamp` is the run completion time in UTC ISO 8601 format. `task` is the original question string passed on the command line, or `"repl session (<N> turns)"` for REPL sessions. `model` is the resolved model identifier that was actually used. `provider` is one of `lmstudio`, `llamacpp`, `huggingface`, `openrouter`, `chatgpt`, `google`, `bedrock`, `generic`, or `command`.
+`version` is the schema version and is currently `1`. `mode` is `"oneshot"` for single-task runs or `"repl"` for interactive sessions. `timestamp` is the run completion time in UTC ISO 8601 format.
+
+`task` is the original question string passed on the command line, or `"repl session (<N> turns)"` for REPL sessions. `model` is the resolved model identifier that was actually used. `provider` is one of `lmstudio`, `llamacpp`, `huggingface`, `openrouter`, `chatgpt`, `google`, `bedrock`, `generic`, or `command`.
 
 `settings` captures run configuration. `sandbox` captures the sandbox backend in use. `result` captures outcome and exit semantics. `stats` captures aggregate counters. `timeline` captures ordered event records.
 
 ### `settings`
 
-`temperature` stores the sampling temperature or `null` when omitted. `top_p` stores nucleus sampling. `seed` stores the random seed or `null`. `max_turns` and `max_output_tokens` store turn and output-token limits. `context_length` stores effective context length after provider resolution. `files` records the filesystem access policy: `"some"` (workspace only, the default), `"all"` (unrestricted), or `"none"` (`.swival/` only).
+`temperature` stores the sampling temperature or `null` when omitted. `top_p` stores nucleus sampling. `seed` stores the random seed or `null`. `max_turns` and `max_output_tokens` store turn and output-token limits.
 
-`commands` records the configured command policy: `"all"` (unrestricted, the default), `"none"` (disabled), `"ask"` (interactive approval per bucket), or a sorted list of whitelisted basenames. `max_review_rounds` records the reviewer retry limit. `skills_discovered` records skill names discovered at startup. `instructions_loaded` records loaded instruction files as absolute paths (e.g. the user-level `AGENTS.md` from `~/.config/swival/`, the cross-agent `~/.agents/AGENTS.md`, and the project-level files).
+`context_length` stores effective context length after provider resolution. `files` records the filesystem access policy: `"some"` (workspace only, the default), `"all"` (unrestricted), or `"none"` (`.swival/` only).
+
+`commands` records the configured command policy: `"all"` (unrestricted, the default), `"none"` (disabled), `"ask"` (interactive approval per bucket), or a sorted list of whitelisted basenames. `max_review_rounds` records the reviewer retry limit.
+
+`skills_discovered` records skill names discovered at startup. `instructions_loaded` records loaded instruction files as absolute paths (e.g. the user-level `AGENTS.md` from `~/.config/swival/`, the cross-agent `~/.agents/AGENTS.md`, and the project-level files).
 
 ### `sandbox`
 
@@ -95,7 +101,11 @@ A `success` outcome means the model produced a final non-tool response. An `exha
 
 `compactions` counts `compact_messages` and `aggressive_drop` events. `turn_drops` counts `drop_middle_turns` events. `guardrail_interventions` counts injected correction prompts for repeated tool failures. `truncated_responses` counts model outputs that hit output-token limits.
 
-`skills_used` records skill names successfully activated through `use_skill`. `review_rounds` records how many reviewer passes occurred when `--reviewer` is active. `todo` appears only when the `todo` tool was used and includes `added`, `completed`, and `remaining` counts. `snapshot` appears only when the `snapshot` tool was used and includes `saves`, `restores`, `cancels`, `blocked`, `force_restores`, and `tokens_saved` counts. `memory` appears when auto-memory was loaded and includes `total_entries`, `bootstrap_entries`, `retrievable_entries`, `bootstrap_tokens`, `retrieval_tokens`, `retrieved_ids`, and `mode` (either `budgeted` or `full`).
+`skills_used` records skill names successfully activated through `use_skill`. `review_rounds` records how many reviewer passes occurred when `--reviewer` is active.
+
+`todo` appears only when the `todo` tool was used and includes `added`, `completed`, and `remaining` counts. `snapshot` appears only when the `snapshot` tool was used and includes `saves`, `restores`, `cancels`, `blocked`, `force_restores`, and `tokens_saved` counts.
+
+`memory` appears when auto-memory was loaded and includes `total_entries`, `bootstrap_entries`, `retrievable_entries`, `bootstrap_tokens`, `retrieval_tokens`, `retrieved_ids`, and `mode` (either `budgeted` or `full`).
 
 `prompt_cache` appears when at least one LLM call in the run returned cache stats. It is an object with `cached_tokens` (tokens served from the provider's prompt cache across the whole run) and `cache_write_tokens` (tokens written to the cache, i.e. the first-call population cost). Both fields are integers. Absent means no cache activity was reported by the provider.
 
@@ -127,7 +137,9 @@ For `repl_turn`, fields include `turn_offset` (the cumulative turn count at the 
 
 For `session_clear`, the event marks that a `/clear` or `/new` command reset the conversation state. No additional fields. These events appear only in REPL reports.
 
-For Agent MetaSKILL events: `metaskill_start` includes `name` and `language`. `metaskill_step` includes `operation` (`ask` or `command`), `purpose` or `argv`, `duration_s`, and `success`. `metaskill_finish` includes `name`, `status`, and `duration_s`. `metaskill_error` includes `name` and `error`. These events appear when `run_metaskill` is called.
+For Agent MetaSKILL events: `metaskill_start` includes `name` and `language`. `metaskill_step` includes `operation` (`ask` or `command`), `purpose` or `argv`, `duration_s`, and `success`.
+
+`metaskill_finish` includes `name`, `status`, and `duration_s`. `metaskill_error` includes `name` and `error`. These events appear when `run_metaskill` is called.
 
 ## Benchmarking Workflow
 

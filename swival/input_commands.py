@@ -113,10 +113,21 @@ INPUT_COMMANDS: dict[str, CommandInfo] = {
         kind="agent_turn",
     ),
     "/loop": CommandInfo(
-        desc="Run a prompt or command on a recurring interval",
+        desc="Run a plain prompt on a recurring interval (no slash bodies)",
         arg="[interval] <prompt>",
         kind="agent_turn",
         modes=("repl", "oneshot"),
+    ),
+    "/loops": CommandInfo(
+        desc="List active background loops (REPL only)",
+        kind="info",
+        modes=("repl",),
+    ),
+    "/unloop": CommandInfo(
+        desc="Cancel a background loop by id, or 'all'",
+        arg="<id|all>",
+        kind="state_change",
+        modes=("repl",),
     ),
     "/new": CommandInfo(
         desc="Reset conversation to initial state",

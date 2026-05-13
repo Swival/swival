@@ -41,7 +41,9 @@ At startup, Swival estimates the total token cost of all tool schemas. If they e
 
 The snapshot tool is the centerpiece of Swival's context management. It lets the agent compress its own investigation history on demand.
 
-A typical workflow looks like this: the agent reads 8 files and greps through logs to debug an authentication failure. All those reads add up to maybe 12K tokens sitting in the conversation — content the agent has already processed and drawn conclusions from. The agent calls `snapshot restore` with a summary like "Root cause: missing null check in auth/parser.py:142. Fix: guard with `if token is None: return default_token`." The 12K tokens of reads collapse to about 200 tokens. The agent continues with a clean context window.
+A typical workflow looks like this: the agent reads 8 files and greps through logs to debug an authentication failure. All those reads add up to maybe 12K tokens sitting in the conversation, content the agent has already processed and drawn conclusions from.
+
+The agent calls `snapshot restore` with a summary like "Root cause: missing null check in auth/parser.py:142. Fix: guard with `if token is None: return default_token`." The 12K tokens of reads collapse to about 200 tokens. The agent continues with a clean context window.
 
 ### Save and Restore
 
@@ -72,7 +74,9 @@ When the context overflows — either detected before the LLM call or reported b
 
 ### Level 1: Shrink Tool Results
 
-The gentlest approach. Old tool results (everything except the two most recent turns) are replaced with structured summaries. A file read becomes `[read_file: path, N lines — content compacted]`. A batched read becomes `[read_multiple_files: path1, path2, …, N chars — compacted]`. A grep becomes `[grep: 'pattern' in path, ~N matches — compacted]`. Command output keeps its first and last 200 characters.
+The gentlest approach. Old tool results (everything except the two most recent turns) are replaced with structured summaries.
+
+A file read becomes `[read_file: path, N lines — content compacted]`. A batched read becomes `[read_multiple_files: path1, path2, …, N chars — compacted]`. A grep becomes `[grep: 'pattern' in path, ~N matches — compacted]`. Command output keeps its first and last 200 characters.
 
 The agent retains all its turns and the structure of what it did. It loses the detailed content but keeps the metadata.
 

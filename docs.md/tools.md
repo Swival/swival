@@ -1,6 +1,10 @@
 # Tools
 
-Swival gives the model a fixed set of tools at runtime. Most tools are always available. Command execution tools are included by default (commands default to `"all"`): `run_command` takes an argv array and is available in all command modes, while `run_shell_command` takes a shell string and is only available with `--commands all` or `--yolo`. Pass `--commands none` to remove both, or `--commands ask` for interactive approval (argv-only, no shell). `use_skill` appears only when skills are discovered, MCP tools appear when external MCP servers are configured, and A2A tools appear when remote A2A agents are configured.
+Swival gives the model a fixed set of tools at runtime. Most tools are always available.
+
+Command execution tools are included by default (commands default to `"all"`): `run_command` takes an argv array and is available in all command modes, while `run_shell_command` takes a shell string and is only available with `--commands all` or `--yolo`. Pass `--commands none` to remove both, or `--commands ask` for interactive approval (argv-only, no shell).
+
+`use_skill` appears only when skills are discovered, MCP tools appear when external MCP servers are configured, and A2A tools appear when remote A2A agents are configured.
 
 ## `read_file`
 
@@ -32,7 +36,9 @@ When `move_from` is used and no `content` is provided, Swival moves the source p
 
 Matching is done in three passes. Swival tries an exact string match first. If that fails, it retries with per-line trimmed matching so leading and trailing whitespace differences do not break the edit. If that still fails, it retries with Unicode normalization so smart quotes, em dashes, and ellipsis variants map to ASCII equivalents.
 
-When multiple matches are found and `replace_all` is false, the call fails with an error that nudges the model toward `line_number`. The optional `line_number` parameter accepts a 1-based line number from `read_file` output. When provided, Swival filters candidate matches to only those whose span includes that line. This is the preferred way to disambiguate repeated matches — the model copies the line number it just read rather than expanding `old_string` with more context. If no match touches the requested line, the error lists the actual candidate lines so the model can retry with the right one. `replace_all` ignores `line_number`.
+When multiple matches are found and `replace_all` is false, the call fails with an error that nudges the model toward `line_number`. The optional `line_number` parameter accepts a 1-based line number from `read_file` output. When provided, Swival filters candidate matches to only those whose span includes that line.
+
+This is the preferred way to disambiguate repeated matches: the model copies the line number it just read rather than expanding `old_string` with more context. If no match touches the requested line, the error lists the actual candidate lines so the model can retry with the right one. `replace_all` ignores `line_number`.
 
 ## `delete_file`
 
@@ -60,7 +66,11 @@ Pass `file_path` for a single file, or `files` for a batch (up to 20 files). The
 
 `think` is structured scratchpad reasoning. It lets the model capture numbered thoughts, revise earlier thoughts, and branch from a prior thought to compare alternative approaches. This is especially helpful for debugging and multi-step refactors.
 
-The only required parameter is `thought`. Everything else is optional. `thought_number` is a 1-based step number that auto-increments if omitted. `total_thoughts` is the estimated total steps needed, defaulting to 3 on the first call and then carrying forward. `next_thought_needed` is a boolean that defaults to true — set it to false when done thinking. A `mode` parameter (`"new"`, `"revision"`, `"branch"`) selects the type of thought. Revision mode requires `revises_thought` to reference an earlier thought number. Branch mode requires `branch_from_thought` plus a `branch_id` label.
+The only required parameter is `thought`. Everything else is optional.
+
+`thought_number` is a 1-based step number that auto-increments if omitted. `total_thoughts` is the estimated total steps needed, defaulting to 3 on the first call and then carrying forward. `next_thought_needed` is a boolean that defaults to true: set it to false when done thinking.
+
+A `mode` parameter (`"new"`, `"revision"`, `"branch"`) selects the type of thought. Revision mode requires `revises_thought` to reference an earlier thought number. Branch mode requires `branch_from_thought` plus a `branch_id` label.
 
 The tool applies tolerant coercion so models that send extra or contradictory fields don't get stuck in validation loops. Incompatible fields are stripped based on the inferred mode, and corrective error messages include valid thought numbers when a reference is wrong.
 
@@ -84,7 +94,9 @@ This tool is only available when the model supports vision. Swival checks vision
 
 ## `fetch_url`
 
-`fetch_url` downloads HTTP or HTTPS content and returns it as markdown, plain text, or raw HTML. It is designed for documentation lookup and API reference pulls. Binary content types are rejected. The `format` parameter selects the output format: `"markdown"` (default), `"text"`, or `"html"`. The `timeout` parameter sets the request timeout in seconds (1–120, default 30).
+`fetch_url` downloads HTTP or HTTPS content and returns it as markdown, plain text, or raw HTML. It is designed for documentation lookup and API reference pulls. Binary content types are rejected.
+
+The `format` parameter selects the output format: `"markdown"` (default), `"text"`, or `"html"`. The `timeout` parameter sets the request timeout in seconds (1–120, default 30).
 
 Raw response bodies are capped at 5 MB, and inline output is capped at 50 KB. Larger converted outputs are saved under `.swival/` so the agent can page through them with `read_file`.
 
@@ -202,13 +214,17 @@ This tool is only available when subagent support is enabled.
 
 ## MCP Tools
 
-Swival can connect to external tool servers via the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP). MCP tools are discovered at startup and exposed alongside built-in tools. MCP tool output is size-guarded: results up to 20 KB are returned inline, larger results are saved to `.swival/` for paginated reads via `read_file`, and output is hard-capped at 10 MB. All MCP output is wrapped with an `[UNTRUSTED EXTERNAL CONTENT]` header, including spill files.
+Swival can connect to external tool servers via the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP). MCP tools are discovered at startup and exposed alongside built-in tools.
+
+MCP tool output is size-guarded: results up to 20 KB are returned inline, larger results are saved to `.swival/` for paginated reads via `read_file`, and output is hard-capped at 10 MB. All MCP output is wrapped with an `[UNTRUSTED EXTERNAL CONTENT]` header, including spill files.
 
 See [MCP](mcp.md) for configuration and details.
 
 ## A2A Tools
 
-Swival can connect to remote agents via the [Agent-to-Agent (A2A) protocol](https://google.github.io/A2A/). A2A tools are discovered at startup and exposed alongside built-in tools. Unlike MCP tools, A2A tools always accept a natural-language `message` plus optional `context_id` and `task_id` for multi-turn conversations. A2A tool output is size-guarded the same way as MCP output, with continuation metadata preserved across size limits and context compaction. All A2A output is wrapped with an `[UNTRUSTED EXTERNAL CONTENT]` header, including spill files.
+Swival can connect to remote agents via the [Agent-to-Agent (A2A) protocol](https://google.github.io/A2A/). A2A tools are discovered at startup and exposed alongside built-in tools.
+
+Unlike MCP tools, A2A tools always accept a natural-language `message` plus optional `context_id` and `task_id` for multi-turn conversations. A2A tool output is size-guarded the same way as MCP output, with continuation metadata preserved across size limits and context compaction. All A2A output is wrapped with an `[UNTRUSTED EXTERNAL CONTENT]` header, including spill files.
 
 See [A2A](a2a.md) for configuration and details.
 

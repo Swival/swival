@@ -432,8 +432,8 @@ reporting. Shell strings are not part of the portable API.</p>
 }
 </code></pre>
 <p><code>ok</code> MUST be true only when the command was allowed, started, did not time out,
-and exited successfully. <code>exit_code</code> SHOULD be the process exit code when known.
-<code>result</code> MUST be a string. Host-level failures SHOULD use an <code>error:</code> prefix in
+and exited successfully. <code>exit_code</code> SHOULD be the process exit code when known.</p>
+<p><code>result</code> MUST be a string. Host-level failures SHOULD use an <code>error:</code> prefix in
 <code>result</code>. <code>truncated</code> MUST be true when <code>result</code> was shortened before returning
 to the metaskill.</p>
 <h3 id="tracekind-data"><code>trace(kind, data={})</code></h3>

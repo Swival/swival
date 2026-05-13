@@ -43,11 +43,17 @@ Swival checks these locations for skills, in precedence order:
 4. `~/.config/swival/skills/` (or `$XDG_CONFIG_HOME/swival/skills/`) — global Swival skills
 5. `~/.agents/skills/` — global cross-agent skills (lowest precedence)
 
-Every immediate subdirectory that contains `SKILL.md` is treated as a skill. If the same skill name exists in multiple locations, the first one in the precedence order wins. Skills in project-local locations are normally shown with file paths in the catalog and need no allowlist entries. The exception is symlinks: if `.agents` or a skill directory symlinks to a path outside the project root, those skills resolve as external and follow external-skill access rules instead.
+Every immediate subdirectory that contains `SKILL.md` is treated as a skill. If the same skill name exists in multiple locations, the first one in the precedence order wins.
+
+Skills in project-local locations are normally shown with file paths in the catalog and need no allowlist entries. The exception is symlinks: if `.agents` or a skill directory symlinks to a path outside the project root, those skills resolve as external and follow external-skill access rules instead.
 
 ### Global skills
 
-Place skill directories in `~/.config/swival/skills/` (or `$XDG_CONFIG_HOME/swival/skills/`) for Swival-specific global skills, or in `~/.agents/skills/` for skills shared across agents. Both are scanned automatically. Global skills have the lowest precedence, so any project-local skill or `--skills-dir` skill with the same name takes priority. Global skills are typically outside the project, so they resolve as non-local: they don't show file paths in the catalog and are auto-added to the read-only allowlist at setup time. In the unusual case where a global path resolves inside the project (e.g. via symlinks), they behave as local skills instead.
+Place skill directories in `~/.config/swival/skills/` (or `$XDG_CONFIG_HOME/swival/skills/`) for Swival-specific global skills, or in `~/.agents/skills/` for skills shared across agents. Both are scanned automatically.
+
+Global skills have the lowest precedence, so any project-local skill or `--skills-dir` skill with the same name takes priority.
+
+Global skills are typically outside the project, so they resolve as non-local: they don't show file paths in the catalog and are auto-added to the read-only allowlist at setup time. In the unusual case where a global path resolves inside the project (e.g. via symlinks), they behave as local skills instead.
 
 ### Extra skill directories
 

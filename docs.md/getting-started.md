@@ -72,7 +72,9 @@ By default, Swival connects to `http://127.0.0.1:1234`, queries LM Studio for th
 
 ## What Happens Internally
 
-When you run a task against LM Studio, Swival first calls `/api/v1/models` to discover the loaded model and context size. It then builds a system prompt that includes tool definitions and workspace context, sends your task to the model, and enters the agent loop where the model can read files, edit files, search, and continue tool-calling until it finishes. When the model returns a final text answer with no more tool calls, Swival prints that answer to standard output and exits.
+When you run a task against LM Studio, Swival first calls `/api/v1/models` to discover the loaded model and context size. It then builds a system prompt that includes tool definitions and workspace context, sends your task to the model, and enters the agent loop where the model can read files, edit files, search, and continue tool-calling until it finishes.
+
+When the model returns a final text answer with no more tool calls, Swival prints that answer to standard output and exits.
 
 Diagnostic logs such as turn headers, tool traces, and timing information are written to standard error, which keeps standard output clean for piping into other tools.
 
@@ -206,4 +208,8 @@ For a deeper look at Bedrock-specific options, see [Providers](providers.md).
 
 If you want the full command surface and mode behavior, continue with [Usage](usage.md). If you want a deeper look at built-in capabilities, read [Tools](tools.md). If you need to understand trust boundaries before enabling stronger actions, read [Safety and Sandboxing](safety-and-sandboxing.md).
 
-If you want to understand how Swival fits large tasks into small context windows, read [Context Management](context-management.md). If you want to connect external tool servers via MCP, see [MCP](mcp.md). If you want to browse the web, see [Web Browsing](web-browsing.md). If you want to connect to remote agents via the A2A protocol, or expose Swival as an A2A server, see [A2A](a2a.md). If you want to drive Swival from an ACP-aware editor such as Zed or the `agent-client-protocol.nvim` plugin, see [ACP](acp.md). If you want copy-on-write isolation so you can review and apply changes only when ready, read [Using Swival with AgentFS](agentfs.md). If you want to run a staged security audit over your codebase, see [Security Audit](audit.md).
+If you want to understand how Swival fits large tasks into small context windows, read [Context Management](context-management.md). If you want to connect external tool servers via MCP, see [MCP](mcp.md). If you want to browse the web, see [Web Browsing](web-browsing.md).
+
+If you want to connect to remote agents via the A2A protocol, or expose Swival as an A2A server, see [A2A](a2a.md). If you want to drive Swival from an ACP-aware editor such as Zed or the `agent-client-protocol.nvim` plugin, see [ACP](acp.md).
+
+If you want copy-on-write isolation so you can review and apply changes only when ready, read [Using Swival with AgentFS](agentfs.md). If you want to run a staged security audit over your codebase, see [Security Audit](audit.md).

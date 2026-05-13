@@ -184,7 +184,8 @@ brew uninstall swival     # if installed with Homebrew
 </code></pre>
 <p>By default, Swival connects to <code>http://127.0.0.1:1234</code>, queries LM Studio for the currently loaded model, and uses that model automatically.</p>
 <h2 id="what-happens-internally">What Happens Internally</h2>
-<p>When you run a task against LM Studio, Swival first calls <code>/api/v1/models</code> to discover the loaded model and context size. It then builds a system prompt that includes tool definitions and workspace context, sends your task to the model, and enters the agent loop where the model can read files, edit files, search, and continue tool-calling until it finishes. When the model returns a final text answer with no more tool calls, Swival prints that answer to standard output and exits.</p>
+<p>When you run a task against LM Studio, Swival first calls <code>/api/v1/models</code> to discover the loaded model and context size. It then builds a system prompt that includes tool definitions and workspace context, sends your task to the model, and enters the agent loop where the model can read files, edit files, search, and continue tool-calling until it finishes.</p>
+<p>When the model returns a final text answer with no more tool calls, Swival prints that answer to standard output and exits.</p>
 <p>Diagnostic logs such as turn headers, tool traces, and timing information are written to standard error, which keeps standard output clean for piping into other tools.</p>
 <h2 id="passing-the-task-on-stdin">Passing The Task On Stdin</h2>
 <p>If you omit the positional task and pipe stdin, Swival reads the task from stdin. On an interactive terminal with no task, Swival enters REPL mode automatically.</p>
@@ -258,7 +259,9 @@ swival &quot;Hello world&quot; --provider bedrock --model global.anthropic.claud
 <p>For a deeper look at Bedrock-specific options, see <a href="providers.html">Providers</a>.</p>
 <h2 id="where-to-go-next">Where To Go Next</h2>
 <p>If you want the full command surface and mode behavior, continue with <a href="usage.html">Usage</a>. If you want a deeper look at built-in capabilities, read <a href="tools.html">Tools</a>. If you need to understand trust boundaries before enabling stronger actions, read <a href="safety-and-sandboxing.html">Safety and Sandboxing</a>.</p>
-<p>If you want to understand how Swival fits large tasks into small context windows, read <a href="context-management.html">Context Management</a>. If you want to connect external tool servers via MCP, see <a href="mcp.html">MCP</a>. If you want to browse the web, see <a href="web-browsing.html">Web Browsing</a>. If you want to connect to remote agents via the A2A protocol, or expose Swival as an A2A server, see <a href="a2a.html">A2A</a>. If you want to drive Swival from an ACP-aware editor such as Zed or the <code>agent-client-protocol.nvim</code> plugin, see <a href="acp.html">ACP</a>. If you want copy-on-write isolation so you can review and apply changes only when ready, read <a href="agentfs.html">Using Swival with AgentFS</a>. If you want to run a staged security audit over your codebase, see <a href="audit.html">Security Audit</a>.</p>
+<p>If you want to understand how Swival fits large tasks into small context windows, read <a href="context-management.html">Context Management</a>. If you want to connect external tool servers via MCP, see <a href="mcp.html">MCP</a>. If you want to browse the web, see <a href="web-browsing.html">Web Browsing</a>.</p>
+<p>If you want to connect to remote agents via the A2A protocol, or expose Swival as an A2A server, see <a href="a2a.html">A2A</a>. If you want to drive Swival from an ACP-aware editor such as Zed or the <code>agent-client-protocol.nvim</code> plugin, see <a href="acp.html">ACP</a>.</p>
+<p>If you want copy-on-write isolation so you can review and apply changes only when ready, read <a href="agentfs.html">Using Swival with AgentFS</a>. If you want to run a staged security audit over your codebase, see <a href="audit.html">Security Audit</a>.</p>
         </article>
     </div>
     <footer class="site-footer">

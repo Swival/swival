@@ -312,6 +312,7 @@ Return value:
 
 `ok` MUST be true only when the command was allowed, started, did not time out,
 and exited successfully. `exit_code` SHOULD be the process exit code when known.
+
 `result` MUST be a string. Host-level failures SHOULD use an `error:` prefix in
 `result`. `truncated` MUST be true when `result` was shortened before returning
 to the metaskill.

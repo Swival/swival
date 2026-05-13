@@ -33,7 +33,9 @@ swival --commands ls,git,python3 \
     "Create a tool that returns a random number between 0 and 42"
 ```
 
-`--commands` accepts `"all"` (unrestricted, the default), `"none"` (disabled), `"ask"` (interactive per-bucket approval), or a comma-separated whitelist. With `--commands all` or `--yolo`, Swival exposes both `run_command` (array argv) and `run_shell_command` (shell string with pipes, redirects, etc.). In ask and whitelist modes, only `run_command` is available. Pass `--commands none` to remove both tools entirely. Pass `--commands ask` to approve each command category interactively.
+`--commands` accepts `"all"` (unrestricted, the default), `"none"` (disabled), `"ask"` (interactive per-bucket approval), or a comma-separated whitelist. With `--commands all` or `--yolo`, Swival exposes both `run_command` (array argv) and `run_shell_command` (shell string with pipes, redirects, etc.). In ask and whitelist modes, only `run_command` is available.
+
+Pass `--commands none` to remove both tools entirely. Pass `--commands ask` to approve each command category interactively.
 
 A successful run exits with code `0`. A runtime or configuration failure exits with code `1`. A run that reaches the turn limit before finishing exits with code `2`. A run interrupted with Ctrl+C exits with code `130`. A run terminated by SIGTERM exits with code `143`.
 
@@ -58,7 +60,7 @@ swival --oneshot-commands "/status"
 swival --oneshot-commands $'/profile fast\n/simplify swival/agent.py'
 ```
 
-Without `--oneshot-commands`, input that looks like a command script is treated as a plain natural-language prompt. A few commands (`/continue`, `/copy`, `!!`) are REPL-only and are rejected even with `--oneshot-commands`. Most other commands, including `/loop`, work in both modes.
+Without `--oneshot-commands`, input that looks like a command script is treated as a plain natural-language prompt. A few commands (`/continue`, `/copy`, `/loops`, `/unloop`, `!!`) are REPL-only and are rejected even with `--oneshot-commands`. Most other commands, including `/loop`, work in both modes.
 
 `/help` prints the command reference in the terminal.
 
@@ -78,29 +80,43 @@ Without `--oneshot-commands`, input that looks like a command script is treated 
 
 `/extend` doubles the current turn budget. `/extend <N>` sets the turn budget to an exact value.
 
-`/goal <objective>` puts the REPL into a persistent goal mode and keeps driving toward that objective across turns until the model calls `complete_goal`, declares a blocker, or `--max-turns` is hit. Use a regular prompt for "answer or do this now"; use `/goal` for "keep working on this until it is actually done." `/goal` with no argument prints the current status; `/goal replace`, `/goal pause`, `/goal resume`, and `/goal clear` manage the active goal. See [Goals](goal.md) for the full walkthrough, examples, and budget behavior.
+`/goal <objective>` puts the REPL into a persistent goal mode and keeps driving toward that objective across turns until the model calls `complete_goal`, declares a blocker, or `--max-turns` is hit. Use a regular prompt for "answer or do this now"; use `/goal` for "keep working on this until it is actually done."
+
+`/goal` with no argument prints the current status; `/goal replace`, `/goal pause`, `/goal resume`, and `/goal clear` manage the active goal. See [Goals](goal.md) for the full walkthrough, examples, and budget behavior.
 
 `/continue` restarts the agent loop for the existing conversation without adding a new user message.
 
-`/loop <interval> <prompt-or-command>` runs a prompt on a recurring interval until you stop it.
+`/loop [interval] <prompt>` schedules a plain prompt to run on a recurring interval. The body must be plain natural-language text; slash commands and `!custom-command` bodies are rejected at registration time. Run those manually instead.
 
 The interval grammar is forgiving: the compact form (`5m`, `30s`, `1h30m`) still works, and so do natural-language shapes like `1 min`, `5 minutes`, `30 sec`, `every hour`, `every 5 minutes`, `a minute`, `half an hour`, and components joined by `and` such as `1 minute and 30 seconds`. The 5-second floor and 24-hour ceiling still apply.
 
-If the input never looks like an interval, the whole argument becomes the prompt and the interval defaults to 10 minutes. If it begins as an interval but is malformed (repeated units, trailing `and`, `every` followed by nothing, bounds violation, etc.) the command errors rather than silently scheduling the wrong prompt.
+If the input never looks like an interval, the whole argument becomes the prompt and the interval defaults to 10 minutes. If it begins as an interval but is malformed, the command errors rather than silently scheduling the wrong prompt.
 
-The prompt can be plain text, a slash command, or a `!custom-command`. Each iteration goes through the same dispatch path as if you typed it yourself, so state (todo list, snapshot, file tracker) carries forward across runs. `Ctrl-C` once skips the current iteration; press it twice within two seconds to exit the loop.
+In REPL mode `/loop` is a background scheduler. Registration runs the first iteration immediately, then returns the prompt to you. Subsequent iterations fire between your commands when their interval has elapsed, each in a snapshot of the live session: the iteration sees the current conversation but its own messages, todos, thinking notes, snapshot state, file tracker, and goal state are discarded at the end.
 
-Works in one-shot mode too, which is the recommended way to run Swival as a long-lived poller under `systemd`, `tmux`, or `nohup`: each iteration's answer is streamed to stdout with a blank-line separator, diagnostics go to stderr, and `SIGTERM` shuts the loop down cleanly between iterations (a second `SIGTERM` exits immediately with code 143).
+The live transcript is never mutated, and iterations do not write to `.swival/HISTORY.md` or the continue file. Filesystem effects (files written, MCP calls, etc.) are real and not rolled back.
+
+Up to four loops can be registered at once. Loops are in-memory only and are cancelled by `/clear`, `/new`, `/init`, and process exit; they are not persisted across restarts. After three consecutive failures a loop emits a warning, and after six it is auto-cancelled with a footer that includes the last error.
+
+`/loops` lists active schedules with their next fire time and any consecutive-failure count. `/unloop <id>` cancels one schedule by its integer id; `/unloop all` clears them all. `/status` shows a `loops: N active` line when any are registered, plus a per-loop breakdown in verbose mode.
+
+In one-shot mode `/loop` keeps the existing foreground-blocking behaviour, which is the recommended way to run Swival as a long-lived poller under `systemd`, `tmux`, or `nohup`. Each iteration's answer is streamed to stdout with a blank-line separator, diagnostics go to stderr, and `SIGTERM` shuts the loop down cleanly between iterations (a second `SIGTERM` exits immediately with code 143).
+
+`Ctrl-C` once skips the current iteration; press it twice within two seconds to exit the loop. The same slash-body restriction applies.
 
 ```sh
-swival --oneshot-commands '/loop 5m /babysit-prs'
-swival --oneshot-commands '/loop every hour /audit'
+swival --oneshot-commands '/loop 5m check open PRs and summarize blockers'
+swival --oneshot-commands '/loop every hour run the build and report failures'
 swival --oneshot-commands '/loop 30 sec check git status and report unusual activity'
 ```
 
-`/status` shows a compact session overview: model, endpoint, context usage, message/turn counts, file access, mode flags, and state summaries (thinking, todo, snapshot, checkpoints, continue file).
+`/status` shows a compact session overview: model, endpoint, context usage, message/turn counts, file access, mode flags, and state summaries (thinking, todo, snapshot, active loops, checkpoints, continue file).
 
-`/audit [path|glob ...]` runs a staged security audit over committed Git-tracked code. It triages files by attack surface, deep-reviews escalated files, verifies each finding with an isolated proof-of-concept agent, and writes patches and reports to `audit-findings/`. Pass `--resume` to continue a previous run (including retrying failed Phase 5 artifacts), `--regen` to regenerate reports and patches for a completed run, `--regen --finding N[,M-R]` to regenerate only selected findings by their 1-based Phase 5 number, `--all` to skip the triage selection and deep-review every file in scope, `--measure-triage` to calibrate triage recall by deep-reviewing every file and tagging findings with their triage decision, `--workers N` to control parallelism, `--patch-max-turns N` to set the Phase 5 patch-generation turn budget (default 50), and `--debug` to write a real-time JSONL debug log to `.swival/audit/debug.jsonl`. Multiple paths or globs can be passed in a single invocation; they are unioned into one run. Works in interactive (REPL) mode and in one-shot mode when `--oneshot-commands` is set. See [Security Audit](audit.md) for the full walkthrough.
+`/audit [path|glob ...]` runs a staged security audit over committed Git-tracked code. It triages files by attack surface, deep-reviews escalated files, verifies each finding with an isolated proof-of-concept agent, and writes patches and reports to `audit-findings/`.
+
+Pass `--resume` to continue a previous run (including retrying failed Phase 5 artifacts), `--regen` to regenerate reports and patches for a completed run, `--regen --finding N[,M-R]` to regenerate only selected findings by their 1-based Phase 5 number, `--all` to skip the triage selection and deep-review every file in scope, `--measure-triage` to calibrate triage recall by deep-reviewing every file and tagging findings with their triage decision, `--workers N` to control parallelism, `--patch-max-turns N` to set the Phase 5 patch-generation turn budget (default 50), and `--debug` to write a real-time JSONL debug log to `.swival/audit/debug.jsonl`.
+
+Multiple paths or globs can be passed in a single invocation; they are unioned into one run. Works in interactive (REPL) mode and in one-shot mode when `--oneshot-commands` is set. See [Security Audit](audit.md) for the full walkthrough.
 
 `/learn` reviews the current session for mistakes and confusions, then persists notes to `.swival/memory/MEMORY.md` for future sessions to learn from. On subsequent runs, memory entries are parsed by heading and selectively injected into the prompt using BM25 retrieval keyed from the user's question, keeping memory token cost bounded.
 
@@ -202,7 +218,9 @@ Useful for long-running sessions.
 
 `--sandbox-session` sets an AgentFS session ID so sandbox state persists across runs. Only valid with `--sandbox agentfs`.
 
-`--sandbox-strict-read` enables strict read isolation inside the AgentFS sandbox. When set, the agent process can only read files that have been explicitly allowed, rather than having unrestricted read access to the host filesystem. This requires an AgentFS version with strict read support. If the installed version does not support it, Swival exits with an error. Only valid with `--sandbox agentfs`.
+`--sandbox-strict-read` enables strict read isolation inside the AgentFS sandbox. When set, the agent process can only read files that have been explicitly allowed, rather than having unrestricted read access to the host filesystem.
+
+This requires an AgentFS version with strict read support. If the installed version does not support it, Swival exits with an error. Only valid with `--sandbox agentfs`.
 
 `--no-sandbox-auto-session` disables the automatic session ID that Swival generates when `--sandbox agentfs` is used without an explicit `--sandbox-session`. By default, Swival derives a deterministic session ID from the project directory so that re-running in the same directory reuses the overlay automatically. Pass this flag to get a fresh, ephemeral overlay each time.
 

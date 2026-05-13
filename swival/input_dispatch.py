@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from .goal import GoalState
+    from .loops import LoopRegistry
     from .snapshot import SnapshotState
     from .thinking import ThinkingState
     from .todo import TodoState
@@ -52,6 +53,7 @@ class InputContext:
     skills_catalog: dict = field(default_factory=dict)
     is_subagent: bool = False
     trace_dir: str | None = None
+    loop_registry: "LoopRegistry | None" = None
 
 
 @dataclass

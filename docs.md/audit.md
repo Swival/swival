@@ -27,7 +27,9 @@ swival> /audit src/*.py
 swival> /audit src/**/*.py
 ```
 
-The matcher uses `pathlib.PurePosixPath.full_match` for any pattern that contains a wildcard. A bare `*` does not cross directory separators, so `src/*.py` matches only direct children of a top-level `src/` directory. Use `**` when you want recursion: `src/**/*.py` matches every `.py` file at any depth under `src/`. As a convenience, a wildcard pattern with no `/` is treated as recursive on its own, so `*.py` still selects every Python file in the repository.
+The matcher uses `pathlib.PurePosixPath.full_match` for any pattern that contains a wildcard. A bare `*` does not cross directory separators, so `src/*.py` matches only direct children of a top-level `src/` directory.
+
+Use `**` when you want recursion: `src/**/*.py` matches every `.py` file at any depth under `src/`. As a convenience, a wildcard pattern with no `/` is treated as recursive on its own, so `*.py` still selects every Python file in the repository.
 
 Multiple paths can be passed; they are unioned into a single audit run with one
 state file and one set of reports:
@@ -123,7 +125,9 @@ audit-findings/
   002-missing-null-check-in-parser.patch
 ```
 
-Each verified finding is assigned a stable index when it is first reached, and that index sticks across retries: if patch generation runs out of turns, the next attempt writes `002-...` for the same finding rather than consuming a new number. Patch failures, report exceptions, and write errors are all persisted as retryable Phase 5 state, so an audit that finishes Phase 4 but stumbles in Phase 5 stays resumable. See [Options](#options) for `--patch-max-turns` and the targeted `--regen --finding` form.
+Each verified finding is assigned a stable index when it is first reached, and that index sticks across retries: if patch generation runs out of turns, the next attempt writes `002-...` for the same finding rather than consuming a new number.
+
+Patch failures, report exceptions, and write errors are all persisted as retryable Phase 5 state, so an audit that finishes Phase 4 but stumbles in Phase 5 stays resumable. See [Options](#options) for `--patch-max-turns` and the targeted `--regen --finding` form.
 
 ## Report Format
 
@@ -161,7 +165,9 @@ Saved audit state from versions before Phase 5 artifact retry is not supported a
 swival> /audit --resume
 ```
 
-`--regen` regenerates reports and patches for a completed audit run. It reuses the verified findings from the original run and re-runs only phase 5 (artifact generation). This is useful when you want to improve patch quality without repeating the expensive triage, deep review, and verification phases. Use `--finding` with 1-based Phase 5 finding numbers to regenerate only selected artifacts. `--finding` requires `--regen` and is rejected if you pass it on a fresh run.
+`--regen` regenerates reports and patches for a completed audit run. It reuses the verified findings from the original run and re-runs only phase 5 (artifact generation). This is useful when you want to improve patch quality without repeating the expensive triage, deep review, and verification phases.
+
+Use `--finding` with 1-based Phase 5 finding numbers to regenerate only selected artifacts. `--finding` requires `--regen` and is rejected if you pass it on a fresh run.
 
 ```text
 swival> /audit --regen
@@ -175,11 +181,17 @@ swival> /audit --regen --finding 2,4-6
 swival> /audit --all swival/
 ```
 
-The flag composes with focus paths and is best paired with one: bare `/audit --all` deep-reviews every auditable file in the repo, which on a non-tiny project is expensive. It is recorded on the run when it starts and is *not* part of the resume-matching key. A bare `/audit --resume` will pick up an `--all` run, and passing `--all` on a resume invocation has no effect (the persisted value wins). When more than one matching run exists, `--resume` picks the most recently modified one, so a fresh `--all` run shadows an older non-`--all` run with the same scope.
+The flag composes with focus paths and is best paired with one: bare `/audit --all` deep-reviews every auditable file in the repo, which on a non-tiny project is expensive.
+
+It is recorded on the run when it starts and is *not* part of the resume-matching key. A bare `/audit --resume` will pick up an `--all` run, and passing `--all` on a resume invocation has no effect (the persisted value wins). When more than one matching run exists, `--resume` picks the most recently modified one, so a fresh `--all` run shadows an older non-`--all` run with the same scope.
 
 Triage occasionally catches that a file is vendored or generated and skips it. With `--all`, those files reach Phase 3 anyway and burn LLM calls there; scope `--all` to directories you actually wrote.
 
-`--measure-triage` is a calibration mode for the Phase 2 selector. It runs Phase 2 normally, snapshots which files were escalated, then deep-reviews every file in scope (the `--all` set). Each verified finding is tagged with whether its source file was escalated or skipped by triage. The Phase 5 output ends with a recall section that counts findings on skipped files: those are the false negatives. Use this to quantify recall before or after tuning promotion thresholds. The mode is expensive (it pays the full `--all` cost plus an extra Phase 2), so it is a calibration tool, not a default. A run started with `--measure-triage` cannot be resumed without it (and vice versa); start a fresh run instead.
+`--measure-triage` is a calibration mode for the Phase 2 selector. It runs Phase 2 normally, snapshots which files were escalated, then deep-reviews every file in scope (the `--all` set).
+
+Each verified finding is tagged with whether its source file was escalated or skipped by triage. The Phase 5 output ends with a recall section that counts findings on skipped files: those are the false negatives. Use this to quantify recall before or after tuning promotion thresholds.
+
+The mode is expensive (it pays the full `--all` cost plus an extra Phase 2), so it is a calibration tool, not a default. A run started with `--measure-triage` cannot be resumed without it (and vice versa); start a fresh run instead.
 
 ```text
 swival> /audit --measure-triage swival/
@@ -224,7 +236,9 @@ swival> /audit src/api/ --regen
 force_review = ["swival/audit.py", "swival/edit.py", "swival/sandbox_*.py"]
 ```
 
-`force_review` is a list of path globs evaluated against repo-relative paths from `git ls-files`, using the same matcher as `/audit` focus arguments (see "Filtering" below for the full rules). A trailing `/` on a non-wildcard entry expands to the directory and everything below it (`src/` matches `src/a.py`, `src/sub/b.py`, and so on); a single `*` does not cross `/`, so `src/*.py` matches only direct children, while `src/**/*.py` recurses. Matching files are unconditionally promoted into Phase 3, regardless of what triage decides. It is the surgical alternative to `--all` for paths you always want deep-reviewed.
+`force_review` is a list of path globs evaluated against repo-relative paths from `git ls-files`, using the same matcher as `/audit` focus arguments (see "Filtering" below for the full rules). A trailing `/` on a non-wildcard entry expands to the directory and everything below it (`src/` matches `src/a.py`, `src/sub/b.py`, and so on); a single `*` does not cross `/`, so `src/*.py` matches only direct children, while `src/**/*.py` recurses.
+
+Matching files are unconditionally promoted into Phase 3, regardless of what triage decides. It is the surgical alternative to `--all` for paths you always want deep-reviewed.
 
 A glob in the project file that matches zero paths in scope produces a warning, since it usually means a stale entry after a rename. Globs in the global file are silent on zero matches, on the assumption that a global glob like `swival/audit.py` will trivially miss in unrelated repositories. Globs from both files are merged: project entries layer on top of global entries.
 

@@ -103,11 +103,14 @@
 <p>This pattern works well for automated gates such as tests, linting, format checks, schema checks, or LLM-as-a-judge scoring. <code>--reviewer</code> is incompatible with <code>--repl</code>.</p>
 <h2 id="reviewer-protocol">Reviewer Protocol</h2>
 <p>Swival invokes the reviewer by shell-splitting the command string and appending <code>&lt;base_dir&gt;</code> as the final argument. The full assistant answer is written to reviewer standard input.</p>
-<p>If the reviewer exits with code <code>0</code>, Swival accepts the answer immediately and ends normally. If the reviewer exits with code <code>1</code>, Swival treats reviewer standard output as feedback, appends that feedback as a new user message, resets turn budget for a new pass, and continues the loop. If the reviewer exits with code <code>2</code>, Swival treats that as reviewer failure, warns on standard error when diagnostics are enabled, and accepts the current answer unchanged. Any other nonzero exit code is handled the same way as <code>2</code>.</p>
+<p>If the reviewer exits with code <code>0</code>, Swival accepts the answer immediately and ends normally.</p>
+<p>If the reviewer exits with code <code>1</code>, Swival treats reviewer standard output as feedback, appends that feedback as a new user message, resets turn budget for a new pass, and continues the loop.</p>
+<p>If the reviewer exits with code <code>2</code>, Swival treats that as reviewer failure, warns on standard error when diagnostics are enabled, and accepts the current answer unchanged. Any other nonzero exit code is handled the same way as <code>2</code>.</p>
 <p>Reviewer standard output and standard error are both captured. Standard error is forwarded to the outer process when verbose, and recorded in the report timeline when <code>--report</code> is active.</p>
 <p>Reviewer execution has a 60-minute timeout. Timeout or spawn failures are treated as reviewer errors and do not discard the agent's answer.</p>
 <h2 id="reviewer-environment-variables">Reviewer Environment Variables</h2>
-<p>Swival sets context variables on the reviewer subprocess for each round. <code>SWIVAL_TASK</code> contains the original user task and is always set. <code>SWIVAL_REVIEW_ROUND</code> contains the current review round number and is always set. <code>SWIVAL_MODEL</code> contains the resolved model identifier when available. When <code>--encrypt-secrets</code> is active, <code>SWIVAL_ENCRYPT_KEY</code> is set to the hex-encoded encryption key so the reviewer can decrypt secrets in the answer.</p>
+<p>Swival sets context variables on the reviewer subprocess for each round. <code>SWIVAL_TASK</code> contains the original user task and is always set. <code>SWIVAL_REVIEW_ROUND</code> contains the current review round number and is always set.</p>
+<p><code>SWIVAL_MODEL</code> contains the resolved model identifier when available. When <code>--encrypt-secrets</code> is active, <code>SWIVAL_ENCRYPT_KEY</code> is set to the hex-encoded encryption key so the reviewer can decrypt secrets in the answer.</p>
 <p>The reviewer inherits the parent environment too, but Swival's injected values override any same-named parent values.</p>
 <h2 id="using-swival-as-the-reviewer">Using Swival As The Reviewer</h2>
 <p>The <code>--reviewer-mode</code> flag turns Swival into a reviewer process that speaks the reviewer protocol natively. No wrapper script needed:</p>
@@ -131,7 +134,8 @@
     &quot;task&quot;
 </code></pre>
 <p>The synthesized reviewer command inherits <code>--provider</code>, <code>--model</code>, <code>--base-url</code>, <code>--files</code>, <code>--skills-dir</code>, <code>--max-context-tokens</code>, and <code>--max-output-tokens</code> from the outer invocation. It always adds <code>--reviewer-mode</code> and <code>--quiet</code>.</p>
-<p>API keys are not placed on the reviewer command line to avoid exposing secrets in process listings. If <code>--api-key</code> was set on the outer invocation, Swival passes it to the reviewer subprocess via the provider-specific environment variable (<code>HF_TOKEN</code>, <code>OPENROUTER_API_KEY</code>, <code>OPENAI_API_KEY</code> for generic, <code>GEMINI_API_KEY</code> for google, <code>CHATGPT_API_KEY</code> for chatgpt). Bedrock uses the AWS credential chain and needs no API key. Keys already set via environment variables are inherited automatically.</p>
+<p>API keys are not placed on the reviewer command line to avoid exposing secrets in process listings. If <code>--api-key</code> was set on the outer invocation, Swival passes it to the reviewer subprocess via the provider-specific environment variable (<code>HF_TOKEN</code>, <code>OPENROUTER_API_KEY</code>, <code>OPENAI_API_KEY</code> for generic, <code>GEMINI_API_KEY</code> for google, <code>CHATGPT_API_KEY</code> for chatgpt).</p>
+<p>Bedrock uses the AWS credential chain and needs no API key. Keys already set via environment variables are inherited automatically.</p>
 <p><code>--report</code> and <code>--cache</code> are not mirrored because reviewer mode does not initialize report or cache infrastructure.</p>
 <p><code>--self-review</code> is incompatible with <code>--reviewer</code>, <code>--repl</code>, and <code>--reviewer-mode</code>. It can be set in <code>swival.toml</code>:</p>
 <pre><code class="language-toml">self_review = true

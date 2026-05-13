@@ -12,7 +12,11 @@ This pattern works well for automated gates such as tests, linting, format check
 
 Swival invokes the reviewer by shell-splitting the command string and appending `<base_dir>` as the final argument. The full assistant answer is written to reviewer standard input.
 
-If the reviewer exits with code `0`, Swival accepts the answer immediately and ends normally. If the reviewer exits with code `1`, Swival treats reviewer standard output as feedback, appends that feedback as a new user message, resets turn budget for a new pass, and continues the loop. If the reviewer exits with code `2`, Swival treats that as reviewer failure, warns on standard error when diagnostics are enabled, and accepts the current answer unchanged. Any other nonzero exit code is handled the same way as `2`.
+If the reviewer exits with code `0`, Swival accepts the answer immediately and ends normally.
+
+If the reviewer exits with code `1`, Swival treats reviewer standard output as feedback, appends that feedback as a new user message, resets turn budget for a new pass, and continues the loop.
+
+If the reviewer exits with code `2`, Swival treats that as reviewer failure, warns on standard error when diagnostics are enabled, and accepts the current answer unchanged. Any other nonzero exit code is handled the same way as `2`.
 
 Reviewer standard output and standard error are both captured. Standard error is forwarded to the outer process when verbose, and recorded in the report timeline when `--report` is active.
 
@@ -20,7 +24,9 @@ Reviewer execution has a 60-minute timeout. Timeout or spawn failures are treate
 
 ## Reviewer Environment Variables
 
-Swival sets context variables on the reviewer subprocess for each round. `SWIVAL_TASK` contains the original user task and is always set. `SWIVAL_REVIEW_ROUND` contains the current review round number and is always set. `SWIVAL_MODEL` contains the resolved model identifier when available. When `--encrypt-secrets` is active, `SWIVAL_ENCRYPT_KEY` is set to the hex-encoded encryption key so the reviewer can decrypt secrets in the answer.
+Swival sets context variables on the reviewer subprocess for each round. `SWIVAL_TASK` contains the original user task and is always set. `SWIVAL_REVIEW_ROUND` contains the current review round number and is always set.
+
+`SWIVAL_MODEL` contains the resolved model identifier when available. When `--encrypt-secrets` is active, `SWIVAL_ENCRYPT_KEY` is set to the hex-encoded encryption key so the reviewer can decrypt secrets in the answer.
 
 The reviewer inherits the parent environment too, but Swival's injected values override any same-named parent values.
 
@@ -59,7 +65,9 @@ swival --provider huggingface --model zai-org/GLM-5.1 --yolo \
 
 The synthesized reviewer command inherits `--provider`, `--model`, `--base-url`, `--files`, `--skills-dir`, `--max-context-tokens`, and `--max-output-tokens` from the outer invocation. It always adds `--reviewer-mode` and `--quiet`.
 
-API keys are not placed on the reviewer command line to avoid exposing secrets in process listings. If `--api-key` was set on the outer invocation, Swival passes it to the reviewer subprocess via the provider-specific environment variable (`HF_TOKEN`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY` for generic, `GEMINI_API_KEY` for google, `CHATGPT_API_KEY` for chatgpt). Bedrock uses the AWS credential chain and needs no API key. Keys already set via environment variables are inherited automatically.
+API keys are not placed on the reviewer command line to avoid exposing secrets in process listings. If `--api-key` was set on the outer invocation, Swival passes it to the reviewer subprocess via the provider-specific environment variable (`HF_TOKEN`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY` for generic, `GEMINI_API_KEY` for google, `CHATGPT_API_KEY` for chatgpt).
+
+Bedrock uses the AWS credential chain and needs no API key. Keys already set via environment variables are inherited automatically.
 
 `--report` and `--cache` are not mirrored because reviewer mode does not initialize report or cache infrastructure.
 
