@@ -2,6 +2,14 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.16
+
+- `/loop` has been added for recurring prompts. In one-shot mode it keeps Swival running as a foreground poller with clean stdout separators, SIGTERM handling, and Ctrl-C behavior for skipping or exiting iterations. In the REPL it runs as an in-memory background scheduler: `/loops` lists active schedules, `/unloop <id>` cancels one, and `/unloop all` clears them.
+- MCP servers and AgentFS lifecycle hooks now run with Swival's bundled virtualenv `bin/` stripped from `PATH` unless that environment was explicitly activated by the user. This prevents packaged Swival installs from shadowing child-process tools such as `mcp`, `python`, `openai`, or `litellm`.
+- `/audit` glob matching is now segment-aware. `src/*.py` matches only direct children, `src/**/*.py` recurses, and bare wildcard patterns like `*.py` remain convenient by matching recursively across the repository.
+- Truncated or malformed tool-call responses from an LLM no longer poison the conversation history. Swival detects the bad assistant turn, asks the model to retry the tool call with valid JSON arguments, and reports a clear failure if the retry cannot recover.
+- Xiaomi MiMo compatibility has been improved by preserving `reasoning_content` on tool-calling turns.
+
 ## 1.0.15
 
 - Swival now speaks the Agent Client Protocol on stdio via `--acp`. `/` and `!` commands are currently ignored when using ACP. `--acp-log` writes diagnostics to a separate log file for debugging client integrations.
