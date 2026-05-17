@@ -22,8 +22,8 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "litellm>=1.84.0",
-    "tiktoken>=0.13",
+    "litellm>=1.85.0",
+    "tiktoken>=0.13.0",
     "html-to-markdown>=3.4.0,<4",
     "rich>=15.0.0",
     "prompt-toolkit>=3.0.52",
@@ -34,7 +34,7 @@ dependencies = [
     "uvicorn>=0.47.0",
     "fast-cipher>=0.2.1",
     "boto3>=1.43.9",
-    "starlark-go>=1.0.0",
+    "starlark-go>=1.0.1",
 ]
 
 [project.urls]
