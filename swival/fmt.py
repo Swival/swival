@@ -631,7 +631,12 @@ def quick_shell(cmd: str, returncode: int, output: str) -> None:
 
 
 def repl_banner() -> None:
-    _console.print(Text("Interactive mode. Type /exit or Ctrl-D to quit.", style="dim"))
+    _console.print(
+        Text(
+            "Type /exit or Ctrl-D to quit. Ctrl-C to interrupt; /continue to continue.",
+            style="dim",
+        )
+    )
 
 
 _LOGO = r"""

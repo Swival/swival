@@ -1639,7 +1639,7 @@ def drop_middle_turns(
     kept = droppable[:keep_count]
     dropped = droppable[keep_count:]
 
-    # Try AI summarization of dropped turns, fall back to static marker.
+    # Try AI summarization of dropped turns, then checkpoint recap, then static marker.
     recap = _build_recap(
         dropped,
         call_llm_fn,
@@ -5783,8 +5783,8 @@ def build_system_prompt(
     now = datetime.now().astimezone()
     system_content += f"\n\nCurrent date and time: {now.strftime('%Y-%m-%d %H:%M %Z')}"
 
-    # Tool-related prompt sections are skipped for the command provider,
-    # which disables tool calling entirely.
+    # Normal tool-info sections are skipped for the command provider; its XML
+    # tool-call catalog is injected above in command-provider format.
     if provider != "command":
         if files_mode == "none":
             system_content += (

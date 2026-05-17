@@ -243,7 +243,7 @@ def outline_files(
     extra_write_roots: list[Path] = (),
     files_mode: str = "some",
 ) -> str:
-    """Outline multiple files. Returns structured sections matching read_multiple_files format."""
+    """Outline multiple files using the same batch section envelope as read_multiple_files."""
     if not files:
         return "error: files list is empty"
     if len(files) > _MAX_OUTLINE_FILES:
