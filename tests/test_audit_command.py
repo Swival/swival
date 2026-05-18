@@ -2981,6 +2981,602 @@ class TestPhaseHuntOne:
         assert coverage.task_id == "bad"
 
 
+class TestReachabilitySplit:
+    """Step 4: LOCAL_ONLY findings always promote to a reachability task or
+    are dropped post-trace; high/critical security_control_failure is the
+    only carve-out."""
+
+    def _state_with_hunt_task(self, tmp_path):
+        from swival.audit import AuditRunState, AuditScope, HuntTask
+
+        scope = AuditScope(
+            branch="m",
+            commit="c",
+            tracked_files=["src/api/webhook.py", "src/clients/fetch.py"],
+            mandatory_files=["src/api/webhook.py", "src/clients/fetch.py"],
+            focus=[],
+        )
+        state = AuditRunState(
+            run_id="r1",
+            scope=scope,
+            queued_files=["src/api/webhook.py", "src/clients/fetch.py"],
+            state_dir=tmp_path,
+            hunt_mode=True,
+        )
+        parent = HuntTask(
+            id="ssrf-1",
+            task_kind="hunt",
+            attack_class="ssrf",
+            attacker_position="unauthenticated remote client",
+            controlled_inputs=["callback_url"],
+            trust_boundary_crossed="POST /webhook",
+            scope_hint="src/api/**",
+            seed_files=["src/api/webhook.py"],
+            seed_symbols=["handle_webhook"],
+            sink_files=["src/clients/fetch.py"],
+            source="phase1",
+            priority="high",
+            language_hint="python",
+            status="done",
+        )
+        state.hunt_tasks[parent.id] = parent
+        return state, parent
+
+    def _local_only_finding(self, parent):
+        from swival.audit import FindingRecord
+
+        return FindingRecord(
+            title="caller-controlled URL hits fetch_remote",
+            finding_type="ssrf",
+            severity="high",
+            locations=["src/clients/fetch.py:42"],
+            preconditions=[],
+            proof=["local_bug: ..."],
+            fix_outline="",
+            source_file="src/clients/fetch.py",
+            local_bug="outbound GET trusts caller-supplied URL",
+            source_boundary="POST /webhook",
+            sink_operation="requests.get",
+            reachability_status="local_only",
+            hunt_task_id=parent.id,
+            attack_class=parent.attack_class,
+            attacker_position=parent.attacker_position,
+            controlled_inputs=list(parent.controlled_inputs),
+        )
+
+    def test_local_only_generates_reachability_task(self, tmp_path):
+        from swival.audit import _generate_reachability_tasks, _finding_key
+
+        state, parent = self._state_with_hunt_task(tmp_path)
+        finding = self._local_only_finding(parent)
+        state.proposed_findings = [finding]
+
+        tasks = _generate_reachability_tasks(state)
+        assert len(tasks) == 1
+        t = tasks[0]
+        assert t.task_kind == "reachability"
+        assert t.attack_class == "ssrf"
+        assert t.attacker_position == parent.attacker_position
+        assert t.controlled_inputs == parent.controlled_inputs
+        assert t.parent_task_id == parent.id
+        assert t.parent_finding_key == _finding_key(finding)
+        assert t.source == "local_only_promotion"
+        assert "src/clients/fetch.py" in t.sink_files
+
+    def test_reachability_task_dedupes_on_repeat(self, tmp_path):
+        from swival.audit import _generate_reachability_tasks
+
+        state, parent = self._state_with_hunt_task(tmp_path)
+        finding = self._local_only_finding(parent)
+        state.proposed_findings = [finding]
+        first = _generate_reachability_tasks(state)
+        for t in first:
+            state.hunt_tasks[t.id] = t
+        second = _generate_reachability_tasks(state)
+        assert second == []
+
+    def test_scf_high_skips_reachability_task(self, tmp_path):
+        from swival.audit import _generate_reachability_tasks
+
+        state, parent = self._state_with_hunt_task(tmp_path)
+        finding = self._local_only_finding(parent)
+        finding.finding_type = "security_control_failure"
+        finding.severity = "critical"
+        state.proposed_findings = [finding]
+        tasks = _generate_reachability_tasks(state)
+        assert tasks == []
+
+    def test_scf_low_still_promotes(self, tmp_path):
+        from swival.audit import _generate_reachability_tasks
+
+        state, parent = self._state_with_hunt_task(tmp_path)
+        finding = self._local_only_finding(parent)
+        finding.finding_type = "security_control_failure"
+        finding.severity = "low"
+        state.proposed_findings = [finding]
+        tasks = _generate_reachability_tasks(state)
+        assert len(tasks) == 1
+
+    def test_reachable_finding_does_not_promote(self, tmp_path):
+        from swival.audit import _generate_reachability_tasks
+
+        state, parent = self._state_with_hunt_task(tmp_path)
+        finding = self._local_only_finding(parent)
+        finding.reachability_status = "reachable"
+        state.proposed_findings = [finding]
+        assert _generate_reachability_tasks(state) == []
+
+    def test_orphan_finding_skipped(self, tmp_path):
+        from swival.audit import _generate_reachability_tasks
+
+        state, parent = self._state_with_hunt_task(tmp_path)
+        finding = self._local_only_finding(parent)
+        finding.hunt_task_id = "missing-task"
+        state.proposed_findings = [finding]
+        assert _generate_reachability_tasks(state) == []
+
+    def test_parse_reachability_response_reachable(self):
+        from swival.audit import _parse_reachability_response
+
+        raw = (
+            "@@ reachability @@\n"
+            "verdict: reachable\n"
+            "reachability_step: POST /webhook\n"
+            "reachability_step: handle_webhook\n"
+            "reachability_step: client.fetch_remote\n"
+            "confidence: high\n"
+        )
+        metrics: dict[str, int] = {}
+        parsed = _parse_reachability_response(raw, metrics)
+        assert parsed is not None
+        assert parsed["verdict"] == "reachable"
+        assert parsed["reachability_path"] == [
+            "POST /webhook",
+            "handle_webhook",
+            "client.fetch_remote",
+        ]
+
+    def test_parse_reachability_malformed_returns_none(self):
+        from swival.audit import _parse_reachability_response
+
+        raw = "garbage with no record header"
+        assert _parse_reachability_response(raw, {}) is None
+
+    def test_apply_reachability_result_updates_finding(self, tmp_path):
+        from swival.audit import _apply_reachability_result
+
+        _, parent = self._state_with_hunt_task(tmp_path)
+        finding = self._local_only_finding(parent)
+        _apply_reachability_result(
+            finding,
+            {"verdict": "reachable", "reachability_path": ["a", "b"]},
+        )
+        assert finding.reachability_status == "reachable"
+        assert finding.reachability_path == ["a", "b"]
+
+    def test_apply_reachability_normalizes_bad_verdict(self, tmp_path):
+        from swival.audit import _apply_reachability_result
+
+        _, parent = self._state_with_hunt_task(tmp_path)
+        finding = self._local_only_finding(parent)
+        _apply_reachability_result(finding, {"verdict": "definitely!"})
+        assert finding.reachability_status == "unknown"
+
+    def test_filter_keeps_reachable_drops_local_only(self, tmp_path):
+        from swival.audit import _filter_to_reachable_findings
+
+        state, parent = self._state_with_hunt_task(tmp_path)
+        f_reachable = self._local_only_finding(parent)
+        f_reachable.reachability_status = "reachable"
+        f_local = self._local_only_finding(parent)
+        f_local.title = "still local"
+        f_unknown = self._local_only_finding(parent)
+        f_unknown.title = "unknown trace"
+        f_unknown.reachability_status = "unknown"
+        state.proposed_findings = [f_reachable, f_local, f_unknown]
+        discarded = _filter_to_reachable_findings(state)
+        assert discarded == 2
+        assert [f.title for f in state.proposed_findings] == [f_reachable.title]
+
+    def test_filter_keeps_scf_high_even_when_local_only(self, tmp_path):
+        from swival.audit import _filter_to_reachable_findings
+
+        state, parent = self._state_with_hunt_task(tmp_path)
+        scf = self._local_only_finding(parent)
+        scf.finding_type = "security_control_failure"
+        scf.severity = "high"
+        state.proposed_findings = [scf]
+        assert _filter_to_reachable_findings(state) == 0
+        assert state.proposed_findings == [scf]
+
+    def test_filter_keeps_file_centric_findings(self, tmp_path):
+        from swival.audit import _filter_to_reachable_findings
+
+        state, parent = self._state_with_hunt_task(tmp_path)
+        f = self._local_only_finding(parent)
+        f.hunt_task_id = ""  # file-centric
+        f.reachability_status = "unknown"
+        state.proposed_findings = [f]
+        assert _filter_to_reachable_findings(state) == 0
+        assert state.proposed_findings == [f]
+
+    def test_filter_no_op_outside_hunt_mode(self, tmp_path):
+        from swival.audit import _filter_to_reachable_findings
+
+        state, parent = self._state_with_hunt_task(tmp_path)
+        state.hunt_mode = False
+        f = self._local_only_finding(parent)
+        state.proposed_findings = [f]
+        assert _filter_to_reachable_findings(state) == 0
+        assert state.proposed_findings == [f]
+
+
+class TestProofBlockParser:
+    """Step 5: ``swival-audit-proof-v1`` block parsing and rejection."""
+
+    def _wrap(self, body: str) -> str:
+        return f"some preamble\n```swival-audit-proof-v1\n{body}\n```\n"
+
+    def test_parse_runtime_reproduced(self):
+        from swival.audit import _parse_proof_block
+
+        body = (
+            "verdict: REPRODUCED\n"
+            "proof_kind: runtime\n"
+            "commands:\n"
+            "  - ./poc < input.bin\n"
+            "  - gdb -batch -ex bt ./core\n"
+            "artifacts:\n"
+            "  - poc.c\n"
+            "observed_output: SIGSEGV in parse_header\n"
+            "trigger: oversized version field\n"
+            "impact: remote crash\n"
+            "limitations: tested on x86_64 only\n"
+        )
+        out = _parse_proof_block(self._wrap(body))
+        assert out["verdict"] == "REPRODUCED"
+        assert out["proof_kind"] == "runtime"
+        assert out["commands"] == ["./poc < input.bin", "gdb -batch -ex bt ./core"]
+        assert out["artifacts"] == ["poc.c"]
+        assert out["impact"] == "remote crash"
+
+    def test_parse_source_reproduced(self):
+        from swival.audit import _parse_proof_block
+
+        body = (
+            "verdict: REPRODUCED\n"
+            "proof_kind: source\n"
+            "commands: none\n"
+            "artifacts: none\n"
+            "observed_output: see verify.c:42-58 cited in finding\n"
+            "trigger: oversized header\n"
+            "impact: overflow\n"
+            "limitations: none\n"
+        )
+        out = _parse_proof_block(self._wrap(body))
+        assert out["verdict"] == "REPRODUCED"
+        assert out["proof_kind"] == "source"
+        assert out["commands"] == []
+        assert out["artifacts"] == []
+
+    def test_parse_notreproduced(self):
+        from swival.audit import _parse_proof_block
+
+        body = (
+            "verdict: NOTREPRODUCED\n"
+            "proof_kind: source\n"
+            "commands: none\n"
+            "artifacts: none\n"
+            "observed_output: existing length check rejects oversized input\n"
+            "trigger: not reachable\n"
+            "impact: none\n"
+            "limitations: none\n"
+        )
+        out = _parse_proof_block(self._wrap(body))
+        assert out["verdict"] == "NOTREPRODUCED"
+        assert out["proof_kind"] == "source"
+
+    def test_parse_notreproduced_allows_none_proof_kind(self):
+        """NOTREPRODUCED with ``proof_kind: none`` (or absent) must parse
+        cleanly. Treating it as malformed would collapse a clean negative
+        verdict into a discard with misleading diagnostics."""
+        from swival.audit import _parse_proof_block
+
+        none_body = (
+            "verdict: NOTREPRODUCED\n"
+            "proof_kind: none\n"
+            "commands: none\n"
+            "artifacts: none\n"
+            "observed_output: control blocks input\n"
+            "trigger: not reachable\n"
+            "impact: none\n"
+            "limitations: none\n"
+        )
+        out = _parse_proof_block(self._wrap(none_body))
+        assert out["verdict"] == "NOTREPRODUCED"
+        assert out["proof_kind"] == ""
+
+        absent_body = (
+            "verdict: NOTREPRODUCED\n"
+            "commands: none\n"
+            "artifacts: none\n"
+            "observed_output: control blocks input\n"
+            "trigger: not reachable\n"
+            "impact: none\n"
+            "limitations: none\n"
+        )
+        out = _parse_proof_block(self._wrap(absent_body))
+        assert out["verdict"] == "NOTREPRODUCED"
+        assert out["proof_kind"] == ""
+
+    def test_parse_malformed_no_verdict_raises(self):
+        from swival.audit import ProofBlockError, _parse_proof_block
+
+        body = (
+            "proof_kind: source\n"
+            "commands: none\n"
+            "observed_output: meh\n"
+            "trigger: x\n"
+            "impact: y\n"
+            "limitations: none\n"
+        )
+        try:
+            _parse_proof_block(self._wrap(body))
+        except ProofBlockError:
+            return
+        raise AssertionError("expected ProofBlockError")
+
+    def test_parse_missing_block_raises(self):
+        from swival.audit import ProofBlockError, _parse_proof_block
+
+        try:
+            _parse_proof_block("nothing useful here, no sentinel")
+        except ProofBlockError:
+            return
+        raise AssertionError("expected ProofBlockError")
+
+    def test_parse_reproduced_requires_proof_kind(self):
+        from swival.audit import ProofBlockError, _parse_proof_block
+
+        body = (
+            "verdict: REPRODUCED\n"
+            "commands: none\n"
+            "artifacts: none\n"
+            "observed_output: x\n"
+            "trigger: y\n"
+            "impact: z\n"
+            "limitations: none\n"
+        )
+        try:
+            _parse_proof_block(self._wrap(body))
+        except ProofBlockError:
+            return
+        raise AssertionError("expected ProofBlockError")
+
+    def test_parse_takes_last_block_on_sentinel_collision(self):
+        from swival.audit import _parse_proof_block
+
+        early = (
+            "```swival-audit-proof-v1\n"
+            "verdict: REPRODUCED\n"
+            "proof_kind: runtime\n"
+            "commands: none\n"
+            "artifacts: none\n"
+            "observed_output: stale\n"
+            "trigger: stale\n"
+            "impact: stale\n"
+            "limitations: none\n"
+            "```"
+        )
+        final = (
+            "```swival-audit-proof-v1\n"
+            "verdict: NOTREPRODUCED\n"
+            "proof_kind: source\n"
+            "commands: none\n"
+            "artifacts: none\n"
+            "observed_output: definitive\n"
+            "trigger: not reachable\n"
+            "impact: none\n"
+            "limitations: none\n"
+            "```"
+        )
+        answer = (
+            f"the model captured prior output:\n{early}\n\nFinal verdict:\n{final}\n"
+        )
+        out = _parse_proof_block(answer)
+        assert out["verdict"] == "NOTREPRODUCED"
+        assert out["observed_output"] == "definitive"
+
+    def test_parse_block_inside_outer_fence(self):
+        from swival.audit import _parse_proof_block
+
+        body = (
+            "verdict: REPRODUCED\n"
+            "proof_kind: source\n"
+            "commands: none\n"
+            "artifacts: none\n"
+            "observed_output: cited\n"
+            "trigger: x\n"
+            "impact: y\n"
+            "limitations: none\n"
+        )
+        answer = f"```text\n```swival-audit-proof-v1\n{body}\n```\n```\n"
+        out = _parse_proof_block(answer)
+        assert out["verdict"] == "REPRODUCED"
+
+    def test_invalid_proof_kind_raises(self):
+        from swival.audit import ProofBlockError, _parse_proof_block
+
+        body = (
+            "verdict: REPRODUCED\n"
+            "proof_kind: dynamic\n"
+            "commands: none\n"
+            "artifacts: none\n"
+            "observed_output: x\n"
+            "trigger: y\n"
+            "impact: z\n"
+            "limitations: none\n"
+        )
+        try:
+            _parse_proof_block(self._wrap(body))
+        except ProofBlockError:
+            return
+        raise AssertionError("expected ProofBlockError")
+
+
+class TestPhase4cReproduce:
+    """The verifier wrapper accepts only structured proof blocks; malformed
+    output, NOTREPRODUCED verdicts, and missing sentinels all map to
+    'discarded'."""
+
+    def _state(self, tmp_path):
+        from swival.audit import AuditRunState, AuditScope
+
+        scope = AuditScope(
+            branch="m",
+            commit="c",
+            tracked_files=["main.c"],
+            mandatory_files=["main.c"],
+            focus=[],
+        )
+        return AuditRunState(
+            run_id="r5",
+            scope=scope,
+            queued_files=["main.c"],
+            state_dir=tmp_path / ".swival" / "audit",
+        )
+
+    def _finding(self):
+        from swival.audit import FindingRecord
+
+        return FindingRecord(
+            title="t",
+            finding_type="memory_safety",
+            severity="high",
+            locations=["main.c:7"],
+            preconditions=[],
+            proof=["..."],
+            fix_outline="",
+            source_file="main.c",
+        )
+
+    def _ctx(self, tmp_path):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            base_dir=str(tmp_path),
+            tools=[],
+            loop_kwargs={
+                "api_base": "x",
+                "model_id": "m",
+                "max_output_tokens": 100,
+                "temperature": 0.0,
+                "top_p": None,
+                "seed": None,
+                "context_length": None,
+                "resolved_commands": {},
+                "llm_kwargs": {},
+            },
+        )
+
+    def _setup_worktree(self, monkeypatch, tmp_path):
+        class Dummy:
+            def __init__(self, work_dir):
+                self.work_dir = work_dir
+
+            def __enter__(self):
+                return self.work_dir
+
+            def __exit__(self, *exc):
+                return False
+
+        monkeypatch.setattr("swival.audit._worktree", lambda base, work: Dummy(work))
+        monkeypatch.setattr(
+            "swival.audit._gather_evidence", lambda f, c: ("--- main.c ---\n", 1)
+        )
+
+    def test_malformed_output_discards(self, monkeypatch, tmp_path):
+        from swival import audit
+
+        self._setup_worktree(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            "swival.agent.run_agent_loop",
+            lambda msgs, tools, **kw: ("no sentinel anywhere REPRODUCED", False),
+        )
+        state = self._state(tmp_path)
+        finding = self._finding()
+        result = audit._phase4c_reproduce(
+            finding, state, self._ctx(tmp_path), tmp_path / "work"
+        )
+        assert result is None
+
+    def test_reproduced_persists_proof_artifact(self, monkeypatch, tmp_path):
+        from swival import audit
+
+        self._setup_worktree(monkeypatch, tmp_path)
+        body = (
+            "```swival-audit-proof-v1\n"
+            "verdict: REPRODUCED\n"
+            "proof_kind: runtime\n"
+            "commands:\n  - ./poc\n"
+            "artifacts:\n  - poc.c\n"
+            "observed_output: SIGSEGV\n"
+            "trigger: oversized argv\n"
+            "impact: stack overflow\n"
+            "limitations: none\n"
+            "```"
+        )
+        monkeypatch.setattr(
+            "swival.agent.run_agent_loop",
+            lambda msgs, tools, **kw: (f"trace...\n{body}", False),
+        )
+        state = self._state(tmp_path)
+        finding = self._finding()
+        result = audit._phase4c_reproduce(
+            finding, state, self._ctx(tmp_path), tmp_path / "work"
+        )
+        assert result is not None
+        assert result["reproduced"] is True
+        assert result["proof_kind"] == "runtime"
+        assert result["commands"] == ["./poc"]
+        assert result["impact"] == "stack overflow"
+
+        from swival.audit import _finding_key
+
+        key = _finding_key(finding)
+        proof_dir = state.state_dir / state.run_id / "verify" / key
+        assert (proof_dir / "proof.txt").exists()
+        assert (proof_dir / "proof.json").exists()
+        assert (proof_dir / "commands.log").read_text().strip() == "./poc"
+
+    def test_notreproduced_block_returns_none(self, monkeypatch, tmp_path):
+        from swival import audit
+
+        self._setup_worktree(monkeypatch, tmp_path)
+        body = (
+            "```swival-audit-proof-v1\n"
+            "verdict: NOTREPRODUCED\n"
+            "proof_kind: source\n"
+            "commands: none\n"
+            "artifacts: none\n"
+            "observed_output: control blocks\n"
+            "trigger: not reachable\n"
+            "impact: none\n"
+            "limitations: none\n"
+            "```"
+        )
+        monkeypatch.setattr(
+            "swival.agent.run_agent_loop",
+            lambda msgs, tools, **kw: (body, False),
+        )
+        state = self._state(tmp_path)
+        finding = self._finding()
+        result = audit._phase4c_reproduce(
+            finding, state, self._ctx(tmp_path), tmp_path / "work"
+        )
+        assert result is None
+
+
 class TestBudgetPlanner:
     def _state(self, tmp_path: Path, budget: int = 0):
         scope = AuditScope(
@@ -3960,7 +4556,19 @@ class TestVerificationGates:
 
         def fake_run(messages, tools, **kw):
             captured.update(kw)
-            return "proof\nREPRODUCED", False
+            return (
+                "proof\n```swival-audit-proof-v1\n"
+                "verdict: REPRODUCED\n"
+                "proof_kind: source\n"
+                "commands: none\n"
+                "artifacts: none\n"
+                "observed_output: cited at main.c:7\n"
+                "trigger: oversized argv\n"
+                "impact: stack overflow\n"
+                "limitations: none\n"
+                "```",
+                False,
+            )
 
         monkeypatch.setattr("swival.agent.run_agent_loop", fake_run)
 
@@ -4567,7 +5175,18 @@ class TestPhase4Parallelism:
         )
         monkeypatch.setattr(
             "swival.agent.run_agent_loop",
-            lambda msgs, tools, **kw: ("could not confirm\nNOTREPRODUCED", False),
+            lambda msgs, tools, **kw: (
+                "could not confirm\n```swival-audit-proof-v1\n"
+                "verdict: NOTREPRODUCED\n"
+                "proof_kind: source\n"
+                "commands: none\n"
+                "artifacts: none\n"
+                "observed_output: control blocks attacker\n"
+                "trigger: not reachable\n"
+                "impact: none\n"
+                "limitations: none\n```",
+                False,
+            ),
         )
 
         ctx = SimpleNamespace(

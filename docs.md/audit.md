@@ -99,10 +99,27 @@ The two are merged into canonical `FindingRecord` objects. JSON parse failures t
 
 Each proposed finding is treated as a hypothesis. A verifier agent runs in an isolated Git worktree at HEAD with full access to the committed source code.
 
-The verifier can inspect code and optionally compile or run small proof-of-concept programs. It must end with one of two verdicts:
+The verifier can inspect code and optionally compile or run small proof-of-concept programs. Its final response must end with a fenced `swival-audit-proof-v1` block carrying a structured verdict:
 
-- **REPRODUCED**: the finding is real and the verifier demonstrated it
-- **NOTREPRODUCED**: the code does not support a practical trigger path
+```text
+```swival-audit-proof-v1
+verdict: REPRODUCED | NOTREPRODUCED
+proof_kind: runtime | source | mixed
+commands:
+  - shell command actually executed, or none
+artifacts:
+  - generated PoC or proof file path, or none
+observed_output: short observed output or specific source citation
+trigger: attacker-controlled input or action
+impact: demonstrated security outcome
+limitations: narrow caveats, or none
+```
+```
+
+- **REPRODUCED**: the verifier demonstrated the bug. `proof_kind` is `runtime` for executed PoCs, `source` for source-only proofs (used for `security_control_failure` and simple logic bugs), or `mixed` when both apply.
+- **NOTREPRODUCED**: the code does not support a practical trigger path.
+
+The harness rejects malformed proof blocks the same way it rejects `NOTREPRODUCED`, so a model that drops the sentinel cannot accidentally claim a verification. For runtime proofs the parsed `commands` list is also persisted to `.swival/audit/<run-id>/verify/<finding-key>/commands.log`, alongside `proof.txt` (the full verifier answer) and `proof.json` (the parsed structure).
 
 Verified findings advance to artifact generation. Discarded findings are dropped. Failed verifications (infrastructure errors, timeouts) are retried once for transient errors and can be resumed with `--resume`.
 
@@ -239,6 +256,8 @@ trust_boundary_crossed = "HTTP API handler"
 scope = "src/api/**"
 priority = "high"
 ```
+
+Hunt findings carry an explicit `reachability_status`. When the hunter reports `local_only` (the bug exists at the sink but the path from the trust boundary is unclear), the harness immediately queues a `task_kind="reachability"` follow-up that reuses the attacker model and asks only one question: does attacker-controlled input from the named boundary actually reach the sink? The trace agent returns `reachable`, `not_reachable`, or `unknown`, and a structured `reachability_path`. After Phase reachability, hunt-derived findings that did not reach `reachable` are dropped before verification. The single carve-out is a high or critical `security_control_failure`, which stays in scope because the security control itself supplies the boundary.
 
 `--budget-tokens N` sets a global token cap for the whole run. Underscores and commas in the value are accepted (`--budget-tokens 2_000_000` or `--budget-tokens 2,000,000`). The planner allocates proportional slices to each phase and tallies consumption; once the global pool is past 50% spent, low-priority hunt tasks are dropped before any other corner is cut.
 

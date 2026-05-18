@@ -293,9 +293,26 @@ _HUNT_ATTACKER_POSITIONS = (
     "sandboxed workload",
 )
 
-_HUNT_TASK_KINDS = ("hunt", "reachability")
+_HUNT_TASK_KIND_HUNT = "hunt"
+_HUNT_TASK_KIND_REACHABILITY = "reachability"
+_HUNT_TASK_KINDS = (_HUNT_TASK_KIND_HUNT, _HUNT_TASK_KIND_REACHABILITY)
 _HUNT_TASK_STATUSES = ("pending", "running", "done", "failed")
-_HUNT_REACHABILITY_STATUSES = ("reachable", "local_only", "not_reachable", "unknown")
+_REACH_REACHABLE = "reachable"
+_REACH_LOCAL_ONLY = "local_only"
+_REACH_NOT_REACHABLE = "not_reachable"
+_REACH_UNKNOWN = "unknown"
+_HUNT_REACHABILITY_STATUSES = (
+    _REACH_REACHABLE,
+    _REACH_LOCAL_ONLY,
+    _REACH_NOT_REACHABLE,
+    _REACH_UNKNOWN,
+)
+_REACHABILITY_TRACE_VERDICTS = (
+    _REACH_REACHABLE,
+    _REACH_NOT_REACHABLE,
+    _REACH_UNKNOWN,
+)
+_REACH_TASK_SOURCE_LOCAL_ONLY = "local_only_promotion"
 _HUNT_CONFIDENCE_LEVELS = ("high", "medium", "low")
 
 
@@ -2792,9 +2809,38 @@ Rules:
   3. The bug deterministically makes that control return accept/allow/true for an input it must reject (or otherwise return the wrong security decision). Speculative fail-open paths, partial-coverage gaps, and "this would be more robust if" arguments do not qualify — reject as NOTREPRODUCED.
   4. Severity is high or critical. If a proposed `security_control_failure` is low or medium severity, reject as NOTREPRODUCED. Do not reclassify it under the standard scope test during verification — a lower-severity bug with a concrete attacker, trigger, and gain belongs under its concrete impact type (`authorization bypass`, `information disclosure`, etc.), and that reclassification is phase 3B's job, not yours.
   If all four hold, treat the finding as REPRODUCED even though the attacker is "any caller of the control" and the trigger is "input the control is required to reject". If any one fails, reject as NOTREPRODUCED — including the case where the underlying logic bug is real but the function is merely security-adjacent rather than the control itself.
-- End your final response with exactly one of these tokens on its own line:
-  REPRODUCED
-  NOTREPRODUCED"""
+- End your final response with exactly one fenced proof block using the
+  ``swival-audit-proof-v1`` sentinel. The harness rejects any other format.
+  Emit nothing after the closing fence.
+
+The block layout is:
+
+```swival-audit-proof-v1
+verdict: REPRODUCED | NOTREPRODUCED
+proof_kind: runtime | source | mixed
+commands:
+  - shell command actually executed, repeatable, or none
+artifacts:
+  - generated PoC or proof file path under the worktree, repeatable, or none
+observed_output: short observed output or specific source citation
+trigger: attacker-controlled input or action that drives the bug
+impact: demonstrated security outcome (DoS, RCE, info disclosure, etc.)
+limitations: narrow caveats, or none
+```
+
+Rules for the block:
+- ``verdict`` is REPRODUCED only when the proof actually demonstrates the
+  attacker, trigger, and security-relevant impact under today's code.
+- ``proof_kind`` is ``runtime`` for executed PoCs, ``source`` for source-only
+  proofs (acceptable for security_control_failure and simple logic bugs only),
+  and ``mixed`` when both apply.
+- Use ``none`` (lowercase) for empty lists.
+- For ``NOTREPRODUCED``, ``proof_kind`` is optional: leave it empty or write
+  ``none`` if no proof attempt was made; otherwise set it to ``runtime``,
+  ``source``, or ``mixed`` describing what you tried. The other fields should
+  explain what the proof attempt found instead.
+- Do not embed nested ``swival-audit-proof-v1`` markers anywhere in the
+  block content."""
 
 _PHASE5_REPORT_TEMPLATE = """\
 You are writing the final markdown report for one reproduced and patched finding.
@@ -3385,15 +3431,7 @@ def _build_hunt_user_prompt(
 ) -> str:
     """Assemble the per-task user prompt for a hunter call."""
     profile_json = _repo_profile_json(state)
-    seed_lines = []
-    for f in task.seed_files[:5]:
-        body = file_evidence.get(f, "")
-        if not body:
-            continue
-        if len(body) > _HUNT_SEED_FILE_CAP:
-            body = body[:_HUNT_SEED_FILE_CAP] + _AUDIT_TRUNCATION_MARKER
-        seed_lines.append(f"--- {f} ---\n{body}")
-    related = "\n\n".join(seed_lines) if seed_lines else "(seed file evidence missing)"
+    related = _format_seed_evidence(task.seed_files, file_evidence, cap_files=5)
 
     sinks = ", ".join(task.sink_files[:8]) or "(none)"
     syms = ", ".join(task.seed_symbols[:8]) or "(none)"
@@ -3640,6 +3678,265 @@ def _phase_hunt_one(
     return (findings, coverage, None)
 
 
+_PHASE_REACHABILITY_RESULT_SCHEMA = PhaseSchema(
+    record=RecordSchema(
+        name="reachability",
+        required=("verdict",),
+        enums={"verdict": _REACHABILITY_TRACE_VERDICTS},
+        repeated={"reachability_step": "reachability_path"},
+    ),
+    cardinality="one",
+)
+
+_PHASE_REACHABILITY_SYSTEM = """\
+You are a reachability tracer running one narrow task in a staged audit.
+
+You are given a confirmed local bug at a specific sink and a named trust
+boundary. Your only job is to decide whether attacker-controlled data from that
+boundary can actually reach the sink in committed code.
+
+You have no tools, no shell access, and no ability to run commands. All the
+source code you need is included below.
+
+Output format: exactly one `@@ reachability @@` block with these keys, one per
+line. Use exactly the keys shown. Do not quote or wrap values.
+
+- verdict: reachable | not_reachable | unknown
+- reachability_step: one step in the data path from source to sink, in order;
+  one line per file or function; omit when not reachable
+- blocker: the named guard, control, or absent edge that breaks the path; only
+  set when verdict is not_reachable
+- confidence: high | medium | low
+
+Rules:
+- Use only the supplied evidence. Do not invent files or symbols.
+- Report `unknown` when the path is plausible but the evidence is incomplete;
+  do not guess.
+- Report `not_reachable` only when a concrete guard or missing edge blocks the
+  path, and name it in `blocker`.
+- Do not propose new findings. Do not change the bug claim. Only decide whether
+  the existing bug is externally reachable.
+"""
+
+
+def _format_seed_evidence(
+    seed_files: list[str],
+    file_evidence: dict[str, str],
+    cap_files: int,
+) -> str:
+    seed_lines = []
+    for f in seed_files[:cap_files]:
+        body = file_evidence.get(f, "")
+        if not body:
+            continue
+        if len(body) > _HUNT_SEED_FILE_CAP:
+            body = body[:_HUNT_SEED_FILE_CAP] + _AUDIT_TRUNCATION_MARKER
+        seed_lines.append(f"--- {f} ---\n{body}")
+    return "\n\n".join(seed_lines) if seed_lines else "(seed file evidence missing)"
+
+
+def _is_scf_high_or_critical(finding: FindingRecord) -> bool:
+    """True when the SCF carve-out applies: high/critical security_control_failure.
+
+    Mirrors the existing `_scf_below_min_severity` predicate but in the positive
+    direction so callers reading "keep if SCF-high" don't have to negate.
+    """
+    return (
+        finding.finding_type == _PHASE3B_SECURITY_CONTROL_FAILURE_TYPE
+        and finding.severity in _SECURITY_CONTROL_FAILURE_MIN_SEVERITIES
+    )
+
+
+def _build_reachability_user_prompt(
+    task: HuntTask,
+    parent_finding: FindingRecord,
+    state: AuditRunState,
+    file_evidence: dict[str, str],
+) -> str:
+    profile_json = _repo_profile_json(state)
+    related = _format_seed_evidence(task.seed_files, file_evidence, cap_files=6)
+    controlled = "\n".join(f"  - {c}" for c in task.controlled_inputs) or "  - (none)"
+    locations = ", ".join(parent_finding.locations) or parent_finding.source_file
+    prior_path = (
+        " -> ".join(parent_finding.reachability_path)
+        if parent_finding.reachability_path
+        else "(none reported)"
+    )
+
+    return (
+        f"Reachability task: {task.id}\n"
+        f"Parent finding: {parent_finding.title}\n"
+        f"Attack class: {task.attack_class}\n"
+        f"Attacker model: {task.attacker_position}\n"
+        f"Controlled inputs:\n{controlled}\n"
+        f"Trust boundary: {task.trust_boundary_crossed}\n"
+        f"Local bug: {parent_finding.local_bug or '(unspecified)'}\n"
+        f"Sink operation: {parent_finding.sink_operation or '(unspecified)'}\n"
+        f"Sink location(s): {locations}\n"
+        f"Hunter-reported partial path: {prior_path}\n\n"
+        f"Repository profile:\n{profile_json}\n\n"
+        f"Committed evidence:\n{related}\n\n"
+        f"Decide whether attacker input from the named trust boundary actually "
+        f"reaches the sink. Emit exactly one `@@ reachability @@` block."
+    )
+
+
+def _parse_reachability_response(raw: str, metrics: dict[str, int]) -> dict | None:
+    """Return the parsed reachability dict, or None when malformed."""
+    try:
+        records = _parse_records(
+            raw, _PHASE_REACHABILITY_RESULT_SCHEMA, metrics=metrics
+        )
+    except ValueError:
+        return None
+    return records[0] if records else None
+
+
+def _generate_reachability_tasks(state: AuditRunState) -> list[HuntTask]:
+    """Promote each LOCAL_ONLY hunt finding to one reachability follow-up.
+
+    The post-reachability filter discards LOCAL_ONLY findings that do not get
+    promoted, so anything we drop here permanently leaves the run unless it
+    matches the high/critical security_control_failure carve-out.
+    """
+    new_tasks: list[HuntTask] = []
+    existing_parents = {
+        t.parent_finding_key
+        for t in state.hunt_tasks.values()
+        if t.task_kind == _HUNT_TASK_KIND_REACHABILITY
+    }
+    for finding in state.proposed_findings:
+        if finding.reachability_status != _REACH_LOCAL_ONLY:
+            continue
+        if _is_scf_high_or_critical(finding):
+            continue
+        fkey = _finding_key(finding)
+        if fkey in existing_parents:
+            continue
+        parent = state.hunt_tasks.get(finding.hunt_task_id)
+        if parent is None:
+            continue
+        seed_files = list(
+            dict.fromkeys(
+                [*parent.seed_files, *(loc.split(":")[0] for loc in finding.locations)]
+            )
+        )
+        sink_files = list(
+            dict.fromkeys(
+                [
+                    finding.source_file or (seed_files[0] if seed_files else ""),
+                    *parent.sink_files,
+                ]
+            )
+        )
+        task_id = _hunt_task_id(
+            parent.attack_class,
+            parent.attacker_position,
+            parent.scope_hint,
+            seed_files,
+            suffix=f"reachability:{fkey}",
+        )
+        new_tasks.append(
+            HuntTask(
+                id=task_id,
+                task_kind=_HUNT_TASK_KIND_REACHABILITY,
+                attack_class=parent.attack_class,
+                attacker_position=parent.attacker_position,
+                controlled_inputs=list(parent.controlled_inputs),
+                trust_boundary_crossed=(
+                    finding.source_boundary or parent.trust_boundary_crossed
+                ),
+                scope_hint=parent.scope_hint,
+                seed_files=seed_files[:8],
+                seed_symbols=list(parent.seed_symbols),
+                sink_files=[f for f in sink_files if f][:8],
+                source=_REACH_TASK_SOURCE_LOCAL_ONLY,
+                priority=parent.priority,
+                parent_task_id=parent.id,
+                parent_finding_key=fkey,
+                language_hint=parent.language_hint,
+            )
+        )
+    return new_tasks
+
+
+def _phase_reachability_one(
+    task: HuntTask,
+    parent_finding: FindingRecord,
+    state: AuditRunState,
+    ctx: InputContext,
+    file_evidence: dict[str, str] | None = None,
+) -> tuple[dict | None, str | None]:
+    try:
+        _validate_hunt_task(task)
+    except HuntTaskValidationError as e:
+        return (None, f"invalid task: {e}")
+
+    budget = BudgetPlanner(state)
+    if budget.exhausted():
+        return (None, "budget exhausted before task started")
+
+    if file_evidence is None:
+        file_evidence = _load_file_contents(task.seed_files[:6], ctx.base_dir)
+    user_prompt = _build_reachability_user_prompt(
+        task, parent_finding, state, file_evidence
+    )
+    messages = [
+        {"role": "system", "content": _PHASE_REACHABILITY_SYSTEM},
+        {"role": "user", "content": user_prompt},
+    ]
+    try:
+        raw = _call_audit_llm(
+            ctx, messages, trace_task=f"audit: reachability {task.id}"
+        )
+    except Exception as e:
+        return (None, f"llm error: {e}")
+
+    budget.charge_call(_HUNT_TASK_KIND_REACHABILITY, user_prompt, raw)
+
+    parsed = _parse_reachability_response(raw, state.metrics)
+    if parsed is None:
+        return (None, "malformed reachability response")
+    return (parsed, None)
+
+
+def _apply_reachability_result(
+    parent_finding: FindingRecord,
+    parsed: dict,
+) -> None:
+    verdict = (parsed.get("verdict") or _REACH_UNKNOWN).strip().lower()
+    if verdict not in _REACHABILITY_TRACE_VERDICTS:
+        verdict = _REACH_UNKNOWN
+    parent_finding.reachability_status = verdict
+    path = list(parsed.get("reachability_path", []) or [])
+    if path:
+        parent_finding.reachability_path = path
+
+
+def _filter_to_reachable_findings(state: AuditRunState) -> int:
+    """Drop hunt-derived findings that did not reach `reachable`.
+
+    File-centric findings (no `hunt_task_id`) and the high/critical
+    security_control_failure carve-out are preserved. Returns the discard
+    count so the caller can log it.
+    """
+    if not state.hunt_mode:
+        return 0
+    kept: list[FindingRecord] = []
+    discarded = 0
+    for f in state.proposed_findings:
+        if not f.hunt_task_id:
+            kept.append(f)
+        elif _is_scf_high_or_critical(f):
+            kept.append(f)
+        elif f.reachability_status == _REACH_REACHABLE:
+            kept.append(f)
+        else:
+            discarded += 1
+    state.proposed_findings = kept
+    return discarded
+
+
 def _phase3b_expand_one(
     item: tuple[dict, str, str, AuditRunState, InputContext],
 ) -> dict | None:
@@ -3818,6 +4115,92 @@ def _gather_evidence(finding: FindingRecord, ctx: InputContext) -> tuple[str, in
 _REPRODUCE_KEYWORD = "REPRODUCED"
 _NO_REPRODUCE_KEYWORD = "NOTREPRODUCED"
 
+_PROOF_SENTINEL = "swival-audit-proof-v1"
+_PROOF_BLOCK_RE = re.compile(
+    r"```" + _PROOF_SENTINEL + r"\s*\n(.*?)\n```",
+    re.DOTALL,
+)
+_PROOF_LIST_KEYS = ("commands", "artifacts")
+_PROOF_SCALAR_KEYS = (
+    "verdict",
+    "proof_kind",
+    "observed_output",
+    "trigger",
+    "impact",
+    "limitations",
+)
+_PROOF_VERDICTS = (_REPRODUCE_KEYWORD, _NO_REPRODUCE_KEYWORD)
+_PROOF_KINDS = ("runtime", "source", "mixed")
+
+
+class ProofBlockError(ValueError):
+    """Raised when Phase 4's structured proof block is missing or malformed."""
+
+
+def _parse_proof_body(body: str) -> dict:
+    """Parse the body of one ``swival-audit-proof-v1`` block.
+
+    The body is line-oriented: scalar keys live on ``key: value`` lines, list
+    keys (``commands``, ``artifacts``) declare on a key line and list items
+    follow as ``  - item`` lines. ``none`` (case-insensitive) clears the list.
+    """
+    out: dict = {k: "" for k in _PROOF_SCALAR_KEYS}
+    for k in _PROOF_LIST_KEYS:
+        out[k] = []
+    current_list: str | None = None
+    for raw in body.splitlines():
+        if not raw.strip():
+            current_list = None
+            continue
+        if current_list is not None and raw.lstrip().startswith("- "):
+            item = raw.lstrip()[2:].strip()
+            if item and item.lower() != "none":
+                out[current_list].append(item)
+            continue
+        if ":" not in raw:
+            current_list = None
+            continue
+        key, _, val = raw.partition(":")
+        key = key.strip()
+        val = val.strip()
+        if key in _PROOF_LIST_KEYS:
+            current_list = key
+            if val and val.lower() != "none":
+                out[key].append(val)
+            continue
+        current_list = None
+        if key in _PROOF_SCALAR_KEYS:
+            out[key] = val
+    if out["verdict"] not in _PROOF_VERDICTS:
+        raise ProofBlockError(f"invalid or missing verdict: {out['verdict']!r}")
+    if out["proof_kind"].lower() in ("", "none"):
+        out["proof_kind"] = ""
+    elif out["proof_kind"] not in _PROOF_KINDS:
+        raise ProofBlockError(f"invalid proof_kind: {out['proof_kind']!r}")
+    if out["verdict"] == _REPRODUCE_KEYWORD and not out["proof_kind"]:
+        raise ProofBlockError("proof_kind is required for REPRODUCED verdicts")
+    return out
+
+
+def _parse_proof_block(answer: str) -> dict:
+    """Locate and parse the structured proof block in a verifier response.
+
+    Multiple candidate blocks can exist (e.g. when captured command output
+    happens to contain the sentinel). We prefer the last fully valid block;
+    if none parse cleanly, the first parser error is propagated.
+    """
+    matches = list(_PROOF_BLOCK_RE.finditer(answer))
+    if not matches:
+        raise ProofBlockError("no swival-audit-proof-v1 block in verifier output")
+    first_err: ProofBlockError | None = None
+    for m in reversed(matches):
+        try:
+            return _parse_proof_body(m.group(1))
+        except ProofBlockError as e:
+            if first_err is None:
+                first_err = e
+    raise first_err or ProofBlockError("no valid proof block")
+
 
 def _finding_key(finding: FindingRecord) -> str:
     """Stable content-based key for a finding, used for verification state and worktrees."""
@@ -3880,14 +4263,76 @@ def _phase4c_reproduce(
             )
 
         answer = answer or ""
-        if _REPRODUCE_KEYWORD in answer and _NO_REPRODUCE_KEYWORD not in answer:
-            fmt.info(f"    verifier [{locs}]: REPRODUCED — {finding.title}")
-            return {"reproduced": True, "summary": answer[-1000:]}
+        try:
+            proof = _parse_proof_block(answer)
+        except ProofBlockError as e:
+            fmt.info(
+                f"    verifier [{locs}]: malformed proof block for {finding.title}: {e}"
+            )
+            return None
 
-        fmt.info(f"    verifier [{locs}]: NOTREPRODUCED — {finding.title}")
-        return None
+        if proof["verdict"] != _REPRODUCE_KEYWORD:
+            fmt.info(f"    verifier [{locs}]: NOTREPRODUCED: {finding.title}")
+            return None
+
+        reproducer = {
+            "reproduced": True,
+            "proof_kind": proof["proof_kind"],
+            "commands": list(proof["commands"]),
+            "artifacts": list(proof["artifacts"]),
+            "observed_output": proof["observed_output"],
+            "trigger": proof["trigger"],
+            "impact": proof["impact"],
+            "limitations": proof["limitations"],
+            "summary": answer[-1000:],
+        }
+        _persist_proof_artifact(state, finding, answer, reproducer)
+        fmt.info(
+            f"    verifier [{locs}]: REPRODUCED ({proof['proof_kind']}): "
+            f"{finding.title}"
+        )
+        return reproducer
     finally:
         wt.__exit__(None, None, None)
+
+
+_PROOF_RAW_ANSWER_CAP = 256 * 1024
+
+
+def _verify_dir(state: AuditRunState, finding_key: str) -> Path:
+    """Per-finding artifact root under .swival/audit/<run-id>/verify/.
+
+    The verifier worktree lives at ``<verify_dir>/work`` and is removed on
+    teardown; proof artifacts go directly under ``<verify_dir>`` so they
+    survive the cleanup.
+    """
+    return state.state_dir / state.run_id / "verify" / finding_key
+
+
+def _persist_proof_artifact(
+    state: AuditRunState,
+    finding: FindingRecord,
+    raw_answer: str,
+    reproducer: dict,
+) -> None:
+    finding_key = _finding_key(finding)
+    proof_dir = _verify_dir(state, finding_key)
+    if len(raw_answer) > _PROOF_RAW_ANSWER_CAP:
+        raw_answer = raw_answer[:_PROOF_RAW_ANSWER_CAP] + _AUDIT_TRUNCATION_MARKER
+    try:
+        proof_dir.mkdir(parents=True, exist_ok=True)
+        (proof_dir / "proof.txt").write_text(raw_answer)
+        (proof_dir / "proof.json").write_text(json.dumps(reproducer, indent=2))
+        if reproducer.get("commands"):
+            (proof_dir / "commands.log").write_text(
+                "\n".join(reproducer["commands"]) + "\n"
+            )
+    except OSError as e:
+        _debug_log(
+            "proof_persist_failed",
+            finding_key=finding_key,
+            error=str(e),
+        )
 
 
 def _evidence_file_paths(finding: FindingRecord) -> list[str]:
@@ -3996,11 +4441,13 @@ def _phase5_report(
     """Generate the markdown report."""
     finding_json = json.dumps(asdict(vf.finding), indent=2)
     reproducer_json = json.dumps(vf.reproducer, indent=2) if vf.reproducer else "{}"
+    proof_kind = (vf.reproducer or {}).get("proof_kind") or "unspecified"
     evidence, _n = _gather_evidence(vf.finding, ctx)
 
     system = _PHASE5_REPORT_TEMPLATE.format(provenance_url=AUDIT_PROVENANCE_URL)
     suffix = (
         f"Verified finding:\n{finding_json}\n\n"
+        f"Proof kind: {proof_kind}\n\n"
         f"Reproducer summary:\n{reproducer_json}\n\n"
         f"Affected source:\n{evidence}\n\n"
         f"Patch ({patch_filename}):\n```diff\n{patch_text}```"
@@ -4864,13 +5311,150 @@ def _run_audit_phases(
         state.candidate_files = sorted(covered)
         state.deep_reviewed_files.update(state.candidate_files)
         state.deep_reviewed_files.update(state.scope.mandatory_files)
-        state.phase = "verification"
+        reach_tasks = _generate_reachability_tasks(state)
+        if reach_tasks:
+            for t in reach_tasks:
+                state.hunt_tasks[t.id] = t
+            fmt.info(
+                f"phase hunt: queued {len(reach_tasks)} reachability task(s) "
+                f"for LOCAL_ONLY findings"
+            )
+        state.phase = _HUNT_TASK_KIND_REACHABILITY
         state.save()
+        n_hunt_done = sum(
+            1
+            for t in state.hunt_tasks.values()
+            if t.task_kind == _HUNT_TASK_KIND_HUNT and t.status == "done"
+        )
+        n_hunt_total = sum(
+            1 for t in state.hunt_tasks.values() if t.task_kind == _HUNT_TASK_KIND_HUNT
+        )
         fmt.info(
             f"phase hunt complete. {len(state.proposed_findings)} proposed "
-            f"finding(s) from {sum(1 for t in state.hunt_tasks.values() if t.status == 'done')}/"
-            f"{len(state.hunt_tasks)} task(s)."
+            f"finding(s) from {n_hunt_done}/{n_hunt_total} hunt task(s)."
         )
+
+    if state.phase == _HUNT_TASK_KIND_REACHABILITY:
+        finding_by_key = {_finding_key(f): f for f in state.proposed_findings}
+
+        for t in state.hunt_tasks.values():
+            if t.task_kind == _HUNT_TASK_KIND_REACHABILITY and t.status == "running":
+                t.status = "pending"
+
+        # Reachability tasks for sibling findings off the same parent hunt task
+        # routinely share seed files, so prefetch the union once per phase
+        # entry and reuse across batches.
+        reach_seed_union = sorted(
+            {
+                f
+                for t in state.hunt_tasks.values()
+                if t.task_kind == _HUNT_TASK_KIND_REACHABILITY
+                for f in t.seed_files[:6]
+            }
+        )
+        reach_file_cache = (
+            _load_file_contents(reach_seed_union, base_dir) if reach_seed_union else {}
+        )
+
+        budget = BudgetPlanner(state)
+        max_reach_attempts = 3
+        for reach_attempt in range(max_reach_attempts):
+            pending = [
+                t
+                for t in state.hunt_tasks.values()
+                if t.task_kind == _HUNT_TASK_KIND_REACHABILITY
+                and t.status in ("pending", "failed")
+            ]
+            if not pending:
+                break
+
+            if budget.exhausted():
+                for t in pending:
+                    t.status = "failed"
+                    t.last_error = "budget exhausted before task started"
+                fmt.warning(
+                    "phase reachability: global token budget exhausted; halting"
+                )
+                state.save()
+                break
+
+            if reach_attempt == 0:
+                fmt.info(
+                    f"phase reachability: running {len(pending)} trace task(s) "
+                    f"with {workers} worker(s)..."
+                )
+            else:
+                fmt.info(
+                    f"phase reachability: retrying {len(pending)} task(s) "
+                    f"(attempt {reach_attempt + 1}/{max_reach_attempts})..."
+                )
+
+            def _trace(task):
+                parent = finding_by_key.get(task.parent_finding_key)
+                if parent is None:
+                    return (task, (None, "parent finding missing"))
+                return (
+                    task,
+                    _phase_reachability_one(
+                        task, parent, state, ctx, file_evidence=reach_file_cache
+                    ),
+                )
+
+            for batch_start in range(0, len(pending), workers * 2):
+                batch = pending[batch_start : batch_start + workers * 2]
+                for t in batch:
+                    t.status = "running"
+                    t.attempts += 1
+                state.save()
+
+                results = _run_batch(_trace, batch, max_workers=workers)
+                for entry in results:
+                    if entry is None:
+                        continue
+                    task, (parsed, error) = entry
+                    if error is not None:
+                        task.status = "failed"
+                        task.last_error = error
+                        fmt.warning(
+                            f"  trace {task.id} ({task.attack_class}) failed: "
+                            f"{error[:120]}"
+                        )
+                        continue
+                    task.status = "done"
+                    task.last_error = ""
+                    parent = finding_by_key.get(task.parent_finding_key)
+                    if parent is not None and parsed is not None:
+                        _apply_reachability_result(parent, parsed)
+                        fmt.info(
+                            f"  trace {task.id}: "
+                            f"{parent.reachability_status}: {parent.title}"
+                        )
+                state.save()
+
+        stuck = [
+            t
+            for t in state.hunt_tasks.values()
+            if t.task_kind == _HUNT_TASK_KIND_REACHABILITY and t.status == "failed"
+        ]
+        if stuck:
+            n_attempted = sum(t.attempts for t in stuck)
+            state.save()
+            return (
+                f"Audit incomplete: {len(stuck)} reachability task(s) failed "
+                f"after {n_attempted} attempt(s). Use /audit --resume to retry. "
+                f"First failure: {stuck[0].id}: "
+                f"{stuck[0].last_error[:120] or 'unknown error'}"
+            )
+
+        before = len(state.proposed_findings)
+        discarded = _filter_to_reachable_findings(state)
+        if discarded:
+            fmt.info(
+                f"phase reachability: dropped {discarded} unreachable "
+                f"finding(s) ({before} -> {len(state.proposed_findings)})"
+            )
+        state.phase = "verification"
+        state.save()
 
     # Resume rule: if force_review changed since the run was saved, apply
     # any new matches before the Phase-2 gate. New matches re-promote saved

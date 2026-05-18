@@ -157,21 +157,40 @@ Audit complete. 2 finding(s) written to audit-findings/. Run `ls audit-findings/
 <p>The two are merged into canonical <code>FindingRecord</code> objects. JSON parse failures trigger an automatic LLM repair pass; if repair also fails, the entire file gets one analytical retry.</p>
 <h3 id="phase-4-verification">Phase 4: Verification</h3>
 <p>Each proposed finding is treated as a hypothesis. A verifier agent runs in an isolated Git worktree at HEAD with full access to the committed source code.</p>
-<p>The verifier can inspect code and optionally compile or run small proof-of-concept programs. It must end with one of two verdicts:</p>
-<ul>
-<li><strong>REPRODUCED</strong>: the finding is real and the verifier demonstrated it</li>
-<li><strong>NOTREPRODUCED</strong>: the code does not support a practical trigger path</li>
-</ul>
-<p>Verified findings advance to artifact generation. Discarded findings are dropped. Failed verifications (infrastructure errors, timeouts) are retried once for transient errors and can be resumed with <code>--resume</code>.</p>
-<p>Verification runs in parallel, capped at 2 concurrent workers regardless of the <code>--workers</code> setting.</p>
-<h3 id="phase-5-artifact-generation">Phase 5: Artifact Generation</h3>
-<p>For each verified finding:</p>
-<ol>
-<li>A patch agent runs in an isolated worktree and applies the minimal correct fix using <code>edit_file</code>. The resulting <code>git diff</code> is captured.</li>
-<li>The LLM writes a structured markdown report.</li>
-</ol>
-<p>Both are saved to the <code>audit-findings/</code> directory:</p>
-<pre><code class="language-text">audit-findings/
+<p>The verifier can inspect code and optionally compile or run small proof-of-concept programs. Its final response must end with a fenced <code>swival-audit-proof-v1</code> block carrying a structured verdict:</p>
+<pre><code class="language-text">```swival-audit-proof-v1
+verdict: REPRODUCED | NOTREPRODUCED
+proof_kind: runtime | source | mixed
+commands:
+  - shell command actually executed, or none
+artifacts:
+  - generated PoC or proof file path, or none
+observed_output: short observed output or specific source citation
+trigger: attacker-controlled input or action
+impact: demonstrated security outcome
+limitations: narrow caveats, or none
+</code></pre>
+<pre><code>
+- **REPRODUCED**: the verifier demonstrated the bug. `proof_kind` is `runtime` for executed PoCs, `source` for source-only proofs (used for `security_control_failure` and simple logic bugs), or `mixed` when both apply.
+- **NOTREPRODUCED**: the code does not support a practical trigger path.
+
+The harness rejects malformed proof blocks the same way it rejects `NOTREPRODUCED`, so a model that drops the sentinel cannot accidentally claim a verification. For runtime proofs the parsed `commands` list is also persisted to `.swival/audit/&lt;run-id&gt;/verify/&lt;finding-key&gt;/commands.log`, alongside `proof.txt` (the full verifier answer) and `proof.json` (the parsed structure).
+
+Verified findings advance to artifact generation. Discarded findings are dropped. Failed verifications (infrastructure errors, timeouts) are retried once for transient errors and can be resumed with `--resume`.
+
+Verification runs in parallel, capped at 2 concurrent workers regardless of the `--workers` setting.
+
+### Phase 5: Artifact Generation
+
+For each verified finding:
+
+1. A patch agent runs in an isolated worktree and applies the minimal correct fix using `edit_file`. The resulting `git diff` is captured.
+2. The LLM writes a structured markdown report.
+
+Both are saved to the `audit-findings/` directory:
+
+```text
+audit-findings/
   001-command-injection-in-handler.md
   001-command-injection-in-handler.patch
   002-missing-null-check-in-parser.md
@@ -244,6 +263,7 @@ trust_boundary_crossed = &quot;HTTP API handler&quot;
 scope = &quot;src/api/**&quot;
 priority = &quot;high&quot;
 </code></pre>
+<p>Hunt findings carry an explicit <code>reachability_status</code>. When the hunter reports <code>local_only</code> (the bug exists at the sink but the path from the trust boundary is unclear), the harness immediately queues a <code>task_kind="reachability"</code> follow-up that reuses the attacker model and asks only one question: does attacker-controlled input from the named boundary actually reach the sink? The trace agent returns <code>reachable</code>, <code>not_reachable</code>, or <code>unknown</code>, and a structured <code>reachability_path</code>. After Phase reachability, hunt-derived findings that did not reach <code>reachable</code> are dropped before verification. The single carve-out is a high or critical <code>security_control_failure</code>, which stays in scope because the security control itself supplies the boundary.</p>
 <p><code>--budget-tokens N</code> sets a global token cap for the whole run. Underscores and commas in the value are accepted (<code>--budget-tokens 2_000_000</code> or <code>--budget-tokens 2,000,000</code>). The planner allocates proportional slices to each phase and tallies consumption; once the global pool is past 50% spent, low-priority hunt tasks are dropped before any other corner is cut.</p>
 <pre><code class="language-text">swival&gt; /audit --hunt --budget-tokens 2_000_000 src/api/
 </code></pre>
