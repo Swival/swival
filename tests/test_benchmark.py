@@ -49,6 +49,26 @@ def _write_report(path, *, outcome="success", turns=2, prompt_tokens=100):
                     "truncated_responses": 0,
                     "total_llm_time_s": 1.5,
                     "total_tool_time_s": 0.25,
+                    "tool_requests": {
+                        "count": 1,
+                        "items": [
+                            {
+                                "turn": 1,
+                                "reason": "need edits",
+                                "tools": ["edit_file"],
+                            }
+                        ],
+                    },
+                    "blocked_tool_calls": {
+                        "count": 1,
+                        "items": [
+                            {
+                                "turn": 2,
+                                "name": "edit_file",
+                                "reason": "not_in_toolset",
+                            }
+                        ],
+                    },
                 },
                 "timeline": [
                     {
@@ -434,6 +454,8 @@ def test_summarize_outputs_builds_variance_and_variant_comparison(tmp_path):
     ]
     assert summary["runs"][0]["prompt_tokens_est"] == 207
     assert summary["runs"][0]["tool_repairs"] == 2
+    assert summary["runs"][0]["tool_request_count"] == 1
+    assert summary["runs"][0]["blocked_tool_call_count"] == 1
     assert summary["runs"][0]["verifier_passed"] is None
     assert summary["runs"][0]["success_strict"] is None
 

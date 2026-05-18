@@ -2511,6 +2511,8 @@ def _post_tool_bookkeeping(
             len(tool_msg["content"]),
             error=tool_msg["content"] if not tool_meta["succeeded"] else None,
             repairs=tool_meta.get("repairs"),
+            blocked=bool(tool_meta.get("blocked")),
+            block_reason=tool_meta.get("block_reason"),
         )
 
     if snapshot_state is not None:
@@ -2623,6 +2625,8 @@ def handle_tool_call(
                 "elapsed": 0.0,
                 "succeeded": False,
                 "repairs": [],
+                "blocked": True,
+                "block_reason": "not_in_toolset",
             },
         )
 

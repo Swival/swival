@@ -98,6 +98,60 @@ class TestReportCollector:
         assert r["stats"]["tool_calls_total"] == 3
         assert r["stats"]["tool_calls_succeeded"] == 2
         assert r["stats"]["tool_calls_failed"] == 1
+        assert r["stats"]["tool_requests"] == {"count": 0, "items": []}
+        assert r["stats"]["blocked_tool_calls"] == {"count": 0, "items": []}
+
+    def test_tool_request_and_blocked_call_tracking(self):
+        rc = ReportCollector()
+        rc.record_tool_call(
+            1,
+            "request_tools",
+            {"reason": "need edits", "tools": ["edit_file"]},
+            True,
+            0.01,
+            40,
+        )
+        rc.record_tool_call(
+            2,
+            "edit_file",
+            {"file_path": "a.txt"},
+            False,
+            0.0,
+            90,
+            error="error: tool 'edit_file' is not available",
+            blocked=True,
+            block_reason="not_in_toolset",
+        )
+
+        r = rc.build_report(
+            task="t",
+            model="m",
+            provider="p",
+            settings={},
+            outcome="success",
+            answer="ok",
+            exit_code=0,
+            turns=2,
+        )
+
+        assert r["stats"]["tool_requests"] == {
+            "count": 1,
+            "items": [{"turn": 1, "reason": "need edits", "tools": ["edit_file"]}],
+        }
+        assert r["stats"]["blocked_tool_calls"] == {
+            "count": 1,
+            "items": [
+                {
+                    "turn": 2,
+                    "name": "edit_file",
+                    "arguments": {"file_path": "a.txt"},
+                    "reason": "not_in_toolset",
+                }
+            ],
+        }
+        blocked_event = r["timeline"][1]
+        assert blocked_event["blocked"] is True
+        assert blocked_event["block_reason"] == "not_in_toolset"
 
     def test_compaction_tracking(self):
         rc = ReportCollector()
