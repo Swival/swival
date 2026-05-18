@@ -194,6 +194,43 @@
 <p>A standard pattern is to run the same task set against multiple models or settings and then compare their report files. Passing <code>--seed</code> can reduce run-to-run variance for providers that support seeded sampling.</p>
 <pre><code class="language-sh">swival &quot;task&quot; --seed 42 --report run1.json
 </code></pre>
+<p>For repeatable local-model experiments, use <code>swival-benchmark</code>. It runs a fixed task corpus across one or more CLI argument variants, writes one <code>--report</code> file per task, and produces <code>summary.json</code>, <code>summary.csv</code>, and <code>summary.md</code>.</p>
+<p><code>bench.toml</code>:</p>
+<pre><code class="language-toml">tasks = &quot;tasks.json&quot;
+out_dir = &quot;.swival/bench/tool-routing&quot;
+seed = 42
+repeat = 2
+timeout_s = 900
+base_args = [&quot;--provider&quot;, &quot;lmstudio&quot;, &quot;--model&quot;, &quot;qwen3-coder-next&quot;]
+
+[variants.baseline]
+args = []
+
+[variants.compact-tools]
+args = [&quot;--temperature&quot;, &quot;0.1&quot;]
+</code></pre>
+<p><code>tasks.json</code>:</p>
+<pre><code class="language-json">{
+  &quot;tasks&quot;: [
+    {
+      &quot;id&quot;: &quot;fix-cli-parse&quot;,
+      &quot;prompt&quot;: &quot;Fix the failing CLI parser test and run the focused test.&quot;
+    },
+    {
+      &quot;id&quot;: &quot;add-unit-test&quot;,
+      &quot;prompt&quot;: &quot;Add a regression test for the cache miss path.&quot;
+    }
+  ]
+}
+</code></pre>
+<p>Run and summarize:</p>
+<pre><code class="language-sh">swival-benchmark run bench.toml
+swival-benchmark summarize bench.toml
+</code></pre>
+<p><code>repeat = 2</code> gives every variant an A/A no-op control. Before calling an experiment a win, compare its success delta against the no-op variance in <code>summary.json</code> or the "No-Op Control" section of <code>summary.md</code>.</p>
+<p>Relative <code>tasks</code>, <code>out_dir</code>, and task <code>base_dir</code> paths resolve from the directory containing <code>bench.toml</code>. The first variant listed in the TOML is the baseline for A/B comparisons, so keep the control variant first.</p>
+<p><code>summary.json</code> includes both pooled comparisons and <code>per_repeat_comparisons</code>. Pooled comparisons count a task as a win only when the candidate succeeds more often than the baseline across all repeats. It also includes <code>by_variant_task</code>, with min/mean/max distributions for noisy continuous metrics such as <code>turns</code>, <code>prompt_tokens_est</code>, <code>duration_s</code>, and <code>tool_calls_failed</code>.</p>
+<p>Each row includes <code>verifier_passed</code> and <code>success_strict</code> slots. They are <code>null</code> until a verifier writes pass/fail data into reports; <code>success</code> remains the outcome-based compatibility field.</p>
 <p>You can compare model variants like this:</p>
 <pre><code class="language-sh">for model in qwen3-coder-next deepseek-coder-v2; do
     swival &quot;Fix the failing tests in tests/&quot; \
