@@ -205,6 +205,30 @@ def test_load_tasks_accepts_wrapped_corpus_and_sanitizes_ids(tmp_path):
     )
 
 
+def test_tool_description_rare_parameter_corpus_is_loadable():
+    corpus = (
+        Path(__file__).resolve().parents[1]
+        / "benchmarks"
+        / "tool-descriptions"
+        / "rare-params"
+        / "tasks.json"
+    )
+
+    tasks = load_tasks(corpus)
+
+    assert [task.id for task in tasks] == [
+        "grep-context-case",
+        "outline-batch-depth",
+        "read-tail",
+    ]
+    prompts = "\n".join(task.prompt for task in tasks)
+    assert "case-insensitively" in prompts
+    assert "context line" in prompts
+    assert "batch mode" in prompts
+    assert "depth 1" in prompts
+    assert "tail" in prompts
+
+
 def test_load_tasks_accepts_file_verifier(tmp_path):
     path = tmp_path / "tasks.json"
     path.write_text(

@@ -115,8 +115,72 @@ CODE_READ_TOOL_NAMES = {
 }
 
 _encoder = tiktoken.get_encoding("cl100k_base")
-_BRIEF_TOOL_DESCRIPTION = "Use this tool when its name matches the task."
 _BRIEF_PARAM_DESCRIPTION = "Tool argument."
+_BRIEF_TOOL_DESCRIPTIONS = {
+    "read_file": "Read a file or list a directory. Use offset/limit for small slices; use tail for file ends.",
+    "read_multiple_files": "Read several files in one call. Each item supports offset/limit/tail.",
+    "write_file": "Create or overwrite a file, or atomically move one file into place.",
+    "edit_file": "Replace exact text in an existing file. Prefer for targeted edits.",
+    "list_files": "List files matching a glob, newest first.",
+    "grep": "Search file contents with a Python regex. Supports include, case-insensitive, and context lines.",
+    "think": "Use a private scratchpad for planning or debugging complex work.",
+    "todo": "Manage a persistent checklist for multi-step work.",
+    "view_image": "Inspect an image file; read_file cannot view image contents.",
+    "delete_file": "Delete a file by moving it to the trash.",
+    "fetch_url": "Fetch an HTTP/HTTPS URL as markdown, text, or HTML.",
+    "snapshot": "Save, restore, or inspect context checkpoints.",
+    "request_tools": "Request broader tool access with a structured escalation signal.",
+    "outline": "Show file structure without bodies. Use file_path or a files batch; depth controls nesting.",
+    "use_skill": "Activate a skill by name.",
+    "run_metaskill": "Run a dynamic skill workflow by name with bounded nested calls.",
+    "run_command": "Run an allowed command as an argv array, not a shell string.",
+    "run_shell_command": "Run an allowed shell command string with shell syntax.",
+    "complete_goal": "Mark the active goal complete after verifying every requirement.",
+}
+_BRIEF_PARAM_DESCRIPTIONS = {
+    "file_path": "Path to read, edit, write, delete, outline, or view.",
+    "files": "Batch file requests.",
+    "offset": "1-based start line.",
+    "limit": "Maximum lines to return; lower it for focused reads.",
+    "tail": "Read the last N lines; ignores offset.",
+    "pattern": "Regex or glob pattern, depending on the tool.",
+    "path": "File or directory to search/list within.",
+    "include": "Glob filter for matched filenames.",
+    "case_insensitive": "Search without case sensitivity.",
+    "context_lines": "Lines before and after each grep match.",
+    "depth": "Outline nesting depth: 1 top-level, 2 methods, 3 nested.",
+    "old_string": "Exact text to replace.",
+    "new_string": "Replacement text.",
+    "replace_all": "Replace every match.",
+    "line_number": "Disambiguate replacement by 1-based line number.",
+    "content": "Text content to write.",
+    "move_from": "Source path to atomically rename into place.",
+    "command": "Command arguments or shell string, matching the tool.",
+    "timeout": "Timeout in seconds.",
+    "reason": "Why broader tools are needed.",
+    "tools": "Specific tools or categories needed.",
+    "action": "Operation to perform.",
+    "label": "Checkpoint label.",
+    "summary": "Replacement summary for restored context.",
+    "force": "Override dirty-scope protection.",
+    "thought": "Scratchpad text.",
+    "thought_number": "Current thought index.",
+    "total_thoughts": "Estimated number of thoughts.",
+    "next_thought_needed": "Whether more thinking is needed.",
+    "mode": "Thought mode.",
+    "revises_thought": "Thought index being revised.",
+    "branch_from_thought": "Thought index to branch from.",
+    "branch_id": "Branch label.",
+    "tasks": "Checklist task text.",
+    "name": "Skill or workflow name.",
+    "input": "Metaskill input object.",
+    "max_ask_calls": "Maximum nested model calls.",
+    "max_command_calls": "Maximum command calls.",
+    "image_path": "Path to the image file.",
+    "question": "Optional question about the image.",
+    "url": "HTTP/HTTPS URL.",
+    "format": "Response format.",
+}
 
 MAX_HISTORY_SIZE = 500 * 1024  # 500KB
 TODO_REMINDER_INTERVAL = 3  # remind after N turns of no todo usage
@@ -5609,15 +5673,34 @@ def _filter_tools_for_mode(tools: list, tools_mode: str) -> list:
 
 
 def _brief_description_for_tool(name: str) -> str:
-    return f"Use {name} when its name matches the task."
+    return _BRIEF_TOOL_DESCRIPTIONS.get(
+        name, f"Use {name} when its name matches the task."
+    )
+
+
+def _brief_description_for_param(name: str | None) -> str:
+    if not name:
+        return _BRIEF_PARAM_DESCRIPTION
+    return _BRIEF_PARAM_DESCRIPTIONS.get(name, _BRIEF_PARAM_DESCRIPTION)
 
 
 def _shorten_tool_descriptions(
-    value, *, tool_name: str | None = None, top_level: bool = False
+    value,
+    *,
+    tool_name: str | None = None,
+    param_name: str | None = None,
+    top_level: bool = False,
+    in_properties: bool = False,
 ):
     if isinstance(value, list):
         return [
-            _shorten_tool_descriptions(item, tool_name=tool_name, top_level=top_level)
+            _shorten_tool_descriptions(
+                item,
+                tool_name=tool_name,
+                param_name=param_name,
+                top_level=top_level,
+                in_properties=in_properties,
+            )
             for item in value
         ]
     if not isinstance(value, dict):
@@ -5634,13 +5717,17 @@ def _shorten_tool_descriptions(
             shortened[key] = (
                 _brief_description_for_tool(next_tool_name)
                 if top_level and next_tool_name
-                else _BRIEF_PARAM_DESCRIPTION
+                else _brief_description_for_param(param_name)
             )
         else:
             shortened[key] = _shorten_tool_descriptions(
                 item,
                 tool_name=next_tool_name,
+                param_name=key
+                if in_properties and isinstance(item, dict)
+                else param_name,
                 top_level=key == "function",
+                in_properties=key == "properties",
             )
     return shortened
 

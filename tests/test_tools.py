@@ -861,7 +861,12 @@ class TestBuildTools:
             brief_read["function"]["parameters"]["properties"]["file_path"][
                 "description"
             ]
-            == "Tool argument."
+            == "Path to read, edit, write, delete, outline, or view."
+        )
+        assert "offset/limit" in brief_read["function"]["description"]
+        assert (
+            brief_read["function"]["parameters"]["properties"]["limit"]["description"]
+            == "Maximum lines to return; lower it for focused reads."
         )
 
     def test_progressive_tool_descriptions_expand_selected_tools(self):
@@ -886,7 +891,7 @@ class TestBuildTools:
             progressive_edit["function"]["description"]
             == full_edit["function"]["description"]
         )
-        assert progressive_read["function"]["description"].startswith("Use read_file")
+        assert "offset/limit" in progressive_read["function"]["description"]
 
     def test_request_tools_available_in_full_mode(self):
         from swival.agent import build_tools

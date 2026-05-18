@@ -1,0 +1,17 @@
+{
+  "tags": ["tool-descriptions", "rare-parameters"],
+  "tasks": [
+    {
+      "id": "grep-context-case",
+      "prompt": "Use grep to search swival/agent.py for tool_descriptions case-insensitively with one context line. In 5 bullets or fewer, report the number of matches shown and name two nearby functions or constants. Do not edit files."
+    },
+    {
+      "id": "outline-batch-depth",
+      "prompt": "Use outline in batch mode on swival/agent.py and swival/benchmark.py with depth 1. In 5 bullets or fewer, say which file defines run_agent_loop and which file defines summarize_outputs. Do not edit files."
+    },
+    {
+      "id": "read-tail",
+      "prompt": "Use read_file with tail to read the last 40 lines of swival/benchmark.py. In 5 bullets or fewer, name the final CLI entrypoint functions visible there. Do not edit files."
+    }
+  ]
+}
