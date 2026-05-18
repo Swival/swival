@@ -254,6 +254,34 @@ class TestHandleToolCallTuple:
         assert meta["elapsed"] == 0.0
         assert meta["succeeded"] is False
 
+    def test_unadvertised_tool_is_rejected(self, tmp_path):
+        from swival.thinking import ThinkingState
+
+        tc = MagicMock()
+        tc.id = "tc4"
+        tc.function.name = "edit_file"
+        tc.function.arguments = json.dumps(
+            {
+                "file_path": "test.txt",
+                "old_string": "broken",
+                "new_string": "fixed",
+            }
+        )
+        ts = ThinkingState(verbose=False)
+
+        msg, meta = agent.handle_tool_call(
+            tc,
+            str(tmp_path),
+            ts,
+            verbose=False,
+            available_tool_names={"read_file", "request_tools"},
+        )
+
+        assert msg["content"].startswith("error: tool 'edit_file' is not available")
+        assert "request_tools" in msg["content"]
+        assert meta["name"] == "edit_file"
+        assert meta["succeeded"] is False
+
 
 # ---------------------------------------------------------------------------
 # load_instructions tuple return

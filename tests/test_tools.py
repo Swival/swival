@@ -819,6 +819,43 @@ class TestBuildTools:
         assert "create_goal" not in names
         assert "update_goal" not in names
 
+    def test_code_read_tools_mode_limits_builtin_tools(self):
+        from swival.agent import build_tools
+
+        tools = build_tools({}, {}, commands_unrestricted=True, tools_mode="code-read")
+        names = {t["function"]["name"] for t in tools}
+        assert names == {
+            "grep",
+            "list_files",
+            "outline",
+            "read_file",
+            "read_multiple_files",
+            "request_tools",
+        }
+
+    def test_unknown_tools_mode_errors(self):
+        from swival.agent import build_tools
+
+        with pytest.raises(ValueError, match="unknown tools_mode"):
+            build_tools({}, {}, commands_unrestricted=False, tools_mode="bogus")
+
+    def test_request_tools_available_in_full_mode(self):
+        from swival.agent import build_tools
+
+        tools = build_tools({}, {}, commands_unrestricted=False)
+        names = {t["function"]["name"] for t in tools}
+        assert "request_tools" in names
+
+    def test_request_tools_dispatch_records_structured_request(self, tmp_path):
+        result = dispatch(
+            "request_tools",
+            {"reason": "need to edit status.txt", "tools": ["edit_file"]},
+            str(tmp_path),
+        )
+
+        assert "tool request recorded: edit_file" in result
+        assert "reason: need to edit status.txt" in result
+
 
 # Sandbox tests
 # =========================================================================

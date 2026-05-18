@@ -103,6 +103,15 @@ from .repair import format_repair_feedback, repair_tool_args
 DEFAULT_SYSTEM_PROMPT_FILE = Path(__file__).parent / "system_prompt.txt"
 MAX_ARG_LOG = 1000
 MAX_INSTRUCTIONS_CHARS = 10_000
+TOOL_MODES = ("full", "code-read")
+CODE_READ_TOOL_NAMES = {
+    "grep",
+    "list_files",
+    "outline",
+    "read_file",
+    "read_multiple_files",
+    "request_tools",
+}
 
 _encoder = tiktoken.get_encoding("cl100k_base")
 
@@ -2570,6 +2579,7 @@ def handle_tool_call(
     metaskill_loop_kwargs=None,
     cancel_flag=None,
     enabled_metaskills=None,
+    available_tool_names=None,
 ):
     """Execute a single tool call and return (tool_msg, metadata).
 
@@ -2592,6 +2602,28 @@ def handle_tool_call(
                 "content": error_content,
             },
             {"name": name, "arguments": None, "elapsed": 0.0, "succeeded": False},
+        )
+
+    if available_tool_names is not None and name not in available_tool_names:
+        error_content = f"error: tool {name!r} is not available in the current toolset."
+        if "request_tools" in available_tool_names:
+            error_content += (
+                " Call request_tools with the missing tool name and a short reason "
+                "if this tool is required."
+            )
+        return (
+            {
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "content": error_content,
+            },
+            {
+                "name": name,
+                "arguments": parsed_args,
+                "elapsed": 0.0,
+                "succeeded": False,
+                "repairs": [],
+            },
         )
 
     schema = get_tool_schema(name)
@@ -3941,6 +3973,12 @@ def build_parser():
         type=str,
         default=_UNSET,
         help='Command execution mode: "all" (default, unrestricted), "none" (disabled), "ask" (approve each command bucket interactively), or comma-separated whitelist (e.g. "ls,git,python3").',
+    )
+    access_group.add_argument(
+        "--tools-mode",
+        choices=TOOL_MODES,
+        default=_UNSET,
+        help='Tool schema exposure: "full" (default) or "code-read" (only file/code navigation tools).',
     )
     provider_group.add_argument(
         "--api-key",
@@ -5472,6 +5510,7 @@ def build_tools(
     *,
     goal_tools: bool = False,
     metaskill_names: list[str] | None = None,
+    tools_mode: str = "full",
 ) -> list:
     """Construct the tools list from base + conditionals.
 
@@ -5539,7 +5578,32 @@ def build_tools(
         from .subagent import SPAWN_SUBAGENT_TOOL, CHECK_SUBAGENTS_TOOL
 
         tools.extend([SPAWN_SUBAGENT_TOOL, CHECK_SUBAGENTS_TOOL])
+    tools = _filter_tools_for_mode(tools, tools_mode)
     return tools
+
+
+def _filter_tools_for_mode(tools: list, tools_mode: str) -> list:
+    if tools_mode == "full":
+        return tools
+    if tools_mode == "code-read":
+        return [
+            tool
+            for tool in tools
+            if tool.get("function", {}).get("name") in CODE_READ_TOOL_NAMES
+        ]
+    raise ValueError(f"unknown tools_mode {tools_mode!r}")
+
+
+def _tool_names_from_schemas(tools: list | None) -> set[str] | None:
+    if tools is None:
+        return None
+    return {
+        name
+        for tool in tools
+        if isinstance(tool, dict)
+        for name in [tool.get("function", {}).get("name")]
+        if isinstance(name, str)
+    }
 
 
 _GOAL_TOOL_NAMES = {"complete_goal"}
@@ -6095,6 +6159,7 @@ def _run_main(args, report, _write_report, parser):
         shell_allowed=shell_allowed,
         subagents=_subagents,
         metaskill_names=_metaskill_names,
+        tools_mode=args.tools_mode,
     )
 
     # Initialize MCP servers
@@ -6893,6 +6958,7 @@ def run_agent_loop(
             metaskill_loop_kwargs=_metaskill_loop_kwargs,
             cancel_flag=cancel_flag,
             enabled_metaskills=enabled_metaskills,
+            available_tool_names=_tool_names_from_schemas(_command_tool_schemas),
         )
         llm_kwargs = {
             **llm_kwargs,
@@ -7702,6 +7768,7 @@ def run_agent_loop(
         image_stash: list[dict] = []
         _last_turn_used_tools = True
         _goal_launch_pending = False
+        _available_tool_names = _tool_names_from_schemas(effective_tools)
         for tool_call in msg.tool_calls:
             # Check cancellation before each tool call
             if cancel_flag is not None and cancel_flag.is_set():
@@ -7751,6 +7818,7 @@ def run_agent_loop(
                 metaskill_loop_kwargs=_metaskill_loop_kwargs,
                 cancel_flag=cancel_flag,
                 enabled_metaskills=enabled_metaskills,
+                available_tool_names=_available_tool_names,
             )
             messages.append(tool_msg)
 

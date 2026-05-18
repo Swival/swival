@@ -63,6 +63,7 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "no_system_prompt": bool,
     "files": str,
     "commands": (str, list),
+    "tools_mode": str,
     "yolo": bool,
     "allowed_dirs": list,
     "allowed_dirs_ro": list,
@@ -156,6 +157,7 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "no_system_prompt": False,
     "files": "some",
     "commands": "all",
+    "tools_mode": "full",
     "yolo": False,
     "add_dir": [],
     "add_dir_ro": [],
@@ -270,6 +272,11 @@ def _validate_config(config: dict, source: str) -> None:
                         raise ConfigError(
                             f"{source}: commands[{i}]: expected string, got {type(elem).__name__}"
                         )
+        if key == "tools_mode":
+            if value not in ("full", "code-read"):
+                raise ConfigError(
+                    f"{source}: 'tools_mode' must be 'full' or 'code-read', got {value!r}"
+                )
 
         # Validate list element types
         if key in _LIST_OF_STR_KEYS:
@@ -1077,6 +1084,7 @@ def args_to_session_kwargs(args, base_dir: str) -> dict:
         "files",
         "yolo",
         "commands",
+        "tools_mode",
         "system_prompt",
         "no_system_prompt",
         "no_instructions",
@@ -1333,6 +1341,7 @@ def generate_config(
         "# sandbox_auto_session = true",
         '# files = "some"                  # "some" (default, workspace) | "all" (unrestricted) | "none" (.swival/ only)',
         '# commands = "all"                # "all" (default) | "none" | "ask" | ["ls", "git", "python3"]',
+        '# tools_mode = "full"             # "full" (default) | "code-read" (file/code navigation tools only)',
         "# yolo = false                    # shorthand for files = all + commands = all",
         '# allowed_dirs = ["../shared-lib", "/data/assets"]',
         '# allowed_dirs_ro = ["/reference/docs", "~/datasets"]',
