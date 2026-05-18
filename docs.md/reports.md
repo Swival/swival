@@ -166,6 +166,11 @@ args = []
 
 [variants.compact-tools]
 args = ["--temperature", "0.1"]
+
+[variants.read-then-full]
+args = ["--tools-mode", "code-read"]
+escalation_args = ["--model", "qwen3-coder-next", "--tools-mode", "full"]
+escalate_on = ["tool_request", "blocked_tool_call", "verifier_failed"]
 ```
 
 `tasks.json`:
@@ -199,6 +204,8 @@ Relative `tasks`, `out_dir`, and task `base_dir` paths resolve from the director
 `summary.json` includes both pooled comparisons and `per_repeat_comparisons`. Pooled comparisons count a task as a win only when the candidate succeeds more often than the baseline across all repeats. It also includes `by_variant_task`, with min/mean/max distributions for noisy continuous metrics such as `turns`, `prompt_tokens_est`, `duration_s`, and `tool_calls_failed`.
 
 Each row includes `verifier_passed` and `success_strict` slots. They are `null` until a verifier writes pass/fail data into reports; `success` remains the outcome-based compatibility field.
+
+Variants can set `escalation_args` to run a second, broader Swival command after a restricted first attempt. Escalation is post-hoc and measurable: by default it triggers on `tool_request`, `blocked_tool_call`, or `verifier_failed`. Rows include `escalated`, `escalation_reasons`, and both `prompt_tokens_est` for the primary attempt and `prompt_tokens_with_escalation` for the real total cost. Aggregates include `escalation_rate` so token savings are reported net of failed restricted attempts.
 
 You can compare model variants like this:
 
