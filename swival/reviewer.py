@@ -138,6 +138,8 @@ def run_as_reviewer(args, base_dir: str) -> int:
             max_context_tokens=args.max_context_tokens,
             verbose=args.verbose,
             aws_profile=getattr(args, "aws_profile", None),
+            project=getattr(args, "gcp_project", None),
+            location=getattr(args, "location", None),
         )
     except (AgentError, SystemExit) as e:
         print(f"reviewer error: provider resolution failed: {e}", file=sys.stderr)
@@ -178,6 +180,8 @@ def run_as_reviewer(args, base_dir: str) -> int:
             user_agent=llm_kwargs.get("user_agent"),
             max_retries=getattr(args, "retries", 5),
             aws_profile=llm_kwargs.get("aws_profile"),
+            vertex_project=llm_kwargs.get("vertex_project"),
+            vertex_location=llm_kwargs.get("vertex_location"),
             **extra_kwargs,
         )
         msg = _llm_result[0]

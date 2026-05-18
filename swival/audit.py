@@ -1260,6 +1260,8 @@ def _call_audit_llm(
             user_agent=llm_kwargs.get("user_agent"),
             prompt_cache=True,
             aws_profile=llm_kwargs.get("aws_profile"),
+            vertex_project=llm_kwargs.get("vertex_project"),
+            vertex_location=llm_kwargs.get("vertex_location"),
         )
         return _msg_content(msg) or ""
 

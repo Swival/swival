@@ -108,6 +108,8 @@ class Session:
         lifecycle_enabled: bool = True,
         command_middleware: str | None = None,
         aws_profile: str | None = None,
+        project: str | None = None,
+        location: str | None = None,
         approved_buckets: set[str] | None = None,
         metaskills: str = "local",
     ):
@@ -176,6 +178,8 @@ class Session:
         self.lifecycle_enabled = lifecycle_enabled
         self.command_middleware = command_middleware
         self.aws_profile = aws_profile
+        self.project = project
+        self.location = location
         self.approved_buckets = approved_buckets
         self.metaskills = metaskills
 
@@ -264,6 +268,8 @@ class Session:
             max_context_tokens=self.max_context_tokens,
             verbose=self.verbose,
             aws_profile=self.aws_profile,
+            project=self.project,
+            location=self.location,
         )
         if self.user_agent is not None:
             self._llm_kwargs["user_agent"] = self.user_agent

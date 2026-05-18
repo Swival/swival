@@ -33,6 +33,8 @@ PROFILE_KEYS: set[str] = {
     "user_agent",
     "base_url",
     "aws_profile",
+    "project",
+    "location",
     "max_output_tokens",
     "max_context_tokens",
     "temperature",
@@ -52,6 +54,8 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "user_agent": str,
     "base_url": str,
     "aws_profile": str,
+    "project": str,
+    "location": str,
     "max_output_tokens": int,
     "max_context_tokens": int,
     "temperature": (int, float),
@@ -124,6 +128,7 @@ _LIST_OF_STR_KEYS = {
 _CONFIG_TO_ARGPARSE: dict[str, str] = {
     "allowed_dirs": "add_dir",
     "allowed_dirs_ro": "add_dir_ro",
+    "project": "gcp_project",
 }
 
 # Boolean keys that are negated when mapping CLI/config to Session kwargs.
@@ -204,6 +209,8 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "no_lifecycle": False,
     "command_middleware": None,
     "aws_profile": None,
+    "gcp_project": None,
+    "location": None,
     "approved_buckets": [],
     "oneshot_commands": False,
     "trace_dir": None,
@@ -1103,6 +1110,7 @@ def args_to_session_kwargs(args, base_dir: str) -> dict:
         "lifecycle_fail_closed",
         "command_middleware",
         "trace_dir",
+        "location",
     ]
 
     kwargs: dict = {"base_dir": base_dir}
@@ -1159,6 +1167,10 @@ def args_to_session_kwargs(args, base_dir: str) -> dict:
     # but args.verbose may have been set directly
     if hasattr(args, "verbose") and "verbose" not in kwargs:
         kwargs["verbose"] = args.verbose
+
+    gcp_project = getattr(args, "gcp_project", None)
+    if gcp_project is not None:
+        kwargs["project"] = gcp_project
 
     return kwargs
 
@@ -1304,11 +1316,13 @@ def generate_config(
         "# CLI flags override these values. Only uncomment what you need.",
         "",
         "# --- Provider / model ---",
-        '# provider = "lmstudio"          # "lmstudio" | "llamacpp" | "huggingface" | "openrouter" | "generic" | "google" | "chatgpt" | "bedrock" | "command"',
+        '# provider = "lmstudio"          # "lmstudio" | "llamacpp" | "huggingface" | "openrouter" | "generic" | "google" | "geap" | "chatgpt" | "bedrock" | "command"',
         '# model = "qwen/qwen3-coder-next"',
         '# api_key = "sk-or-..."            # prefer env vars; this is a fallback',
         '# base_url = "https://..."         # server URL; for bedrock: region name or endpoint URL',
         '# aws_profile = "bedrock"          # AWS profile name for bedrock provider (from ~/.aws/config)',
+        '# project = "my-gcp-project"       # Google Cloud project ID for geap provider',
+        '# location = "us-central1"         # Google Cloud location for geap provider',
         "",
         "# --- Generation parameters ---",
         "# max_output_tokens = 32768",

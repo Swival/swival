@@ -66,6 +66,12 @@ _PROVIDERS = [
         "HuggingFace-hosted models and endpoints",
     ),
     (
+        "geap",
+        "Gemini Enterprise Agent Platform",
+        "Gemini through Google Cloud (formerly Vertex AI)",
+        "enterprise setups with Google Cloud credentials",
+    ),
+    (
         "bedrock",
         "AWS Bedrock",
         "Models through AWS",
@@ -85,6 +91,8 @@ _CONFIG_KEY_ORDER = [
     "base_url",
     "api_key",
     "aws_profile",
+    "project",
+    "location",
     "max_context_tokens",
     "max_output_tokens",
     "reasoning_effort",
@@ -331,6 +339,8 @@ def _collect_settings() -> dict | None:
         _ask_openrouter(settings)
     elif provider_name == "google":
         _ask_google(settings)
+    elif provider_name == "geap":
+        _ask_geap(settings)
     elif provider_name == "generic":
         _ask_generic(settings)
     elif provider_name == "huggingface":
@@ -527,7 +537,7 @@ def _ask_openrouter(s: dict) -> None:
 
 
 def _ask_google(s: dict) -> None:
-    s["model"] = _prompt_text_required("Model (e.g. gemini-2.5-flash)")
+    s["model"] = _prompt_text_required("Model (e.g. gemini-3-flash)")
 
     _ask_api_key(s, env_var="GEMINI_API_KEY or OPENAI_API_KEY")
 
@@ -556,6 +566,12 @@ def _ask_huggingface(s: dict) -> None:
     url = _prompt_text("Endpoint URL override (blank to skip)", default="")
     if url:
         s["base_url"] = url
+
+
+def _ask_geap(s: dict) -> None:
+    s["model"] = _prompt_text_required("Model (e.g. gemini-2.5-flash)")
+    s["project"] = _prompt_text_required("Google Cloud project ID")
+    s["location"] = _prompt_text_required("Location (e.g. global)")
 
 
 def _ask_bedrock(s: dict) -> None:
@@ -642,11 +658,13 @@ def _mask_secret(val: str) -> str:
 
 def _prompt_choice(label: str, choices: list[str], *, rich_labels: bool = False) -> int:
     """Present a numbered list and return the 0-based index of the selection."""
+    width = len(str(len(choices)))
     for i, c in enumerate(choices, 1):
+        num = f"{i}.".rjust(width + 1)
         if rich_labels:
-            _console.print(f"  [bold]{i}.[/bold] {c}")
+            _console.print(f"  [bold]{num}[/bold] {c}")
         else:
-            _console.print(f"  {i}. {c}")
+            _console.print(f"  {num} {c}")
     _console.print()
 
     while True:

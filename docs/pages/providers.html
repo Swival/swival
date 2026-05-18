@@ -104,7 +104,8 @@
 <li><a href="#huggingface-inference-api">HuggingFace Inference API</a> — hosted inference</li>
 <li><a href="#openrouter">OpenRouter</a> — multi-provider access through a single API</li>
 <li><a href="#generic-openai-compatible">Generic (OpenAI-compatible)</a> — any OpenAI-compatible server</li>
-<li><a href="#google-gemini-api">Google Gemini API</a> — Google's models</li>
+<li><a href="#google-gemini-api">Google Gemini API</a> — Google's models via API key</li>
+<li><a href="#gemini-enterprise-agent-platform">Gemini Enterprise Agent Platform</a> — Gemini through Google Cloud (formerly Vertex AI)</li>
 <li><a href="#chatgpt-pluspro">ChatGPT Plus/Pro</a> — OpenAI models via your existing subscription</li>
 <li><a href="#aws-bedrock">AWS Bedrock</a> — models hosted on AWS</li>
 <li><a href="#command-external-program">Command (External Program)</a> — shell out to an external program</li>
@@ -249,11 +250,41 @@ swival --provider generic \
 <p><code>--model</code> is required. Authentication comes from <code>--api-key</code>, <code>GEMINI_API_KEY</code>, or <code>OPENAI_API_KEY</code>.</p>
 <pre><code class="language-sh">export GEMINI_API_KEY=...
 swival --provider google \
-    --model gemini-2.5-flash \
+    --model gemini-3-flash \
     &quot;task&quot;
 </code></pre>
 <p>When <code>--max-context-tokens</code> is not set, Swival auto-detects the context window from the model's known limits. If detection fails, context length is unknown and compaction may not trigger at the right time — set <code>--max-context-tokens</code> explicitly if you hit issues.</p>
 <p><code>--base-url</code> overrides the default endpoint if you need a custom one.</p>
+<h2 id="gemini-enterprise-agent-platform">Gemini Enterprise Agent Platform</h2>
+<p>The <code>geap</code> provider connects to Google's Gemini models through Vertex AI / Gemini Enterprise Agent Platform. Unlike the <code>google</code> provider which uses a public API key, <code>geap</code> uses Google Cloud project credentials and is designed for enterprise setups.</p>
+<p><code>--provider vertexai</code> is accepted as an alias for <code>--provider geap</code>.</p>
+<p><code>--model</code>, <code>--gcp-project</code>, and <code>--location</code> are required. Authentication uses Google Application Default Credentials — no API key.</p>
+<pre><code class="language-sh">gcloud auth application-default login
+swival --provider geap \
+    --gcp-project my-gcp-project \
+    --location us-central1 \
+    --model gemini-3.1-pro \
+    &quot;task&quot;
+</code></pre>
+<p>For service accounts, set <code>GOOGLE_APPLICATION_CREDENTIALS</code> instead of running the gcloud login:</p>
+<pre><code class="language-sh">export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+swival --provider geap \
+    --gcp-project my-gcp-project \
+    --location us-central1 \
+    --model gemini-3.1-pro \
+    &quot;task&quot;
+</code></pre>
+<p><code>--gcp-project</code> can also be set via the <code>GOOGLE_CLOUD_PROJECT</code> environment variable:</p>
+<pre><code class="language-sh">export GOOGLE_CLOUD_PROJECT=my-gcp-project
+swival --provider geap --location us-central1 --model gemini-3.1-pro &quot;task&quot;
+</code></pre>
+<p>Pass bare model names like <code>gemini-3.1-pro</code>. Do not include a <code>vertex_ai/</code> prefix — Swival adds it automatically and rejects prefixed names with a clear error.</p>
+<p>In config:</p>
+<pre><code class="language-toml">provider = &quot;geap&quot;
+model = &quot;gemini-3.1-pro&quot;
+project = &quot;my-gcp-project&quot;
+location = &quot;us-central1&quot;
+</code></pre>
 <h2 id="chatgpt-pluspro">ChatGPT Plus/Pro</h2>
 <p>The <code>chatgpt</code> provider lets you use OpenAI models through your existing ChatGPT Plus or ChatGPT Pro subscription, without needing a separate API key.</p>
 <p>Authentication uses an OAuth device-code flow — on first use, Swival prints a device code and a verification URL to your terminal. Open the URL, enter the code, and authorize with your ChatGPT account. The resulting tokens are cached locally and refreshed automatically on subsequent runs.</p>

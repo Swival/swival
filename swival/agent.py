@@ -469,6 +469,31 @@ _SSO_TOKEN_ERROR_RE = re.compile(
 )
 
 
+_GEAP_AUTH_KEYWORDS = ("credentials", "unauthorized", "permission")
+
+_GEAP_AUTH_HINT = (
+    "\n\nGEAP authentication requires valid Google Cloud credentials.\n"
+    "Options:\n"
+    "  gcloud auth application-default login\n"
+    "  export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json\n\n"
+    "Example:\n"
+    "  swival --provider geap \\\n"
+    "    --gcp-project my-gcp-project \\\n"
+    "    --location us-central1 \\\n"
+    '    --model gemini-3.1-pro "task"'
+)
+
+
+def _geap_auth_hint(provider: str, error_text: str) -> str:
+    """Return actionable GEAP credential guidance if the error looks auth-related."""
+    if provider != "geap":
+        return ""
+    lower = error_text.lower()
+    if any(kw in lower for kw in _GEAP_AUTH_KEYWORDS):
+        return _GEAP_AUTH_HINT
+    return ""
+
+
 def _is_transient(exc):
     """Return True if the exception looks like a transient network/server error."""
     import litellm as _lt
@@ -2819,6 +2844,8 @@ def _resolve_model_str(provider: str, model_id: str) -> str:
         return f"chatgpt/{bare}"
     elif provider == "bedrock":
         return f"bedrock/{model_id.removeprefix('bedrock/')}"
+    elif provider == "geap":
+        return f"vertex_ai/{model_id}"
     else:
         return model_id
 
@@ -3372,6 +3399,8 @@ def call_llm(
     llm_filter=None,
     call_kind="agent",
     aws_profile=None,
+    vertex_project=None,
+    vertex_location=None,
 ):
     """Call LiteLLM with the appropriate provider.
 
@@ -3510,6 +3539,13 @@ def call_llm(
                 kwargs["aws_region_name"] = base_url
         if aws_profile:
             kwargs["aws_profile_name"] = aws_profile
+    elif provider == "geap":
+        kwargs = {
+            "vertex_project": vertex_project,
+            "vertex_location": vertex_location,
+        }
+        if base_url:
+            kwargs["api_base"] = base_url
     else:
         raise AgentError(f"unknown provider {provider!r}")
 
@@ -3552,7 +3588,9 @@ def call_llm(
     # Bedrock), tell LiteLLM to auto-inject cache breakpoints on the system
     # message. OpenAI/Deepseek cache automatically (>1024 token prompts).
     # lmstudio is local — no caching benefit.
-    if prompt_cache and provider != "lmstudio":
+    # geap (Vertex AI) rejects cached content when tools or system
+    # instructions are present in the same request.
+    if prompt_cache and provider not in ("lmstudio", "geap"):
         try:
             from litellm.utils import supports_prompt_caching
 
@@ -3753,7 +3791,9 @@ def call_llm(
             )
             tne._provider_retries = _retries_from_exc(e)
             raise tne
-        ae = AgentError(f"LLM call failed: {e}")
+        msg = f"LLM call failed: {e}"
+        msg += _geap_auth_hint(provider, msg_text)
+        ae = AgentError(msg)
         ae._provider_retries = _retries_from_exc(e)
         _raise_with_retries(ae)
     except ToolsNotSupportedError:
@@ -3782,6 +3822,8 @@ def call_llm(
                 "    --base-url us-east-2 \\\n"
                 '    --aws-profile bedrock "task"'
             )
+        else:
+            msg += _geap_auth_hint(provider, msg_text)
         ae = AgentError(msg)
         ae._provider_retries = _retries_from_exc(e)
         _raise_with_retries(ae)
@@ -3836,6 +3878,10 @@ def _build_self_review_cmd(
         parts.extend(["--retries", str(args.retries)])
     if getattr(args, "aws_profile", None):
         parts.extend(["--aws-profile", args.aws_profile])
+    if getattr(args, "gcp_project", None):
+        parts.extend(["--gcp-project", args.gcp_project])
+    if getattr(args, "location", None):
+        parts.extend(["--location", args.location])
 
     return shlex.join(parts)
 
@@ -3970,6 +4016,17 @@ def build_parser():
         "--aws-profile",
         default=_UNSET,
         help="AWS profile name for bedrock provider (from ~/.aws/config). Overrides AWS_PROFILE env var.",
+    )
+    provider_group.add_argument(
+        "--gcp-project",
+        dest="gcp_project",
+        default=_UNSET,
+        help="Google Cloud project ID for geap provider. Overrides GOOGLE_CLOUD_PROJECT env var.",
+    )
+    provider_group.add_argument(
+        "--location",
+        default=_UNSET,
+        help="Google Cloud location for geap provider (e.g. us-central1).",
     )
 
     color_group = output_group.add_mutually_exclusive_group()
@@ -4313,12 +4370,14 @@ def build_parser():
             "openrouter",
             "generic",
             "google",
+            "geap",
+            "vertexai",
             "chatgpt",
             "bedrock",
             "command",
         ],
         default=_UNSET,
-        help="LLM provider: lmstudio (local), llamacpp (llama.cpp server, auto-discovers model), huggingface (HF API), openrouter (multi-provider API), generic (any OpenAI-compatible server), google (Gemini via OpenAI-compatible endpoint), chatgpt (ChatGPT Plus/Pro subscription via OAuth), bedrock (AWS Bedrock, auth via AWS credential chain), command (external command as LLM, --model is the command to run).",
+        help="LLM provider: lmstudio (local), llamacpp (llama.cpp server, auto-discovers model), huggingface (HF API), openrouter (multi-provider API), generic (any OpenAI-compatible server), google (Gemini via OpenAI-compatible endpoint), geap (Gemini Enterprise Agent Platform / Vertex AI, auth via Google Cloud credentials), chatgpt (ChatGPT Plus/Pro subscription via OAuth), bedrock (AWS Bedrock, auth via AWS credential chain), command (external command as LLM, --model is the command to run). 'vertexai' is an alias for 'geap'.",
     )
     output_group.add_argument(
         "-q",
@@ -5256,12 +5315,16 @@ def resolve_provider(
     max_context_tokens: int | None,
     verbose: bool,
     aws_profile: str | None = None,
+    project: str | None = None,
+    location: str | None = None,
 ) -> tuple[str, str | None, str | None, int | None, dict]:
     """Validate provider args, discover model (LM Studio), return resolved config.
 
     Returns (model_id, api_base, api_key, context_length, llm_kwargs).
     Raises ConfigError for invalid configuration.
     """
+    if provider == "vertexai":
+        provider = "geap"
     provider_name = provider
     llm_provider = provider
     os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -5384,6 +5447,42 @@ def resolve_provider(
             _bare = model_id.removeprefix("chatgpt/").removeprefix("chatgpt/")
             context_length = _litellm_context_length(f"chatgpt/{_bare}")
 
+    elif provider == "geap":
+        if not model:
+            raise ConfigError("--model is required when --provider is geap")
+        if api_key:
+            raise ConfigError(
+                "--api-key is not supported for geap. "
+                "Use application-default credentials (gcloud auth application-default login) "
+                "or GOOGLE_APPLICATION_CREDENTIALS instead."
+            )
+        if "/" in model:
+            raise ConfigError(
+                f"pass the bare model name (e.g. gemini-3.1-pro), "
+                f"not a prefixed string like {model!r}. "
+                f"Swival adds the vertex_ai/ prefix automatically."
+            )
+        resolved_project = project or os.environ.get("GOOGLE_CLOUD_PROJECT")
+        if not resolved_project:
+            raise ConfigError(
+                "--gcp-project or GOOGLE_CLOUD_PROJECT env var is required for geap provider"
+            )
+        if not location:
+            raise ConfigError(
+                "--location is required for geap provider (e.g. us-central1)"
+            )
+        creds_file = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+        if creds_file and not os.path.isfile(creds_file):
+            raise ConfigError(
+                f"GOOGLE_APPLICATION_CREDENTIALS points to a file that does not exist: {creds_file}"
+            )
+        model_id = model
+        api_base = base_url
+        resolved_key = None
+        context_length = max_context_tokens
+        if context_length is None:
+            context_length = _litellm_context_length(f"vertex_ai/{model_id}")
+
     elif provider == "bedrock":
         if not model:
             raise ConfigError("--model is required when --provider is bedrock")
@@ -5432,6 +5531,9 @@ def resolve_provider(
     }
     if aws_profile:
         llm_kwargs["aws_profile"] = aws_profile
+    if provider == "geap":
+        llm_kwargs["vertex_project"] = resolved_project
+        llm_kwargs["vertex_location"] = location
     return model_id, api_base, resolved_key, context_length, llm_kwargs
 
 
@@ -5923,6 +6025,8 @@ def _validate_external_command(cmd_string: str, label: str) -> None:
 
 
 def _run_main(args, report, _write_report, parser):
+    if args.provider == "vertexai":
+        args.provider = "geap"
     args._raw_llm_baseline = {
         "provider": args.provider,
         "model": args.model,
@@ -5930,6 +6034,8 @@ def _run_main(args, report, _write_report, parser):
         "user_agent": args.user_agent,
         "base_url": args.base_url,
         "aws_profile": args.aws_profile,
+        "project": args.gcp_project,
+        "location": args.location,
         "max_context_tokens": args.max_context_tokens,
         "max_output_tokens": args.max_output_tokens,
         "temperature": args.temperature,
@@ -5950,6 +6056,8 @@ def _run_main(args, report, _write_report, parser):
             max_context_tokens=args.max_context_tokens,
             verbose=args.verbose,
             aws_profile=args.aws_profile,
+            project=args.gcp_project,
+            location=args.location,
         )
     except ConfigError as e:
         parser.error(str(e))
@@ -6072,7 +6180,7 @@ def _run_main(args, report, _write_report, parser):
     elif _sa_val is False:
         _subagents = False
     else:
-        _subagents = args.provider in ("google", "chatgpt", "bedrock") or (
+        _subagents = args.provider in ("google", "geap", "chatgpt", "bedrock") or (
             context_length is not None and context_length >= 100_000
         )
     # Resolve metaskill names for tool exposure
@@ -8420,6 +8528,8 @@ def _repl_profile(
             max_context_tokens=merged.get("max_context_tokens"),
             verbose=verbose,
             aws_profile=merged.get("aws_profile"),
+            project=merged.get("project"),
+            location=merged.get("location"),
         )
     except (ConfigError, AgentError) as exc:
         return current_profile, f"profile switch failed: {exc}", True
@@ -8435,6 +8545,8 @@ def _repl_profile(
         "provider",
         "api_key",
         "aws_profile",
+        "vertex_project",
+        "vertex_location",
         "extra_body",
         "reasoning_effort",
         "sanitize_thinking",

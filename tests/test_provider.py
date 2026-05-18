@@ -13,9 +13,11 @@ from swival.agent import (
     _msg_to_dict,
     _pick_best_choice,
     _promote_reasoning_content,
+    _resolve_model_str,
     _sanitize_assistant_content,
     _strip_leaked_think_head,
 )
+from swival.config import ConfigError
 from swival.report import AgentError
 
 
@@ -1403,13 +1405,13 @@ class TestGoogleProviderRouting:
         with patch("litellm.completion") as mock_comp:
             mock_comp.return_value = self._mock_response()
             _, api_base, api_key, _, llm_kwargs = resolve_provider(
-                "google", "gemini-2.5-flash", "gemini-key", None, None, False
+                "google", "gemini-3-flash", "gemini-key", None, None, False
             )
             assert llm_kwargs["provider"] == "generic"
             assert api_base == self._GOOGLE_OPENAI_BASE
             call_llm(
                 api_base,
-                "gemini-2.5-flash",
+                "gemini-3-flash",
                 [],
                 100,
                 0.5,
@@ -1421,13 +1423,13 @@ class TestGoogleProviderRouting:
                 api_key=api_key,
             )
             kwargs = mock_comp.call_args[1]
-            assert kwargs["model"] == "openai/gemini-2.5-flash"
+            assert kwargs["model"] == "openai/gemini-3-flash"
             assert kwargs["api_key"] == "gemini-key"
             assert kwargs["api_base"] == self._GOOGLE_OPENAI_BASE
 
     def test_google_custom_base_url_overrides_default(self):
         _, api_base, _, _, llm_kwargs = resolve_provider(
-            "google", "gemini-2.5-flash", "k", "https://custom.example.com", None, False
+            "google", "gemini-3-flash", "k", "https://custom.example.com", None, False
         )
         assert llm_kwargs["provider"] == "generic"
         assert api_base == "https://custom.example.com"
@@ -1469,7 +1471,7 @@ class TestGoogleProviderValidation:
                 "--provider",
                 "google",
                 "--model",
-                "gemini-2.5-flash",
+                "gemini-3-flash",
                 "--no-system-prompt",
                 "--base-dir",
                 str(tmp_path),
@@ -1504,7 +1506,7 @@ class TestGoogleProviderValidation:
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         try:
             _, api_base, api_key, _, llm_kwargs = resolve_provider(
-                "google", "gemini-2.5-flash", None, None, None, False
+                "google", "gemini-3-flash", None, None, None, False
             )
         finally:
             monkeypatch.undo()
@@ -1524,7 +1526,7 @@ class TestGoogleProviderValidation:
                 "--provider",
                 "google",
                 "--model",
-                "gemini-2.5-flash",
+                "gemini-3-flash",
                 "--api-key",
                 "gemini-cli",
                 "--no-system-prompt",
@@ -3281,3 +3283,292 @@ class TestOrphanedToolCallsStripsReasoning:
         assert len(asst["tool_calls"]) == 1
         assert asst["tool_calls"][0]["id"] == "tc1"
         assert asst["reasoning_content"] == "I will call f and g"
+
+
+# ---------------------------------------------------------------------------
+# GEAP (Gemini Enterprise Agent Platform / Vertex AI) provider
+# ---------------------------------------------------------------------------
+
+
+class TestResolveModelStrGeap:
+    """Verify _resolve_model_str for geap provider."""
+
+    def test_bare_model(self):
+        assert (
+            _resolve_model_str("geap", "gemini-3.1-pro") == "vertex_ai/gemini-3.1-pro"
+        )
+
+    def test_another_model(self):
+        assert (
+            _resolve_model_str("geap", "gemini-3-flash") == "vertex_ai/gemini-3-flash"
+        )
+
+
+class TestResolveProviderGeap:
+    """Direct unit tests for resolve_provider() with provider='geap'."""
+
+    def test_happy_path(self):
+        model_id, api_base, resolved_key, context_length, llm_kwargs = resolve_provider(
+            "geap",
+            "gemini-3.1-pro",
+            None,
+            None,
+            None,
+            False,
+            project="my-project",
+            location="us-central1",
+        )
+        assert model_id == "gemini-3.1-pro"
+        assert resolved_key is None
+        assert llm_kwargs["provider"] == "geap"
+        assert llm_kwargs["vertex_project"] == "my-project"
+        assert llm_kwargs["vertex_location"] == "us-central1"
+
+    def test_vertexai_alias_normalizes_to_geap(self):
+        model_id, _, _, _, llm_kwargs = resolve_provider(
+            "vertexai",
+            "gemini-3.1-pro",
+            None,
+            None,
+            None,
+            False,
+            project="my-project",
+            location="us-central1",
+        )
+        assert model_id == "gemini-3.1-pro"
+        assert llm_kwargs["provider"] == "geap"
+        assert llm_kwargs["vertex_project"] == "my-project"
+
+    def test_missing_model_raises(self):
+        with pytest.raises(ConfigError, match="--model is required"):
+            resolve_provider(
+                "geap",
+                None,
+                None,
+                None,
+                None,
+                False,
+                project="p",
+                location="us-central1",
+            )
+
+    def test_api_key_rejected(self):
+        with pytest.raises(ConfigError, match="--api-key is not supported for geap"):
+            resolve_provider(
+                "geap",
+                "gemini-3.1-pro",
+                "some-key",
+                None,
+                None,
+                False,
+                project="p",
+                location="us-central1",
+            )
+
+    def test_prefixed_model_rejected(self):
+        with pytest.raises(ConfigError, match="bare model name"):
+            resolve_provider(
+                "geap",
+                "vertex_ai/gemini-3.1-pro",
+                None,
+                None,
+                None,
+                False,
+                project="p",
+                location="us-central1",
+            )
+
+    def test_missing_project_raises(self):
+        with pytest.raises(ConfigError, match="--gcp-project.*required"):
+            resolve_provider(
+                "geap",
+                "gemini-3.1-pro",
+                None,
+                None,
+                None,
+                False,
+                location="us-central1",
+            )
+
+    def test_project_from_env(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "env-project")
+        _, _, _, _, llm_kwargs = resolve_provider(
+            "geap",
+            "gemini-3.1-pro",
+            None,
+            None,
+            None,
+            False,
+            location="us-central1",
+        )
+        assert llm_kwargs["vertex_project"] == "env-project"
+
+    def test_explicit_project_overrides_env(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "env-project")
+        _, _, _, _, llm_kwargs = resolve_provider(
+            "geap",
+            "gemini-3.1-pro",
+            None,
+            None,
+            None,
+            False,
+            project="explicit-project",
+            location="us-central1",
+        )
+        assert llm_kwargs["vertex_project"] == "explicit-project"
+
+    def test_missing_location_raises(self):
+        with pytest.raises(ConfigError, match="--location is required"):
+            resolve_provider(
+                "geap",
+                "gemini-3.1-pro",
+                None,
+                None,
+                None,
+                False,
+                project="p",
+            )
+
+    def test_context_override(self):
+        _, _, _, context_length, _ = resolve_provider(
+            "geap",
+            "gemini-3.1-pro",
+            None,
+            None,
+            200000,
+            False,
+            project="p",
+            location="us-central1",
+        )
+        assert context_length == 200000
+
+    def test_credentials_file_missing_raises(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/nonexistent/sa.json")
+        with pytest.raises(ConfigError, match="does not exist"):
+            resolve_provider(
+                "geap",
+                "gemini-3.1-pro",
+                None,
+                None,
+                None,
+                False,
+                project="p",
+                location="us-central1",
+            )
+
+    def test_base_url_passthrough(self):
+        _, api_base, _, _, _ = resolve_provider(
+            "geap",
+            "gemini-3.1-pro",
+            None,
+            "https://custom-endpoint.example.com",
+            None,
+            False,
+            project="p",
+            location="us-central1",
+        )
+        assert api_base == "https://custom-endpoint.example.com"
+
+
+class TestGeapRouting:
+    """Verify that call_llm routes geap calls correctly."""
+
+    def _mock_response(self):
+        choice = MagicMock()
+        choice.message = MagicMock(content="ok", tool_calls=None)
+        choice.finish_reason = "stop"
+        resp = MagicMock()
+        resp.choices = [choice]
+        return resp
+
+    def test_geap_routing_basic(self):
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                None,
+                "gemini-3.1-pro",
+                [],
+                100,
+                0.5,
+                1.0,
+                None,
+                None,
+                False,
+                provider="geap",
+                api_key=None,
+                vertex_project="my-project",
+                vertex_location="us-central1",
+            )
+            mock_comp.assert_called_once()
+            kwargs = mock_comp.call_args[1]
+            assert kwargs["model"] == "vertex_ai/gemini-3.1-pro"
+            assert kwargs["vertex_project"] == "my-project"
+            assert kwargs["vertex_location"] == "us-central1"
+            assert "api_key" not in kwargs
+            assert "api_base" not in kwargs
+
+    def test_geap_routing_with_base_url(self):
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                "https://custom-endpoint.example.com",
+                "gemini-3.1-pro",
+                [],
+                100,
+                0.5,
+                1.0,
+                None,
+                None,
+                False,
+                provider="geap",
+                api_key=None,
+                vertex_project="my-project",
+                vertex_location="us-central1",
+            )
+            mock_comp.assert_called_once()
+            kwargs = mock_comp.call_args[1]
+            assert kwargs["api_base"] == "https://custom-endpoint.example.com"
+
+
+class TestGeapCLIParser:
+    """Verify that argparse accepts 'geap' and 'vertexai' as providers."""
+
+    def test_parser_accepts_geap(self):
+        from swival.agent import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "--provider",
+                "geap",
+                "--model",
+                "gemini-3.1-pro",
+                "--gcp-project",
+                "my-project",
+                "--location",
+                "us-central1",
+                "task",
+            ]
+        )
+        assert args.provider == "geap"
+        assert args.gcp_project == "my-project"
+        assert args.location == "us-central1"
+
+    def test_parser_accepts_vertexai_alias(self):
+        from swival.agent import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "--provider",
+                "vertexai",
+                "--model",
+                "gemini-3.1-pro",
+                "--gcp-project",
+                "my-project",
+                "--location",
+                "us-central1",
+                "task",
+            ]
+        )
+        assert args.provider == "vertexai"

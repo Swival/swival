@@ -35,6 +35,7 @@ dependencies = [
     "fast-cipher>=0.2.1",
     "boto3>=1.43.9",
     "starlark-go>=1.0.1",
+    "google-cloud-aiplatform>=1.100.0",
 ]
 
 [project.urls]

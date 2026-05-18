@@ -7,7 +7,8 @@ Swival supports local, hosted, and API-based model providers:
 - [HuggingFace Inference API](#huggingface-inference-api) — hosted inference
 - [OpenRouter](#openrouter) — multi-provider access through a single API
 - [Generic (OpenAI-compatible)](#generic-openai-compatible) — any OpenAI-compatible server
-- [Google Gemini API](#google-gemini-api) — Google's models
+- [Google Gemini API](#google-gemini-api) — Google's models via API key
+- [Gemini Enterprise Agent Platform](#gemini-enterprise-agent-platform) — Gemini through Google Cloud (formerly Vertex AI)
 - [ChatGPT Plus/Pro](#chatgpt-pluspro) — OpenAI models via your existing subscription
 - [AWS Bedrock](#aws-bedrock) — models hosted on AWS
 - [Command (External Program)](#command-external-program) — shell out to an external program
@@ -238,13 +239,59 @@ The `google` provider connects to Google's Gemini API through its OpenAI-compati
 ```sh
 export GEMINI_API_KEY=...
 swival --provider google \
-    --model gemini-2.5-flash \
+    --model gemini-3-flash \
     "task"
 ```
 
 When `--max-context-tokens` is not set, Swival auto-detects the context window from the model's known limits. If detection fails, context length is unknown and compaction may not trigger at the right time — set `--max-context-tokens` explicitly if you hit issues.
 
 `--base-url` overrides the default endpoint if you need a custom one.
+
+## Gemini Enterprise Agent Platform
+
+The `geap` provider connects to Google's Gemini models through Vertex AI / Gemini Enterprise Agent Platform. Unlike the `google` provider which uses a public API key, `geap` uses Google Cloud project credentials and is designed for enterprise setups.
+
+`--provider vertexai` is accepted as an alias for `--provider geap`.
+
+`--model`, `--gcp-project`, and `--location` are required. Authentication uses Google Application Default Credentials — no API key.
+
+```sh
+gcloud auth application-default login
+swival --provider geap \
+    --gcp-project my-gcp-project \
+    --location us-central1 \
+    --model gemini-3.1-pro \
+    "task"
+```
+
+For service accounts, set `GOOGLE_APPLICATION_CREDENTIALS` instead of running the gcloud login:
+
+```sh
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+swival --provider geap \
+    --gcp-project my-gcp-project \
+    --location us-central1 \
+    --model gemini-3.1-pro \
+    "task"
+```
+
+`--gcp-project` can also be set via the `GOOGLE_CLOUD_PROJECT` environment variable:
+
+```sh
+export GOOGLE_CLOUD_PROJECT=my-gcp-project
+swival --provider geap --location us-central1 --model gemini-3.1-pro "task"
+```
+
+Pass bare model names like `gemini-3.1-pro`. Do not include a `vertex_ai/` prefix — Swival adds it automatically and rejects prefixed names with a clear error.
+
+In config:
+
+```toml
+provider = "geap"
+model = "gemini-3.1-pro"
+project = "my-gcp-project"
+location = "us-central1"
+```
 
 ## ChatGPT Plus/Pro
 
