@@ -33,6 +33,8 @@ METRIC_KEYS = (
     "turn_drops",
     "guardrail_interventions",
     "truncated_responses",
+    "tool_request_count",
+    "blocked_tool_call_count",
     "duration_s",
     "total_llm_time_s",
     "total_tool_time_s",
@@ -414,6 +416,18 @@ def _report_repairs(report: dict) -> int:
     return total
 
 
+def _count_stat_items(stats: dict, key: str) -> int:
+    value = stats.get(key)
+    if isinstance(value, dict):
+        count = value.get("count")
+        if isinstance(count, int):
+            return count
+        items = value.get("items")
+        if isinstance(items, list):
+            return len(items)
+    return 0
+
+
 def _verifier_passed(report: dict) -> bool | None:
     result = report.get("result", {})
     value = result.get("verifier_passed")
@@ -470,6 +484,8 @@ def summarize_report(report_path: Path, meta_path: Path) -> dict:
             "turn_drops": int(stats.get("turn_drops", 0)),
             "guardrail_interventions": int(stats.get("guardrail_interventions", 0)),
             "truncated_responses": int(stats.get("truncated_responses", 0)),
+            "tool_request_count": _count_stat_items(stats, "tool_requests"),
+            "blocked_tool_call_count": _count_stat_items(stats, "blocked_tool_calls"),
             "total_llm_time_s": float(stats.get("total_llm_time_s", 0.0)),
             "total_tool_time_s": float(stats.get("total_tool_time_s", 0.0)),
             "duration_s": float(meta.get("duration_s", 0.0)),
@@ -497,6 +513,8 @@ def summarize_report(report_path: Path, meta_path: Path) -> dict:
         "turn_drops": 0,
         "guardrail_interventions": 0,
         "truncated_responses": 0,
+        "tool_request_count": 0,
+        "blocked_tool_call_count": 0,
         "total_llm_time_s": 0.0,
         "total_tool_time_s": 0.0,
         "duration_s": float(meta.get("duration_s", 0.0)),
@@ -759,6 +777,8 @@ def write_summary_csv(path: Path, rows: list[dict]) -> None:
         "turn_drops",
         "guardrail_interventions",
         "truncated_responses",
+        "tool_request_count",
+        "blocked_tool_call_count",
         "duration_s",
         "process_returncode",
         "report_exit_code",
