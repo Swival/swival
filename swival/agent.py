@@ -104,6 +104,7 @@ DEFAULT_SYSTEM_PROMPT_FILE = Path(__file__).parent / "system_prompt.txt"
 MAX_ARG_LOG = 1000
 MAX_INSTRUCTIONS_CHARS = 10_000
 TOOL_MODES = ("full", "code-read")
+TOOL_DESCRIPTION_MODES = ("full", "brief", "progressive")
 CODE_READ_TOOL_NAMES = {
     "grep",
     "list_files",
@@ -114,6 +115,8 @@ CODE_READ_TOOL_NAMES = {
 }
 
 _encoder = tiktoken.get_encoding("cl100k_base")
+_BRIEF_TOOL_DESCRIPTION = "Use this tool when its name matches the task."
+_BRIEF_PARAM_DESCRIPTION = "Tool argument."
 
 MAX_HISTORY_SIZE = 500 * 1024  # 500KB
 TODO_REMINDER_INTERVAL = 3  # remind after N turns of no todo usage
@@ -3984,6 +3987,12 @@ def build_parser():
         default=_UNSET,
         help='Tool schema exposure: "full" (default) or "code-read" (only file/code navigation tools).',
     )
+    access_group.add_argument(
+        "--tool-descriptions",
+        choices=TOOL_DESCRIPTION_MODES,
+        default=_UNSET,
+        help='Tool description detail: "full" (default), "brief", or "progressive" (brief first, expand after use).',
+    )
     provider_group.add_argument(
         "--api-key",
         type=str,
@@ -5073,6 +5082,7 @@ def main():
                     c.strip() for c in (args.commands or "").split(",") if c.strip()
                 )
             ),
+            "tool_descriptions": args.tool_descriptions,
             "max_review_rounds": args.max_review_rounds,
             "skills_discovered": sorted(skills_catalog or {}),
             "instructions_loaded": instructions_loaded or [],
@@ -5596,6 +5606,63 @@ def _filter_tools_for_mode(tools: list, tools_mode: str) -> list:
             if tool.get("function", {}).get("name") in CODE_READ_TOOL_NAMES
         ]
     raise ValueError(f"unknown tools_mode {tools_mode!r}")
+
+
+def _brief_description_for_tool(name: str) -> str:
+    return f"Use {name} when its name matches the task."
+
+
+def _shorten_tool_descriptions(
+    value, *, tool_name: str | None = None, top_level: bool = False
+):
+    if isinstance(value, list):
+        return [
+            _shorten_tool_descriptions(item, tool_name=tool_name, top_level=top_level)
+            for item in value
+        ]
+    if not isinstance(value, dict):
+        return value
+
+    next_tool_name = tool_name
+    fn = value.get("function")
+    if isinstance(fn, dict) and isinstance(fn.get("name"), str):
+        next_tool_name = fn["name"]
+
+    shortened = {}
+    for key, item in value.items():
+        if key == "description" and isinstance(item, str):
+            shortened[key] = (
+                _brief_description_for_tool(next_tool_name)
+                if top_level and next_tool_name
+                else _BRIEF_PARAM_DESCRIPTION
+            )
+        else:
+            shortened[key] = _shorten_tool_descriptions(
+                item,
+                tool_name=next_tool_name,
+                top_level=key == "function",
+            )
+    return shortened
+
+
+def _tool_schemas_for_description_mode(
+    tools: list | None,
+    mode: str,
+    expanded_tool_names: set[str] | None = None,
+) -> list | None:
+    if tools is None or mode == "full":
+        return tools
+    if mode not in ("brief", "progressive"):
+        raise ValueError(f"unknown tool_descriptions mode {mode!r}")
+    expanded_tool_names = expanded_tool_names or set()
+    rendered = []
+    for tool in tools:
+        name = tool.get("function", {}).get("name")
+        if mode == "progressive" and name in expanded_tool_names:
+            rendered.append(tool)
+        else:
+            rendered.append(_shorten_tool_descriptions(tool, top_level=True))
+    return rendered
 
 
 def _tool_names_from_schemas(tools: list | None) -> set[str] | None:
@@ -6357,6 +6424,7 @@ def _run_main(args, report, _write_report, parser):
         command_policy=command_policy,
         metaskills_policy=_metaskills_policy_val,
         enabled_metaskills=set(_metaskill_names or []),
+        tool_descriptions=args.tool_descriptions,
     )
 
     # Validate and thread llm_filter
@@ -6779,6 +6847,7 @@ def run_agent_loop(
     goal_launch_turn: bool = False,
     metaskills_policy: str = "local",
     enabled_metaskills: set | None = None,
+    tool_descriptions: str = "full",
 ) -> tuple[str | None, bool]:
     """Run the tool-calling loop until a final answer or max turns.
 
@@ -6927,7 +6996,13 @@ def run_agent_loop(
             tools = [
                 t for t in tools if t.get("function", {}).get("name") != "view_image"
             ]
-    effective_tools = None if provider == "command" else tools
+    if tool_descriptions not in TOOL_DESCRIPTION_MODES:
+        raise ValueError(f"unknown tool_descriptions mode {tool_descriptions!r}")
+    expanded_tool_descriptions: set[str] = set()
+    base_effective_tools = None if provider == "command" else tools
+    effective_tools = _tool_schemas_for_description_mode(
+        base_effective_tools, tool_descriptions, expanded_tool_descriptions
+    )
 
     # Build command_tool_kwargs for command provider tool-calling support
     _command_tool_schemas = (
@@ -7041,7 +7116,7 @@ def run_agent_loop(
 
     def _drop_tools(exc, elapsed_time, tokens):
         """Handle ToolsNotSupportedError: record, warn, drop tools."""
-        nonlocal effective_tools, _is_tools_retry, turns
+        nonlocal base_effective_tools, effective_tools, _is_tools_retry, turns
         if report:
             report.record_llm_call(
                 turns + turn_offset,
@@ -7054,6 +7129,7 @@ def run_agent_loop(
             "model does not support function calling \u2014 "
             "dropping tools and retrying as plain chat"
         )
+        base_effective_tools = None
         effective_tools = None
         _is_tools_retry = True
         turns -= 1
@@ -7061,6 +7137,9 @@ def run_agent_loop(
     _is_tools_retry = False
     while turns < max_turns:
         turns += 1
+        effective_tools = _tool_schemas_for_description_mode(
+            base_effective_tools, tool_descriptions, expanded_tool_descriptions
+        )
 
         # Check cancellation flag
         if cancel_flag is not None and cancel_flag.is_set():
@@ -7355,6 +7434,7 @@ def run_agent_loop(
                         "context window exceeded even after compaction — "
                         "dropping all tools and retrying as plain chat"
                     )
+                    base_effective_tools = None
                     effective_tools = None
                 # Truncate a bloated system prompt so the user's
                 # actual question can fit in the remaining context.
@@ -7783,6 +7863,16 @@ def run_agent_loop(
                 return None, True
 
             _tc_name = tool_call.function.name
+            if (
+                tool_descriptions == "progressive"
+                and base_effective_tools is not None
+                and _tc_name not in expanded_tool_descriptions
+            ):
+                expanded_tool_descriptions.add(_tc_name)
+                if report:
+                    report.record_tool_description_expansion(
+                        turns + turn_offset, _tc_name, "tool_call_attempt"
+                    )
             _emit(
                 EVENT_TOOL_START,
                 {
@@ -10323,6 +10413,7 @@ def repl_loop(
     trace_dir: str | None = None,
     metaskills_policy: str = "local",
     enabled_metaskills: set | None = None,
+    tool_descriptions: str = "full",
 ):
     """Interactive read-eval-print loop."""
     from prompt_toolkit import PromptSession
@@ -10551,6 +10642,7 @@ def repl_loop(
         turn_offset=turn_offset,
         metaskills_policy=metaskills_policy,
         enabled_metaskills=enabled_metaskills,
+        tool_descriptions=tool_descriptions,
     )
 
     ctx = InputContext(

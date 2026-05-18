@@ -46,6 +46,7 @@ class ReportCollector:
         self.goal_events: list[dict] = []
         self.tool_requests: list[dict] = []
         self.blocked_tool_calls: list[dict] = []
+        self.tool_description_expansions: list[dict] = []
         self._last_report: dict | None = None
         self.security_stats: dict[str, int] = {
             "command_policy_blocks": 0,
@@ -190,6 +191,13 @@ class ReportCollector:
         if reason is not None:
             event["reason"] = reason
         self.events.append(event)
+
+    def record_tool_description_expansion(
+        self, turn: int, name: str, reason: str
+    ) -> None:
+        item = {"turn": turn, "name": name, "reason": reason}
+        self.tool_description_expansions.append(item)
+        self.events.append({"type": "tool_description_expansion", **item})
 
     def record_memory(
         self,
@@ -359,6 +367,10 @@ class ReportCollector:
                 "blocked_tool_calls": {
                     "count": len(self.blocked_tool_calls),
                     "items": list(self.blocked_tool_calls),
+                },
+                "tool_description_expansions": {
+                    "count": len(self.tool_description_expansions),
+                    "items": list(self.tool_description_expansions),
                 },
                 **({"todo": todo_stats} if todo_stats else {}),
                 **({"snapshot": snapshot_stats} if snapshot_stats else {}),

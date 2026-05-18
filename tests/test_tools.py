@@ -839,6 +839,55 @@ class TestBuildTools:
         with pytest.raises(ValueError, match="unknown tools_mode"):
             build_tools({}, {}, commands_unrestricted=False, tools_mode="bogus")
 
+    def test_brief_tool_descriptions_keep_schema_and_shorten_text(self):
+        from swival.agent import (
+            _tool_schemas_for_description_mode,
+            build_tools,
+        )
+
+        tools = build_tools({}, {}, commands_unrestricted=False)
+        brief = _tool_schemas_for_description_mode(tools, "brief")
+        full_read = next(t for t in tools if t["function"]["name"] == "read_file")
+        brief_read = next(t for t in brief if t["function"]["name"] == "read_file")
+
+        assert (
+            brief_read["function"]["parameters"]["required"]
+            == full_read["function"]["parameters"]["required"]
+        )
+        assert len(brief_read["function"]["description"]) < len(
+            full_read["function"]["description"]
+        )
+        assert (
+            brief_read["function"]["parameters"]["properties"]["file_path"][
+                "description"
+            ]
+            == "Tool argument."
+        )
+
+    def test_progressive_tool_descriptions_expand_selected_tools(self):
+        from swival.agent import (
+            _tool_schemas_for_description_mode,
+            build_tools,
+        )
+
+        tools = build_tools({}, {}, commands_unrestricted=False)
+        progressive = _tool_schemas_for_description_mode(
+            tools, "progressive", {"edit_file"}
+        )
+        full_edit = next(t for t in tools if t["function"]["name"] == "edit_file")
+        progressive_edit = next(
+            t for t in progressive if t["function"]["name"] == "edit_file"
+        )
+        progressive_read = next(
+            t for t in progressive if t["function"]["name"] == "read_file"
+        )
+
+        assert (
+            progressive_edit["function"]["description"]
+            == full_edit["function"]["description"]
+        )
+        assert progressive_read["function"]["description"].startswith("Use read_file")
+
     def test_request_tools_available_in_full_mode(self):
         from swival.agent import build_tools
 

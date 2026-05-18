@@ -111,6 +111,7 @@ class Session:
         approved_buckets: set[str] | None = None,
         metaskills: str = "local",
         tools_mode: str = "full",
+        tool_descriptions: str = "full",
     ):
         self.base_dir = base_dir
         self.scratch_dir = scratch_dir
@@ -180,6 +181,7 @@ class Session:
         self.approved_buckets = approved_buckets
         self.metaskills = metaskills
         self.tools_mode = tools_mode
+        self.tool_descriptions = tool_descriptions
 
         # Streaming / cancellation hooks (set externally, e.g. by A2A server).
         # event_callback receives (kind, data) where kind is one of the
@@ -546,6 +548,7 @@ class Session:
             command_policy=self._command_policy,
             metaskills_policy=self._metaskills_policy,
             enabled_metaskills=set(self._metaskill_names or []),
+            tool_descriptions=self.tool_descriptions,
         )
         if state.get("compaction_state") is not None:
             kwargs["compaction_state"] = state["compaction_state"]
@@ -648,6 +651,7 @@ class Session:
                     "top_p": self.top_p,
                     "seed": self.seed,
                     "files": self.files,
+                    "tool_descriptions": self.tool_descriptions,
                 },
                 outcome=outcome,
                 answer=answer,

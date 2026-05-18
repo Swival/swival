@@ -32,6 +32,7 @@ max_turns = 250
 # top_p = 0.9
 # seed = 42
 commands = ["ls", "git", "python3"]    # also accepts "all", "none", or "ask"
+# tool_descriptions = "full"            # "full", "brief", or "progressive"
 # approved_buckets = ["ls", "git push", "python3 -m pytest"]  # explicit pre-approvals for ask mode (runtime approvals go to .swival/approved_buckets)
 allowed_dirs = ["/tmp"]
 allowed_dirs_ro = ["/opt/zig/lib/std"]

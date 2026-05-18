@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 
-SUMMARY_VERSION = 3
+SUMMARY_VERSION = 4
 DEFAULT_REPEAT = 2
 DEFAULT_ESCALATE_ON = ("tool_request", "blocked_tool_call", "verifier_failed")
 ESCALATION_TRIGGERS = frozenset(DEFAULT_ESCALATE_ON)
@@ -38,6 +38,7 @@ METRIC_KEYS = (
     "truncated_responses",
     "tool_request_count",
     "blocked_tool_call_count",
+    "description_expansion_count",
     "escalated",
     "duration_s",
     "total_llm_time_s",
@@ -594,6 +595,9 @@ def _summarize_report_once(report_path: Path, meta_path: Path) -> dict:
             "truncated_responses": int(stats.get("truncated_responses", 0)),
             "tool_request_count": _count_stat_items(stats, "tool_requests"),
             "blocked_tool_call_count": _count_stat_items(stats, "blocked_tool_calls"),
+            "description_expansion_count": _count_stat_items(
+                stats, "tool_description_expansions"
+            ),
             "total_llm_time_s": float(stats.get("total_llm_time_s", 0.0)),
             "total_tool_time_s": float(stats.get("total_tool_time_s", 0.0)),
             "duration_s": float(meta.get("duration_s", 0.0)),
@@ -629,6 +633,7 @@ def _summarize_report_once(report_path: Path, meta_path: Path) -> dict:
         "truncated_responses": 0,
         "tool_request_count": 0,
         "blocked_tool_call_count": 0,
+        "description_expansion_count": 0,
         "total_llm_time_s": 0.0,
         "total_tool_time_s": 0.0,
         "duration_s": float(meta.get("duration_s", 0.0)),
@@ -676,6 +681,7 @@ def summarize_report(report_path: Path, meta_path: Path) -> dict:
         "truncated_responses",
         "tool_request_count",
         "blocked_tool_call_count",
+        "description_expansion_count",
     ):
         row[key] = primary.get(key, 0) + fallback.get(key, 0)
     for key in ("duration_s", "total_llm_time_s", "total_tool_time_s"):
@@ -718,6 +724,7 @@ def aggregate_rows(rows: list[dict]) -> dict:
         "tool_calls_failed": _sum(rows, "tool_calls_failed"),
         "tool_request_count": _sum(rows, "tool_request_count"),
         "blocked_tool_call_count": _sum(rows, "blocked_tool_call_count"),
+        "description_expansion_count": _sum(rows, "description_expansion_count"),
         "tool_repairs": _sum(rows, "tool_repairs"),
         "compactions": _sum(rows, "compactions"),
         "turn_drops": _sum(rows, "turn_drops"),
@@ -958,6 +965,7 @@ def write_summary_csv(path: Path, rows: list[dict]) -> None:
         "truncated_responses",
         "tool_request_count",
         "blocked_tool_call_count",
+        "description_expansion_count",
         "primary_outcome",
         "primary_success",
         "primary_verifier_passed",
@@ -983,14 +991,15 @@ def render_markdown_summary(summary: dict) -> str:
         "",
         "## Variants",
         "",
-        "| Variant | Successes | Tasks | Rate | Escalations | Escalation rate | Turns | Tool failures | Prompt tokens | Tokens incl. escalation | Duration s |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Variant | Successes | Tasks | Rate | Escalations | Escalation rate | Description expansions | Turns | Tool failures | Prompt tokens | Tokens incl. escalation | Duration s |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for name in summary["variants"]:
         row = summary["by_variant"][name]
         lines.append(
             "| {name} | {successes} | {tasks} | {rate:.2%} | {escalations} | "
-            "{escalation_rate:.2%} | {turns} | {tool_failures} | {tokens} | "
+            "{escalation_rate:.2%} | {description_expansions} | {turns} | "
+            "{tool_failures} | {tokens} | "
             "{tokens_with_escalation} | {duration} |".format(
                 name=name,
                 successes=row["successes"],
@@ -998,6 +1007,7 @@ def render_markdown_summary(summary: dict) -> str:
                 rate=row["success_rate"],
                 escalations=row.get("escalations", 0),
                 escalation_rate=row.get("escalation_rate", 0.0),
+                description_expansions=row.get("description_expansion_count", 0),
                 turns=row["turns"],
                 tool_failures=row["tool_calls_failed"],
                 tokens=row["prompt_tokens_est"],

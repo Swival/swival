@@ -100,6 +100,10 @@ class TestReportCollector:
         assert r["stats"]["tool_calls_failed"] == 1
         assert r["stats"]["tool_requests"] == {"count": 0, "items": []}
         assert r["stats"]["blocked_tool_calls"] == {"count": 0, "items": []}
+        assert r["stats"]["tool_description_expansions"] == {
+            "count": 0,
+            "items": [],
+        }
 
     def test_tool_request_and_blocked_call_tracking(self):
         rc = ReportCollector()
@@ -152,6 +156,32 @@ class TestReportCollector:
         blocked_event = r["timeline"][1]
         assert blocked_event["blocked"] is True
         assert blocked_event["block_reason"] == "not_in_toolset"
+
+    def test_tool_description_expansion_tracking(self):
+        rc = ReportCollector()
+        rc.record_tool_description_expansion(2, "edit_file", "tool_call_attempt")
+
+        r = rc.build_report(
+            task="t",
+            model="m",
+            provider="p",
+            settings={},
+            outcome="success",
+            answer="ok",
+            exit_code=0,
+            turns=2,
+        )
+
+        assert r["stats"]["tool_description_expansions"] == {
+            "count": 1,
+            "items": [{"turn": 2, "name": "edit_file", "reason": "tool_call_attempt"}],
+        }
+        assert r["timeline"][0] == {
+            "type": "tool_description_expansion",
+            "turn": 2,
+            "name": "edit_file",
+            "reason": "tool_call_attempt",
+        }
 
     def test_compaction_tracking(self):
         rc = ReportCollector()
