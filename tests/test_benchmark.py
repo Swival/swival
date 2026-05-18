@@ -17,6 +17,7 @@ from swival.benchmark import (
     load_tasks,
     no_op_control,
     render_markdown_summary,
+    run_verifier,
     run_benchmark,
     summarize_outputs,
     write_summary_artifacts,
@@ -183,6 +184,53 @@ def test_load_tasks_accepts_wrapped_corpus_and_sanitizes_ids(tmp_path):
     )
 
 
+def test_load_tasks_accepts_file_verifier(tmp_path):
+    path = tmp_path / "tasks.json"
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "fix",
+                    "prompt": "Fix it",
+                    "verifier": {
+                        "type": "file_equals",
+                        "path": "status.txt",
+                        "text": "state=fixed\n",
+                    },
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    tasks = load_tasks(path)
+
+    assert tasks[0].verifier == {
+        "type": "file_equals",
+        "path": "status.txt",
+        "text": "state=fixed\n",
+    }
+
+
+def test_load_tasks_rejects_bad_verifier(tmp_path):
+    path = tmp_path / "tasks.json"
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "fix",
+                    "prompt": "Fix it",
+                    "verifier": {"type": "shell", "path": "x", "text": ""},
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(BenchmarkError, match="verifier.type"):
+        load_tasks(path)
+
+
 def test_build_swival_command_includes_report_seed_variant_and_task_args(tmp_path):
     spec = BenchmarkSpec(
         path=tmp_path / "bench.toml",
@@ -204,6 +252,38 @@ def test_build_swival_command_includes_report_seed_variant_and_task_args(tmp_pat
     assert "--temperature" in command
     assert "--base-dir" in command
     assert command[-3:] == ["--max-turns", "4", "Do work"]
+
+
+def test_run_verifier_checks_file_relative_to_variant_base_dir(tmp_path):
+    base = tmp_path / "repo"
+    base.mkdir()
+    (base / "status.txt").write_text("state=fixed\n", encoding="utf-8")
+    spec = BenchmarkSpec(
+        path=tmp_path / "bench.toml",
+        out_dir=tmp_path / "out",
+        tasks_path=tmp_path / "tasks.json",
+        seed=1,
+        repeat=1,
+        base_args=("--model", "m"),
+        variants=(Variant("baseline", ("--base-dir", str(base))),),
+    )
+    task = Task(
+        "fix",
+        "Fix it",
+        verifier={
+            "type": "file_equals",
+            "path": "status.txt",
+            "text": "state=fixed\n",
+        },
+    )
+
+    result = run_verifier(spec, spec.variants[0], task)
+
+    assert result == {
+        "type": "file_equals",
+        "path": "status.txt",
+        "passed": True,
+    }
 
 
 def test_run_benchmark_creates_report_dir_and_keeps_agent_errors(tmp_path, monkeypatch):
@@ -381,6 +461,7 @@ def test_verifier_passed_and_success_strict_slots(tmp_path):
     assert summary["runs"][0]["success"] is True
     assert summary["runs"][0]["verifier_passed"] is False
     assert summary["runs"][0]["success_strict"] is False
+    assert summary["by_variant"]["baseline"]["successes"] == 0
 
 
 def test_missing_report_is_harness_error(tmp_path):

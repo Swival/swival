@@ -49,6 +49,7 @@ class Task:
     prompt: str
     base_dir: str | None = None
     args: tuple[str, ...] = ()
+    verifier: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -208,12 +209,26 @@ def load_tasks(path: str | Path) -> tuple[Task, ...]:
         base_dir = item.get("base_dir")
         if base_dir is not None and not isinstance(base_dir, str):
             raise BenchmarkError(f"task {task_id}: base_dir must be a string")
+        verifier = item.get("verifier")
+        if verifier is not None:
+            if not isinstance(verifier, dict):
+                raise BenchmarkError(f"task {task_id}: verifier must be an object")
+            vtype = verifier.get("type")
+            if vtype not in ("file_contains", "file_equals"):
+                raise BenchmarkError(
+                    f"task {task_id}: verifier.type must be 'file_contains' or 'file_equals'"
+                )
+            if not isinstance(verifier.get("path"), str) or not verifier.get("path"):
+                raise BenchmarkError(f"task {task_id}: verifier.path must be a string")
+            if not isinstance(verifier.get("text"), str):
+                raise BenchmarkError(f"task {task_id}: verifier.text must be a string")
         tasks.append(
             Task(
                 id=task_id,
                 prompt=prompt,
                 base_dir=base_dir,
                 args=_as_str_list(item.get("args", []), f"task {task_id}.args"),
+                verifier=verifier,
             )
         )
         _reject_reserved_args(tasks[-1].args, f"task {task_id}.args")
@@ -242,6 +257,67 @@ def build_swival_command(
     command.extend(task.args)
     command.append(task.prompt)
     return command
+
+
+def _arg_value(args: tuple[str, ...], name: str) -> str | None:
+    for idx, arg in enumerate(args):
+        if arg == name and idx + 1 < len(args):
+            return args[idx + 1]
+        if arg.startswith(name + "="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def _effective_base_dir(spec: BenchmarkSpec, variant: Variant, task: Task) -> Path:
+    base_dir = _arg_value(spec.base_args + variant.args + task.args, "--base-dir")
+    if task.base_dir:
+        base_dir = task.base_dir
+    if base_dir:
+        path = Path(base_dir)
+        if not path.is_absolute():
+            path = spec.path.parent / path
+        return path.resolve()
+    return spec.path.parent.resolve()
+
+
+def run_verifier(
+    spec: BenchmarkSpec, variant: Variant, task: Task
+) -> dict[str, Any] | None:
+    verifier = task.verifier
+    if verifier is None:
+        return None
+    base_dir = _effective_base_dir(spec, variant, task)
+    rel_path = Path(str(verifier["path"]))
+    target = (base_dir / rel_path).resolve()
+    try:
+        target.relative_to(base_dir)
+    except ValueError:
+        return {
+            "type": verifier["type"],
+            "path": str(rel_path),
+            "passed": False,
+            "error": "verifier path escapes base_dir",
+        }
+    try:
+        actual = target.read_text(encoding="utf-8")
+    except OSError as e:
+        return {
+            "type": verifier["type"],
+            "path": str(rel_path),
+            "passed": False,
+            "error": str(e),
+        }
+
+    expected = str(verifier["text"])
+    if verifier["type"] == "file_contains":
+        passed = expected in actual
+    else:
+        passed = actual == expected
+    return {
+        "type": verifier["type"],
+        "path": str(rel_path),
+        "passed": passed,
+    }
 
 
 def _write_json(path: Path, data: dict) -> None:
@@ -297,6 +373,9 @@ def run_benchmark(spec: BenchmarkSpec, tasks: tuple[Task, ...]) -> dict:
                     "stdout_tail": stdout,
                     "stderr_tail": stderr,
                 }
+                verifier_result = run_verifier(spec, variant, task)
+                if verifier_result is not None:
+                    meta["verifier"] = verifier_result
                 _write_json(meta_path, meta)
 
                 failed = timed_out or not report_path.exists()
@@ -348,6 +427,13 @@ def _verifier_passed(report: dict) -> bool | None:
     return None
 
 
+def _meta_verifier_passed(meta: dict) -> bool | None:
+    verifier = meta.get("verifier")
+    if isinstance(verifier, dict) and isinstance(verifier.get("passed"), bool):
+        return verifier["passed"]
+    return None
+
+
 def summarize_report(report_path: Path, meta_path: Path) -> dict:
     meta = (
         json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
@@ -359,6 +445,8 @@ def summarize_report(report_path: Path, meta_path: Path) -> dict:
         outcome = result.get("outcome", "unknown")
         report_exit = result.get("exit_code")
         verifier_passed = _verifier_passed(report)
+        if verifier_passed is None:
+            verifier_passed = _meta_verifier_passed(meta)
         return {
             "task_id": meta.get("task_id") or report_path.stem,
             "variant": meta.get("variant"),
@@ -387,14 +475,15 @@ def summarize_report(report_path: Path, meta_path: Path) -> dict:
             "duration_s": float(meta.get("duration_s", 0.0)),
         }
 
+    verifier_passed = _meta_verifier_passed(meta)
     return {
         "task_id": meta.get("task_id") or report_path.stem,
         "variant": meta.get("variant"),
         "repeat": meta.get("repeat"),
         "outcome": "harness_error",
         "success": False,
-        "verifier_passed": None,
-        "success_strict": None,
+        "verifier_passed": verifier_passed,
+        "success_strict": None if verifier_passed is None else False,
         "process_returncode": meta.get("returncode"),
         "report_exit_code": None,
         "timed_out": bool(meta.get("timed_out", False)),
@@ -418,9 +507,16 @@ def _sum(rows: list[dict], key: str) -> int | float:
     return sum(row.get(key, 0) for row in rows)
 
 
+def _row_succeeded(row: dict) -> bool:
+    strict = row.get("success_strict")
+    if isinstance(strict, bool):
+        return strict
+    return bool(row.get("success"))
+
+
 def aggregate_rows(rows: list[dict]) -> dict:
     tasks = len(rows)
-    successes = sum(1 for row in rows if row.get("success"))
+    successes = sum(1 for row in rows if _row_succeeded(row))
     return {
         "tasks": tasks,
         "successes": successes,
@@ -493,10 +589,10 @@ def no_op_control(
             flips = []
             for row in other:
                 base = first_index.get((row.get("task_id"),))
-                if base and bool(base.get("success")) != bool(row.get("success")):
+                if base and _row_succeeded(base) != _row_succeeded(row):
                     flips.append(row.get("task_id"))
-            delta = sum(1 for row in other if row.get("success")) - sum(
-                1 for row in first if row.get("success")
+            delta = sum(1 for row in other if _row_succeeded(row)) - sum(
+                1 for row in first if _row_succeeded(row)
             )
             controls.append(
                 {
@@ -522,7 +618,7 @@ def _comparison_for_rows(
     for row in base_rows:
         task_id = str(row.get("task_id"))
         base_successes[task_id] = base_successes.get(task_id, 0) + int(
-            bool(row.get("success"))
+            _row_succeeded(row)
         )
     for variant in variants[1:]:
         candidate = [row for row in rows if row.get("variant") == variant.name]
@@ -530,7 +626,7 @@ def _comparison_for_rows(
         for row in candidate:
             task_id = str(row.get("task_id"))
             candidate_successes[task_id] = candidate_successes.get(task_id, 0) + int(
-                bool(row.get("success"))
+                _row_succeeded(row)
             )
 
         wins: list[str] = []
