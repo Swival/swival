@@ -149,6 +149,57 @@ A standard pattern is to run the same task set against multiple models or settin
 swival "task" --seed 42 --report run1.json
 ```
 
+For repeatable local-model experiments, use `swival-benchmark`. It runs a fixed task corpus across one or more CLI argument variants, writes one `--report` file per task, and produces `summary.json`, `summary.csv`, and `summary.md`.
+
+`bench.toml`:
+
+```toml
+tasks = "tasks.json"
+out_dir = ".swival/bench/tool-routing"
+seed = 42
+repeat = 2
+timeout_s = 900
+base_args = ["--provider", "lmstudio", "--model", "qwen3-coder-next"]
+
+[variants.baseline]
+args = []
+
+[variants.compact-tools]
+args = ["--temperature", "0.1"]
+```
+
+`tasks.json`:
+
+```json
+{
+  "tasks": [
+    {
+      "id": "fix-cli-parse",
+      "prompt": "Fix the failing CLI parser test and run the focused test."
+    },
+    {
+      "id": "add-unit-test",
+      "prompt": "Add a regression test for the cache miss path."
+    }
+  ]
+}
+```
+
+Run and summarize:
+
+```sh
+swival-benchmark run bench.toml
+swival-benchmark summarize bench.toml
+```
+
+`repeat = 2` gives every variant an A/A no-op control. Before calling an experiment a win, compare its success delta against the no-op variance in `summary.json` or the "No-Op Control" section of `summary.md`.
+
+Relative `tasks`, `out_dir`, and task `base_dir` paths resolve from the directory containing `bench.toml`. The first variant listed in the TOML is the baseline for A/B comparisons, so keep the control variant first.
+
+`summary.json` includes both pooled comparisons and `per_repeat_comparisons`. Pooled comparisons count a task as a win only when the candidate succeeds more often than the baseline across all repeats. It also includes `by_variant_task`, with min/mean/max distributions for noisy continuous metrics such as `turns`, `prompt_tokens_est`, `duration_s`, and `tool_calls_failed`.
+
+Each row includes `verifier_passed` and `success_strict` slots. They are `null` until a verifier writes pass/fail data into reports; `success` remains the outcome-based compatibility field.
+
 You can compare model variants like this:
 
 ```sh

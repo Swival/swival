@@ -44,6 +44,7 @@ Issues = "https://github.com/swival/swival/issues"
 
 [project.scripts]
 swival = "swival.agent:main"
+swival-benchmark = "swival.benchmark:main"
 
 [build-system]
 requires = ["hatchling"]
