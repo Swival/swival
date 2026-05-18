@@ -63,7 +63,6 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "no_system_prompt": bool,
     "files": str,
     "commands": (str, list),
-    "tools_mode": str,
     "tool_descriptions": str,
     "yolo": bool,
     "allowed_dirs": list,
@@ -158,7 +157,6 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "no_system_prompt": False,
     "files": "some",
     "commands": "all",
-    "tools_mode": "full",
     "tool_descriptions": "full",
     "yolo": False,
     "add_dir": [],
@@ -274,15 +272,10 @@ def _validate_config(config: dict, source: str) -> None:
                         raise ConfigError(
                             f"{source}: commands[{i}]: expected string, got {type(elem).__name__}"
                         )
-        if key == "tools_mode":
-            if value not in ("full", "code-read"):
-                raise ConfigError(
-                    f"{source}: 'tools_mode' must be 'full' or 'code-read', got {value!r}"
-                )
         if key == "tool_descriptions":
-            if value not in ("full", "brief", "progressive"):
+            if value not in ("full", "brief"):
                 raise ConfigError(
-                    f"{source}: 'tool_descriptions' must be 'full', 'brief', or 'progressive', got {value!r}"
+                    f"{source}: 'tool_descriptions' must be 'full' or 'brief', got {value!r}"
                 )
 
         # Validate list element types
@@ -1091,7 +1084,6 @@ def args_to_session_kwargs(args, base_dir: str) -> dict:
         "files",
         "yolo",
         "commands",
-        "tools_mode",
         "tool_descriptions",
         "system_prompt",
         "no_system_prompt",
@@ -1349,8 +1341,7 @@ def generate_config(
         "# sandbox_auto_session = true",
         '# files = "some"                  # "some" (default, workspace) | "all" (unrestricted) | "none" (.swival/ only)',
         '# commands = "all"                # "all" (default) | "none" | "ask" | ["ls", "git", "python3"]',
-        '# tools_mode = "full"             # "full" (default) | "code-read" (file/code navigation tools only)',
-        '# tool_descriptions = "full"      # "full" | "brief" | "progressive"',
+        '# tool_descriptions = "full"      # "full" | "brief" (compact, keeps high-value param hints)',
         "# yolo = false                    # shorthand for files = all + commands = all",
         '# allowed_dirs = ["../shared-lib", "/data/assets"]',
         '# allowed_dirs_ro = ["/reference/docs", "~/datasets"]',

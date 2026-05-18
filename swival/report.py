@@ -44,9 +44,6 @@ class ReportCollector:
         self.memory_stats: dict | None = None
         self.lifecycle_events: list[dict] = []
         self.goal_events: list[dict] = []
-        self.tool_requests: list[dict] = []
-        self.blocked_tool_calls: list[dict] = []
-        self.tool_description_expansions: list[dict] = []
         self._last_report: dict | None = None
         self.security_stats: dict[str, int] = {
             "command_policy_blocks": 0,
@@ -109,8 +106,6 @@ class ReportCollector:
         result_length: int,
         error: str | None = None,
         repairs: list[dict] | None = None,
-        blocked: bool = False,
-        block_reason: str | None = None,
     ):
         self.total_tool_time += duration
         if name == "use_skill" and succeeded and arguments:
@@ -134,32 +129,6 @@ class ReportCollector:
             event["error"] = error
         if repairs:
             event["repairs"] = repairs
-        if blocked:
-            event["blocked"] = True
-            if block_reason:
-                event["block_reason"] = block_reason
-            self.blocked_tool_calls.append(
-                {
-                    "turn": turn,
-                    "name": name,
-                    "arguments": arguments,
-                    **({"reason": block_reason} if block_reason else {}),
-                }
-            )
-        if name == "request_tools" and succeeded:
-            arguments = arguments or {}
-            tools = arguments.get("tools", [])
-            if isinstance(tools, str):
-                tools = [tools]
-            elif not isinstance(tools, list):
-                tools = []
-            self.tool_requests.append(
-                {
-                    "turn": turn,
-                    "reason": str(arguments.get("reason", "")),
-                    "tools": [str(tool) for tool in tools],
-                }
-            )
         self.events.append(event)
 
     def record_compaction(
@@ -191,13 +160,6 @@ class ReportCollector:
         if reason is not None:
             event["reason"] = reason
         self.events.append(event)
-
-    def record_tool_description_expansion(
-        self, turn: int, name: str, reason: str
-    ) -> None:
-        item = {"turn": turn, "name": name, "reason": reason}
-        self.tool_description_expansions.append(item)
-        self.events.append({"type": "tool_description_expansion", **item})
 
     def record_memory(
         self,
@@ -360,18 +322,6 @@ class ReportCollector:
                 "total_tool_time_s": round(self.total_tool_time, 3),
                 "skills_used": list(self.skills_used),
                 "review_rounds": review_rounds,
-                "tool_requests": {
-                    "count": len(self.tool_requests),
-                    "items": list(self.tool_requests),
-                },
-                "blocked_tool_calls": {
-                    "count": len(self.blocked_tool_calls),
-                    "items": list(self.blocked_tool_calls),
-                },
-                "tool_description_expansions": {
-                    "count": len(self.tool_description_expansions),
-                    "items": list(self.tool_description_expansions),
-                },
                 **({"todo": todo_stats} if todo_stats else {}),
                 **({"snapshot": snapshot_stats} if snapshot_stats else {}),
                 **({"goal": goal_stats} if goal_stats else {}),

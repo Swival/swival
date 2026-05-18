@@ -103,16 +103,7 @@ from .repair import format_repair_feedback, repair_tool_args
 DEFAULT_SYSTEM_PROMPT_FILE = Path(__file__).parent / "system_prompt.txt"
 MAX_ARG_LOG = 1000
 MAX_INSTRUCTIONS_CHARS = 10_000
-TOOL_MODES = ("full", "code-read")
-TOOL_DESCRIPTION_MODES = ("full", "brief", "progressive")
-CODE_READ_TOOL_NAMES = {
-    "grep",
-    "list_files",
-    "outline",
-    "read_file",
-    "read_multiple_files",
-    "request_tools",
-}
+TOOL_DESCRIPTION_MODES = ("full", "brief")
 
 _encoder = tiktoken.get_encoding("cl100k_base")
 _BRIEF_PARAM_DESCRIPTION = "Tool argument."
@@ -129,7 +120,6 @@ _BRIEF_TOOL_DESCRIPTIONS = {
     "delete_file": "Delete a file by moving it to the trash.",
     "fetch_url": "Fetch an HTTP/HTTPS URL as markdown, text, or HTML.",
     "snapshot": "Save, restore, or inspect context checkpoints.",
-    "request_tools": "Request broader tool access with a structured escalation signal.",
     "outline": "Show file structure without bodies. Use file_path or a files batch; depth controls nesting.",
     "use_skill": "Activate a skill by name.",
     "run_metaskill": "Run a dynamic skill workflow by name with bounded nested calls.",
@@ -157,8 +147,6 @@ _BRIEF_PARAM_DESCRIPTIONS = {
     "move_from": "Source path to atomically rename into place.",
     "command": "Command arguments or shell string, matching the tool.",
     "timeout": "Timeout in seconds.",
-    "reason": "Why broader tools are needed.",
-    "tools": "Specific tools or categories needed.",
     "action": "Operation to perform.",
     "label": "Checkpoint label.",
     "summary": "Replacement summary for restored context.",
@@ -2578,8 +2566,6 @@ def _post_tool_bookkeeping(
             len(tool_msg["content"]),
             error=tool_msg["content"] if not tool_meta["succeeded"] else None,
             repairs=tool_meta.get("repairs"),
-            blocked=bool(tool_meta.get("blocked")),
-            block_reason=tool_meta.get("block_reason"),
         )
 
     if snapshot_state is not None:
@@ -2675,11 +2661,6 @@ def handle_tool_call(
 
     if available_tool_names is not None and name not in available_tool_names:
         error_content = f"error: tool {name!r} is not available in the current toolset."
-        if "request_tools" in available_tool_names:
-            error_content += (
-                " Call request_tools with the missing tool name and a short reason "
-                "if this tool is required."
-            )
         return (
             {
                 "role": "tool",
@@ -2692,8 +2673,6 @@ def handle_tool_call(
                 "elapsed": 0.0,
                 "succeeded": False,
                 "repairs": [],
-                "blocked": True,
-                "block_reason": "not_in_toolset",
             },
         )
 
@@ -4046,16 +4025,10 @@ def build_parser():
         help='Command execution mode: "all" (default, unrestricted), "none" (disabled), "ask" (approve each command bucket interactively), or comma-separated whitelist (e.g. "ls,git,python3").',
     )
     access_group.add_argument(
-        "--tools-mode",
-        choices=TOOL_MODES,
-        default=_UNSET,
-        help='Tool schema exposure: "full" (default) or "code-read" (only file/code navigation tools).',
-    )
-    access_group.add_argument(
         "--tool-descriptions",
         choices=TOOL_DESCRIPTION_MODES,
         default=_UNSET,
-        help='Tool description detail: "full" (default), "brief", or "progressive" (brief first, expand after use).',
+        help='Tool description detail: "full" (default) or "brief" (compact descriptions, keeps high-value parameter hints).',
     )
     provider_group.add_argument(
         "--api-key",
@@ -5588,7 +5561,6 @@ def build_tools(
     *,
     goal_tools: bool = False,
     metaskill_names: list[str] | None = None,
-    tools_mode: str = "full",
 ) -> list:
     """Construct the tools list from base + conditionals.
 
@@ -5656,20 +5628,7 @@ def build_tools(
         from .subagent import SPAWN_SUBAGENT_TOOL, CHECK_SUBAGENTS_TOOL
 
         tools.extend([SPAWN_SUBAGENT_TOOL, CHECK_SUBAGENTS_TOOL])
-    tools = _filter_tools_for_mode(tools, tools_mode)
     return tools
-
-
-def _filter_tools_for_mode(tools: list, tools_mode: str) -> list:
-    if tools_mode == "full":
-        return tools
-    if tools_mode == "code-read":
-        return [
-            tool
-            for tool in tools
-            if tool.get("function", {}).get("name") in CODE_READ_TOOL_NAMES
-        ]
-    raise ValueError(f"unknown tools_mode {tools_mode!r}")
 
 
 def _brief_description_for_tool(name: str) -> str:
@@ -5735,21 +5694,12 @@ def _shorten_tool_descriptions(
 def _tool_schemas_for_description_mode(
     tools: list | None,
     mode: str,
-    expanded_tool_names: set[str] | None = None,
 ) -> list | None:
     if tools is None or mode == "full":
         return tools
-    if mode not in ("brief", "progressive"):
+    if mode != "brief":
         raise ValueError(f"unknown tool_descriptions mode {mode!r}")
-    expanded_tool_names = expanded_tool_names or set()
-    rendered = []
-    for tool in tools:
-        name = tool.get("function", {}).get("name")
-        if mode == "progressive" and name in expanded_tool_names:
-            rendered.append(tool)
-        else:
-            rendered.append(_shorten_tool_descriptions(tool, top_level=True))
-    return rendered
+    return [_shorten_tool_descriptions(tool, top_level=True) for tool in tools]
 
 
 def _tool_names_from_schemas(tools: list | None) -> set[str] | None:
@@ -6317,7 +6267,6 @@ def _run_main(args, report, _write_report, parser):
         shell_allowed=shell_allowed,
         subagents=_subagents,
         metaskill_names=_metaskill_names,
-        tools_mode=args.tools_mode,
     )
 
     # Initialize MCP servers
@@ -7085,10 +7034,9 @@ def run_agent_loop(
             ]
     if tool_descriptions not in TOOL_DESCRIPTION_MODES:
         raise ValueError(f"unknown tool_descriptions mode {tool_descriptions!r}")
-    expanded_tool_descriptions: set[str] = set()
     base_effective_tools = None if provider == "command" else tools
     effective_tools = _tool_schemas_for_description_mode(
-        base_effective_tools, tool_descriptions, expanded_tool_descriptions
+        base_effective_tools, tool_descriptions
     )
 
     # Build command_tool_kwargs for command provider tool-calling support
@@ -7224,9 +7172,6 @@ def run_agent_loop(
     _is_tools_retry = False
     while turns < max_turns:
         turns += 1
-        effective_tools = _tool_schemas_for_description_mode(
-            base_effective_tools, tool_descriptions, expanded_tool_descriptions
-        )
 
         # Check cancellation flag
         if cancel_flag is not None and cancel_flag.is_set():
@@ -7939,7 +7884,6 @@ def run_agent_loop(
         image_stash: list[dict] = []
         _last_turn_used_tools = True
         _goal_launch_pending = False
-        _available_tool_names = _tool_names_from_schemas(effective_tools)
         for tool_call in msg.tool_calls:
             # Check cancellation before each tool call
             if cancel_flag is not None and cancel_flag.is_set():
@@ -7950,16 +7894,6 @@ def run_agent_loop(
                 return None, True
 
             _tc_name = tool_call.function.name
-            if (
-                tool_descriptions == "progressive"
-                and base_effective_tools is not None
-                and _tc_name not in expanded_tool_descriptions
-            ):
-                expanded_tool_descriptions.add(_tc_name)
-                if report:
-                    report.record_tool_description_expansion(
-                        turns + turn_offset, _tc_name, "tool_call_attempt"
-                    )
             _emit(
                 EVENT_TOOL_START,
                 {
@@ -7999,7 +7933,6 @@ def run_agent_loop(
                 metaskill_loop_kwargs=_metaskill_loop_kwargs,
                 cancel_flag=cancel_flag,
                 enabled_metaskills=enabled_metaskills,
-                available_tool_names=_available_tool_names,
             )
             messages.append(tool_msg)
 

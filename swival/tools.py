@@ -555,39 +555,6 @@ SNAPSHOT_TOOL = {
 
 TOOLS.append(SNAPSHOT_TOOL)
 
-REQUEST_TOOLS_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "request_tools",
-        "description": (
-            "Request broader tool access when the current toolset is insufficient. "
-            "Use this instead of explaining missing tools in prose. "
-            "This records a structured signal for escalation; it does not change "
-            "the current toolset by itself."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "reason": {
-                    "type": "string",
-                    "description": "Why the current tools are insufficient.",
-                },
-                "tools": {
-                    "type": "array",
-                    "description": (
-                        "Specific tools or tool categories needed, such as "
-                        "edit_file, write_file, run_command, or full."
-                    ),
-                    "items": {"type": "string"},
-                },
-            },
-            "required": ["reason"],
-        },
-    },
-}
-
-TOOLS.append(REQUEST_TOOLS_TOOL)
-
 OUTLINE_TOOL = {
     "type": "function",
     "function": {
@@ -3168,21 +3135,6 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             messages=kwargs.get("messages"),
             tool_call_id=kwargs.get("tool_call_id"),
         )
-    elif name == "request_tools":
-        reason = str(args.get("reason", "")).strip()
-        if not reason:
-            return "error: reason is required"
-        requested = args.get("tools", [])
-        if isinstance(requested, str):
-            requested = [requested]
-        if not isinstance(requested, list) or not all(
-            isinstance(item, str) for item in requested
-        ):
-            return "error: tools must be an array of strings"
-        tool_text = (
-            ", ".join(t.strip() for t in requested if t.strip()) or "(unspecified)"
-        )
-        return f"tool request recorded: {tool_text}\nreason: {reason}"
     elif name == "outline":
         from .outline import outline as _outline, outline_files as _outline_files
 

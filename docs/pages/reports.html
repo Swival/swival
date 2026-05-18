@@ -206,8 +206,8 @@ base_args = [&quot;--provider&quot;, &quot;lmstudio&quot;, &quot;--model&quot;, 
 [variants.baseline]
 args = []
 
-[variants.compact-tools]
-args = [&quot;--temperature&quot;, &quot;0.1&quot;]
+[variants.brief-tools]
+args = [&quot;--tool-descriptions&quot;, &quot;brief&quot;]
 </code></pre>
 <p><code>tasks.json</code>:</p>
 <pre><code class="language-json">{
@@ -231,6 +231,7 @@ swival-benchmark summarize bench.toml
 <p>Relative <code>tasks</code>, <code>out_dir</code>, and task <code>base_dir</code> paths resolve from the directory containing <code>bench.toml</code>. The first variant listed in the TOML is the baseline for A/B comparisons, so keep the control variant first.</p>
 <p><code>summary.json</code> includes both pooled comparisons and <code>per_repeat_comparisons</code>. Pooled comparisons count a task as a win only when the candidate succeeds more often than the baseline across all repeats. It also includes <code>by_variant_task</code>, with min/mean/max distributions for noisy continuous metrics such as <code>turns</code>, <code>prompt_tokens_est</code>, <code>duration_s</code>, and <code>tool_calls_failed</code>.</p>
 <p>Each row includes <code>verifier_passed</code> and <code>success_strict</code> slots. They are <code>null</code> until a verifier writes pass/fail data into reports; <code>success</code> remains the outcome-based compatibility field.</p>
+<p>Use <code>--tool-descriptions brief</code> to expose all tools with compact descriptions. The brief mode preserves high-value parameter hints (pagination, grep options, outline depth) so the model keeps using rare arguments correctly.</p>
 <p>You can compare model variants like this:</p>
 <pre><code class="language-sh">for model in qwen3-coder-next deepseek-coder-v2; do
     swival &quot;Fix the failing tests in tests/&quot; \

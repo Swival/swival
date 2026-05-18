@@ -164,13 +164,8 @@ base_args = ["--provider", "lmstudio", "--model", "qwen3-coder-next"]
 [variants.baseline]
 args = []
 
-[variants.compact-tools]
-args = ["--temperature", "0.1"]
-
-[variants.read-then-full]
-args = ["--tools-mode", "code-read"]
-escalation_args = ["--model", "qwen3-coder-next", "--tools-mode", "full"]
-escalate_on = ["tool_request", "blocked_tool_call", "verifier_failed"]
+[variants.brief-tools]
+args = ["--tool-descriptions", "brief"]
 ```
 
 `tasks.json`:
@@ -205,9 +200,7 @@ Relative `tasks`, `out_dir`, and task `base_dir` paths resolve from the director
 
 Each row includes `verifier_passed` and `success_strict` slots. They are `null` until a verifier writes pass/fail data into reports; `success` remains the outcome-based compatibility field.
 
-Variants can set `escalation_args` to run a second, broader Swival command after a restricted first attempt. Escalation is post-hoc and measurable: by default it triggers on `tool_request`, `blocked_tool_call`, or `verifier_failed`. Rows include `escalated`, `escalation_reasons`, and both `prompt_tokens_est` for the primary attempt and `prompt_tokens_with_escalation` for the real total cost. Aggregates include `escalation_rate` so token savings are reported net of failed restricted attempts.
-
-Use `--tool-descriptions brief` to expose all tools with compact descriptions, or `--tool-descriptions progressive` to start compact and expand a tool's full description after the model first calls it. Reports include `tool_description_expansions`, and benchmark rows include `description_expansion_count`, so you can tell whether progressive descriptions actually changed the run.
+Use `--tool-descriptions brief` to expose all tools with compact descriptions. The brief mode preserves high-value parameter hints (pagination, grep options, outline depth) so the model keeps using rare arguments correctly.
 
 You can compare model variants like this:
 

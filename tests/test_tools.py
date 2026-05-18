@@ -819,26 +819,6 @@ class TestBuildTools:
         assert "create_goal" not in names
         assert "update_goal" not in names
 
-    def test_code_read_tools_mode_limits_builtin_tools(self):
-        from swival.agent import build_tools
-
-        tools = build_tools({}, {}, commands_unrestricted=True, tools_mode="code-read")
-        names = {t["function"]["name"] for t in tools}
-        assert names == {
-            "grep",
-            "list_files",
-            "outline",
-            "read_file",
-            "read_multiple_files",
-            "request_tools",
-        }
-
-    def test_unknown_tools_mode_errors(self):
-        from swival.agent import build_tools
-
-        with pytest.raises(ValueError, match="unknown tools_mode"):
-            build_tools({}, {}, commands_unrestricted=False, tools_mode="bogus")
-
     def test_brief_tool_descriptions_keep_schema_and_shorten_text(self):
         from swival.agent import (
             _tool_schemas_for_description_mode,
@@ -868,47 +848,6 @@ class TestBuildTools:
             brief_read["function"]["parameters"]["properties"]["limit"]["description"]
             == "Maximum lines to return; lower it for focused reads."
         )
-
-    def test_progressive_tool_descriptions_expand_selected_tools(self):
-        from swival.agent import (
-            _tool_schemas_for_description_mode,
-            build_tools,
-        )
-
-        tools = build_tools({}, {}, commands_unrestricted=False)
-        progressive = _tool_schemas_for_description_mode(
-            tools, "progressive", {"edit_file"}
-        )
-        full_edit = next(t for t in tools if t["function"]["name"] == "edit_file")
-        progressive_edit = next(
-            t for t in progressive if t["function"]["name"] == "edit_file"
-        )
-        progressive_read = next(
-            t for t in progressive if t["function"]["name"] == "read_file"
-        )
-
-        assert (
-            progressive_edit["function"]["description"]
-            == full_edit["function"]["description"]
-        )
-        assert "offset/limit" in progressive_read["function"]["description"]
-
-    def test_request_tools_available_in_full_mode(self):
-        from swival.agent import build_tools
-
-        tools = build_tools({}, {}, commands_unrestricted=False)
-        names = {t["function"]["name"] for t in tools}
-        assert "request_tools" in names
-
-    def test_request_tools_dispatch_records_structured_request(self, tmp_path):
-        result = dispatch(
-            "request_tools",
-            {"reason": "need to edit status.txt", "tools": ["edit_file"]},
-            str(tmp_path),
-        )
-
-        assert "tool request recorded: edit_file" in result
-        assert "reason: need to edit status.txt" in result
 
 
 # Sandbox tests

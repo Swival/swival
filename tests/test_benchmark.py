@@ -50,26 +50,6 @@ def _write_report(path, *, outcome="success", turns=2, prompt_tokens=100):
                     "truncated_responses": 0,
                     "total_llm_time_s": 1.5,
                     "total_tool_time_s": 0.25,
-                    "tool_requests": {
-                        "count": 1,
-                        "items": [
-                            {
-                                "turn": 1,
-                                "reason": "need edits",
-                                "tools": ["edit_file"],
-                            }
-                        ],
-                    },
-                    "blocked_tool_calls": {
-                        "count": 1,
-                        "items": [
-                            {
-                                "turn": 2,
-                                "name": "edit_file",
-                                "reason": "not_in_toolset",
-                            }
-                        ],
-                    },
                 },
                 "timeline": [
                     {
@@ -361,73 +341,6 @@ def test_run_benchmark_creates_report_dir_and_keeps_agent_errors(tmp_path, monke
     assert row["process_returncode"] == 1
 
 
-def test_run_benchmark_escalates_and_reports_total_token_cost(tmp_path, monkeypatch):
-    base = tmp_path / "repo"
-    base.mkdir()
-    (base / "status.txt").write_text("state=broken\n", encoding="utf-8")
-    spec = BenchmarkSpec(
-        path=tmp_path / "bench.toml",
-        out_dir=tmp_path / "out",
-        tasks_path=tmp_path / "tasks.json",
-        seed=1,
-        repeat=1,
-        base_args=("--provider", "lmstudio"),
-        variants=(
-            Variant(
-                "code_read",
-                ("--model", "m", "--tools-mode", "code-read"),
-                escalation_args=("--model", "m", "--tools-mode", "full"),
-                escalate_on=("tool_request", "blocked_tool_call", "verifier_failed"),
-            ),
-        ),
-    )
-    task = Task(
-        "fix",
-        "Fix it",
-        base_dir=str(base),
-        verifier={
-            "type": "file_equals",
-            "path": "status.txt",
-            "text": "state=fixed\n",
-        },
-    )
-    commands = []
-
-    def fake_run(command, **kwargs):
-        commands.append(command)
-        report = command[command.index("--report") + 1]
-        if report.endswith(".escalated.json"):
-            (base / "status.txt").write_text("state=fixed\n", encoding="utf-8")
-            _write_report(Path(report), outcome="success", prompt_tokens=300)
-        else:
-            _write_report(Path(report), outcome="success", prompt_tokens=100)
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
-    monkeypatch.setattr("swival.benchmark.subprocess.run", fake_run)
-
-    summary = run_benchmark(spec, (task,))
-
-    assert len(commands) == 2
-    row = summary["runs"][0]
-    assert row["escalated"] is True
-    assert row["escalation_reasons"] == [
-        "tool_request",
-        "blocked_tool_call",
-        "verifier_failed",
-    ]
-    assert row["outcome"] == "success"
-    assert row["success_strict"] is True
-    assert row["primary_outcome"] == "success"
-    assert row["primary_verifier_passed"] is False
-    assert row["prompt_tokens_est"] == 205
-    assert row["prompt_tokens_with_escalation"] == 810
-    assert row["escalation_prompt_tokens_est"] == 605
-    assert summary["by_variant"]["code_read"]["escalations"] == 1
-    assert summary["by_variant"]["code_read"]["escalation_rate"] == 1.0
-    assert summary["by_variant"]["code_read"]["prompt_tokens_est"] == 205
-    assert summary["by_variant"]["code_read"]["prompt_tokens_with_escalation"] == 810
-
-
 def test_aggregate_rows_counts_successes_and_metrics():
     rows = [
         {"success": True, "turns": 2, "prompt_tokens_est": 100, "duration_s": 1.1},
@@ -441,7 +354,6 @@ def test_aggregate_rows_counts_successes_and_metrics():
     assert summary["success_rate"] == 0.5
     assert summary["turns"] == 5
     assert summary["prompt_tokens_est"] == 300
-    assert summary["prompt_tokens_with_escalation"] == 300
     assert summary["duration_s"] == 2.3
 
 
@@ -547,8 +459,6 @@ def test_summarize_outputs_builds_variance_and_variant_comparison(tmp_path):
     ]
     assert summary["runs"][0]["prompt_tokens_est"] == 207
     assert summary["runs"][0]["tool_repairs"] == 2
-    assert summary["runs"][0]["tool_request_count"] == 1
-    assert summary["runs"][0]["blocked_tool_call_count"] == 1
     assert summary["runs"][0]["verifier_passed"] is None
     assert summary["runs"][0]["success_strict"] is None
 

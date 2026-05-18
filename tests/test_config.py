@@ -47,7 +47,6 @@ def _make_args(**overrides):
         "system_prompt": _UNSET,
         "no_system_prompt": _UNSET,
         "commands": _UNSET,
-        "tools_mode": _UNSET,
         "yolo": _UNSET,
         "files": _UNSET,
         "add_dir": None,  # append actions use None sentinel

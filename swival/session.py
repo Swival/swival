@@ -110,7 +110,6 @@ class Session:
         aws_profile: str | None = None,
         approved_buckets: set[str] | None = None,
         metaskills: str = "local",
-        tools_mode: str = "full",
         tool_descriptions: str = "full",
     ):
         self.base_dir = base_dir
@@ -180,7 +179,6 @@ class Session:
         self.aws_profile = aws_profile
         self.approved_buckets = approved_buckets
         self.metaskills = metaskills
-        self.tools_mode = tools_mode
         self.tool_descriptions = tool_descriptions
 
         # Streaming / cancellation hooks (set externally, e.g. by A2A server).
@@ -350,7 +348,6 @@ class Session:
             shell_allowed=self._shell_allowed,
             subagents=self.subagents,
             metaskill_names=self._metaskill_names,
-            tools_mode=self.tools_mode,
         )
 
         # Initialize MCP servers

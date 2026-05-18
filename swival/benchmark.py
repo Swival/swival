@@ -20,15 +20,12 @@ from pathlib import Path
 from typing import Any
 
 
-SUMMARY_VERSION = 4
+SUMMARY_VERSION = 5
 DEFAULT_REPEAT = 2
-DEFAULT_ESCALATE_ON = ("tool_request", "blocked_tool_call", "verifier_failed")
-ESCALATION_TRIGGERS = frozenset(DEFAULT_ESCALATE_ON)
 METRIC_KEYS = (
     "turns",
     "llm_calls",
     "prompt_tokens_est",
-    "prompt_tokens_with_escalation",
     "tool_calls_total",
     "tool_calls_failed",
     "tool_repairs",
@@ -36,10 +33,6 @@ METRIC_KEYS = (
     "turn_drops",
     "guardrail_interventions",
     "truncated_responses",
-    "tool_request_count",
-    "blocked_tool_call_count",
-    "description_expansion_count",
-    "escalated",
     "duration_s",
     "total_llm_time_s",
     "total_tool_time_s",
@@ -63,8 +56,6 @@ class Task:
 class Variant:
     name: str
     args: tuple[str, ...]
-    escalation_args: tuple[str, ...] = ()
-    escalate_on: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -152,41 +143,7 @@ def load_spec(path: str | Path) -> BenchmarkSpec:
             raise BenchmarkError(
                 f"variants.{name} must pin a model with --model/-m or --profile"
             )
-        escalation_args = _as_str_list(
-            body.get("escalation_args", []), f"variants.{name}.escalation_args"
-        )
-        _reject_reserved_args(escalation_args, f"variants.{name}.escalation_args")
-        if escalation_args:
-            escalation_combined = base_args + escalation_args
-            if not _has_flag(escalation_combined, "--model", "-m", "--profile"):
-                raise BenchmarkError(
-                    f"variants.{name}.escalation_args must pin a model "
-                    "with --model/-m or --profile"
-                )
-            escalate_on = _as_str_list(
-                body.get("escalate_on", list(DEFAULT_ESCALATE_ON)),
-                f"variants.{name}.escalate_on",
-            )
-            unknown = sorted(set(escalate_on) - ESCALATION_TRIGGERS)
-            if unknown:
-                raise BenchmarkError(
-                    f"variants.{name}.escalate_on has unknown trigger(s): "
-                    + ", ".join(unknown)
-                )
-        else:
-            if "escalate_on" in body:
-                raise BenchmarkError(
-                    f"variants.{name}.escalate_on requires escalation_args"
-                )
-            escalate_on = ()
-        variants.append(
-            Variant(
-                name=name,
-                args=args,
-                escalation_args=escalation_args,
-                escalate_on=escalate_on,
-            )
-        )
+        variants.append(Variant(name=name, args=args))
 
     return BenchmarkSpec(
         path=spec_path,
@@ -375,8 +332,6 @@ def run_attempt(
     repeat_idx: int,
     report_path: Path,
     meta_path: Path,
-    *,
-    phase: str,
 ) -> dict[str, Any]:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     command = build_swival_command(spec, variant, task, report_path)
@@ -409,7 +364,6 @@ def run_attempt(
         "variant": variant.name,
         "repeat": repeat_idx,
         "task_id": task.id,
-        "phase": phase,
         "command": command,
         "returncode": returncode,
         "duration_s": duration_s,
@@ -425,18 +379,6 @@ def run_attempt(
     return meta
 
 
-def escalation_reasons(row: dict, triggers: tuple[str, ...]) -> list[str]:
-    reasons: list[str] = []
-    trigger_set = set(triggers)
-    if "tool_request" in trigger_set and row.get("tool_request_count", 0) > 0:
-        reasons.append("tool_request")
-    if "blocked_tool_call" in trigger_set and row.get("blocked_tool_call_count", 0) > 0:
-        reasons.append("blocked_tool_call")
-    if "verifier_failed" in trigger_set and row.get("verifier_passed") is False:
-        reasons.append("verifier_failed")
-    return reasons
-
-
 def run_benchmark(spec: BenchmarkSpec, tasks: tuple[Task, ...]) -> dict:
     spec.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -448,40 +390,8 @@ def run_benchmark(spec: BenchmarkSpec, tasks: tuple[Task, ...]) -> dict:
                 meta_path = run_dir / f"{task.id}.meta.json"
                 run_dir.mkdir(parents=True, exist_ok=True)
                 meta = run_attempt(
-                    spec,
-                    variant,
-                    task,
-                    repeat_idx,
-                    report_path,
-                    meta_path,
-                    phase="primary",
+                    spec, variant, task, repeat_idx, report_path, meta_path
                 )
-
-                primary_row = summarize_report(report_path, meta_path)
-                reasons = escalation_reasons(primary_row, variant.escalate_on)
-                if variant.escalation_args and reasons:
-                    escalation_report = run_dir / f"{task.id}.escalated.json"
-                    escalation_meta = run_dir / f"{task.id}.escalated.meta.json"
-                    escalation_variant = Variant(
-                        name=variant.name,
-                        args=variant.escalation_args,
-                    )
-                    run_attempt(
-                        spec,
-                        escalation_variant,
-                        task,
-                        repeat_idx,
-                        escalation_report,
-                        escalation_meta,
-                        phase="escalation",
-                    )
-                    meta["escalation"] = {
-                        "escalated": True,
-                        "reasons": reasons,
-                        "report": str(escalation_report),
-                        "meta": str(escalation_meta),
-                    }
-                    _write_json(meta_path, meta)
 
                 failed = bool(meta.get("timed_out", False)) or not report_path.exists()
                 if failed and spec.stop_on_failure:
@@ -519,18 +429,6 @@ def _report_repairs(report: dict) -> int:
     return total
 
 
-def _count_stat_items(stats: dict, key: str) -> int:
-    value = stats.get(key)
-    if isinstance(value, dict):
-        count = value.get("count")
-        if isinstance(count, int):
-            return count
-        items = value.get("items")
-        if isinstance(items, list):
-            return len(items)
-    return 0
-
-
 def _verifier_passed(report: dict) -> bool | None:
     result = report.get("result", {})
     value = result.get("verifier_passed")
@@ -551,7 +449,7 @@ def _meta_verifier_passed(meta: dict) -> bool | None:
     return None
 
 
-def _summarize_report_once(report_path: Path, meta_path: Path) -> dict:
+def summarize_report(report_path: Path, meta_path: Path) -> dict:
     meta = (
         json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
     )
@@ -568,24 +466,18 @@ def _summarize_report_once(report_path: Path, meta_path: Path) -> dict:
             "task_id": meta.get("task_id") or report_path.stem,
             "variant": meta.get("variant"),
             "repeat": meta.get("repeat"),
-            "phase": meta.get("phase", "primary"),
             "outcome": outcome,
             "success": outcome == "success",
             "verifier_passed": verifier_passed,
             "success_strict": None
             if verifier_passed is None
             else outcome == "success" and verifier_passed,
-            "escalated": False,
-            "escalation_reasons": [],
-            "primary_prompt_tokens_est": _report_prompt_tokens(report),
-            "escalation_prompt_tokens_est": 0,
             "process_returncode": meta.get("returncode"),
             "report_exit_code": report_exit,
             "timed_out": bool(meta.get("timed_out", False)),
             "turns": int(stats.get("turns", 0)),
             "llm_calls": int(stats.get("llm_calls", 0)),
             "prompt_tokens_est": _report_prompt_tokens(report),
-            "prompt_tokens_with_escalation": _report_prompt_tokens(report),
             "tool_calls_total": int(stats.get("tool_calls_total", 0)),
             "tool_calls_failed": int(stats.get("tool_calls_failed", 0)),
             "tool_repairs": _report_repairs(report),
@@ -593,11 +485,6 @@ def _summarize_report_once(report_path: Path, meta_path: Path) -> dict:
             "turn_drops": int(stats.get("turn_drops", 0)),
             "guardrail_interventions": int(stats.get("guardrail_interventions", 0)),
             "truncated_responses": int(stats.get("truncated_responses", 0)),
-            "tool_request_count": _count_stat_items(stats, "tool_requests"),
-            "blocked_tool_call_count": _count_stat_items(stats, "blocked_tool_calls"),
-            "description_expansion_count": _count_stat_items(
-                stats, "tool_description_expansions"
-            ),
             "total_llm_time_s": float(stats.get("total_llm_time_s", 0.0)),
             "total_tool_time_s": float(stats.get("total_tool_time_s", 0.0)),
             "duration_s": float(meta.get("duration_s", 0.0)),
@@ -608,22 +495,16 @@ def _summarize_report_once(report_path: Path, meta_path: Path) -> dict:
         "task_id": meta.get("task_id") or report_path.stem,
         "variant": meta.get("variant"),
         "repeat": meta.get("repeat"),
-        "phase": meta.get("phase", "primary"),
         "outcome": "harness_error",
         "success": False,
         "verifier_passed": verifier_passed,
         "success_strict": None if verifier_passed is None else False,
-        "escalated": False,
-        "escalation_reasons": [],
-        "primary_prompt_tokens_est": 0,
-        "escalation_prompt_tokens_est": 0,
         "process_returncode": meta.get("returncode"),
         "report_exit_code": None,
         "timed_out": bool(meta.get("timed_out", False)),
         "turns": 0,
         "llm_calls": 0,
         "prompt_tokens_est": 0,
-        "prompt_tokens_with_escalation": 0,
         "tool_calls_total": 0,
         "tool_calls_failed": 0,
         "tool_repairs": 0,
@@ -631,70 +512,14 @@ def _summarize_report_once(report_path: Path, meta_path: Path) -> dict:
         "turn_drops": 0,
         "guardrail_interventions": 0,
         "truncated_responses": 0,
-        "tool_request_count": 0,
-        "blocked_tool_call_count": 0,
-        "description_expansion_count": 0,
         "total_llm_time_s": 0.0,
         "total_tool_time_s": 0.0,
         "duration_s": float(meta.get("duration_s", 0.0)),
     }
 
 
-def summarize_report(report_path: Path, meta_path: Path) -> dict:
-    primary = _summarize_report_once(report_path, meta_path)
-    meta = (
-        json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
-    )
-    escalation = meta.get("escalation")
-    if not isinstance(escalation, dict) or not escalation.get("escalated"):
-        return primary
-
-    escalation_report = Path(str(escalation.get("report", "")))
-    escalation_meta = Path(str(escalation.get("meta", "")))
-    fallback = _summarize_report_once(escalation_report, escalation_meta)
-    row = fallback.copy()
-    reasons = [str(reason) for reason in escalation.get("reasons", [])]
-    row["task_id"] = primary["task_id"]
-    row["variant"] = primary["variant"]
-    row["repeat"] = primary["repeat"]
-    row["phase"] = "escalated"
-    row["escalated"] = True
-    row["escalation_reasons"] = reasons
-    row["primary_outcome"] = primary["outcome"]
-    row["primary_success"] = primary["success"]
-    row["primary_verifier_passed"] = primary["verifier_passed"]
-    row["prompt_tokens_est"] = primary["prompt_tokens_est"]
-    row["primary_prompt_tokens_est"] = primary["prompt_tokens_est"]
-    row["escalation_prompt_tokens_est"] = fallback["prompt_tokens_est"]
-    row["prompt_tokens_with_escalation"] = (
-        primary["prompt_tokens_est"] + fallback["prompt_tokens_est"]
-    )
-    for key in (
-        "turns",
-        "llm_calls",
-        "tool_calls_total",
-        "tool_calls_failed",
-        "tool_repairs",
-        "compactions",
-        "turn_drops",
-        "guardrail_interventions",
-        "truncated_responses",
-        "tool_request_count",
-        "blocked_tool_call_count",
-        "description_expansion_count",
-    ):
-        row[key] = primary.get(key, 0) + fallback.get(key, 0)
-    for key in ("duration_s", "total_llm_time_s", "total_tool_time_s"):
-        row[key] = round(float(primary.get(key, 0.0) + fallback.get(key, 0.0)), 3)
-    return row
-
-
 def _sum(rows: list[dict], key: str) -> int | float:
     return sum(row.get(key, 0) for row in rows)
-
-
-def _sum_with_default(rows: list[dict], key: str, default_key: str) -> int | float:
-    return sum(row.get(key, row.get(default_key, 0)) for row in rows)
 
 
 def _row_succeeded(row: dict) -> bool:
@@ -707,24 +532,15 @@ def _row_succeeded(row: dict) -> bool:
 def aggregate_rows(rows: list[dict]) -> dict:
     tasks = len(rows)
     successes = sum(1 for row in rows if _row_succeeded(row))
-    escalations = sum(1 for row in rows if row.get("escalated"))
     return {
         "tasks": tasks,
         "successes": successes,
         "success_rate": round(successes / tasks, 4) if tasks else 0.0,
-        "escalations": escalations,
-        "escalation_rate": round(escalations / tasks, 4) if tasks else 0.0,
         "turns": _sum(rows, "turns"),
         "llm_calls": _sum(rows, "llm_calls"),
         "prompt_tokens_est": _sum(rows, "prompt_tokens_est"),
-        "prompt_tokens_with_escalation": _sum_with_default(
-            rows, "prompt_tokens_with_escalation", "prompt_tokens_est"
-        ),
         "tool_calls_total": _sum(rows, "tool_calls_total"),
         "tool_calls_failed": _sum(rows, "tool_calls_failed"),
-        "tool_request_count": _sum(rows, "tool_request_count"),
-        "blocked_tool_call_count": _sum(rows, "blocked_tool_call_count"),
-        "description_expansion_count": _sum(rows, "description_expansion_count"),
         "tool_repairs": _sum(rows, "tool_repairs"),
         "compactions": _sum(rows, "compactions"),
         "turn_drops": _sum(rows, "turn_drops"),
@@ -948,14 +764,9 @@ def write_summary_csv(path: Path, rows: list[dict]) -> None:
         "verifier_passed",
         "success_strict",
         "outcome",
-        "escalated",
-        "escalation_reasons",
         "turns",
         "llm_calls",
         "prompt_tokens_est",
-        "prompt_tokens_with_escalation",
-        "primary_prompt_tokens_est",
-        "escalation_prompt_tokens_est",
         "tool_calls_total",
         "tool_calls_failed",
         "tool_repairs",
@@ -963,12 +774,6 @@ def write_summary_csv(path: Path, rows: list[dict]) -> None:
         "turn_drops",
         "guardrail_interventions",
         "truncated_responses",
-        "tool_request_count",
-        "blocked_tool_call_count",
-        "description_expansion_count",
-        "primary_outcome",
-        "primary_success",
-        "primary_verifier_passed",
         "duration_s",
         "process_returncode",
         "report_exit_code",
@@ -991,29 +796,21 @@ def render_markdown_summary(summary: dict) -> str:
         "",
         "## Variants",
         "",
-        "| Variant | Successes | Tasks | Rate | Escalations | Escalation rate | Description expansions | Turns | Tool failures | Prompt tokens | Tokens incl. escalation | Duration s |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Variant | Successes | Tasks | Rate | Turns | Tool failures | Prompt tokens | Duration s |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for name in summary["variants"]:
         row = summary["by_variant"][name]
         lines.append(
-            "| {name} | {successes} | {tasks} | {rate:.2%} | {escalations} | "
-            "{escalation_rate:.2%} | {description_expansions} | {turns} | "
-            "{tool_failures} | {tokens} | "
-            "{tokens_with_escalation} | {duration} |".format(
+            "| {name} | {successes} | {tasks} | {rate:.2%} | {turns} | "
+            "{tool_failures} | {tokens} | {duration} |".format(
                 name=name,
                 successes=row["successes"],
                 tasks=row["tasks"],
                 rate=row["success_rate"],
-                escalations=row.get("escalations", 0),
-                escalation_rate=row.get("escalation_rate", 0.0),
-                description_expansions=row.get("description_expansion_count", 0),
                 turns=row["turns"],
                 tool_failures=row["tool_calls_failed"],
                 tokens=row["prompt_tokens_est"],
-                tokens_with_escalation=row.get(
-                    "prompt_tokens_with_escalation", row["prompt_tokens_est"]
-                ),
                 duration=row["duration_s"],
             )
         )
