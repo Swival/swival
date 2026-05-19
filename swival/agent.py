@@ -10373,9 +10373,7 @@ def repl_loop(
 
         remaining = todo_state.remaining_count
         if remaining:
-            next_todo = next(
-                (i.text for i in todo_state.items if not i.done), None
-            )
+            next_todo = next((i.text for i in todo_state.items if not i.done), None)
             if next_todo:
                 label = next_todo
                 if len(label) > 40:
