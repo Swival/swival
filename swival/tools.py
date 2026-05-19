@@ -1554,7 +1554,11 @@ def _read_files(
 ) -> str:
     """Read multiple files and return results grouped by file."""
     if not files:
-        return "error: files list is empty"
+        return (
+            "error: read_files requires a non-empty 'files' array. Each entry is either a "
+            "path string or an object like {\"file_path\": \"...\", \"offset\": 1, \"limit\": 200}. "
+            "To read a single file, use read_file instead."
+        )
     if len(files) > _MAX_READ_FILES:
         return f"error: too many files requested ({len(files)}), maximum is {_MAX_READ_FILES}"
 
@@ -1766,9 +1770,19 @@ def _write_file(
         move_from = None
 
     if content is not None and move_from is not None:
-        return "error: set content or move_from, not both"
+        return (
+            "error: write_file received both 'content' and 'move_from'. "
+            "These are mutually exclusive: set 'content' (a string) to create or overwrite "
+            f"{file_path}, OR set 'move_from' (a source path) to atomically rename that path "
+            f"to {file_path}. Drop whichever one does not apply and retry."
+        )
     if content is None and move_from is None:
-        return "error: set content or move_from"
+        return (
+            "error: write_file requires exactly one of 'content' or 'move_from'. "
+            f"To create or overwrite {file_path}, pass 'content' as a string (use \"\" for an "
+            f"empty file). To rename an existing file to {file_path}, pass 'move_from' with the "
+            "source path. Retry with one of these arguments."
+        )
 
     # Resolve destination.
     try:
@@ -1807,7 +1821,11 @@ def _write_file(
             return f"error: {exc}"
 
         if move_from_resolved == resolved:
-            return "error: move_from and file_path resolve to the same path"
+            return (
+                f"error: write_file move_from={move_from!r} and file_path={file_path!r} "
+                "resolve to the same location, so the rename would be a no-op. To rename a "
+                "file, set file_path to the new destination path."
+            )
 
         # Use the original (pre-resolved) path for existence/type checks so
         # that dangling symlinks are handled consistently with delete_file.
@@ -1821,7 +1839,11 @@ def _write_file(
             return f"error: move_from not found: {move_from}"
 
         if not move_from_original.is_symlink() and move_from_original.is_dir():
-            return "error: move_from is a directory (cannot move directories)"
+            return (
+                f"error: move_from={move_from!r} is a directory. write_file's move_from only "
+                "renames regular files and symlinks, not directories. Use run_command with "
+                "'mv' to move a directory."
+            )
 
         resolved.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -1884,7 +1906,12 @@ def _edit_file(
             return error
 
     if not old_string:
-        return "error: old_string must not be empty"
+        return (
+            "error: edit_file requires a non-empty 'old_string' to locate the text to replace. "
+            "To insert text into a file, pass the surrounding context as 'old_string' and the "
+            "context plus your new content as 'new_string'. To create a new file or overwrite "
+            "one entirely, use write_file instead."
+        )
 
     try:
         content = resolved.read_text(encoding="utf-8")
@@ -2068,7 +2095,11 @@ def _delete_file(
 
     # 4. Type check: symlinks (even to dirs) are OK, actual dirs are not.
     if not original.is_symlink() and original.is_dir():
-        return "error: is a directory (delete individual files instead)"
+        return (
+            f"error: {file_path} is a directory. delete_file only removes regular files and "
+            "symlinks (no recursive directory removal). List the directory with list_files, "
+            "then delete each file individually."
+        )
 
     # 5. Read guard.
     if tracker is not None and not original.is_symlink():
@@ -2693,7 +2724,11 @@ def _run_argv_command(
 ) -> str:
     """Execute an argv-form command and return its output."""
     if not command:
-        return "error: command list is empty"
+        return (
+            "error: run_command requires a non-empty 'command' array, e.g. "
+            "[\"ls\", \"-la\"] or [\"git\", \"status\"]. The first element is the program "
+            "name, remaining elements are its arguments."
+        )
 
     if command[0].lower() == "cd":
         target = command[1] if len(command) > 1 else ""
@@ -3120,12 +3155,21 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
         files = args.get("files")
         file_path = args.get("file_path")
         if files and file_path:
-            return "error: set file_path or files, not both"
+            return (
+                "error: outline received both 'file_path' and 'files'. These are mutually "
+                "exclusive: pass 'file_path' (a single path string) to outline one file, OR "
+                "pass 'files' (an array of {file_path, depth?} objects) to outline several "
+                "in one call. Drop whichever one does not apply and retry."
+            )
         if files:
             if isinstance(files, str):
                 files = [{"file_path": files}]
             elif not isinstance(files, list):
-                return "error: 'files' must be an array"
+                return (
+                    "error: outline 'files' must be an array of objects like "
+                    "[{\"file_path\": \"...\", \"depth\": 2}, ...]. To outline a single file, "
+                    "use 'file_path' instead of 'files'."
+                )
             return _outline_files(
                 files=files,
                 base_dir=base_dir,
@@ -3135,7 +3179,10 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
                 files_mode=files_mode,
             )
         if not file_path:
-            return "error: file_path or files is required"
+            return (
+                "error: outline requires either 'file_path' (a single path) or 'files' "
+                "(an array of {file_path, depth?} objects). Retry with one of these arguments."
+            )
         return _outline(
             file_path=file_path,
             base_dir=base_dir,
