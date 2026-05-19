@@ -5,7 +5,7 @@ The `/audit` command runs a multi-phase security audit over committed Git-tracke
 It triages files by attack surface, performs deep review on escalated files, verifies each finding with an isolated proof-of-concept agent, generates patches, and writes structured reports. Only provable bugs survive to the final output.
 
 ```text
-/audit [path|glob ...] [--resume] [--regen] [--finding N[,M-R]] [--all] [--measure-triage] [--hunt] [--budget-tokens N] [--workers N] [--patch-max-turns N] [--debug]
+/audit [path|glob ...] [--resume] [--regen] [--finding N[,M-R]] [--all] [--measure-triage] [--hunt] [--proof-strict] [--budget-tokens N] [--workers N] [--patch-max-turns N] [--debug]
 ```
 
 Works in both interactive (REPL) and one-shot mode (requires `--oneshot-commands`). Runs against `HEAD`, so dirty working-directory changes are ignored.
@@ -95,9 +95,15 @@ Each escalated file goes through a two-step deep review.
 
 The two are merged into canonical `FindingRecord` objects. JSON parse failures trigger an automatic LLM repair pass; if repair also fails, the entire file gets one analytical retry.
 
-### Phase 4: Verification
+### Phase 4a: Adversarial disproof gate
 
-Each proposed finding is treated as a hypothesis. A verifier agent runs in an isolated Git worktree at HEAD with full access to the committed source code.
+Before the expensive proof verifier runs, every proposed finding is handed to an adversarial reviewer that tries to falsify it. The reviewer reads the finding plus the same evidence bundle the verifier would receive, and cannot emit new findings — it can only return `INVALID`, `NEEDS_PROOF`, or `PLAUSIBLE`. Findings flagged `INVALID` with a concrete blocking control or missing reachability step are discarded before they reach the verifier; `NEEDS_PROOF` findings carry a `required_next_proof` string into the verifier prompt; `PLAUSIBLE` findings proceed normally.
+
+The disproof reviewer can be pointed at a separate model under `[audit.reviewer]` in `swival.toml`. Without that configuration the main model fills in and the metric `disproof_same_model` is incremented so the agreement rate can be audited after the fact. By default a reviewer transport failure fails open to the verifier (logged as `failed_open`); `--proof-strict` instead routes those into a gapfill queue and refuses to advance to verification until the operator resolves them.
+
+### Phase 4b: Verification
+
+Each remaining proposed finding is treated as a hypothesis. A verifier agent runs in an isolated Git worktree at HEAD with full access to the committed source code.
 
 The verifier can inspect code and optionally compile or run small proof-of-concept programs. Its final response must end with a fenced `swival-audit-proof-v1` block carrying a structured verdict:
 
@@ -265,7 +271,21 @@ Hunt findings carry an explicit `reachability_status`. When the hunter reports `
 swival> /audit --hunt --budget-tokens 2_000_000 src/api/
 ```
 
-Several harness flags are recognised by the parser but reserved for upcoming work and currently return an explicit `not yet implemented` error: `--proof-strict` (adversarial disproof gate), `--trace-reachability` (in-repo reachability trace), and `--gapfill N` (observable-coverage gapfill). The corresponding `[audit]` config keys (`proof_strict`, `max_gapfill_tasks`) are similarly refused. These will land in subsequent releases.
+`--proof-strict` enables the strict variant of the adversarial disproof gate. In balanced mode (the default), a disproof reviewer transport failure fails open to the verifier so the run keeps moving. Under `--proof-strict`, those failures route into a gapfill queue and the run refuses to advance until the operator resolves them. The flag can also be set as `proof_strict = true` under `[audit]` in `swival.toml`.
+
+The reviewer can be pointed at a separate same-provider model under `[audit.reviewer] model`; without it the main model fills in.
+
+```toml
+[audit]
+proof_strict = true
+
+[audit.reviewer]
+model = "claude-haiku-4-5"
+```
+
+`[audit.reviewer] profile` is parsed but reserved for a future release. Switching the reviewer to a different provider needs an api_base/api_key overlay that is not yet wired through, so for now only same-provider model overrides take effect; a `profile` entry currently surfaces an explicit error.
+
+Two more harness flags are recognised by the parser but reserved for upcoming work and currently return an explicit `not yet implemented` error: `--trace-reachability` (in-repo reachability trace) and `--gapfill N` (observable-coverage gapfill). The `[audit] max_gapfill_tasks` config key is similarly refused. These will land in subsequent releases.
 
 All options can be combined with a focus path:
 

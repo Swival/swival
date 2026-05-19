@@ -54,6 +54,11 @@ INPUT_COMMANDS: dict[str, CommandInfo] = {
                 "hunt tasks derived from Phase-1 scans plus [[audit.hunt_task]]",
             ),
             (
+                "--proof-strict",
+                "Strict adversarial review: disproof transport failures route "
+                "to gapfill instead of failing open to proof",
+            ),
+            (
                 "--budget-tokens N",
                 "Global token budget for the whole run; underscores and "
                 "commas accepted (e.g. 2_000_000)",

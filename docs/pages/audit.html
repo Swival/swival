@@ -99,7 +99,7 @@
             <h1 id="swival-security-scanner">Swival Security Scanner</h1>
 <p>The <code>/audit</code> command runs a multi-phase security audit over committed Git-tracked code.</p>
 <p>It triages files by attack surface, performs deep review on escalated files, verifies each finding with an isolated proof-of-concept agent, generates patches, and writes structured reports. Only provable bugs survive to the final output.</p>
-<pre><code class="language-text">/audit [path|glob ...] [--resume] [--regen] [--finding N[,M-R]] [--all] [--measure-triage] [--hunt] [--budget-tokens N] [--workers N] [--patch-max-turns N] [--debug]
+<pre><code class="language-text">/audit [path|glob ...] [--resume] [--regen] [--finding N[,M-R]] [--all] [--measure-triage] [--hunt] [--proof-strict] [--budget-tokens N] [--workers N] [--patch-max-turns N] [--debug]
 </code></pre>
 <p>Works in both interactive (REPL) and one-shot mode (requires <code>--oneshot-commands</code>). Runs against <code>HEAD</code>, so dirty working-directory changes are ignored.</p>
 <h2 id="quick-start">Quick Start</h2>
@@ -155,8 +155,11 @@ Audit complete. 2 finding(s) written to audit-findings/. Run `ls audit-findings/
 <p><strong>Inventory (3a):</strong> The LLM produces a compact list of finding stubs (title, severity, exact <code>path:line</code> location, and a one-line claim under 20 words). At most 3 findings per file. Speculative findings are explicitly rejected.</p>
 <p><strong>Expansion (3b):</strong> Each finding stub is expanded with proof details: finding type, preconditions, a propagation-path proof, and a minimal fix outline. Expansion runs in parallel (up to 2 workers per file).</p>
 <p>The two are merged into canonical <code>FindingRecord</code> objects. JSON parse failures trigger an automatic LLM repair pass; if repair also fails, the entire file gets one analytical retry.</p>
-<h3 id="phase-4-verification">Phase 4: Verification</h3>
-<p>Each proposed finding is treated as a hypothesis. A verifier agent runs in an isolated Git worktree at HEAD with full access to the committed source code.</p>
+<h3 id="phase-4a-adversarial-disproof-gate">Phase 4a: Adversarial disproof gate</h3>
+<p>Before the expensive proof verifier runs, every proposed finding is handed to an adversarial reviewer that tries to falsify it. The reviewer reads the finding plus the same evidence bundle the verifier would receive, and cannot emit new findings — it can only return <code>INVALID</code>, <code>NEEDS_PROOF</code>, or <code>PLAUSIBLE</code>. Findings flagged <code>INVALID</code> with a concrete blocking control or missing reachability step are discarded before they reach the verifier; <code>NEEDS_PROOF</code> findings carry a <code>required_next_proof</code> string into the verifier prompt; <code>PLAUSIBLE</code> findings proceed normally.</p>
+<p>The disproof reviewer can be pointed at a separate model under <code>[audit.reviewer]</code> in <code>swival.toml</code>. Without that configuration the main model fills in and the metric <code>disproof_same_model</code> is incremented so the agreement rate can be audited after the fact. By default a reviewer transport failure fails open to the verifier (logged as <code>failed_open</code>); <code>--proof-strict</code> instead routes those into a gapfill queue and refuses to advance to verification until the operator resolves them.</p>
+<h3 id="phase-4b-verification">Phase 4b: Verification</h3>
+<p>Each remaining proposed finding is treated as a hypothesis. A verifier agent runs in an isolated Git worktree at HEAD with full access to the committed source code.</p>
 <p>The verifier can inspect code and optionally compile or run small proof-of-concept programs. Its final response must end with a fenced <code>swival-audit-proof-v1</code> block carrying a structured verdict:</p>
 <pre><code class="language-text">```swival-audit-proof-v1
 verdict: REPRODUCED | NOTREPRODUCED
@@ -267,7 +270,15 @@ priority = &quot;high&quot;
 <p><code>--budget-tokens N</code> sets a global token cap for the whole run. Underscores and commas in the value are accepted (<code>--budget-tokens 2_000_000</code> or <code>--budget-tokens 2,000,000</code>). The planner allocates proportional slices to each phase and tallies consumption; once the global pool is past 50% spent, low-priority hunt tasks are dropped before any other corner is cut.</p>
 <pre><code class="language-text">swival&gt; /audit --hunt --budget-tokens 2_000_000 src/api/
 </code></pre>
-<p>Several harness flags are recognised by the parser but reserved for upcoming work and currently return an explicit <code>not yet implemented</code> error: <code>--proof-strict</code> (adversarial disproof gate), <code>--trace-reachability</code> (in-repo reachability trace), and <code>--gapfill N</code> (observable-coverage gapfill). The corresponding <code>[audit]</code> config keys (<code>proof_strict</code>, <code>max_gapfill_tasks</code>) are similarly refused. These will land in subsequent releases.</p>
+<p><code>--proof-strict</code> enables the strict variant of the adversarial disproof gate. In balanced mode (the default), a disproof reviewer transport failure fails open to the verifier so the run keeps moving. Under <code>--proof-strict</code>, those failures route into a gapfill queue and the run refuses to advance until the operator resolves them. The flag can also be set as <code>proof_strict = true</code> under <code>[audit]</code> in <code>swival.toml</code>.</p>
+<p>The reviewer can be pointed at a separate model under <code>[audit.reviewer]</code>; without it the main model fills in.</p>
+<pre><code class="language-toml">[audit]
+proof_strict = true
+
+[audit.reviewer]
+model = &quot;claude-haiku-4-5&quot;
+</code></pre>
+<p>Two more harness flags are recognised by the parser but reserved for upcoming work and currently return an explicit <code>not yet implemented</code> error: <code>--trace-reachability</code> (in-repo reachability trace) and <code>--gapfill N</code> (observable-coverage gapfill). The <code>[audit] max_gapfill_tasks</code> config key is similarly refused. These will land in subsequent releases.</p>
 <p>All options can be combined with a focus path:</p>
 <pre><code class="language-text">swival&gt; /audit src/api/ --resume --workers 6
 swival&gt; /audit src/api/ --regen

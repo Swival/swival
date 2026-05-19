@@ -3577,6 +3577,501 @@ class TestPhase4cReproduce:
         assert result is None
 
 
+class TestDisproofBlockParser:
+    """Step 6: ``swival-audit-disproof-v1`` block parsing and rejection."""
+
+    def _wrap(self, body: str) -> str:
+        return f"some preamble\n```swival-audit-disproof-v1\n{body}\n```\n"
+
+    def test_parse_invalid_with_blocking_control(self):
+        from swival.audit import _parse_disproof_block
+
+        body = (
+            "verdict: INVALID\n"
+            "reason: handler guards path with realpath/within-root check\n"
+            "counterclaim_checked:\n"
+            "  - upload path is not rooted under uploads_dir\n"
+            "blocking_control: assert resolve(path).startswith(uploads_root)\n"
+            "missing_link: none\n"
+            "required_next_proof: none\n"
+            "review_model: \n"
+        )
+        out = _parse_disproof_block(self._wrap(body))
+        assert out["verdict"] == "INVALID"
+        assert out["blocking_control"].startswith("assert resolve")
+        assert out["missing_link"] == ""
+        assert out["counterclaim_checked"] == [
+            "upload path is not rooted under uploads_dir"
+        ]
+
+    def test_parse_needs_proof_with_required_next_proof(self):
+        from swival.audit import _parse_disproof_block
+
+        body = (
+            "verdict: NEEDS_PROOF\n"
+            "reason: cannot tell if header path is attacker-reachable\n"
+            "counterclaim_checked:\n"
+            "  - request handler ever receives X-Trace-Id from clients\n"
+            "blocking_control: none\n"
+            "missing_link: no exposure of route to unauthenticated clients\n"
+            "required_next_proof: curl with crafted X-Trace-Id against /track\n"
+            "review_model: \n"
+        )
+        out = _parse_disproof_block(self._wrap(body))
+        assert out["verdict"] == "NEEDS_PROOF"
+        assert out["required_next_proof"].startswith("curl")
+
+    def test_parse_plausible(self):
+        from swival.audit import _parse_disproof_block
+
+        body = (
+            "verdict: PLAUSIBLE\n"
+            "reason: could not find any blocking control\n"
+            "counterclaim_checked: none\n"
+            "blocking_control: none\n"
+            "missing_link: none\n"
+            "required_next_proof: none\n"
+            "review_model: \n"
+        )
+        out = _parse_disproof_block(self._wrap(body))
+        assert out["verdict"] == "PLAUSIBLE"
+        assert out["counterclaim_checked"] == []
+        assert out["blocking_control"] == ""
+
+    def test_missing_block_raises(self):
+        from swival.audit import DisproofBlockError, _parse_disproof_block
+
+        try:
+            _parse_disproof_block("INVALID — no block here")
+        except DisproofBlockError:
+            return
+        raise AssertionError("expected DisproofBlockError")
+
+    def test_invalid_verdict_raises(self):
+        from swival.audit import DisproofBlockError, _parse_disproof_block
+
+        try:
+            _parse_disproof_block(self._wrap("verdict: UNCERTAIN\n"))
+        except DisproofBlockError:
+            return
+        raise AssertionError("expected DisproofBlockError")
+
+
+class TestDisproofRouting:
+    """Step 6: per-finding routing rules from _disproof_routing."""
+
+    def test_invalid_with_concrete_evidence_routes_to_invalid(self):
+        from swival.audit import _disproof_routing
+
+        parsed = {
+            "verdict": "INVALID",
+            "reason": "guarded",
+            "counterclaim_checked": ["x"],
+            "blocking_control": "if not allowed: return 403",
+            "missing_link": "",
+            "required_next_proof": "",
+            "review_model": "rev-mini",
+        }
+        rec = _disproof_routing(parsed, None, proof_strict=False)
+        assert rec["status"] == "invalid"
+        assert rec["blocking_control"].startswith("if not allowed")
+
+    def test_invalid_without_evidence_demotes_to_plausible(self):
+        from swival.audit import _disproof_routing
+
+        parsed = {
+            "verdict": "INVALID",
+            "reason": "vibes",
+            "counterclaim_checked": [],
+            "blocking_control": "",
+            "missing_link": "",
+            "required_next_proof": "",
+            "review_model": "rev-mini",
+        }
+        rec = _disproof_routing(parsed, None, proof_strict=False)
+        assert rec["status"] == "plausible"
+
+    def test_needs_proof_carries_required_proof(self):
+        from swival.audit import _disproof_routing
+
+        parsed = {
+            "verdict": "NEEDS_PROOF",
+            "reason": "n/a",
+            "counterclaim_checked": [],
+            "blocking_control": "",
+            "missing_link": "no proof",
+            "required_next_proof": "curl /x",
+            "review_model": "rev-mini",
+        }
+        rec = _disproof_routing(parsed, None, proof_strict=False)
+        assert rec["status"] == "needs_proof"
+        assert rec["required_next_proof"] == "curl /x"
+
+    def test_transport_failure_balanced_fails_open(self):
+        from swival.audit import _disproof_routing
+
+        rec = _disproof_routing(None, "timeout", proof_strict=False)
+        assert rec["status"] == "failed_open"
+        assert rec["reason"] == "timeout"
+
+    def test_transport_failure_strict_routes_to_gapfill(self):
+        from swival.audit import _disproof_routing
+
+        rec = _disproof_routing(None, "timeout", proof_strict=True)
+        assert rec["status"] == "gapfill"
+
+
+class TestDisproofPhaseOrchestration:
+    """Step 6: end-to-end routing inside the disproof phase of _run_audit_phases."""
+
+    def _state(self, tmp_path, *, proof_strict=False):
+        from swival.audit import AuditRunState, AuditScope, FindingRecord
+
+        scope = AuditScope(
+            branch="m",
+            commit="c",
+            tracked_files=["a.py", "b.py"],
+            mandatory_files=["a.py", "b.py"],
+            focus=[],
+        )
+        state = AuditRunState(
+            run_id="d1",
+            scope=scope,
+            queued_files=["a.py", "b.py"],
+            state_dir=tmp_path / ".swival" / "audit",
+            proof_strict=proof_strict,
+        )
+        f1 = FindingRecord(
+            title="ssrf via webhook",
+            finding_type="vulnerability",
+            severity="high",
+            locations=["a.py:1"],
+            preconditions=[],
+            proof=["..."],
+            fix_outline="guard host",
+            source_file="a.py",
+        )
+        f2 = FindingRecord(
+            title="ide-only false positive",
+            finding_type="vulnerability",
+            severity="medium",
+            locations=["b.py:2"],
+            preconditions=[],
+            proof=["..."],
+            fix_outline="n/a",
+            source_file="b.py",
+        )
+        state.proposed_findings = [f1, f2]
+        state.phase = "disproof"
+        return state
+
+    def _ctx(self, tmp_path):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            base_dir=str(tmp_path),
+            tools=[],
+            loop_kwargs={
+                "api_base": "x",
+                "model_id": "m",
+                "max_output_tokens": 100,
+                "temperature": 0.0,
+                "top_p": None,
+                "seed": None,
+                "context_length": None,
+                "resolved_commands": {},
+                "llm_kwargs": {},
+            },
+        )
+
+    def test_invalid_finding_is_discarded_before_verification(
+        self, monkeypatch, tmp_path
+    ):
+        from swival import audit
+
+        state = self._state(tmp_path)
+        ctx = self._ctx(tmp_path)
+        invalid_block = (
+            "```swival-audit-disproof-v1\n"
+            "verdict: INVALID\n"
+            "reason: guarded\n"
+            "counterclaim_checked:\n  - input is trusted\n"
+            "blocking_control: route requires admin auth\n"
+            "missing_link: none\n"
+            "required_next_proof: none\n"
+            "review_model: \n"
+            "```"
+        )
+        plausible_block = (
+            "```swival-audit-disproof-v1\n"
+            "verdict: PLAUSIBLE\n"
+            "reason: nope\n"
+            "counterclaim_checked: none\n"
+            "blocking_control: none\n"
+            "missing_link: none\n"
+            "required_next_proof: none\n"
+            "review_model: \n"
+            "```"
+        )
+
+        calls = {"n": 0}
+
+        def fake_call(ctx_, msgs, **kw):
+            calls["n"] += 1
+            return invalid_block if calls["n"] == 1 else plausible_block
+
+        monkeypatch.setattr(audit, "_call_audit_llm", fake_call)
+        monkeypatch.setattr(audit, "_gather_evidence", lambda f, c: ("ev", 1))
+
+        # Stop after the disproof phase by simulating "no findings".
+        before = list(state.proposed_findings)
+        from swival.audit import _finding_key
+
+        f1_key = _finding_key(before[0])
+
+        # Drive the phase by hand to avoid pulling in the rest of the orchestrator.
+        targets = [(f, _finding_key(f)) for f in state.proposed_findings]
+        results = []
+        for f, key in targets:
+            parsed, err = audit._phase_disproof_one(f, state, ctx, reviewer_model="")
+            results.append((key, parsed, err))
+        for key, parsed, err in results:
+            rec = audit._disproof_routing(parsed, err, proof_strict=False)
+            state.adversarial_state[key] = rec
+
+        assert state.adversarial_state[f1_key]["status"] == "invalid"
+        statuses = {v["status"] for v in state.adversarial_state.values()}
+        assert "plausible" in statuses
+
+    def test_disproof_records_review_model(self, monkeypatch, tmp_path):
+        from swival import audit
+
+        state = self._state(tmp_path)
+        ctx = self._ctx(tmp_path)
+        block = (
+            "```swival-audit-disproof-v1\n"
+            "verdict: PLAUSIBLE\n"
+            "reason: ok\n"
+            "counterclaim_checked: none\n"
+            "blocking_control: none\n"
+            "missing_link: none\n"
+            "required_next_proof: none\n"
+            "review_model: \n"
+            "```"
+        )
+        monkeypatch.setattr(audit, "_call_audit_llm", lambda c, m, **kw: block)
+        monkeypatch.setattr(audit, "_gather_evidence", lambda f, c: ("ev", 1))
+
+        parsed, err = audit._phase_disproof_one(
+            state.proposed_findings[0], state, ctx, reviewer_model="reviewer-mini"
+        )
+        assert err is None
+        assert parsed["review_model"] == "reviewer-mini"
+
+    def test_disproof_handles_malformed_block(self, monkeypatch, tmp_path):
+        from swival import audit
+
+        state = self._state(tmp_path)
+        ctx = self._ctx(tmp_path)
+        monkeypatch.setattr(audit, "_call_audit_llm", lambda c, m, **kw: "no block")
+        monkeypatch.setattr(audit, "_gather_evidence", lambda f, c: ("ev", 1))
+
+        parsed, err = audit._phase_disproof_one(
+            state.proposed_findings[0], state, ctx, reviewer_model=""
+        )
+        assert parsed is None
+        assert err and "malformed disproof block" in err
+
+
+class TestDisproofAgreement:
+    """Step 6 review: agreement_with_proof must be set deterministically."""
+
+    def _bare(self, tmp_path):
+        from swival.audit import (
+            AuditRunState,
+            AuditScope,
+            FindingRecord,
+            _finding_key,
+        )
+
+        scope = AuditScope(
+            branch="m",
+            commit="c",
+            tracked_files=["a.py"],
+            mandatory_files=["a.py"],
+            focus=[],
+        )
+        state = AuditRunState(
+            run_id="ag1",
+            scope=scope,
+            queued_files=["a.py"],
+            state_dir=tmp_path / ".swival" / "audit",
+        )
+        finding = FindingRecord(
+            title="x",
+            finding_type="vulnerability",
+            severity="high",
+            locations=["a.py:1"],
+            preconditions=[],
+            proof=["..."],
+            fix_outline="g",
+            source_file="a.py",
+        )
+        return state, finding, _finding_key(finding)
+
+    def _ctx(self, tmp_path):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            base_dir=str(tmp_path),
+            tools=[],
+            loop_kwargs={
+                "api_base": "x",
+                "model_id": "m",
+                "max_output_tokens": 100,
+                "temperature": 0.0,
+                "top_p": None,
+                "seed": None,
+                "context_length": None,
+                "resolved_commands": {},
+                "llm_kwargs": {},
+            },
+        )
+
+    def _setup_worktree(self, monkeypatch):
+        class Dummy:
+            def __init__(self, work):
+                self.work = work
+
+            def __enter__(self):
+                return self.work
+
+            def __exit__(self, *exc):
+                return False
+
+        monkeypatch.setattr("swival.audit._worktree", lambda b, w: Dummy(w))
+        monkeypatch.setattr("swival.audit._gather_evidence", lambda f, c: ("ev", 1))
+
+    def _reproduced_block(self):
+        return (
+            "```swival-audit-proof-v1\n"
+            "verdict: REPRODUCED\n"
+            "proof_kind: runtime\n"
+            "commands:\n  - ./poc\n"
+            "artifacts: none\n"
+            "observed_output: ok\n"
+            "trigger: t\n"
+            "impact: i\n"
+            "limitations: none\n"
+            "```"
+        )
+
+    def _notreproduced_block(self):
+        return (
+            "```swival-audit-proof-v1\n"
+            "verdict: NOTREPRODUCED\n"
+            "proof_kind: source\n"
+            "commands: none\n"
+            "artifacts: none\n"
+            "observed_output: guarded\n"
+            "trigger: none\n"
+            "impact: none\n"
+            "limitations: none\n"
+            "```"
+        )
+
+    def test_plausible_reproduced_is_agreed(self, monkeypatch, tmp_path):
+        from swival import audit
+
+        self._setup_worktree(monkeypatch)
+        state, finding, key = self._bare(tmp_path)
+        state.adversarial_state[key] = {"status": "plausible"}
+        monkeypatch.setattr(
+            "swival.agent.run_agent_loop",
+            lambda msgs, tools, **kw: (self._reproduced_block(), False),
+        )
+        vf = audit._verify_single_finding(
+            finding, state, self._ctx(tmp_path), tmp_path / "w"
+        )
+        assert vf is not None
+        assert state.adversarial_state[key]["agreement_with_proof"] == "agreed"
+        assert vf.adversarial["agreement_with_proof"] == "agreed"
+
+    def test_plausible_notreproduced_is_disagreed(self, monkeypatch, tmp_path):
+        from swival import audit
+
+        self._setup_worktree(monkeypatch)
+        state, finding, key = self._bare(tmp_path)
+        state.adversarial_state[key] = {"status": "plausible"}
+        monkeypatch.setattr(
+            "swival.agent.run_agent_loop",
+            lambda msgs, tools, **kw: (self._notreproduced_block(), False),
+        )
+        vf = audit._verify_single_finding(
+            finding, state, self._ctx(tmp_path), tmp_path / "w"
+        )
+        assert vf is None
+        assert state.adversarial_state[key]["agreement_with_proof"] == "disagreed"
+
+    def test_needs_proof_either_outcome_is_agreed(self, monkeypatch, tmp_path):
+        from swival import audit
+
+        self._setup_worktree(monkeypatch)
+        state, finding, key = self._bare(tmp_path)
+        state.adversarial_state[key] = {"status": "needs_proof"}
+        monkeypatch.setattr(
+            "swival.agent.run_agent_loop",
+            lambda msgs, tools, **kw: (self._reproduced_block(), False),
+        )
+        audit._verify_single_finding(
+            finding, state, self._ctx(tmp_path), tmp_path / "w"
+        )
+        assert state.adversarial_state[key]["agreement_with_proof"] == "agreed"
+
+        state.adversarial_state[key] = {"status": "needs_proof"}
+        monkeypatch.setattr(
+            "swival.agent.run_agent_loop",
+            lambda msgs, tools, **kw: (self._notreproduced_block(), False),
+        )
+        audit._verify_single_finding(
+            finding, state, self._ctx(tmp_path), tmp_path / "w"
+        )
+        assert state.adversarial_state[key]["agreement_with_proof"] == "agreed"
+
+    def test_failed_open_records_no_review(self, monkeypatch, tmp_path):
+        from swival import audit
+
+        self._setup_worktree(monkeypatch)
+        state, finding, key = self._bare(tmp_path)
+        state.adversarial_state[key] = {"status": "failed_open"}
+        monkeypatch.setattr(
+            "swival.agent.run_agent_loop",
+            lambda msgs, tools, **kw: (self._reproduced_block(), False),
+        )
+        audit._verify_single_finding(
+            finding, state, self._ctx(tmp_path), tmp_path / "w"
+        )
+        assert state.adversarial_state[key]["agreement_with_proof"] == "no_review"
+
+
+class TestProofStrictResumeRetriesGapfill:
+    """Step 6 review: --proof-strict gapfill items must retry on resume,
+    not be permanently skipped by the terminal-status filter."""
+
+    def test_gapfill_status_is_not_in_skip_set(self):
+        import inspect
+
+        from swival import audit
+
+        src = inspect.getsource(audit._run_audit_phases)
+        chunk = src.split('if state.phase == "disproof":', 1)[1]
+        skip_block = chunk.split("if targets", 1)[0]
+        assert '"gapfill"' not in skip_block, (
+            "gapfill must be retryable on resume so --proof-strict failures "
+            "can recover after the reviewer is back"
+        )
+
+
 class TestBudgetPlanner:
     def _state(self, tmp_path: Path, budget: int = 0):
         scope = AuditScope(
@@ -3696,13 +4191,12 @@ class TestAuditCliFlags:
         assert captured["hunt_mode"] is True
         assert captured["budget_tokens"] == 0
 
-    def test_proof_strict_flag_is_reserved(self, tmp_path):
+    def test_proof_strict_flag_threads_through(self, tmp_path, monkeypatch):
         from swival.audit import run_audit_command
 
-        out = run_audit_command("--proof-strict", self._ctx(tmp_path))
-        assert out.startswith("error:")
-        assert "--proof-strict is reserved" in out
-        assert "not yet implemented" in out
+        captured = self._capture(monkeypatch)
+        run_audit_command("--proof-strict", self._ctx(tmp_path))
+        assert captured["proof_strict"] is True
 
     def test_trace_reachability_flag_is_reserved(self, tmp_path):
         from swival.audit import run_audit_command
@@ -3734,15 +4228,37 @@ class TestAuditCliFlags:
         assert "--gapfill is reserved" in out
         assert "not yet implemented" in out
 
-    def test_proof_strict_config_key_is_reserved(self, tmp_path, monkeypatch):
+    def test_proof_strict_config_key_threads_through(self, tmp_path, monkeypatch):
         from swival.audit import run_audit_command
 
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
         (tmp_path / "swival.toml").write_text("[audit]\nproof_strict = true\n")
+        captured = self._capture(monkeypatch)
+        run_audit_command("", self._ctx(tmp_path))
+        assert captured["proof_strict"] is True
+
+    def test_reviewer_profile_is_reserved(self, tmp_path, monkeypatch):
+        from swival.audit import run_audit_command
+
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+        (tmp_path / "swival.toml").write_text(
+            '[audit.reviewer]\nprofile = "reviewer"\n'
+        )
         out = run_audit_command("", self._ctx(tmp_path))
         assert out.startswith("error:")
-        assert "proof_strict" in out
-        assert "not yet implemented" in out
+        assert "[audit.reviewer] profile" in out
+        assert "reserved" in out
+
+    def test_reviewer_model_threads_through(self, tmp_path, monkeypatch):
+        from swival.audit import run_audit_command
+
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+        (tmp_path / "swival.toml").write_text(
+            '[audit.reviewer]\nmodel = "reviewer-mini"\n'
+        )
+        captured = self._capture(monkeypatch)
+        run_audit_command("", self._ctx(tmp_path))
+        assert captured["reviewer_model"] == "reviewer-mini"
 
     def test_max_gapfill_tasks_config_key_is_reserved(self, tmp_path, monkeypatch):
         from swival.audit import run_audit_command

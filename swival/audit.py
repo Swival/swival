@@ -2064,12 +2064,14 @@ def _call_audit_llm(
     messages: list[dict],
     temperature: float | None = None,
     trace_task: str | None = None,
+    model_override: str | None = None,
 ) -> str:
     from .agent import call_llm, ContextOverflowError
     from ._msg import _msg_content
 
     kw = ctx.loop_kwargs
     llm_kwargs = kw.get("llm_kwargs", {})
+    effective_model = model_override or kw["model_id"]
 
     cache_info = None
 
@@ -2077,7 +2079,7 @@ def _call_audit_llm(
         nonlocal cache_info
         msg, _finish, _activity, _retries, cache_info = call_llm(
             kw["api_base"],
-            kw["model_id"],
+            effective_model,
             msgs,
             kw.get("max_output_tokens"),
             temperature,
@@ -4137,15 +4139,19 @@ class ProofBlockError(ValueError):
     """Raised when Phase 4's structured proof block is missing or malformed."""
 
 
-def _parse_proof_body(body: str) -> dict:
-    """Parse the body of one ``swival-audit-proof-v1`` block.
+def _parse_kv_block(
+    body: str,
+    scalar_keys: tuple[str, ...],
+    list_keys: tuple[str, ...],
+) -> dict:
+    """Line-oriented walker shared by all ``swival-audit-*-v1`` blocks.
 
-    The body is line-oriented: scalar keys live on ``key: value`` lines, list
-    keys (``commands``, ``artifacts``) declare on a key line and list items
-    follow as ``  - item`` lines. ``none`` (case-insensitive) clears the list.
+    ``key: value`` lines populate scalars; ``key:`` followed by ``  - item``
+    lines populates the named list. ``none`` (case-insensitive) clears a list
+    item. Callers apply their own verdict-shape validation after.
     """
-    out: dict = {k: "" for k in _PROOF_SCALAR_KEYS}
-    for k in _PROOF_LIST_KEYS:
+    out: dict = {k: "" for k in scalar_keys}
+    for k in list_keys:
         out[k] = []
     current_list: str | None = None
     for raw in body.splitlines():
@@ -4163,14 +4169,42 @@ def _parse_proof_body(body: str) -> dict:
         key, _, val = raw.partition(":")
         key = key.strip()
         val = val.strip()
-        if key in _PROOF_LIST_KEYS:
+        if key in list_keys:
             current_list = key
             if val and val.lower() != "none":
                 out[key].append(val)
             continue
         current_list = None
-        if key in _PROOF_SCALAR_KEYS:
+        if key in scalar_keys:
             out[key] = val
+    return out
+
+
+def _parse_sentinel_block(
+    answer: str,
+    block_re: re.Pattern,
+    body_parser,
+    exc_cls: type,
+    missing_msg: str,
+):
+    """Find the structured block in a response. Prefer the last valid match so
+    that captured command output containing the sentinel cannot poison the
+    verdict."""
+    matches = list(block_re.finditer(answer))
+    if not matches:
+        raise exc_cls(missing_msg)
+    first_err = None
+    for m in reversed(matches):
+        try:
+            return body_parser(m.group(1))
+        except exc_cls as e:
+            if first_err is None:
+                first_err = e
+    raise first_err or exc_cls("no valid block")
+
+
+def _parse_proof_body(body: str) -> dict:
+    out = _parse_kv_block(body, _PROOF_SCALAR_KEYS, _PROOF_LIST_KEYS)
     if out["verdict"] not in _PROOF_VERDICTS:
         raise ProofBlockError(f"invalid or missing verdict: {out['verdict']!r}")
     if out["proof_kind"].lower() in ("", "none"):
@@ -4183,23 +4217,13 @@ def _parse_proof_body(body: str) -> dict:
 
 
 def _parse_proof_block(answer: str) -> dict:
-    """Locate and parse the structured proof block in a verifier response.
-
-    Multiple candidate blocks can exist (e.g. when captured command output
-    happens to contain the sentinel). We prefer the last fully valid block;
-    if none parse cleanly, the first parser error is propagated.
-    """
-    matches = list(_PROOF_BLOCK_RE.finditer(answer))
-    if not matches:
-        raise ProofBlockError("no swival-audit-proof-v1 block in verifier output")
-    first_err: ProofBlockError | None = None
-    for m in reversed(matches):
-        try:
-            return _parse_proof_body(m.group(1))
-        except ProofBlockError as e:
-            if first_err is None:
-                first_err = e
-    raise first_err or ProofBlockError("no valid proof block")
+    return _parse_sentinel_block(
+        answer,
+        _PROOF_BLOCK_RE,
+        _parse_proof_body,
+        ProofBlockError,
+        "no swival-audit-proof-v1 block in verifier output",
+    )
 
 
 def _finding_key(finding: FindingRecord) -> str:
@@ -4208,8 +4232,232 @@ def _finding_key(finding: FindingRecord) -> str:
     return hashlib.sha256(blob.encode()).hexdigest()[:12]
 
 
+_DISPROOF_SENTINEL = "swival-audit-disproof-v1"
+_DISPROOF_BLOCK_RE = re.compile(
+    r"```" + _DISPROOF_SENTINEL + r"\s*\n(.*?)\n```",
+    re.DOTALL,
+)
+_DISPROOF_VERDICT_PLAUSIBLE = "PLAUSIBLE"
+_DISPROOF_VERDICT_NEEDS_PROOF = "NEEDS_PROOF"
+_DISPROOF_VERDICT_INVALID = "INVALID"
+_DISPROOF_VERDICTS = (
+    _DISPROOF_VERDICT_PLAUSIBLE,
+    _DISPROOF_VERDICT_NEEDS_PROOF,
+    _DISPROOF_VERDICT_INVALID,
+)
+_DISPROOF_SCALAR_KEYS = (
+    "verdict",
+    "reason",
+    "blocking_control",
+    "missing_link",
+    "required_next_proof",
+    "review_model",
+)
+_DISPROOF_LIST_KEYS = ("counterclaim_checked",)
+
+_DISPROOF_STATUS_INVALID = "invalid"
+_DISPROOF_STATUS_PLAUSIBLE = "plausible"
+_DISPROOF_STATUS_NEEDS_PROOF = "needs_proof"
+_DISPROOF_STATUS_FAILED_OPEN = "failed_open"
+_DISPROOF_STATUS_GAPFILL = "gapfill"
+_DISPROOF_TERMINAL_STATUSES = (
+    _DISPROOF_STATUS_INVALID,
+    _DISPROOF_STATUS_PLAUSIBLE,
+    _DISPROOF_STATUS_NEEDS_PROOF,
+    _DISPROOF_STATUS_FAILED_OPEN,
+)
+
+
+class DisproofBlockError(ValueError):
+    """Raised when the adversarial-disproof block is missing or malformed."""
+
+
+def _parse_disproof_body(body: str) -> dict:
+    out = _parse_kv_block(body, _DISPROOF_SCALAR_KEYS, _DISPROOF_LIST_KEYS)
+    if out["verdict"] not in _DISPROOF_VERDICTS:
+        raise DisproofBlockError(f"invalid or missing verdict: {out['verdict']!r}")
+    for k in ("blocking_control", "missing_link", "required_next_proof"):
+        if out[k].lower() == "none":
+            out[k] = ""
+    return out
+
+
+def _parse_disproof_block(answer: str) -> dict:
+    return _parse_sentinel_block(
+        answer,
+        _DISPROOF_BLOCK_RE,
+        _parse_disproof_body,
+        DisproofBlockError,
+        "no swival-audit-disproof-v1 block in reviewer output",
+    )
+
+
+_PHASE_DISPROOF_SYSTEM = """\
+You are an adversarial reviewer for one proposed security finding from a staged audit.
+
+Your job is to falsify the finding. Do not investigate new bugs. Do not propose new findings. Only attempt to disprove the one finding you are given, using the cited evidence.
+
+You have no tools, no shell access, and no ability to run commands. All the source code you need is included below.
+
+Instantiate explicit counterclaims to test, for example:
+- name a concrete guard in committed code that already blocks the trigger
+- show the supposedly attacker-controlled input is trusted-only (only admin/operator can supply it)
+- show the named trust boundary is not externally reachable
+- show the impact is correctness-only and has no security-relevant outcome
+- show the sink cannot receive attacker-controlled data on any path
+
+Verdicts:
+- INVALID: you have concrete counterevidence that falsifies the finding (cite the guard, missing path, trusted-only trigger, non-security impact, or contradicting code).
+- NEEDS_PROOF: the finding is not obviously false but the evidence as written is insufficient. Specify what proof the verifier should attempt next.
+- PLAUSIBLE: you could not falsify the finding from the cited evidence.
+
+Output exactly one fenced block using the ``swival-audit-disproof-v1`` sentinel. Emit nothing after the closing fence.
+
+```swival-audit-disproof-v1
+verdict: PLAUSIBLE | NEEDS_PROOF | INVALID
+reason: one short sentence describing the disproof outcome
+counterclaim_checked:
+  - explicit falsification target tested, repeatable, one per line
+blocking_control: concrete guard you found in code, or none
+missing_link: missing attacker/reachability/proof step that blocks falsification, or none
+required_next_proof: specific proof the verifier should attempt for NEEDS_PROOF, or none
+review_model: leave blank; the harness fills this in
+```
+
+Rules for the block:
+- ``INVALID`` requires a concrete blocking_control or missing_link citation. Do not return INVALID on speculation.
+- ``NEEDS_PROOF`` requires a non-empty required_next_proof string.
+- For ``PLAUSIBLE``, all counterevidence fields may be ``none``.
+- Use ``none`` (lowercase) for empty lists and empty scalar fields.
+- Do not embed nested ``swival-audit-disproof-v1`` markers in the block content."""
+
+
 class _TransientVerifierError(Exception):
     """Raised when a verifier worker hits a transient provider or transport error."""
+
+
+def _phase_disproof_one(
+    finding: FindingRecord,
+    state: AuditRunState,
+    ctx: InputContext,
+    *,
+    reviewer_model: str = "",
+) -> tuple[dict | None, str | None]:
+    """Run the adversarial reviewer on one proposed finding.
+
+    On success the parsed disproof block is returned with ``review_model`` set
+    to the model actually used (the override when configured, otherwise the
+    main model). On failure ``parsed`` is None and the caller routes via the
+    strict/balanced policy.
+    """
+    locs = ", ".join(finding.locations) if finding.locations else finding.source_file
+    evidence, _n = _gather_evidence(finding, ctx)
+    finding_json = json.dumps(asdict(finding), indent=2)
+    messages = [
+        {"role": "system", "content": _PHASE_DISPROOF_SYSTEM},
+        {
+            "role": "user",
+            "content": (
+                f"Proposed finding:\n{finding_json}\n\n"
+                f"Committed evidence bundle:\n{evidence}"
+            ),
+        },
+    ]
+    used_model = reviewer_model or ctx.loop_kwargs.get("model_id", "") or ""
+    try:
+        answer = _call_audit_llm(
+            ctx,
+            messages,
+            trace_task=f"audit: disproof {finding.title}",
+            model_override=reviewer_model or None,
+        )
+    except (ConnectionError, TimeoutError, OSError) as e:
+        return None, f"transport error: {e}"
+    except Exception as e:
+        return None, f"disproof call failed: {e}"
+    budget = BudgetPlanner(state)
+    budget.charge_call("disproof", messages[-1]["content"], answer or "")
+    try:
+        parsed = _parse_disproof_block(answer or "")
+    except DisproofBlockError as e:
+        fmt.info(f"    reviewer [{locs}]: malformed disproof block: {e}")
+        return None, f"malformed disproof block: {e}"
+    parsed["review_model"] = used_model
+    return parsed, None
+
+
+def _set_agreement(state: AuditRunState, finding_key: str, outcome: str) -> None:
+    """Stamp ``agreement_with_proof`` on the adversarial record for a finding.
+
+    Outcomes are ``agreed``, ``disagreed``, ``agreed_pre_proof``, ``no_review``.
+    """
+    record = state.adversarial_state.get(finding_key)
+    if record is not None:
+        record["agreement_with_proof"] = outcome
+
+
+_DISPROOF_REPRODUCED_AGREEMENT = {
+    _DISPROOF_STATUS_PLAUSIBLE: "agreed",
+    _DISPROOF_STATUS_NEEDS_PROOF: "agreed",
+    _DISPROOF_STATUS_FAILED_OPEN: "no_review",
+}
+_DISPROOF_DISCARDED_AGREEMENT = {
+    _DISPROOF_STATUS_PLAUSIBLE: "disagreed",
+    _DISPROOF_STATUS_NEEDS_PROOF: "agreed",
+    _DISPROOF_STATUS_FAILED_OPEN: "no_review",
+}
+
+
+def _disproof_routing(
+    parsed: dict | None,
+    error: str | None,
+    *,
+    proof_strict: bool,
+) -> dict:
+    """Convert a per-finding disproof result into a persistent state record.
+
+    Rules:
+    - INVALID with a concrete blocking_control or missing_link discards before
+      verification.
+    - NEEDS_PROOF carries ``required_next_proof`` into the verifier prompt.
+    - PLAUSIBLE proceeds normally.
+    - On parser or transport failure: balanced mode fails open to verification;
+      strict mode marks ``gapfill`` so the operator can route it manually.
+    """
+    if parsed is None:
+        status = (
+            _DISPROOF_STATUS_GAPFILL if proof_strict else _DISPROOF_STATUS_FAILED_OPEN
+        )
+        return {
+            "status": status,
+            "verdict": "",
+            "reason": error or "",
+            "counterclaim_checked": [],
+            "blocking_control": "",
+            "missing_link": "",
+            "required_next_proof": "",
+            "review_model": "",
+        }
+    verdict = parsed["verdict"]
+    if verdict == _DISPROOF_VERDICT_INVALID and not (
+        parsed.get("blocking_control") or parsed.get("missing_link")
+    ):
+        verdict = _DISPROOF_VERDICT_PLAUSIBLE
+    status = {
+        _DISPROOF_VERDICT_INVALID: _DISPROOF_STATUS_INVALID,
+        _DISPROOF_VERDICT_NEEDS_PROOF: _DISPROOF_STATUS_NEEDS_PROOF,
+        _DISPROOF_VERDICT_PLAUSIBLE: _DISPROOF_STATUS_PLAUSIBLE,
+    }[verdict]
+    return {
+        "status": status,
+        "verdict": verdict,
+        "reason": parsed.get("reason", ""),
+        "counterclaim_checked": list(parsed.get("counterclaim_checked", [])),
+        "blocking_control": parsed.get("blocking_control", ""),
+        "missing_link": parsed.get("missing_link", ""),
+        "required_next_proof": parsed.get("required_next_proof", ""),
+        "review_model": parsed.get("review_model", ""),
+    }
 
 
 def _phase4c_reproduce(
@@ -4241,13 +4489,21 @@ def _phase4c_reproduce(
             f"    verifier [{locs}]: running verification agent "
             f"(severity={finding.severity})"
         )
+        next_proof = state.adversarial_state.get(_finding_key(finding), {}).get(
+            "required_next_proof", ""
+        )
+        guidance = (
+            f"\n\nAdversarial reviewer requested next proof:\n{next_proof}"
+            if next_proof
+            else ""
+        )
         messages = [
             {"role": "system", "content": _PHASE4_VERIFY_SYSTEM},
             {
                 "role": "user",
                 "content": (
                     f"Proposed finding:\n{finding_json}\n\n"
-                    f"Committed evidence bundle:\n{evidence}"
+                    f"Committed evidence bundle:\n{evidence}{guidance}"
                 ),
             },
         ]
@@ -4537,15 +4793,27 @@ def _verify_single_finding(
 ) -> VerifiedFinding | None:
     """Run the PoC-based verifier on one finding. Returns None if discarded."""
     reproducer = _phase4c_reproduce(finding, state, ctx, work_dir)
+    key = _finding_key(finding)
     if reproducer is None:
+        status = state.adversarial_state.get(key, {}).get("status", "")
+        outcome = _DISPROOF_DISCARDED_AGREEMENT.get(status)
+        if outcome is not None:
+            _set_agreement(state, key, outcome)
         fmt.info(f"  discarded (no reproduction): {finding.title}")
         return None
+
+    status = state.adversarial_state.get(key, {}).get("status", "")
+    outcome = _DISPROOF_REPRODUCED_AGREEMENT.get(status)
+    if outcome is not None:
+        _set_agreement(state, key, outcome)
+    adv_record = state.adversarial_state.get(key)
 
     return VerifiedFinding(
         finding=finding,
         correctness_reason="verified by proof-of-concept reproduction",
         rebuttal_reason="not used; PoC verifier is authoritative",
         reproducer=reproducer,
+        adversarial=dict(adv_record) if adv_record else None,
     )
 
 
@@ -4939,11 +5207,6 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
     if finding_selector is not None and not regen:
         return "error: --finding requires --regen"
 
-    if proof_strict:
-        return (
-            "error: --proof-strict is reserved for the upcoming adversarial "
-            "disproof gate; not yet implemented."
-        )
     if trace_reachability:
         return (
             "error: --trace-reachability is reserved for the upcoming in-repo "
@@ -4970,9 +5233,13 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
         else int(audit_cfg.get("budget_tokens") or 0)
     )
     if audit_cfg.get("proof_strict") is True:
+        proof_strict = True
+    reviewer_model = audit_cfg.get("reviewer_model") or ""
+    if audit_cfg.get("reviewer_profile"):
         return (
-            "error: [audit] proof_strict = true is reserved for the upcoming "
-            "adversarial disproof gate; not yet implemented."
+            "error: [audit.reviewer] profile is reserved for a future release "
+            "(needs provider/api_base overlay). Use [audit.reviewer] model "
+            "for a same-provider reviewer model override."
         )
     if int(audit_cfg.get("max_gapfill_tasks") or 0) > 0:
         return (
@@ -5013,6 +5280,8 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
             budget_tokens=budget_tokens,
             max_hunt_tasks=max_hunt_tasks,
             configured_hunt_tasks=configured_hunt_tasks,
+            proof_strict=proof_strict,
+            reviewer_model=reviewer_model,
         )
     finally:
         _debug_log_path = None
@@ -5038,6 +5307,8 @@ def _run_audit_phases(
     budget_tokens: int = 0,
     max_hunt_tasks: int = 0,
     configured_hunt_tasks: list[dict] | None = None,
+    proof_strict: bool = False,
+    reviewer_model: str = "",
 ) -> str:
     configured_hunt_tasks = list(configured_hunt_tasks or [])
     force_review = list(force_review or [])
@@ -5068,6 +5339,14 @@ def _run_audit_phases(
                 f"error: --hunt mismatch. saved run was "
                 f"{'hunt' if state.hunt_mode else 'file-centric'}; "
                 f"this invocation is {'hunt' if hunt_mode else 'file-centric'}. "
+                f"Start a fresh run instead of resuming."
+            )
+        if proof_strict != state.proof_strict:
+            saved = "strict" if state.proof_strict else "balanced"
+            now = "strict" if proof_strict else "balanced"
+            return (
+                f"error: --proof-strict mismatch. saved run was {saved}; "
+                f"this invocation is {now}. "
                 f"Start a fresh run instead of resuming."
             )
         # Budget override on resume is opt-in: 0 (the default when no flag is
@@ -5116,6 +5395,7 @@ def _run_audit_phases(
             measure_triage=measure_triage,
             hunt_mode=hunt_mode,
             budget_tokens=int(budget_tokens or 0),
+            proof_strict=bool(proof_strict),
         )
         mode_flags = []
         if state.select_all:
@@ -5124,6 +5404,8 @@ def _run_audit_phases(
             mode_flags.append("--measure-triage")
         if state.hunt_mode:
             mode_flags.append("--hunt")
+        if state.proof_strict:
+            mode_flags.append("--proof-strict")
         if state.budget_tokens:
             mode_flags.append(f"--budget-tokens {state.budget_tokens}")
         mode_tail = (" " + " ".join(mode_flags)) if mode_flags else ""
@@ -5453,7 +5735,7 @@ def _run_audit_phases(
                 f"phase reachability: dropped {discarded} unreachable "
                 f"finding(s) ({before} -> {len(state.proposed_findings)})"
             )
-        state.phase = "verification"
+        state.phase = "disproof"
         state.save()
 
     # Resume rule: if force_review changed since the run was saved, apply
@@ -5650,13 +5932,108 @@ def _run_audit_phases(
                 f"review after retries. Use /audit --resume to retry."
             )
 
-        state.phase = "verification"
+        state.phase = "disproof"
         state.save()
         metrics_summary = _format_audit_metrics(state.metrics)
         fmt.info(
             f"phase 3 complete. {len(state.proposed_findings)} proposed findings."
             + (f" ({metrics_summary})" if metrics_summary else "")
         )
+
+    # ``gapfill`` is deliberately omitted from the skip set: under
+    # --proof-strict it is the deferred bucket for reviewer transport
+    # failures, and /audit --resume must actually retry those.
+    if state.phase == "disproof":
+        finding_keys: dict[int, str] = {
+            id(f): _finding_key(f) for f in state.proposed_findings
+        }
+        targets = [
+            (f, finding_keys[id(f)])
+            for f in state.proposed_findings
+            if state.adversarial_state.get(finding_keys[id(f)], {}).get("status")
+            not in _DISPROOF_TERMINAL_STATUSES
+        ]
+        if targets:
+            same_model = not reviewer_model
+            mode_label = "strict" if state.proof_strict else "balanced"
+            fmt.info(
+                f"phase disproof: reviewing {len(targets)} finding(s) "
+                f"({mode_label}; reviewer={reviewer_model or 'same-model fallback'})"
+            )
+            if same_model:
+                state.metrics["disproof_same_model"] = (
+                    int(state.metrics.get("disproof_same_model", 0)) + 1
+                )
+
+            def _disproof_worker(item):
+                f, key = item
+                parsed, err = _phase_disproof_one(
+                    f, state, ctx, reviewer_model=reviewer_model
+                )
+                if err is not None and parsed is None:
+                    parsed2, err2 = _phase_disproof_one(
+                        f, state, ctx, reviewer_model=reviewer_model
+                    )
+                    if parsed2 is not None:
+                        parsed, err = parsed2, None
+                    else:
+                        err = err2 or err
+                return key, parsed, err
+
+            disproof_workers = min(workers, 4)
+            results = _run_batch(
+                _disproof_worker, targets, max_workers=disproof_workers
+            )
+            for entry in results:
+                if entry is None:
+                    continue
+                key, parsed, err = entry
+                record = _disproof_routing(parsed, err, proof_strict=state.proof_strict)
+                record["attempts"] = (
+                    int(state.adversarial_state.get(key, {}).get("attempts", 0)) + 1
+                )
+                state.adversarial_state[key] = record
+                metric_key = f"disproof_{record['status']}"
+                state.metrics[metric_key] = int(state.metrics.get(metric_key, 0)) + 1
+                state.save()
+
+        invalid_keys = {
+            k
+            for k, v in state.adversarial_state.items()
+            if v.get("status") == _DISPROOF_STATUS_INVALID
+        }
+        if invalid_keys:
+            kept: list[FindingRecord] = []
+            dropped = 0
+            for f in state.proposed_findings:
+                key = finding_keys.get(id(f)) or _finding_key(f)
+                if key in invalid_keys:
+                    _set_agreement(state, key, "agreed_pre_proof")
+                    dropped += 1
+                    continue
+                kept.append(f)
+            state.proposed_findings = kept
+            fmt.info(
+                f"phase disproof: discarded {dropped} INVALID finding(s) "
+                f"before verification"
+            )
+
+        if state.proof_strict:
+            stuck = [
+                k
+                for k, v in state.adversarial_state.items()
+                if v.get("status") == _DISPROOF_STATUS_GAPFILL
+            ]
+            if stuck:
+                state.save()
+                return (
+                    f"Audit incomplete: {len(stuck)} disproof review(s) failed "
+                    f"under --proof-strict. Re-run with /audit --resume after the "
+                    f"reviewer is healthy, or drop --proof-strict to fail open."
+                )
+
+        state.phase = "verification"
+        state.save()
 
     # Phase 4: verification (parallel)
     if state.phase == "verification":
