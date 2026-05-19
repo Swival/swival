@@ -768,36 +768,33 @@ BINARY_CHECK_BYTES = 8 * 1024  # 8 KB
 
 CHECKSUM_HEX_LEN = 8
 CHECKSUM_VALUE_RE = re.compile(rf"^[0-9a-f]{{{CHECKSUM_HEX_LEN}}}$")
-CHECKSUM_TRAILER_RE = re.compile(
-    rf"^\[checksum=([0-9a-f]{{{CHECKSUM_HEX_LEN}}})\]$"
-)
+CHECKSUM_TRAILER_RE = re.compile(rf"^\[checksum=([0-9a-f]{{{CHECKSUM_HEX_LEN}}})\]$")
+
+
+def _hash_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()[:CHECKSUM_HEX_LEN]
 
 
 def _compute_checksum(resolved: Path) -> str | None:
-    """Return SHA-256 of *resolved* truncated to CHECKSUM_HEX_LEN lowercase hex chars, or None on IO error."""
     try:
-        data = resolved.read_bytes()
+        return _hash_bytes(resolved.read_bytes())
     except OSError:
         return None
-    return hashlib.sha256(data).hexdigest()[:CHECKSUM_HEX_LEN]
 
 
 def _verify_checksum(
     resolved: Path,
-    expected_hash,
+    expected_hash: object,
     file_path: str,
     tool_name: str,
 ) -> str | None:
     """Return an error string if *expected_hash* is well-formed and doesn't match the file.
 
-    No-op when *expected_hash* is None, empty, or syntactically not a checksum
-    value: the guard is opt-in, and weak models routinely pass placeholders like
-    0 or "1" that should be treated as "no checksum supplied" rather than as a
-    mismatch.
+    The guard is opt-in: None, empty, non-string, or syntactically invalid
+    values are treated as "no checksum supplied" so weak models passing
+    placeholders like 0 or "1" don't generate spurious mismatches.
     """
-    if expected_hash in (None, ""):
-        return None
-    if not isinstance(expected_hash, str):
+    if not isinstance(expected_hash, str) or not expected_hash:
         return None
     expected = expected_hash.strip().lower()
     if not CHECKSUM_VALUE_RE.fullmatch(expected):
@@ -812,6 +809,7 @@ def _verify_checksum(
             "The file changed since you last read it. Re-read and retry."
         )
     return None
+
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 IMAGE_MIME = {
@@ -1416,30 +1414,23 @@ def _read_file(
             result += "\n[truncated at 50KB]"
         return result
 
-    # Binary detection: check first 8 KB for null bytes
     try:
-        with open(resolved, "rb") as f:
-            chunk = f.read(BINARY_CHECK_BYTES)
+        data = resolved.read_bytes()
     except FileNotFoundError:
         return f"error: file not found (removed after check): {file_path}"
     except PermissionError as exc:
         return f"error: read_file: permission denied opening {file_path}: {exc}"
 
-    if b"\x00" in chunk:
+    if b"\x00" in data[:BINARY_CHECK_BYTES]:
         ext = resolved.suffix.lower()
         if ext in IMAGE_EXTENSIONS:
             return f"error: {file_path} is an image file. Use view_image to analyze it."
         return f"error: binary file detected: {file_path}"
 
-    # Read as UTF-8 text
     try:
-        text = resolved.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return f"error: file not found (removed after check): {file_path}"
+        text = data.decode("utf-8")
     except UnicodeDecodeError as exc:
         return f"error: failed to decode {file_path} as UTF-8: {exc}"
-    except PermissionError as exc:
-        return f"error: read_file: permission denied reading {file_path}: {exc}"
 
     lines = text.splitlines()
 
@@ -1482,10 +1473,8 @@ def _read_file(
     if remaining > 0:
         next_offset = start + lines_emitted + 1  # 1-based
         result += f"\n[{remaining} more lines, use offset={next_offset} to continue]"
-    checksum = _compute_checksum(resolved)
-    if checksum is not None:
-        suffix = f"[checksum={checksum}]"
-        result = f"{result}\n{suffix}" if result else suffix
+    suffix = f"[checksum={_hash_bytes(data)}]"
+    result = f"{result}\n{suffix}" if result else suffix
     return result
 
 

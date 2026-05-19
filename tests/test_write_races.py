@@ -94,38 +94,19 @@ class TestCmdOutputIsolation:
 
 class TestVanishedCmdOutput:
     def test_read_deleted_file_returns_error(self, tmp_path):
-        """Reading a file that vanishes between existence check and open."""
+        """Reading a file that vanishes between existence check and read."""
         target = tmp_path / "cmd_output_abc123.txt"
         target.write_text("hello")
 
-        # Patch open to simulate the file vanishing after the existence check
-        original_open = open
+        original_read_bytes = Path.read_bytes
 
-        def vanishing_open(path, *args, **kwargs):
-            if "cmd_output_abc123" in str(path):
-                target.unlink(missing_ok=True)
-                raise FileNotFoundError(f"No such file: {path}")
-            return original_open(path, *args, **kwargs)
-
-        with patch("builtins.open", side_effect=vanishing_open):
-            result = _read_file(str(target), str(tmp_path), offset=1, limit=100)
-
-        assert result.startswith("error:")
-
-    def test_read_vanishes_after_binary_check(self, tmp_path):
-        """File vanishes between the binary check and read_text()."""
-        target = tmp_path / "cmd_output_late.txt"
-        target.write_text("hello world")
-
-        original_read_text = Path.read_text
-
-        def vanishing_read_text(self_path, *args, **kwargs):
-            if "cmd_output_late" in str(self_path):
+        def vanishing_read_bytes(self_path, *args, **kwargs):
+            if "cmd_output_abc123" in str(self_path):
                 target.unlink(missing_ok=True)
                 raise FileNotFoundError(f"No such file: {self_path}")
-            return original_read_text(self_path, *args, **kwargs)
+            return original_read_bytes(self_path, *args, **kwargs)
 
-        with patch.object(Path, "read_text", vanishing_read_text):
+        with patch.object(Path, "read_bytes", vanishing_read_bytes):
             result = _read_file(str(target), str(tmp_path), offset=1, limit=100)
 
         assert result.startswith("error:")

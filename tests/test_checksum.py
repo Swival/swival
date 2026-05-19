@@ -39,7 +39,10 @@ class TestReadFileEmitsHash:
         p = tmp_path / "hello.txt"
         p.write_text("alpha\n", encoding="utf-8")
         result = _read_file("hello.txt", str(tmp_path))
-        assert result.splitlines()[-1] == f"[checksum={_expected_checksum(p.read_bytes())}]"
+        assert (
+            result.splitlines()[-1]
+            == f"[checksum={_expected_checksum(p.read_bytes())}]"
+        )
 
     def test_empty_file_still_has_hash(self, tmp_path):
         p = tmp_path / "empty.txt"
@@ -64,7 +67,9 @@ class TestReadFileEmitsHash:
 
     def test_hash_after_pagination_trailer(self, tmp_path):
         p = tmp_path / "many.txt"
-        p.write_text("\n".join(f"line{i}" for i in range(1, 11)) + "\n", encoding="utf-8")
+        p.write_text(
+            "\n".join(f"line{i}" for i in range(1, 11)) + "\n", encoding="utf-8"
+        )
         result = _read_file("many.txt", str(tmp_path), offset=1, limit=3)
         lines = result.splitlines()
         assert "more lines, use offset=" in lines[-2]
