@@ -974,7 +974,7 @@ def _list_files(
         return f"error: {exc}"
 
     if not root.exists():
-        return f"error: path does not exist: {path}"
+        return f'error: path does not exist: "{path}"'
 
     base = Path(base_dir).resolve()
 
@@ -1109,7 +1109,7 @@ def _grep(
         return f"error: {exc}"
 
     if not root.exists():
-        return f"error: path does not exist: {path}"
+        return f'error: path does not exist: "{path}"'
 
     base = Path(base_dir).resolve()
 
@@ -1334,7 +1334,7 @@ def _read_file(
             )
         if resolved == _history_path(base_dir):
             return "No history yet. Update .swival/memory/MEMORY.md when you learn something worth remembering long-term about the project."
-        return f"error: path does not exist: {file_path}"
+        return f'error: path does not exist: "{file_path}"'
 
     # Directory listing
     if resolved.is_dir():

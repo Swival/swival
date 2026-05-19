@@ -9048,6 +9048,7 @@ def _repl_clear(
     snapshot_state: SnapshotState | None = None,
     goal_state: GoalState | None = None,
     loop_registry: LoopRegistry | None = None,
+    continue_base_dir: str | None = None,
 ) -> str:
     """Clear conversation history, keeping only the leading system messages."""
     leading = []
@@ -9081,6 +9082,11 @@ def _repl_clear(
         cancelled = loop_registry.reset()
         if cancelled:
             fmt.info(f"[loops] cancelled {cancelled}")
+
+    if continue_base_dir is not None:
+        from .continue_here import clear_continue_file
+
+        clear_continue_file(continue_base_dir)
 
     fmt.reset_state()
     return f"context cleared ({dropped} messages removed)"
@@ -9537,6 +9543,7 @@ def execute_input(
                 snapshot_state=ctx.snapshot_state,
                 goal_state=ctx.goal_state,
                 loop_registry=ctx.loop_registry,
+                continue_base_dir=ctx.base_dir if ctx.continue_here else None,
             )
             _ensure_goal_tools_disabled(ctx.tools)
             _rpt = ctx.loop_kwargs.get("report")

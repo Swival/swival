@@ -14,6 +14,7 @@ from swival.continue_here import (
     _find_first_user_task,
     _build_deterministic_continue,
     write_continue_file,
+    clear_continue_file,
     load_continue_file,
     format_continue_prompt,
 )
@@ -302,6 +303,17 @@ class TestWriteAndLoad:
 
     def test_load_returns_none_when_missing(self, tmp_path):
         assert load_continue_file(str(tmp_path)) is None
+
+    def test_clear_removes_existing_file(self, tmp_path):
+        path = tmp_path / ".swival" / "continue.md"
+        path.parent.mkdir(parents=True)
+        path.write_text("content")
+
+        assert clear_continue_file(str(tmp_path)) is True
+        assert not path.exists()
+
+    def test_clear_returns_false_when_missing(self, tmp_path):
+        assert clear_continue_file(str(tmp_path)) is False
 
     def test_load_returns_none_for_empty(self, tmp_path):
         path = tmp_path / ".swival" / "continue.md"

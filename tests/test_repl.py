@@ -800,6 +800,18 @@ class TestClearCommand:
         assert len(messages) == 1
         assert messages[0]["role"] == "system"
 
+    def test_clear_removes_continue_file(self, tmp_path):
+        """After /clear, any saved continuation is discarded."""
+        path = tmp_path / ".swival" / "continue.md"
+        path.parent.mkdir(parents=True)
+        path.write_text("resume this")
+
+        messages = [_sys("system"), _user("q1")]
+        ts = ThinkingState(verbose=False)
+        _repl_clear(messages, ts, continue_base_dir=str(tmp_path))
+
+        assert not path.exists()
+
     def test_clear_resets_thinking_state(self, tmp_path):
         """After /clear, ThinkingState history/branches are reset."""
         ts = ThinkingState(verbose=False)

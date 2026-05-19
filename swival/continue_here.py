@@ -275,6 +275,23 @@ def _try_llm_summary(
         return None
 
 
+def clear_continue_file(base_dir: str) -> bool:
+    """Delete .swival/continue.md if present. Returns True when removed."""
+    try:
+        path = _safe_continue_path(base_dir)
+    except ValueError:
+        return False
+
+    if not path.is_file():
+        return False
+
+    try:
+        path.unlink()
+    except OSError:
+        return False
+    return True
+
+
 def load_continue_file(base_dir: str, *, delete: bool = True) -> str | None:
     """Read and optionally delete .swival/continue.md. Returns content or None."""
     try:

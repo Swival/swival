@@ -108,7 +108,7 @@ class TestReadMultipleFilesErrors:
         assert "1: ok" in result
         assert "=== FILE: missing.txt ===" in result
         assert "status: error" in result
-        assert "error: path does not exist: missing.txt" in result
+        assert 'error: path does not exist: "missing.txt"' in result
 
     def test_empty_files_list(self, tmp_path):
         result = _read_files([], str(tmp_path))
