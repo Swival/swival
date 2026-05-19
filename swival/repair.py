@@ -416,3 +416,44 @@ def format_repair_feedback(
 
     lines.append("  Use this corrected format for subsequent calls.")
     return "\n".join(lines)
+
+
+def validate_required_args(
+    name: str,
+    args: Any,
+    schema: dict[str, Any] | None,
+) -> str | None:
+    """Return an LLM-actionable error string if *args* is missing required fields,
+    or isn't a JSON object at all. Returns None when the call passes validation
+    or when no schema is available (MCP/A2A tools)."""
+    if not isinstance(args, dict):
+        return (
+            f"error: tool {name!r} expects a JSON object of arguments, "
+            f"got {type(args).__name__}: {args!r}"
+        )
+    if not schema:
+        return None
+    required = schema.get("required") or []
+    if not required:
+        return None
+    missing = [f for f in required if f not in args or args[f] is None]
+    if not missing:
+        return None
+    props = schema.get("properties", {})
+    plural = "s" if len(missing) > 1 else ""
+    lines = [
+        f"error: tool {name!r} is missing required argument{plural}: "
+        f"{', '.join(repr(m) for m in missing)}."
+    ]
+    for field in missing:
+        spec = props.get(field, {})
+        ftype = spec.get("type", "value")
+        desc = (spec.get("description") or "").strip()
+        if desc:
+            lines.append(f"  - {field} ({ftype}): {desc}")
+        else:
+            lines.append(f"  - {field} ({ftype})")
+    lines.append(f"  Received fields: {sorted(args.keys())}")
+    lines.append(f"  Required fields: {list(required)}")
+    lines.append("  Retry the call with the missing argument(s) included.")
+    return "\n".join(lines)

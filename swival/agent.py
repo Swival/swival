@@ -99,7 +99,7 @@ from .tools import (
     cleanup_old_cmd_outputs,
     get_tool_schema,
 )
-from .repair import format_repair_feedback, repair_tool_args
+from .repair import format_repair_feedback, repair_tool_args, validate_required_args
 
 DEFAULT_SYSTEM_PROMPT_FILE = Path(__file__).parent / "system_prompt.txt"
 MAX_ARG_LOG = 1000
@@ -2721,6 +2721,25 @@ def handle_tool_call(
             pretty = pretty[:MAX_ARG_LOG] + "\n... (truncated)"
         fmt.tool_call(name, pretty)
 
+    validation_error = validate_required_args(name, parsed_args, schema)
+    if validation_error is not None:
+        if verbose:
+            fmt.tool_error(name, validation_error)
+        return (
+            {
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "content": validation_error,
+            },
+            {
+                "name": name,
+                "arguments": parsed_args if isinstance(parsed_args, dict) else None,
+                "elapsed": 0.0,
+                "succeeded": False,
+                "repairs": repairs,
+            },
+        )
+
     t0 = time.monotonic()
     try:
         result = dispatch(
@@ -2762,7 +2781,7 @@ def handle_tool_call(
     except A2aShutdownError:
         result = "error: A2A agent is shutting down"
     except Exception as e:
-        result = f"error: {e}"
+        result = f"error: tool {name!r} raised {type(e).__name__}: {e}"
     elapsed = time.monotonic() - t0
 
     succeeded = not result.startswith("error:")
