@@ -38,6 +38,8 @@ args = ["server.js"]
 env = { API_KEY = "secret" }
 ```
 
+Stdio servers inherit a sanitized environment. Swival removes its own bundled venv `bin/` directory from `PATH` before launching the subprocess so that swival's transitive Python dependencies (and the `swival` entry point itself) cannot shadow tools the server expects to find on the system. If you supply a `PATH` entry in `env`, the same sanitization is applied to it. The only exception is when you have deliberately activated swival's venv yourself (`VIRTUAL_ENV` points at it), in which case the path is left untouched.
+
 For example, you can connect Swival to a browser automation server. See [Web Browsing](web-browsing.md) for Chrome DevTools MCP, agent-browser, and Lightpanda setup guides.
 
 For SSE servers, `url` is the endpoint and `headers` is an optional dictionary of HTTP headers.

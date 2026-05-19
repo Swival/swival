@@ -263,7 +263,7 @@ swival --provider google \
 </code></pre>
 <p>On the first run, you will see a device-code prompt with a URL and a code to enter in your browser. Once you complete the flow, the OAuth tokens are stored locally and refreshed automatically. To remove the cached tokens and force the device-code flow on the next run, use <code>swival --logout</code>.</p>
 <p>Supported model names may change over time. Check OpenAI's documentation for the current model list and naming conventions.</p>
-<p>Three environment variables are available for advanced use. <code>CHATGPT_TOKEN_DIR</code> overrides the default token storage directory, <code>CHATGPT_AUTH_FILE</code> overrides the token filename or path, and <code>CHATGPT_API_BASE</code> overrides the API base URL.</p>
+<p>Two environment variables are available for advanced use. <code>CHATGPT_TOKEN_DIR</code> overrides the default token storage directory, and <code>CHATGPT_AUTH_FILE</code> overrides the token filename or path. Use <code>--base-url</code> to override the API base URL.</p>
 <pre><code class="language-sh">export CHATGPT_TOKEN_DIR=/path/to/tokens
 swival --provider chatgpt --model gpt-5.5 &quot;task&quot;
 swival --logout
@@ -315,7 +315,7 @@ extra_body = { chat_template_kwargs = { enable_thinking = false } }
 <p>The <code>command</code> provider shells out to an external program instead of calling an API. This is useful when you want to wrap an existing CLI tool — such as <code>codex exec --skip-git-repo-check --full-auto --ephemeral</code>, <code>ollama run</code>, or a custom script — as Swival's backend.</p>
 <p>The conversation transcript is written to the program's stdin, and the program's stdout is read back as the model response. <code>--model</code> holds the command string, which is split with <code>shlex</code>. <code>--base-url</code> and <code>--api-key</code> are ignored.</p>
 <p>Tool calling is supported when command execution is enabled (the default, or via <code>--commands</code>). The external program can request tool execution by emitting <code>&lt;swival:call&gt;</code> XML blocks in its output.</p>
-<p>Swival parses these, dispatches the tool calls, appends results to the transcript, and re-invokes the command. This loop continues (up to 20 rounds) until the program responds without tool calls. When no commands are whitelisted, the command provider runs without tools.</p>
+<p>Swival parses these, dispatches the tool calls, appends results to the transcript, and re-invokes the command. This loop continues (up to 20 rounds) until the program responds without tool calls. With <code>--commands none</code>, the native <code>run_command</code> and <code>run_shell_command</code> tools are not exposed, but the program can still call MCP, A2A, and skill tools through the same XML block protocol when those are configured.</p>
 <pre><code class="language-sh">swival --provider command --model &quot;codex exec --skip-git-repo-check --full-auto --ephemeral&quot; &quot;task&quot;
 </code></pre>
 <p>Or in config:</p>

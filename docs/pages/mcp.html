@@ -121,6 +121,7 @@ command = &quot;node&quot;
 args = [&quot;server.js&quot;]
 env = { API_KEY = &quot;secret&quot; }
 </code></pre>
+<p>Stdio servers inherit a sanitized environment. Swival removes its own bundled venv <code>bin/</code> directory from <code>PATH</code> before launching the subprocess so that swival's transitive Python dependencies (and the <code>swival</code> entry point itself) cannot shadow tools the server expects to find on the system. If you supply a <code>PATH</code> entry in <code>env</code>, the same sanitization is applied to it. The only exception is when you have deliberately activated swival's venv yourself (<code>VIRTUAL_ENV</code> points at it), in which case the path is left untouched.</p>
 <p>For example, you can connect Swival to a browser automation server. See <a href="web-browsing.html">Web Browsing</a> for Chrome DevTools MCP, agent-browser, and Lightpanda setup guides.</p>
 <p>For SSE servers, <code>url</code> is the endpoint and <code>headers</code> is an optional dictionary of HTTP headers.</p>
 <h2 id="json-configuration">JSON Configuration</h2>

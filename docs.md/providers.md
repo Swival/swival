@@ -264,7 +264,7 @@ On the first run, you will see a device-code prompt with a URL and a code to ent
 
 Supported model names may change over time. Check OpenAI's documentation for the current model list and naming conventions.
 
-Three environment variables are available for advanced use. `CHATGPT_TOKEN_DIR` overrides the default token storage directory, `CHATGPT_AUTH_FILE` overrides the token filename or path, and `CHATGPT_API_BASE` overrides the API base URL.
+Two environment variables are available for advanced use. `CHATGPT_TOKEN_DIR` overrides the default token storage directory, and `CHATGPT_AUTH_FILE` overrides the token filename or path. Use `--base-url` to override the API base URL.
 
 ```sh
 export CHATGPT_TOKEN_DIR=/path/to/tokens
@@ -354,7 +354,7 @@ The conversation transcript is written to the program's stdin, and the program's
 
 Tool calling is supported when command execution is enabled (the default, or via `--commands`). The external program can request tool execution by emitting `<swival:call>` XML blocks in its output.
 
-Swival parses these, dispatches the tool calls, appends results to the transcript, and re-invokes the command. This loop continues (up to 20 rounds) until the program responds without tool calls. When no commands are whitelisted, the command provider runs without tools.
+Swival parses these, dispatches the tool calls, appends results to the transcript, and re-invokes the command. This loop continues (up to 20 rounds) until the program responds without tool calls. With `--commands none`, the native `run_command` and `run_shell_command` tools are not exposed, but the program can still call MCP, A2A, and skill tools through the same XML block protocol when those are configured.
 
 ```sh
 swival --provider command --model "codex exec --skip-git-repo-check --full-auto --ephemeral" "task"

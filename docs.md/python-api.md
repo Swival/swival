@@ -33,15 +33,14 @@ Session(
     api_key: str | None = None,
     user_agent: str | None = None,
     base_url: str | None = None,
-    aws_profile: str | None = None,
     max_turns: int = 100,
     max_output_tokens: int = 32768,
     max_context_tokens: int | None = None,
     temperature: float | None = None,
     top_p: float | None = None,
     seed: int | None = None,
-    commands: list[str] | str | None = "all",  # "all", "none", "ask", or list (whitelist = run_command only)
     files: str = "some",
+    commands: str | list[str] | None = "all",  # "all", "none", "ask", or list (whitelist = run_command only)
     yolo: bool = False,
     verbose: bool = False,
     system_prompt: str | None = None,
@@ -49,7 +48,6 @@ Session(
     no_instructions: bool = False,
     no_skills: bool = False,
     skills_dir: list[str] | None = None,
-    metaskills: str = "local",  # "local", "all", or "off"
     allowed_dirs: list[str] | None = None,
     allowed_dirs_ro: list[str] | None = None,
     sandbox: str = "builtin",
@@ -85,7 +83,9 @@ Session(
     lifecycle_fail_closed: bool = False,
     lifecycle_enabled: bool = True,
     command_middleware: str | None = None,
+    aws_profile: str | None = None,
     approved_buckets: set[str] | None = None,
+    metaskills: str = "local",  # "local", "all", or "off"
 )
 ```
 

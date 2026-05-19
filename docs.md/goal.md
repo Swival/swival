@@ -36,7 +36,7 @@ Goal state is started and controlled by the operator through `/goal`. The model 
 
 ## Token Budget Wrap-Up
 
-When the optional `token_budget` is reached, the goal transitions to `budget_limited`. The runtime injects a wrap-up steering prompt, and the dispatcher rejects mutating or work-starting tool calls (write, edit, command execution, subagents, MCP, A2A) with a fixed error string. Read-only tools (`read_file`, `grep`, `list_files`, `fetch_url`, `view_image`, `think`, `todo`, `snapshot`, `outline`) and `complete_goal` remain available for a coherent wrap-up.
+When the optional `token_budget` is reached, the goal transitions to `budget_limited`. The runtime injects a wrap-up steering prompt, and the dispatcher rejects mutating or work-starting tool calls (write, edit, command execution, subagents, MCP, A2A) with a fixed error string. Read-only tools (`read_file`, `read_multiple_files`, `grep`, `list_files`, `fetch_url`, `view_image`, `think`, `todo`, `snapshot`, `outline`) and `complete_goal` remain available for a coherent wrap-up.
 
 ## Slash Command Reference
 

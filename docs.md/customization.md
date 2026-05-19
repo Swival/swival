@@ -268,7 +268,7 @@ When a system message is present, Swival appends the current local date and time
 swival --temperature 0.3 --top-p 0.9 "task"
 ```
 
-If you do not set `--temperature`, provider defaults apply. `--top-p` defaults to `1.0`.
+If you do not set `--temperature` or `--top-p`, provider defaults apply.
 
 `--seed` passes a deterministic seed when the provider supports it.
 

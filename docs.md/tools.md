@@ -10,13 +10,13 @@ Command execution tools are included by default (commands default to `"all"`): `
 
 `read_file` can read text files and directory listings inside allowed roots. File output is line-numbered, which makes later edits precise. The default window starts at `offset=1` with `limit=2000` lines.
 
-If output is truncated, Swival appends a continuation hint with the next offset. You can also request `tail=N` to start from the end of the file, which is useful for logs.
+If output is truncated, Swival appends a continuation hint with the next offset. You can also request `tail_lines=N` to start from the end of the file, which is useful for logs. `tail_lines` is mutually exclusive with `offset`.
 
 Large responses are capped at 50 KB per call, and individual long lines are truncated at 2,000 characters. Directory reads return sorted entries and mark subdirectories with a trailing `/`.
 
 ## `read_multiple_files`
 
-`read_multiple_files` reads several files in a single call. Each entry in the `files` array can specify its own `offset`, `limit`, and `tail`, just like `read_file`. Results are grouped by file with `--- path ---` headers and the same line-numbered format as `read_file`.
+`read_multiple_files` reads several files in a single call. Each entry in the `files` array can specify its own `offset`, `limit`, and `tail_lines`, just like `read_file` (`offset` and `tail_lines` remain mutually exclusive per entry). Results are grouped by file with `--- path ---` headers and the same line-numbered format as `read_file`.
 
 Per-file errors (missing files, binary files, path escapes) are reported inline without failing the batch. The total response is capped at 50 KB across all files. If the budget runs out mid-batch, the files already read are returned along with a truncation notice. A single oversized file is always included (with its own line-level truncation) so the tool never returns empty content for a valid request.
 

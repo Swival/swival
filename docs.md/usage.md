@@ -200,7 +200,7 @@ Useful for long-running sessions.
 
 ### Sandboxing Flags
 
-`--base-dir` defines the base directory for file tools and defaults to the current directory.
+`--base-dir` defines the base directory for file tools. When omitted, Swival walks up from the current directory looking for a `.git` directory or a `swival.toml` file, and uses the first match it finds; if neither is found, it falls back to the current directory.
 
 `--files` controls filesystem tool access. Accepts `"some"` (the default, workspace only), `"all"` (unrestricted), or `"none"` (`.swival/` directory only). With `--files none`, the agent can still run commands and fetch URLs but cannot read or write project files.
 

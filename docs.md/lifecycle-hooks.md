@@ -107,7 +107,7 @@ The hook receives all of the parent environment plus these `SWIVAL_*` variables:
 | `SWIVAL_REPO_HASH`    | 48-character hash of normalized repo identity                  | both      |
 | `SWIVAL_PROJECT_HASH` | 48-character hash of repo identity + project_rel               | both      |
 | `SWIVAL_REPORT`       | Path to the report file                                        | exit only |
-| `SWIVAL_OUTCOME`      | Run outcome: `success`, `exhausted`, `error`, `interrupted`    | exit only |
+| `SWIVAL_OUTCOME`      | Run outcome: `success`, `exhausted`, `error`                   | exit only |
 | `SWIVAL_EXIT_CODE`    | Process exit code as a string                                  | exit only |
 
 Git-specific variables are omitted when `SWIVAL_GIT_PRESENT=0`.
