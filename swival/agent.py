@@ -10315,7 +10315,6 @@ def repl_loop(
     random.shuffle(_toolbar_tips)
     _toolbar_state = {
         "git_dirty": 0,
-        "elapsed_start": time.time(),
         "tip_idx": 0,
         "ctx_pct": 0,
         "total_tok": 0,
@@ -10374,8 +10373,17 @@ def repl_loop(
 
         remaining = todo_state.remaining_count
         if remaining:
-            parts.append((_S, " │ "))
-            parts.append((_S_KEY, f"{remaining} todo"))
+            next_todo = next(
+                (i.text for i in todo_state.items if not i.done), None
+            )
+            if next_todo:
+                label = next_todo
+                if len(label) > 40:
+                    label = label[:37] + "..."
+                parts.append((_S, " │ "))
+                parts.append((_S_KEY, label))
+                if remaining > 1:
+                    parts.append((_S, f" +{remaining - 1}"))
 
         has_goal = goal_state and goal_state.has_active()
         if has_goal:
@@ -10385,12 +10393,7 @@ def repl_loop(
             parts.append((_S, " │ "))
             parts.append((_S_MODEL, objective))
 
-        elapsed = int(time.time() - _toolbar_state["elapsed_start"])
-        if elapsed >= 60:
-            parts.append((_S, f" │ {elapsed // 60}m{elapsed % 60:02d}s"))
-
-        # Rotating tip when toolbar is sparse
-        has_contextual = dirty or remaining or has_goal or elapsed >= 60
+        has_contextual = dirty or remaining or has_goal
         if not has_contextual:
             tip = _toolbar_tips[_toolbar_state["tip_idx"] % len(_toolbar_tips)]
             parts.append((_S, " │ "))
