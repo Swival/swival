@@ -30,9 +30,9 @@ Pick the provider that matches how you want to run models:
 | LM Studio        | none                                                | none                                              | `swival "Refactor src/api.py"`                                                       |
 | llama.cpp        | none                                                | `--provider llamacpp`                             | `swival --provider llamacpp "Refactor src/api.py"`                                   |
 | HuggingFace      | `HF_TOKEN` or `--api-key`                           | `--provider huggingface --model ORG/MODEL`        | `swival --provider huggingface --model zai-org/GLM-5.1 "task"`                       |
-| OpenRouter       | `OPENROUTER_API_KEY` or `--api-key`                 | `--provider openrouter --model MODEL`             | `swival --provider openrouter --model z-ai/glm-5 "task"`                             |
+| OpenRouter       | `OPENROUTER_API_KEY` or `--api-key`                 | `--provider openrouter --model MODEL`             | `swival --provider openrouter --model z-ai/glm-5.1 "task"`                             |
 | Google Gemini    | `GEMINI_API_KEY`, `OPENAI_API_KEY`, or `--api-key`  | `--provider google --model MODEL`                 | `swival --provider google --model gemini-2.5-flash "task"`                           |
-| ChatGPT Plus/Pro | browser auth on first run or `CHATGPT_API_KEY`      | `--provider chatgpt --model MODEL`                | `swival --provider chatgpt --model gpt-5.4 "task"`                                   |
+| ChatGPT Plus/Pro | browser auth on first run or `CHATGPT_API_KEY`      | `--provider chatgpt --model MODEL`                | `swival --provider chatgpt --model gpt-5.5 "task"`                                   |
 | Generic          | optional `OPENAI_API_KEY`                           | `--provider generic --base-url URL --model MODEL` | `swival --provider generic --base-url http://127.0.0.1:8080 --model my-model "task"` |
 | AWS Bedrock      | AWS credential chain (`AWS_PROFILE`, env vars, IAM) | `--provider bedrock --model MODEL`                | `swival --provider bedrock --model global.anthropic.claude-opus-4-6-v1 "task"`       |
 | Command          | none                                                | `--provider command --model "COMMAND"`            | `swival --provider command --model "codex exec --full-auto" "task"`                  |
@@ -99,7 +99,7 @@ You can also point it at a dedicated endpoint with `--base-url` and `--api-key`.
 export OPENROUTER_API_KEY=sk_or_...
 uv tool install swival
 swival "Refactor the error handling in src/api.py" \
-    --provider openrouter --model z-ai/glm-5
+    --provider openrouter --model z-ai/glm-5.1
 ```
 
 ### Google Gemini
@@ -119,7 +119,7 @@ API key needed.
 ```sh
 uv tool install swival
 swival "Refactor the error handling in src/api.py" \
-    --provider chatgpt --model gpt-5.4
+    --provider chatgpt --model gpt-5.5
 ```
 
 On first use, a device code and URL are printed to your terminal. Open the URL,
@@ -181,7 +181,7 @@ the agent doesn't lose track of multi-step plans even under pressure.
 **Your models, your way.** Works with LM Studio, llama.cpp, HuggingFace
 Inference API, OpenRouter, Google Gemini, ChatGPT Plus/Pro, any
 OpenAI-compatible server, and any external command. With LM Studio and llama.cpp,
-it auto-discovers whatever model you have loaded — nothing to configure. With
+it auto-discovers whatever model you have loaded, so there is nothing to configure. With
 HuggingFace or OpenRouter, point it at any supported model. With Google Gemini,
 use Gemini models through Google's native API. With ChatGPT Plus/Pro,
 authenticate through your browser and use OpenAI's models through your existing
@@ -214,8 +214,8 @@ new conversation using BM25 ranking, so context from past work carries forward
 without bloating the prompt. Use `/learn` in the REPL to teach it something
 on the spot.
 
-**Pick up where you left off.** When a session is interrupted — Ctrl+C, max
-turns, context overflow — Swival saves its state to disk. Next time you run it
+**Pick up where you left off.** When a session is interrupted by Ctrl+C, max
+turns, or context overflow, Swival saves its state to disk. Next time you run it
 in the same directory, it picks up where it left off: what it was doing, what
 it had figured out, and what was left.
 
