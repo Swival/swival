@@ -172,6 +172,10 @@ print(answer)
     aws_profile: str | None = None,
     approved_buckets: set[str] | None = None,
     metaskills: str = &quot;local&quot;,  # &quot;local&quot;, &quot;all&quot;, or &quot;off&quot;
+    repair_truncated_args: bool = True,
+    scavenge_content_calls: bool = True,
+    storm_breaker: bool = True,
+    flatten_mcp_schemas: bool = True,
 )
 </code></pre>
 <p>All parameters are keyword-only. The important ones:</p>
@@ -306,6 +310,22 @@ print(answer)
 <tr>
 <td><code>approved_buckets</code></td>
 <td>Pre-approved command buckets for <code>commands="ask"</code> mode (e.g. <code>{"ls", "git status"}</code>).</td>
+</tr>
+<tr>
+<td><code>repair_truncated_args</code></td>
+<td>Recover from truncated tool-call JSON by repairing or re-prompting. Default <code>True</code>.</td>
+</tr>
+<tr>
+<td><code>scavenge_content_calls</code></td>
+<td>Extract tool-call markup that leaked into assistant text and replay it as a real call. Default <code>True</code>.</td>
+</tr>
+<tr>
+<td><code>storm_breaker</code></td>
+<td>Detect repeated identical tool-call failures and inject a corrective hint. Default <code>True</code>.</td>
+</tr>
+<tr>
+<td><code>flatten_mcp_schemas</code></td>
+<td>Flatten deeply nested MCP tool schemas to formats small models tolerate better. Default <code>True</code>.</td>
 </tr>
 </tbody>
 </table>
@@ -512,7 +532,7 @@ except ContextOverflowError:
                 </div>
             </div>
             <div class="footer-bottom">
-                <p>&copy; 2025 Swival &middot; MIT License</p>
+                <p>&copy; 2025&ndash;2026 Swival &middot; MIT License</p>
             </div>
         </div>
     </footer>

@@ -274,7 +274,7 @@ def docs_page_html(title: str, desc: str, body: str, slug: str) -> str:
                 </div>
             </div>
             <div class="footer-bottom">
-                <p>&copy; 2025 Swival &middot; MIT License</p>
+                <p>&copy; 2025&ndash;2026 Swival &middot; MIT License</p>
             </div>
         </div>
     </footer>
@@ -376,7 +376,7 @@ def docs_hub_html() -> str:
                 </div>
             </div>
             <div class="footer-bottom">
-                <p>&copy; 2025 Swival &middot; MIT License</p>
+                <p>&copy; 2025&ndash;2026 Swival &middot; MIT License</p>
             </div>
         </div>
     </footer>

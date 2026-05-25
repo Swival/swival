@@ -214,9 +214,9 @@
 								<em>or on macOS:</em>
 								<pre><code>brew install swival/tap/swival</code></pre>
 							</li>
-							<li>Run with any model on the platform (e.g. <a href="https://openrouter.ai/z-ai/glm-5">GLM-5</a>):
+							<li>Run with any model on the platform (e.g. <a href="https://openrouter.ai/z-ai/glm-5.1">GLM-5.1</a>):
 								<pre><code>swival "Simplify the error handling in src/api.py" \
-    --provider openrouter --model z-ai/glm-5</code></pre>
+    --provider openrouter --model z-ai/glm-5.1</code></pre>
 							</li>
 						</ol>
 					</div>
@@ -242,7 +242,7 @@
 answer = swival.run(
     "What files handle authentication?",
     provider="openrouter",
-    model="z-ai/glm-5",
+    model="z-ai/glm-5.1",
 )</code></pre>
 						<p>For multi-turn conversations, use the <code>Session</code> class &mdash; see the <a href="pages/python-api.html">Python API docs</a>.</p>
 					</div>

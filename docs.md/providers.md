@@ -119,14 +119,14 @@ For OpenRouter, `--model` is required and authentication comes from `OPENROUTER_
 
 ```sh
 export OPENROUTER_API_KEY=sk_or_your_token_here
-swival --provider openrouter --model z-ai/glm-5 "task"
+swival --provider openrouter --model z-ai/glm-5.1 "task"
 ```
 
 If you use an OpenRouter-compatible custom endpoint, set `--base-url`.
 
 ```sh
 swival --provider openrouter \
-    --model z-ai/glm-5 \
+    --model z-ai/glm-5.1 \
     --base-url https://custom.openrouter.endpoint \
     --api-key sk_or_key \
     "task"
@@ -135,11 +135,11 @@ swival --provider openrouter \
 OpenRouter models vary widely in context limits, so you should set `--max-context-tokens` to match the model you chose.
 
 ```sh
-swival --provider openrouter --model z-ai/glm-5 \
+swival --provider openrouter --model z-ai/glm-5.1 \
     --max-context-tokens 131072 "task"
 ```
 
-Pass bare model identifiers like `z-ai/glm-5`. If you accidentally include a provider prefix (e.g. `openrouter/z-ai/glm-5`), Swival detects and corrects the double prefix.
+Pass bare model identifiers like `z-ai/glm-5.1`. If you accidentally include a provider prefix (e.g. `openrouter/z-ai/glm-5.1`), Swival detects and corrects the double prefix.
 
 ## llama.cpp
 

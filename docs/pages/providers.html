@@ -170,20 +170,20 @@ swival --provider huggingface --model zai-org/GLM-5.1 &quot;task&quot;
 <h2 id="openrouter">OpenRouter</h2>
 <p>For OpenRouter, <code>--model</code> is required and authentication comes from <code>OPENROUTER_API_KEY</code> or <code>--api-key</code>.</p>
 <pre><code class="language-sh">export OPENROUTER_API_KEY=sk_or_your_token_here
-swival --provider openrouter --model z-ai/glm-5 &quot;task&quot;
+swival --provider openrouter --model z-ai/glm-5.1 &quot;task&quot;
 </code></pre>
 <p>If you use an OpenRouter-compatible custom endpoint, set <code>--base-url</code>.</p>
 <pre><code class="language-sh">swival --provider openrouter \
-    --model z-ai/glm-5 \
+    --model z-ai/glm-5.1 \
     --base-url https://custom.openrouter.endpoint \
     --api-key sk_or_key \
     &quot;task&quot;
 </code></pre>
 <p>OpenRouter models vary widely in context limits, so you should set <code>--max-context-tokens</code> to match the model you chose.</p>
-<pre><code class="language-sh">swival --provider openrouter --model z-ai/glm-5 \
+<pre><code class="language-sh">swival --provider openrouter --model z-ai/glm-5.1 \
     --max-context-tokens 131072 &quot;task&quot;
 </code></pre>
-<p>Pass bare model identifiers like <code>z-ai/glm-5</code>. If you accidentally include a provider prefix (e.g. <code>openrouter/z-ai/glm-5</code>), Swival detects and corrects the double prefix.</p>
+<p>Pass bare model identifiers like <code>z-ai/glm-5.1</code>. If you accidentally include a provider prefix (e.g. <code>openrouter/z-ai/glm-5.1</code>), Swival detects and corrects the double prefix.</p>
 <h2 id="llamacpp">llama.cpp</h2>
 <p><a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> runs GGUF models locally through <code>llama-server</code>, which exposes an OpenAI-compatible API. Start the server first, then point Swival at it.</p>
 <p>Start <code>llama-server</code> with a model from HuggingFace:</p>
@@ -408,7 +408,7 @@ Prompt cache: 6103 tokens written to cache
                 </div>
             </div>
             <div class="footer-bottom">
-                <p>&copy; 2025 Swival &middot; MIT License</p>
+                <p>&copy; 2025&ndash;2026 Swival &middot; MIT License</p>
             </div>
         </div>
     </footer>
