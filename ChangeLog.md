@@ -2,6 +2,12 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.20
+
+- Tool-calling reliability has been improved. Truncated tool-call arguments are now reassembled when the underlying JSON can be recovered cleanly, even when the provider reports `finish_reason=length`. Tool calls that the model accidentally emits as plain assistant text are scavenged from the content channel and rewired as real structured calls when multiple signals agree on the intent. And a sliding-window storm breaker detects when the model is stuck repeatedly issuing the same tool call with the same arguments and nudges it to try something different instead of letting the loop spin.
+- Deeply nested MCP tool schemas are flattened on the way to the model so that small-context providers do not choke on them.
+- The REPL input marquee, which scrolls the tail of your prompt while you wait for the model, is now shown on every turn rather than only on long prompts, and it transitions cleanly into the labeled spinner if the prefill takes longer than expected.
+
 ## 1.0.19
 
 - Swival now records a checksum of every file it reads and verifies that checksum before the next write, so a concurrent edit from your editor or another process is detected immediately instead of being silently overwritten.
