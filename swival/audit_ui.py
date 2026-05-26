@@ -58,6 +58,13 @@ class _WorkerEnd:
 
 
 @dataclass
+class _WorkerTurn:
+    slot: int
+    turn: int
+    max_turns: int
+
+
+@dataclass
 class _Finding:
     severity: str
     title: str
@@ -154,7 +161,7 @@ class AuditUI:
         self._phases: dict[int, _PhaseState] = {}
         self._phase_order: list[int] = []
         self._next_phase_id = 0
-        self._workers: dict[int, tuple[str, float]] = {}
+        self._workers: dict[int, tuple[str, float, int, int]] = {}
         self._tally_verified = 0
         self._tally_discarded = 0
         self._tally_failed = 0
@@ -288,10 +295,18 @@ class AuditUI:
             if not snapshot:
                 continue
             now = time.monotonic()
-            for slot, (label, started) in snapshot:
+            for slot, (label, started, turn, max_turns) in snapshot:
                 age = _fmt_duration(now - started)
+                if turn:
+                    turn_part = (
+                        f" · turn {turn}/{max_turns}"
+                        if max_turns
+                        else f" · turn {turn}"
+                    )
+                else:
+                    turn_part = ""
                 self._console.print(
-                    f"      verifier worker {slot} · still running · {age} · {label}",
+                    f"      verifier worker {slot} · still running · {age}{turn_part} · {label}",
                     style="dim cyan",
                     highlight=False,
                 )
@@ -326,6 +341,12 @@ class AuditUI:
         if not self._enabled:
             return
         self._enqueue(_WorkerEnd(slot))
+
+    def worker_turn(self, slot: int, turn: int, max_turns: int = 0) -> None:
+        """Update the per-worker turn counter shown in the Live panel."""
+        if not self._enabled:
+            return
+        self._enqueue(_WorkerTurn(slot, turn, max_turns))
 
     def finding(self, severity: str, title: str, path: Optional[str] = None) -> None:
         if not self._enabled:
@@ -574,9 +595,19 @@ class AuditUI:
                 line.append(event.summary, style="dim")
             self._print_above(line)
         elif isinstance(event, _WorkerStart):
-            self._workers[event.slot] = (event.label, event.started_at)
+            self._workers[event.slot] = (event.label, event.started_at, 0, 0)
         elif isinstance(event, _WorkerEnd):
             self._workers.pop(event.slot, None)
+        elif isinstance(event, _WorkerTurn):
+            existing = self._workers.get(event.slot)
+            if existing is not None:
+                label, started, _prev_turn, _prev_max = existing
+                self._workers[event.slot] = (
+                    label,
+                    started,
+                    event.turn,
+                    event.max_turns,
+                )
         elif isinstance(event, _Finding):
             self._findings_seen.append((event.severity, event.title, event.path))
             style = fmt.severity_style(event.severity)
@@ -649,7 +680,7 @@ class AuditUI:
         if self._workers:
             spin = self._spinner_frames[self._tick % len(self._spinner_frames)]
             for slot in sorted(self._workers):
-                label, started = self._workers[slot]
+                label, started, turn, max_turns = self._workers[slot]
                 age = time.monotonic() - started
                 line = Text(overflow="ellipsis", no_wrap=True)
                 line.append(f"  {spin} ", style="cyan")
@@ -657,6 +688,11 @@ class AuditUI:
                 line.append(" · ", style="dim")
                 line.append(label, style="white")
                 line.append(f"  {_fmt_duration(age)}", style="dim")
+                if turn:
+                    suffix = (
+                        f"  turn {turn}/{max_turns}" if max_turns else f"  turn {turn}"
+                    )
+                    line.append(suffix, style="dim")
                 rows.append(line)
         elif active is not None:
             rows.append(Text("  (workers idle)", style="dim"))

@@ -68,6 +68,14 @@ def _get_current_ui() -> "AuditUI | None":
     return getattr(_current_ui, "ui", None)
 
 
+def _set_current_worker_slot(slot: int | None) -> None:
+    _current_ui.worker_slot = slot
+
+
+def _get_current_worker_slot() -> int | None:
+    return getattr(_current_ui, "worker_slot", None)
+
+
 def _ui_info(ui: "AuditUI | None", msg: str) -> None:
     """Route an informational line through the audit UI when available."""
     target = ui if ui is not None else _get_current_ui()
@@ -3089,6 +3097,27 @@ def _phase4c_reproduce(
         ]
 
         kw = _make_isolated_loop_kwargs(ctx, work_dir)
+
+        target_ui = ui if ui is not None else _get_current_ui()
+        worker_slot = _get_current_worker_slot()
+        if target_ui is not None and worker_slot is not None:
+            from .a2a_types import EVENT_STATUS_UPDATE
+
+            def _on_event(kind: str, data: dict) -> None:
+                if kind != EVENT_STATUS_UPDATE:
+                    return
+                turn = data.get("turn")
+                if not isinstance(turn, int):
+                    return
+                max_turns = data.get("max_turns")
+                target_ui.worker_turn(
+                    worker_slot,
+                    turn,
+                    max_turns if isinstance(max_turns, int) else 0,
+                )
+
+            kw["event_callback"] = _on_event
+
         try:
             with _ui_pause(ui):
                 answer, _exhausted = run_agent_loop(messages, ctx.tools, **kw)
@@ -3415,6 +3444,8 @@ def _run_batch(
                 _set_current_ui(prev_ui)
         slot = slot_queue.get()
         _set_current_ui(ui)
+        prev_slot = _get_current_worker_slot()
+        _set_current_worker_slot(slot)
         try:
             try:
                 label = label_for(item)
@@ -3426,6 +3457,7 @@ def _run_batch(
             finally:
                 ui.worker_ended(slot)
         finally:
+            _set_current_worker_slot(prev_slot)
             _set_current_ui(prev_ui)
             slot_queue.put(slot)
 
