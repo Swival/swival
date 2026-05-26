@@ -1947,9 +1947,13 @@ Output format: one or more `@@ finding @@` blocks. Each block has these keys, on
 Use exactly the keys shown. Do not quote, escape, or wrap values. Each value
 runs to the end of its line.
 
-If there are no findings, output the single line:
+Severity (anchor to the target's deployment surface, not worst case):
+- critical: unauth remote code execution, or a security-decision primitive returning the wrong answer for any-party input.
+- high: untrusted actor lacking the privilege the bug grants, via normal input. E.g. auth bypass on a network service, local privesc, memory corruption from attacker bytes.
+- medium: untrusted actor, but needs non-default config, specific layout, or crafted input; or significant impact when the attacker already has same-trust access.
+- low: needs local access, admin/operator cooperation, or dev-only paths; or minor impact (verbose errors, transient local resource use).
 
-@@ none @@
+For CLI tools, libraries, and local-only services, bugs only triggerable by the user running them are rarely high or critical. Tie-break downward. The security_control_failure carve-out below forces high or critical and overrides this when it applies.
 
 Worked example:
 
@@ -2000,7 +2004,11 @@ Explicitly out of scope — emit nothing for these even when the bug is real:
 - DoS that requires an admin or operator to author the malicious config, regex, or input
 - defense-in-depth: "an additional check would be safer", "this should also validate X", "this could leak in some other deployment", "redundant guard missing"
 
-Only report bugs where the structured fields specifically answer attacker / trigger / gain — for example "unauthenticated open redirect on failed form auth" or "out-of-bounds read on attacker-supplied trailing CR" — or where the security_control_failure carve-out lets the cited function's own job (an Ed25519 verifier, a seccomp policy enforcer) supply the security context."""
+Only report bugs where the structured fields specifically answer attacker / trigger / gain — for example "unauthenticated open redirect on failed form auth" or "out-of-bounds read on attacker-supplied trailing CR" — or where the security_control_failure carve-out lets the cited function's own job (an Ed25519 verifier, a seccomp policy enforcer) supply the security context.
+
+If no finding survives the scope gate, output the single line and nothing else:
+
+@@ none @@"""
 
 _PHASE3B_OUT_OF_SCOPE_TYPE = "out-of-scope"
 _PHASE3B_SECURITY_CONTROL_FAILURE_TYPE = "security_control_failure"
