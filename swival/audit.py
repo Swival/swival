@@ -5,12 +5,14 @@ from __future__ import annotations
 import bisect
 import hashlib
 import json
+import queue
 import re
 import subprocess
 import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -19,6 +21,7 @@ if TYPE_CHECKING:
     from .input_dispatch import InputContext
 
 from . import fmt
+from .audit_ui import AuditUI, PhaseHandle
 
 # ---------------------------------------------------------------------------
 # Provenance
@@ -42,6 +45,7 @@ _DEFAULT_METRICS: dict[str, int] = {
     "repair_failures": 0,
     "analytical_retries": 0,
     "multiline_continuations": 0,
+    "lenient_corrections": 0,
 }
 
 # ---------------------------------------------------------------------------
@@ -50,6 +54,51 @@ _DEFAULT_METRICS: dict[str, int] = {
 
 _debug_log_path: Path | None = None
 _debug_log_lock = threading.Lock()
+
+
+_current_ui = threading.local()
+
+
+def _set_current_ui(ui: "AuditUI | None") -> None:
+    _current_ui.ui = ui
+
+
+def _get_current_ui() -> "AuditUI | None":
+    return getattr(_current_ui, "ui", None)
+
+
+def _ui_info(ui: "AuditUI | None", msg: str) -> None:
+    """Route an informational line through the audit UI when available."""
+    target = ui if ui is not None else _get_current_ui()
+    if target is not None:
+        target.scrollback(msg)
+    else:
+        fmt.info(msg)
+
+
+def _ui_warning(ui: "AuditUI | None", msg: str) -> None:
+    """Route a warning line through the audit UI when available."""
+    target = ui if ui is not None else _get_current_ui()
+    if target is not None:
+        target.warning(msg)
+    else:
+        fmt.warning(msg)
+
+
+@contextmanager
+def _ui_pause(ui: "AuditUI | None"):
+    """Stop the audit UI's live region for the duration of a child agent loop.
+
+    Audit-driven sub-agents write progress/diagnostics directly to the shared
+    stderr Rich console; without pausing the Live region they interleave with
+    its repaint and tear the display.
+    """
+    target = ui if ui is not None else _get_current_ui()
+    if target is None:
+        yield
+        return
+    with target.pause():
+        yield
 
 
 def _debug_log(event: str, **fields) -> None:
@@ -1333,12 +1382,19 @@ def _parse_records(
 
     commit()
 
-    if saw_none:
-        if records:
-            raise ValueError("'@@ none @@' sentinel mixed with actual records")
+    if saw_none and not records:
         return []
 
-    validated = _validate_records(records, schema, repeated_map)
+    if saw_none and records:
+        if metrics is not None:
+            metrics["lenient_corrections"] = metrics.get("lenient_corrections", 0) + 1
+        _debug_log(
+            "records_lenient_discard_none",
+            record_type=target_name,
+            kept=len(records),
+        )
+
+    validated = _validate_records(records, schema, repeated_map, metrics=metrics)
     if metrics is not None and multiline_records > 0:
         metrics["multiline_continuations"] = (
             metrics.get("multiline_continuations", 0) + multiline_records
@@ -1350,6 +1406,7 @@ def _validate_records(
     records: list[dict],
     schema: PhaseSchema,
     repeated_map: dict[str, str],
+    metrics: dict[str, int] | None = None,
 ) -> list[dict]:
     rec_schema = schema.record
     enum_lc = {k.lower(): {a.lower() for a in v} for k, v in rec_schema.enums.items()}
@@ -1398,11 +1455,21 @@ def _validate_records(
                     )
 
     if schema.cardinality == "one":
-        if len(records) != 1:
+        if not records:
             raise ValueError(
-                f"expected exactly one '@@ {rec_schema.name} @@' record, "
-                f"got {len(records)}"
+                f"expected exactly one '@@ {rec_schema.name} @@' record, got 0"
             )
+        if len(records) > 1:
+            if metrics is not None:
+                metrics["lenient_corrections"] = (
+                    metrics.get("lenient_corrections", 0) + 1
+                )
+            _debug_log(
+                "records_lenient_truncate",
+                record_type=rec_schema.name,
+                got=len(records),
+            )
+            del records[1:]
     elif schema.cardinality == "zero_or_more":
         if not records:
             msg = f"expected at least one '@@ {rec_schema.name} @@' record"
@@ -1444,6 +1511,7 @@ _METRIC_LABELS: tuple[tuple[str, str], ...] = (
     ("repair_failures", "repairs failed"),
     ("analytical_retries", "analytical retries"),
     ("multiline_continuations", "multiline continuations"),
+    ("lenient_corrections", "lenient corrections"),
 )
 
 
@@ -1536,14 +1604,14 @@ def _parse_records_with_repair(
             raw_len=len(raw),
             raw_preview=raw[:3000],
         )
-        fmt.info(f"  parse failed ({error_msg}), attempting repair...")
+        _ui_info(None, f"  parse failed ({error_msg}), attempting repair...")
         try:
             result = _repair_records_response(
                 ctx, raw, error_msg, worked_example, schema, metrics=metrics
             )
             metrics["repair_successes"] = metrics.get("repair_successes", 0) + 1
             _debug_log("records_repair_ok", record_type=schema.record.name)
-            fmt.info("  repair succeeded")
+            _ui_info(None, "  repair succeeded")
             return result
         except ValueError as repair_err:
             metrics["repair_failures"] = metrics.get("repair_failures", 0) + 1
@@ -1552,7 +1620,7 @@ def _parse_records_with_repair(
                 record_type=schema.record.name,
                 error=str(repair_err),
             )
-            fmt.info("  repair failed")
+            _ui_info(None, "  repair failed")
             raise
 
 
@@ -1935,7 +2003,7 @@ Reject any claim that is not fully proven.
 You have no tools, no shell access, and no ability to run commands.
 All the source code you need is included below. Do not request additional information.
 
-Output format: either one or more `@@ finding @@` blocks (described below), OR the single line `@@ none @@` if no in-scope finding exists. No other output shape is valid.
+Output format: either one or more `@@ finding @@` blocks (described below), OR the single line `@@ none @@` if no in-scope finding exists. No other output shape is valid. If you emit any `@@ finding @@` block, do NOT also emit `@@ none @@` — the sentinel is only for the zero-findings case.
 
 Each `@@ finding @@` block has these keys, one per line:
 - title: short title
@@ -2098,7 +2166,7 @@ You are expanding one security finding with proof details.
 You have no tools, no shell access, and no ability to run commands.
 All the source code you need is included below. Do not request additional information.
 
-Output format: a single `@@ expansion @@` block with these keys, one per line:
+Output format: exactly one `@@ expansion @@` block — never two, never a copy of the worked example below followed by your own. The block has these keys, one per line:
 - type: one of {", ".join(_PHASE3B_TYPE_VALUES)} - pick the security impact label, never a generic-correctness label
 - attacker: specific untrusted actor, under 15 words
 - trigger: attacker-controlled input or action reaching the bug, under 20 words
@@ -2643,27 +2711,32 @@ def _emit_measure_triage_recall(state: AuditRunState) -> None:
             by_decision_severity.get((decision, sev), 0) + 1
         )
 
-    fmt.info("--- triage recall (--measure-triage) ---")
-    fmt.info(
-        f"  candidate set after triage: {len(state.measurement_escalated_paths)} files"
+    _ui_info(None, "--- triage recall (--measure-triage) ---")
+    _ui_info(
+        None,
+        f"  candidate set after triage: {len(state.measurement_escalated_paths)} files",
     )
-    fmt.info(f"  expanded deep-review set:   {len(state.candidate_files)} files")
+    _ui_info(None, f"  expanded deep-review set:   {len(state.candidate_files)} files")
     n_escalated = sum(
         n for (d, _s), n in by_decision_severity.items() if d == "escalated"
     )
     n_skipped = sum(n for (d, _s), n in by_decision_severity.items() if d == "skipped")
-    fmt.info(f"  verified findings on escalated files: {n_escalated}")
-    fmt.info(f"  verified findings on SKIPped files:   {n_skipped} (false negatives)")
+    _ui_info(None, f"  verified findings on escalated files: {n_escalated}")
+    _ui_info(
+        None,
+        f"  verified findings on SKIPped files:   {n_skipped} (false negatives)",
+    )
     if n_skipped:
         for sev in _SEVERITIES + ("unknown",):
             n = by_decision_severity.get(("skipped", sev), 0)
             if n:
-                fmt.info(f"    skipped × {sev}: {n}")
+                _ui_info(None, f"    skipped × {sev}: {n}")
         for vf in state.verified_findings:
             if vf.finding.triage_decision == "skipped":
-                fmt.info(
+                _ui_info(
+                    None,
                     f"    - {vf.finding.source_file}: "
-                    f"[{vf.finding.severity}] {vf.finding.title}"
+                    f"[{vf.finding.severity}] {vf.finding.title}",
                 )
 
 
@@ -2710,25 +2783,29 @@ def _emit_phase2_summary(
         1 for p in candidate_set if records[p].confirmation_outcome == "promoted"
     )
 
-    fmt.info(
+    _ui_info(
+        None,
         f"phase 2 complete. {len(state.candidate_files)} files escalated "
-        f"({n_high} high, {n_medium} medium)"
+        f"({n_high} high, {n_medium} medium)",
     )
     if promotions or by_confirm:
-        fmt.info(f"  - {by_llm} by LLM triage")
+        _ui_info(None, f"  - {by_llm} by LLM triage")
         for prefix, label, emit in _PROMOTION_REASON_LABELS:
             n = counts[prefix]
             if not n:
                 continue
-            (fmt.warning if emit == "warning" else fmt.info)(f"  - {n} {label}")
+            if emit == "warning":
+                _ui_warning(None, f"  - {n} {label}")
+            else:
+                _ui_info(None, f"  - {n} {label}")
         if by_confirm:
-            fmt.info(f"  - {by_confirm} recovered by confirmation pass")
+            _ui_info(None, f"  - {by_confirm} recovered by confirmation pass")
 
     skipped = [p for p, r in records.items() if r.priority == "SKIP"]
     if skipped:
         ranked = sorted(skipped, key=lambda p: (-state.attack_scores.get(p, 0), p))[:5]
         top = ", ".join(f"{p}:{state.attack_scores.get(p, 0)}" for p in ranked)
-        fmt.info(f"  {len(skipped)} files SKIPped (top by score: {top})")
+        _ui_info(None, f"  {len(skipped)} files SKIPped (top by score: {top})")
 
 
 def _phase3a_inventory(
@@ -2860,6 +2937,7 @@ def _phase3_deep_review(
     path: str,
     state: AuditRunState,
     ctx: InputContext,
+    ui: AuditUI | None = None,
 ) -> list[FindingRecord]:
     """Deep review a single escalated file using inventory + expansion."""
     try:
@@ -2877,7 +2955,7 @@ def _phase3_deep_review(
         try:
             expansions.append(_phase3b_expand_one(item))
         except Exception as e:
-            fmt.warning(f"expansion failed for {path}: {e}")
+            _ui_warning(ui, f"expansion failed for {path}: {e}")
             expansions.append(None)
 
     findings = []
@@ -2898,9 +2976,10 @@ def _phase3_deep_review(
                 f"all {failed_expansions} expansion(s) failed for {path} "
                 f"({len(inventory)} inventory finding(s))"
             )
-        fmt.warning(
+        _ui_warning(
+            ui,
             f"  {path}: {failed_expansions}/{len(inventory)} expansion(s) failed, "
-            f"{len(findings)} finding(s) retained"
+            f"{len(findings)} finding(s) retained",
         )
     return findings
 
@@ -2909,6 +2988,7 @@ def _deep_review_one(
     path: str,
     state: AuditRunState,
     ctx: InputContext,
+    ui: AuditUI | None = None,
 ) -> DeepReviewResult:
     """Run deep review with repair-first retry policy.
 
@@ -2917,14 +2997,14 @@ def _deep_review_one(
     giving up.
     """
     try:
-        findings = _phase3_deep_review(path, state, ctx)
+        findings = _phase3_deep_review(path, state, ctx, ui=ui)
         return DeepReviewResult(path=path, findings=findings)
     except (ValueError, RuntimeError) as e:
         if isinstance(e, ValueError):
             state.metrics["analytical_retries"] += 1
-        fmt.info(f"  retrying deep review for {path} after error: {e}")
+        _ui_info(ui, f"  retrying deep review for {path} after error: {e}")
         try:
-            findings = _phase3_deep_review(path, state, ctx)
+            findings = _phase3_deep_review(path, state, ctx, ui=ui)
             return DeepReviewResult(path=path, findings=findings)
         except (ValueError, RuntimeError) as e2:
             return DeepReviewResult(path=path, error=str(e2))
@@ -2973,6 +3053,7 @@ def _phase4c_reproduce(
     state: AuditRunState,
     ctx: InputContext,
     work_dir: Path,
+    ui: AuditUI | None = None,
 ) -> dict | None:
     """Run a verifier agent. Returns proof dict or None (NOTREPRODUCED).
 
@@ -2984,18 +3065,16 @@ def _phase4c_reproduce(
 
     finding_json = json.dumps(asdict(finding), indent=2)
     locs = ", ".join(finding.locations) if finding.locations else finding.source_file
-    fmt.info(f"    verifier [{locs}]: collecting evidence for {finding.title}")
+    _ui_info(ui, f"    verifier [{locs}]: collecting evidence for {finding.title}")
     evidence, n_files = _gather_evidence(finding, ctx)
-    fmt.info(f"    verifier [{locs}]: gathered {n_files} evidence file(s)")
+    _ui_info(ui, f"    verifier [{locs}]: gathered {n_files} evidence file(s)")
 
-    fmt.info(f"    verifier [{locs}]: preparing isolated worktree")
-    wt = _worktree(ctx.base_dir, work_dir)
-    wt.__enter__()
-
-    try:
-        fmt.info(
+    _ui_info(ui, f"    verifier [{locs}]: preparing isolated worktree")
+    with _worktree(ctx.base_dir, work_dir):
+        _ui_info(
+            ui,
             f"    verifier [{locs}]: running verification agent "
-            f"(severity={finding.severity})"
+            f"(severity={finding.severity})",
         )
         messages = [
             {"role": "system", "content": _PHASE4_VERIFY_SYSTEM},
@@ -3010,7 +3089,8 @@ def _phase4c_reproduce(
 
         kw = _make_isolated_loop_kwargs(ctx, work_dir)
         try:
-            answer, _exhausted = run_agent_loop(messages, ctx.tools, **kw)
+            with _ui_pause(ui):
+                answer, _exhausted = run_agent_loop(messages, ctx.tools, **kw)
         except (ConnectionError, TimeoutError, OSError) as e:
             raise _TransientVerifierError(str(e)) from e
         finally:
@@ -3020,13 +3100,11 @@ def _phase4c_reproduce(
 
         answer = answer or ""
         if _REPRODUCE_KEYWORD in answer and _NO_REPRODUCE_KEYWORD not in answer:
-            fmt.info(f"    verifier [{locs}]: REPRODUCED — {finding.title}")
+            _ui_info(ui, f"    verifier [{locs}]: REPRODUCED — {finding.title}")
             return {"reproduced": True, "summary": answer[-1000:]}
 
-        fmt.info(f"    verifier [{locs}]: NOTREPRODUCED — {finding.title}")
+        _ui_info(ui, f"    verifier [{locs}]: NOTREPRODUCED — {finding.title}")
         return None
-    finally:
-        wt.__exit__(None, None, None)
 
 
 def _evidence_file_paths(finding: FindingRecord) -> list[str]:
@@ -3048,6 +3126,7 @@ def _phase5_patch(
     ctx: InputContext,
     state: AuditRunState,
     patch_max_turns: int = _DEFAULT_PATCH_MAX_TURNS,
+    ui: AuditUI | None = None,
 ) -> PatchGenerationResult:
     """Generate a patch by running an agent loop in a worktree, then capturing git diff."""
     from .agent import run_agent_loop
@@ -3057,73 +3136,71 @@ def _phase5_patch(
 
     work_dir = Path(ctx.base_dir) / state.state_dir / state.run_id / "patch-gen"
     try:
-        wt = _worktree(ctx.base_dir, work_dir)
-        wt.__enter__()
+        with _worktree(ctx.base_dir, work_dir):
+            prompt = (
+                f"Fix the following security finding with the smallest correct change. "
+                f"Use edit_file to make the fix. Do not make unrelated changes.\n\n"
+                f"{finding_json}\n\n"
+                f"Committed source for affected files:\n{evidence}"
+            )
+            messages = [
+                {
+                    "role": "system",
+                    "content": "You are fixing a security bug. Make the minimal correct fix using edit_file.",
+                },
+                {"role": "user", "content": prompt},
+            ]
+
+            kw = _make_isolated_loop_kwargs(ctx, work_dir, max_turns=patch_max_turns)
+
+            # Pre-seed the file tracker so the agent can edit without a read_file
+            # round-trip — the committed source is already in the prompt.
+            tracker = kw.get("file_tracker")
+            if tracker is not None:
+                evidence_paths = _evidence_file_paths(vf.finding)
+                for rel in evidence_paths:
+                    tracker.record_read(str(work_dir / rel))
+
+            try:
+                with _ui_pause(ui):
+                    _answer, exhausted = run_agent_loop(messages, ctx.tools, **kw)
+            except Exception as e:
+                _ui_info(ui, f"    patch: agent loop failed: {e}")
+                return PatchGenerationResult(
+                    error_code="patch_agent_error", error=f"agent loop failed: {e}"
+                )
+            finally:
+                _write_audit_trace(
+                    ctx, messages, task=f"audit: phase 5 patch {vf.finding.title}"
+                )
+
+            if exhausted:
+                _ui_info(
+                    ui, "    patch: turn budget exhausted, discarding incomplete work"
+                )
+                return PatchGenerationResult(
+                    error_code="patch_turn_budget_exhausted",
+                    error="turn budget exhausted",
+                )
+
+            diff = subprocess.run(
+                ["git", "diff"],
+                capture_output=True,
+                cwd=str(work_dir),
+                timeout=10,
+            )
+            patch_text = diff.stdout.decode(errors="replace").strip()
+            if not patch_text:
+                _ui_info(ui, "    patch: no changes produced")
+                return PatchGenerationResult(
+                    error_code="patch_no_diff", error="no changes produced"
+                )
+            return PatchGenerationResult(patch_text=patch_text + "\n")
     except RuntimeError as e:
-        fmt.info(f"    patch: worktree failed: {e}")
+        _ui_info(ui, f"    patch: worktree failed: {e}")
         return PatchGenerationResult(
             error_code="patch_worktree_error", error=f"worktree failed: {e}"
         )
-
-    try:
-        prompt = (
-            f"Fix the following security finding with the smallest correct change. "
-            f"Use edit_file to make the fix. Do not make unrelated changes.\n\n"
-            f"{finding_json}\n\n"
-            f"Committed source for affected files:\n{evidence}"
-        )
-        messages = [
-            {
-                "role": "system",
-                "content": "You are fixing a security bug. Make the minimal correct fix using edit_file.",
-            },
-            {"role": "user", "content": prompt},
-        ]
-
-        kw = _make_isolated_loop_kwargs(ctx, work_dir, max_turns=patch_max_turns)
-
-        # Pre-seed the file tracker so the agent can edit without a read_file
-        # round-trip — the committed source is already in the prompt.
-        tracker = kw.get("file_tracker")
-        if tracker is not None:
-            evidence_paths = _evidence_file_paths(vf.finding)
-            for rel in evidence_paths:
-                tracker.record_read(str(work_dir / rel))
-
-        try:
-            _answer, exhausted = run_agent_loop(messages, ctx.tools, **kw)
-        except Exception as e:
-            fmt.info(f"    patch: agent loop failed: {e}")
-            return PatchGenerationResult(
-                error_code="patch_agent_error", error=f"agent loop failed: {e}"
-            )
-        finally:
-            _write_audit_trace(
-                ctx, messages, task=f"audit: phase 5 patch {vf.finding.title}"
-            )
-
-        if exhausted:
-            fmt.info("    patch: turn budget exhausted, discarding incomplete work")
-            return PatchGenerationResult(
-                error_code="patch_turn_budget_exhausted",
-                error="turn budget exhausted",
-            )
-
-        diff = subprocess.run(
-            ["git", "diff"],
-            capture_output=True,
-            cwd=str(work_dir),
-            timeout=10,
-        )
-        patch_text = diff.stdout.decode(errors="replace").strip()
-        if not patch_text:
-            fmt.info("    patch: no changes produced")
-            return PatchGenerationResult(
-                error_code="patch_no_diff", error="no changes produced"
-            )
-        return PatchGenerationResult(patch_text=patch_text + "\n")
-    finally:
-        wt.__exit__(None, None, None)
 
 
 def _phase5_report(
@@ -3226,11 +3303,12 @@ def _verify_single_finding(
     state: AuditRunState,
     ctx: InputContext,
     work_dir: Path,
+    ui: AuditUI | None = None,
 ) -> VerifiedFinding | None:
     """Run the PoC-based verifier on one finding. Returns None if discarded."""
-    reproducer = _phase4c_reproduce(finding, state, ctx, work_dir)
+    reproducer = _phase4c_reproduce(finding, state, ctx, work_dir, ui=ui)
     if reproducer is None:
-        fmt.info(f"  discarded (no reproduction): {finding.title}")
+        _ui_info(ui, f"  discarded (no reproduction): {finding.title}")
         return None
 
     return VerifiedFinding(
@@ -3245,6 +3323,7 @@ def _verify_one_finding(
     item: tuple[str, FindingRecord],
     state: AuditRunState,
     ctx: "InputContext",
+    ui: AuditUI | None = None,
 ) -> VerificationResult:
     """Verify a single finding with retry on transient errors. Never raises."""
     finding_key, finding = item
@@ -3259,14 +3338,15 @@ def _verify_one_finding(
     attempts = 0
     try:
         attempts += 1
-        verified = _verify_single_finding(finding, state, ctx, work_dir)
+        verified = _verify_single_finding(finding, state, ctx, work_dir, ui=ui)
     except _TransientVerifierError as e:
-        fmt.info(
-            f"  [{finding_key}] retrying {finding.title} after transient error: {e}"
+        _ui_info(
+            ui,
+            f"  [{finding_key}] retrying {finding.title} after transient error: {e}",
         )
         try:
             attempts += 1
-            verified = _verify_single_finding(finding, state, ctx, work_dir)
+            verified = _verify_single_finding(finding, state, ctx, work_dir, ui=ui)
         except Exception as e2:
             return VerificationResult(
                 finding_key=finding_key, error=str(e2), attempts=attempts
@@ -3290,18 +3370,68 @@ def _verify_one_finding(
 # ---------------------------------------------------------------------------
 
 
-def _run_batch(fn, items, max_workers: int = 4):
-    """Run fn(item) in parallel, return results preserving order."""
+def _run_batch(
+    fn,
+    items,
+    max_workers: int = 4,
+    *,
+    ui=None,
+    label_for=None,
+):
+    """Run fn(item) in parallel, return results preserving order.
+
+    When ``ui`` is provided, each task acquires a worker slot from a
+    bounded queue, publishes a ``worker_started`` event with
+    ``label_for(item)``, runs ``fn(item)``, then publishes
+    ``worker_ended`` and returns the slot. Batch-level failures are
+    routed through ``ui.warning`` instead of the global ``fmt.warning``.
+    """
     results = [None] * len(items)
+    slot_queue: queue.Queue[int] | None = None
+    if ui is not None:
+        slot_queue = queue.Queue()
+        for slot in range(1, max(1, max_workers) + 1):
+            slot_queue.put(slot)
+    if label_for is None:
+        label_for = str
+
+    def _wrapped(item):
+        prev_ui = _get_current_ui()
+        if slot_queue is None:
+            _set_current_ui(ui)
+            try:
+                return fn(item)
+            finally:
+                _set_current_ui(prev_ui)
+        slot = slot_queue.get()
+        _set_current_ui(ui)
+        try:
+            try:
+                label = label_for(item)
+            except Exception:
+                label = str(item)
+            ui.worker_started(slot, label)
+            try:
+                return fn(item)
+            finally:
+                ui.worker_ended(slot)
+        finally:
+            _set_current_ui(prev_ui)
+            slot_queue.put(slot)
+
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(fn, item): i for i, item in enumerate(items)}
+        futures = {pool.submit(_wrapped, item): i for i, item in enumerate(items)}
         for future in as_completed(futures):
             idx = futures[future]
             try:
                 results[idx] = future.result()
             except Exception as e:
                 _debug_log("batch_error", idx=idx, error=str(e))
-                fmt.warning(f"batch item {idx} failed: {e}")
+                msg = f"batch item {idx} failed: {e}"
+                if ui is not None:
+                    ui.warning(msg)
+                else:
+                    fmt.warning(msg)
                 results[idx] = None
     return results
 
@@ -3432,7 +3562,7 @@ def _mark_artifact_failed(
     entry["last_error_code"] = error_code
     entry["last_error"] = error_msg
     state.save()
-    fmt.info(f"  [{fi}/{total}] failed ({error_msg})")
+    _ui_info(None, f"  [{fi}/{total}] failed ({error_msg})")
 
 
 # ---------------------------------------------------------------------------
@@ -3609,6 +3739,705 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
         _debug_log_path = None
 
 
+_PHASE_TITLES: dict[str, tuple[str, str]] = {
+    "inventory": ("Phase 1 · Inventory", "inventory"),
+    "triage": ("Phase 2 · Triage", "triage"),
+    "deep_review": ("Phase 3 · Deep Review", "deep_review"),
+    "verification": ("Phase 4 · Verification", "verification"),
+    "artifacts": ("Phase 5 · Artifacts", "artifacts"),
+}
+
+
+def _phase_open(
+    ui: AuditUI, phase_key: str, *, total: int | None = None
+) -> PhaseHandle:
+    title, color_key = _PHASE_TITLES[phase_key]
+    if total is not None:
+        title = f"{title} · {total} item{'s' if total != 1 else ''}"
+    return ui.phase(title, total=total, color=fmt.phase_color(color_key))
+
+
+def _run_pipeline(
+    state: AuditRunState,
+    ui: AuditUI,
+    ctx: InputContext,
+    base_dir: str,
+    workers: int,
+    *,
+    resume: bool,
+    force_review: list[str],
+    force_review_sources: dict[str, str],
+    patch_max_turns: int,
+    selected_indexes: set[int] | None,
+) -> str:
+    """Drive phases 1-5 against a populated state, routing UI through ``ui``."""
+    _set_current_ui(ui)
+    try:
+        return _run_pipeline_body(
+            state,
+            ui,
+            ctx,
+            base_dir,
+            workers,
+            resume=resume,
+            force_review=force_review,
+            force_review_sources=force_review_sources,
+            patch_max_turns=patch_max_turns,
+            selected_indexes=selected_indexes,
+        )
+    finally:
+        _set_current_ui(None)
+
+
+def _run_pipeline_body(
+    state: AuditRunState,
+    ui: AuditUI,
+    ctx: InputContext,
+    base_dir: str,
+    workers: int,
+    *,
+    resume: bool,
+    force_review: list[str],
+    force_review_sources: dict[str, str],
+    patch_max_turns: int,
+    selected_indexes: set[int] | None,
+) -> str:
+
+    # Phase 1: scope + profile
+    if state.phase == "init":
+        ph1 = _phase_open(ui, "inventory", total=4)
+        ph1.set_current(f"loading {len(state.scope.mandatory_files)} files")
+        if not ui.is_live:
+            fmt.info(
+                f"phase 1: loading {len(state.scope.mandatory_files)} file contents..."
+            )
+        content_cache = _load_file_contents(state.scope.mandatory_files, base_dir)
+        ph1.advance(current="building import/caller indices")
+        if not ui.is_live:
+            fmt.info("phase 1: building import/caller indices...")
+        state.import_index, state.caller_index = _build_context_indices(
+            state.scope.mandatory_files, content_cache
+        )
+        ph1.advance(current="ordering by attack surface")
+        if not ui.is_live:
+            fmt.info("phase 1: ordering by attack surface...")
+        state.queued_files, state.attack_scores = _order_by_attack_surface(
+            state.scope.mandatory_files, content_cache
+        )
+        ph1.advance(current="calling LLM for repo profile")
+        if not ui.is_live:
+            fmt.info("phase 1: calling LLM for repo profile...")
+        try:
+            state.repo_profile = _phase1_repo_profile(state, ctx)
+        except ValueError as e:
+            _ui_warning(
+                ui,
+                f"phase 1: profile parse failed ({e}); "
+                "continuing with empty profile (later phases lose enrichment)",
+            )
+            state.repo_profile = {}
+            state.metrics["phase1_profile_failures"] = (
+                state.metrics.get("phase1_profile_failures", 0) + 1
+            )
+        ph1.advance()
+        state.phase = "triage"
+        state.save()
+        summary_str = state.repo_profile.get("summary", "")[:80]
+        if not ui.is_live:
+            fmt.info(f"phase 1 complete. profile: {summary_str}")
+        ph1.complete(f"profile: {summary_str}" if summary_str else None)
+
+    # Resume rule: re-apply updated force_review before the Phase-2 gate.
+    if resume and state.phase in ("triage", "deep_review") and force_review:
+        force_matches, force_warnings = _resolve_force_review(
+            force_review, force_review_sources, state.scope.mandatory_files
+        )
+        for w in force_warnings:
+            ui.warning(w)
+        re_promoted = 0
+        for path, source in force_matches.items():
+            rec = state.triage_records.get(path)
+            if rec is None:
+                continue
+            reason = f"forced via swival.toml ({source})"
+            if reason in rec.promotion_reasons:
+                continue
+            rec.promotion_reasons.append(reason)
+            if rec.priority == "SKIP":
+                rec.priority = "ESCALATE_MEDIUM"
+                if path not in state.candidate_files:
+                    state.candidate_files.append(path)
+                re_promoted += 1
+        if re_promoted:
+            ui.scrollback(
+                f"resume: {re_promoted} file(s) promoted via updated "
+                f"swival.toml force_review"
+            )
+            state.save()
+
+    if state.phase == "triage" and state.select_all:
+        state.candidate_files = list(state.queued_files)
+        state.reviewed_files.update(state.queued_files)
+        state.phase = "deep_review"
+        state.save()
+        ui.scrollback(
+            f"phase 2: skipped (--all); {len(state.candidate_files)} files "
+            f"queued for deep review"
+        )
+
+    if state.phase == "triage":
+
+        def _triage(path):
+            return _phase2_triage_one(path, state, ctx)
+
+        def _collect_triage(results, ph):
+            for rec in results:
+                if rec is not None:
+                    state.triage_records[rec.path] = rec
+                    state.reviewed_files.add(rec.path)
+                ph.advance()
+
+        pending = [f for f in state.queued_files if f not in state.reviewed_files]
+        if pending:
+            ph2 = _phase_open(ui, "triage", total=len(pending))
+            if not ui.is_live:
+                fmt.info(f"phase 2: triaging {len(pending)} files...")
+            for batch_start in range(0, len(pending), workers * 2):
+                batch = pending[batch_start : batch_start + workers * 2]
+                results = _run_batch(
+                    _triage, batch, max_workers=workers, ui=ui, label_for=str
+                )
+                _collect_triage(results, ph2)
+                state.save()
+                done = len(state.reviewed_files)
+                total = len(state.queued_files)
+                if not ui.is_live:
+                    fmt.info(f"  triage progress: {done}/{total}")
+            ph2.complete(
+                f"{len(state.reviewed_files)}/{len(state.queued_files)} reviewed"
+            )
+
+        for _triage_retry in range(2):
+            still_pending = [
+                f for f in state.queued_files if f not in state.reviewed_files
+            ]
+            if not still_pending:
+                break
+            ph2r = _phase_open(ui, "triage", total=len(still_pending))
+            if not ui.is_live:
+                fmt.info(
+                    f"phase 2: retrying {len(still_pending)} files "
+                    f"(attempt {_triage_retry + 2})..."
+                )
+            results = _run_batch(
+                _triage, still_pending, max_workers=workers, ui=ui, label_for=str
+            )
+            _collect_triage(results, ph2r)
+            state.save()
+            ph2r.complete(f"retry attempt {_triage_retry + 2}")
+
+        force_matches, force_warnings = _resolve_force_review(
+            force_review, force_review_sources, state.scope.mandatory_files
+        )
+        for w in force_warnings:
+            ui.warning(w)
+        promotions = _apply_promotions(state, force_matches)
+
+        # Confirmation pass for low-confidence SKIPs.
+        confirm_targets = [
+            p
+            for p, r in state.triage_records.items()
+            if r.priority == "SKIP" and r.confidence == "low"
+        ]
+        if confirm_targets:
+            ui.scrollback(
+                f"phase 2: confirmation pass on {len(confirm_targets)} "
+                f"low-confidence SKIP(s)..."
+            )
+
+            def _confirm(p):
+                return _phase2_confirm_one(p, state, ctx)
+
+            results = _run_batch(
+                _confirm,
+                confirm_targets,
+                max_workers=workers,
+                ui=ui,
+                label_for=str,
+            )
+            for original_path, new_rec in zip(confirm_targets, results):
+                old = state.triage_records[original_path]
+                if new_rec is None:
+                    old.confirmation_outcome = "kept"
+                    continue
+                if new_rec.priority in ("ESCALATE_HIGH", "ESCALATE_MEDIUM"):
+                    new_rec.confirmation_outcome = "promoted"
+                    new_rec.promotion_reasons = list(old.promotion_reasons)
+                    state.triage_records[original_path] = new_rec
+                else:
+                    old.confirmation_outcome = "kept"
+            state.save()
+
+        state.candidate_files = [
+            path
+            for path, rec in state.triage_records.items()
+            if rec.priority in ("ESCALATE_HIGH", "ESCALATE_MEDIUM")
+        ]
+        if state.measure_triage:
+            state.measurement_escalated_paths = set(state.candidate_files)
+            state.candidate_files = list(state.queued_files)
+            ui.scrollback(
+                f"phase 2 (measure-triage): expanding deep-review set from "
+                f"{len(state.measurement_escalated_paths)} to "
+                f"{len(state.candidate_files)} files"
+            )
+        state.phase = "deep_review"
+        state.save()
+
+        _emit_phase2_summary(state, promotions)
+
+    # Phase 3: deep review
+    if state.phase == "deep_review":
+
+        def _review(path):
+            return _deep_review_one(path, state, ctx, ui=ui)
+
+        def _collect_deep_review(results, total_files, ph):
+            for result in results:
+                if result is None:
+                    ph.advance()
+                    continue
+                done = len(state.deep_reviewed_files)
+                if result.error is not None:
+                    ui.warning(
+                        f"  [{done}/{total_files}] failed: {result.path} "
+                        f"({result.error[:80]})"
+                    )
+                    ph.advance()
+                    continue
+                n = len(result.findings) if result.findings else 0
+                if result.findings:
+                    if state.measure_triage:
+                        decision = (
+                            "escalated"
+                            if result.path in state.measurement_escalated_paths
+                            else "skipped"
+                        )
+                        for f in result.findings:
+                            f.triage_decision = decision
+                    for f in result.findings:
+                        ui.finding(f.severity, f.title, f.source_file)
+                    state.proposed_findings.extend(result.findings)
+                state.deep_reviewed_files.add(result.path)
+                done = len(state.deep_reviewed_files)
+                label = f"{n} finding(s)" if n else "no findings"
+                if not ui.is_live:
+                    fmt.info(f"  [{done}/{total_files}] {result.path}: {label}")
+                ph.advance()
+
+        for _dr_attempt in range(3):
+            pending = [
+                f for f in state.candidate_files if f not in state.deep_reviewed_files
+            ]
+            if not pending:
+                break
+            total_files = len(state.candidate_files)
+            reviewed_before = len(state.deep_reviewed_files)
+            ph3 = _phase_open(ui, "deep_review", total=len(pending))
+            if _dr_attempt == 0:
+                if not ui.is_live:
+                    fmt.info(f"phase 3: deep review of {len(pending)} files...")
+            else:
+                if not ui.is_live:
+                    fmt.info(
+                        f"phase 3: retrying {len(pending)} files "
+                        f"(attempt {_dr_attempt + 1})..."
+                    )
+
+            for batch_start in range(0, len(pending), workers * 2):
+                batch = pending[batch_start : batch_start + workers * 2]
+                results = _run_batch(
+                    _review, batch, max_workers=workers, ui=ui, label_for=str
+                )
+                _collect_deep_review(results, total_files, ph3)
+                state.save()
+            reviewed_this_attempt = len(state.deep_reviewed_files) - reviewed_before
+            ph3.complete(
+                f"{reviewed_this_attempt}/{len(pending)} reviewed this attempt "
+                f"({len(state.deep_reviewed_files)}/{total_files} total)"
+            )
+
+        if any(f not in state.deep_reviewed_files for f in state.candidate_files):
+            remaining = [
+                f for f in state.candidate_files if f not in state.deep_reviewed_files
+            ]
+            msg = (
+                f"Audit incomplete: {len(remaining)} escalated files failed deep "
+                f"review after retries. Use /audit --resume to retry."
+            )
+            ui.incomplete(msg)
+            return msg
+
+        state.phase = "verification"
+        state.save()
+        metrics_summary = _format_audit_metrics(state.metrics)
+        msg = f"phase 3 complete. {len(state.proposed_findings)} proposed findings." + (
+            f" ({metrics_summary})" if metrics_summary else ""
+        )
+        if not ui.is_live:
+            fmt.info(msg)
+
+    # Phase 4: verification (parallel)
+    if state.phase == "verification":
+        seen_keys: set[str] = set()
+        deduped: list[FindingRecord] = []
+        deduped_keys: list[str] = []
+        for f in state.proposed_findings:
+            key = _finding_key(f)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                deduped.append(f)
+                deduped_keys.append(key)
+        if len(deduped) < len(state.proposed_findings):
+            ui.scrollback(
+                f"  deduplicated {len(state.proposed_findings)} proposed findings "
+                f"to {len(deduped)}"
+            )
+            state.proposed_findings = deduped
+
+        stale = [k for k in state.verification_state if k not in seen_keys]
+        for k in stale:
+            del state.verification_state[k]
+
+        already_verified_keys = {
+            _finding_key(vf.finding) for vf in state.verified_findings
+        }
+        for key in deduped_keys:
+            if key not in state.verification_state:
+                state.verification_state[key] = {
+                    "status": "verified" if key in already_verified_keys else "pending",
+                    "attempts": 0,
+                    "last_error": None,
+                    "summary": None,
+                }
+
+        max_verify_attempts = 3
+
+        def _verify(item):
+            return _verify_one_finding(item, state, ctx, ui=ui)
+
+        def _verify_label(item):
+            try:
+                _key, f = item
+                return f.title
+            except (TypeError, ValueError):
+                return str(item)
+
+        for _v_attempt in range(max_verify_attempts):
+            for vs in state.verification_state.values():
+                if vs["status"] == "running":
+                    vs["status"] = "pending"
+
+            pending = [
+                (key, f)
+                for key, f in zip(deduped_keys, state.proposed_findings)
+                if state.verification_state[key]["status"] in ("pending", "failed")
+            ]
+
+            if not pending:
+                break
+
+            verify_workers = min(workers, 2)
+            ph4 = _phase_open(ui, "verification", total=len(pending))
+            if _v_attempt == 0:
+                if not ui.is_live:
+                    fmt.info(
+                        f"phase 4: verifying {len(pending)} findings "
+                        f"with {verify_workers} workers..."
+                    )
+            else:
+                if not ui.is_live:
+                    fmt.info(
+                        f"phase 4: retry {_v_attempt}/{max_verify_attempts - 1}, "
+                        f"{len(pending)} findings remaining..."
+                    )
+
+            for key, _ in pending:
+                state.verification_state[key]["status"] = "running"
+            state.save()
+
+            results = _run_batch(
+                _verify,
+                pending,
+                max_workers=verify_workers,
+                ui=ui,
+                label_for=_verify_label,
+            )
+
+            verified_count = 0
+            discarded_count = 0
+            failed_count = 0
+            total = len(pending)
+
+            for i, result in enumerate(results):
+                key = pending[i][0]
+                finding = pending[i][1]
+                finding_title = finding.title
+                vs = state.verification_state[key]
+                vs["attempts"] = vs.get("attempts", 0) + (
+                    result.attempts if isinstance(result, VerificationResult) else 1
+                )
+
+                if result is None or (
+                    isinstance(result, VerificationResult) and result.error is not None
+                ):
+                    vs["status"] = "failed"
+                    vs["last_error"] = (
+                        result.error
+                        if isinstance(result, VerificationResult)
+                        else "unexpected worker failure"
+                    )
+                    failed_count += 1
+                    if not ui.is_live:
+                        fmt.info(f"  [{i + 1}/{total}] failed: {finding_title}")
+                elif result.discarded:
+                    vs["status"] = "discarded"
+                    vs["summary"] = "not reproduced"
+                    discarded_count += 1
+                    ui.tally(discarded=1)
+                    if not ui.is_live:
+                        fmt.info(f"  [{i + 1}/{total}] discarded: {finding_title}")
+                elif result.verified_finding is not None:
+                    vs["status"] = "verified"
+                    vs["summary"] = "verified by proof-of-concept reproduction"
+                    state.verified_findings.append(result.verified_finding)
+                    verified_count += 1
+                    ui.tally(verified=1)
+                    if not ui.is_live:
+                        fmt.info(f"  [{i + 1}/{total}] verified: {finding_title}")
+                    ui.finding(
+                        finding.severity,
+                        f"VERIFIED: {finding.title}",
+                        finding.source_file,
+                    )
+                ph4.advance()
+                state.save()
+
+            if not ui.is_live:
+                fmt.info(
+                    f"  batch complete: {verified_count} verified, "
+                    f"{discarded_count} discarded, {failed_count} failed"
+                )
+            ph4.complete(
+                f"{verified_count} verified · {discarded_count} discarded · "
+                f"{failed_count} failed"
+            )
+
+        remaining_failed = sum(
+            1
+            for vs in state.verification_state.values()
+            if vs["status"] not in ("verified", "discarded")
+        )
+        if remaining_failed:
+            ui.tally(failed=remaining_failed)
+
+        non_terminal = [
+            key
+            for key, vs in state.verification_state.items()
+            if vs["status"] not in ("verified", "discarded")
+        ]
+        if non_terminal:
+            n_failed = sum(
+                1
+                for key in non_terminal
+                if state.verification_state[key]["status"] == "failed"
+            )
+            msg = (
+                f"Audit incomplete: {len(non_terminal)} findings not verified "
+                f"after {max_verify_attempts} attempts ({n_failed} failed). "
+                f"Use /audit --resume to retry."
+            )
+            ui.incomplete(msg)
+            return msg
+
+        seen_vf_keys: set[str] = set()
+        deduped_vf: list[VerifiedFinding] = []
+        for vf in state.verified_findings:
+            vf_key = _finding_key(vf.finding)
+            if vf_key not in seen_vf_keys:
+                seen_vf_keys.add(vf_key)
+                deduped_vf.append(vf)
+        state.verified_findings = deduped_vf
+
+        state.phase = "artifacts"
+        state.save()
+        if not ui.is_live:
+            fmt.info(
+                f"phase 4 complete. {len(state.verified_findings)} verified findings."
+            )
+
+    # Phase 5: artifacts
+    if state.phase == "artifacts":
+        if state.verified_findings:
+            artifact_dir = Path(base_dir) / state.artifact_dir
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            _ensure_artifact_state(state)
+
+            targets = []
+            total = len(state.verified_findings)
+            for fi, vf in enumerate(state.verified_findings, 1):
+                key = _artifact_key(vf)
+                entry = state.artifact_state[key]
+                if selected_indexes is not None:
+                    if fi - 1 in selected_indexes:
+                        targets.append((fi, vf, key, entry))
+                elif entry.get("status") in ("pending", "failed"):
+                    targets.append((fi, vf, key, entry))
+
+            ph5 = None
+            if targets:
+                ph5 = _phase_open(ui, "artifacts", total=len(targets))
+                if not ui.is_live:
+                    fmt.info(
+                        f"phase 5: generating artifacts for {len(targets)} "
+                        f"of {len(state.verified_findings)} findings..."
+                    )
+
+            for target_i, (fi, vf, key, entry) in enumerate(targets, 1):
+                patch_filename = entry["patch_filename"]
+                report_filename = entry["report_filename"]
+                if selected_indexes is None:
+                    progress = f"[{fi}/{total}] generating patch"
+                else:
+                    progress = (
+                        f"[{target_i}/{len(targets)}] regenerating finding {fi}/{total}"
+                    )
+
+                if ph5 is not None:
+                    ph5.set_current(f"patch: {vf.finding.title}")
+                if not ui.is_live:
+                    fmt.info(f"  {progress}: {vf.finding.title}")
+                patch_result = _phase5_patch(vf, ctx, state, patch_max_turns, ui=ui)
+                entry["attempts"] = int(entry.get("attempts", 0)) + 1
+                entry["last_patch_max_turns"] = patch_max_turns
+                if patch_result.patch_text is None:
+                    _mark_artifact_failed(
+                        entry,
+                        state,
+                        fi,
+                        total,
+                        patch_result.error_code or "patch_failed",
+                        patch_result.error or "patch generation failed",
+                    )
+                    if ph5 is not None:
+                        ph5.advance()
+                    continue
+
+                if ph5 is not None:
+                    ph5.set_current(f"report: {vf.finding.title}")
+                if not ui.is_live:
+                    fmt.info(f"  [{fi}/{total}] generating report...")
+                try:
+                    report_text = _phase5_report(
+                        vf, patch_filename, patch_result.patch_text, ctx
+                    )
+                except Exception as e:
+                    _mark_artifact_failed(
+                        entry, state, fi, total, "report_generation_error", str(e)
+                    )
+                    if ph5 is not None:
+                        ph5.advance()
+                    continue
+
+                try:
+                    (artifact_dir / patch_filename).write_text(patch_result.patch_text)
+                    (artifact_dir / report_filename).write_text(report_text)
+                except OSError as e:
+                    _mark_artifact_failed(
+                        entry, state, fi, total, "write_artifact_error", str(e)
+                    )
+                    if ph5 is not None:
+                        ph5.advance()
+                    continue
+
+                entry["status"] = "written"
+                entry["last_error_code"] = None
+                entry["last_error"] = None
+                state.save()
+                if not ui.is_live:
+                    fmt.info(
+                        f"  [{fi}/{total}] wrote {report_filename} + {patch_filename}"
+                    )
+                if ph5 is not None:
+                    ph5.advance()
+
+            if ph5 is not None:
+                ph5.complete(f"{len(targets)} artifact(s) written")
+
+        # Safety-net rewinds.
+        unreviewed = [
+            f for f in state.scope.mandatory_files if f not in state.reviewed_files
+        ]
+        if unreviewed:
+            state.phase = "triage"
+            state.save()
+            msg = (
+                f"Audit incomplete: {len(unreviewed)} files were not reviewed. "
+                f"Use /audit --resume to continue."
+            )
+            ui.incomplete(msg)
+            return msg
+        undeep_reviewed = [
+            f for f in state.candidate_files if f not in state.deep_reviewed_files
+        ]
+        if undeep_reviewed:
+            state.phase = "deep_review"
+            state.save()
+            msg = (
+                f"Audit incomplete: {len(undeep_reviewed)} escalated files failed "
+                f"deep review. Use /audit --resume to continue."
+            )
+            ui.incomplete(msg)
+            return msg
+
+        failed, pending_n, written = _artifact_summary(state)
+        if failed or pending_n:
+            state.phase = "artifacts"
+            state.save()
+            msg = (
+                "Audit incomplete: artifact generation has "
+                f"{failed} failed and {pending_n} pending out of "
+                f"{len(state.verified_findings)} verified finding(s). "
+                "Use /audit --resume --patch-max-turns 75 to retry incomplete "
+                "artifacts, or /audit --regen --finding 1 --patch-max-turns 75 "
+                "to retry a specific finding."
+            )
+            ui.incomplete(msg)
+            return msg
+
+        if state.measure_triage:
+            _emit_measure_triage_recall(state)
+
+        state.phase = "done"
+        state.save()
+    else:
+        _failed, _pending, written = _artifact_summary(state)
+
+    artifact_dir_label = str(state.artifact_dir) if state.verified_findings else None
+    ui.summary(artifact_dir=artifact_dir_label, written=written)
+
+    if written == 0:
+        return (
+            "No provable security bugs or security-control failures found "
+            "in Git-tracked files."
+        )
+
+    return (
+        f"Audit complete. {written} finding(s) written to {state.artifact_dir}/. "
+        f"Run `ls {state.artifact_dir}/` to review."
+    )
+
+
 def _run_audit_phases(
     cmd_arg: str,
     ctx: InputContext,
@@ -3715,501 +4544,23 @@ def _run_audit_phases(
                 f"consider narrowing with `{hint}` (one or more paths/globs)."
             )
 
-    # Phase 1: scope + profile
-    if state.phase == "init":
-        fmt.info(
-            f"phase 1: loading {len(state.scope.mandatory_files)} file contents..."
-        )
-        content_cache = _load_file_contents(state.scope.mandatory_files, base_dir)
-        fmt.info("phase 1: building import/caller indices...")
-        state.import_index, state.caller_index = _build_context_indices(
-            state.scope.mandatory_files, content_cache
-        )
-        fmt.info("phase 1: ordering by attack surface...")
-        state.queued_files, state.attack_scores = _order_by_attack_surface(
-            state.scope.mandatory_files, content_cache
-        )
-        fmt.info("phase 1: calling LLM for repo profile...")
-        state.repo_profile = _phase1_repo_profile(state, ctx)
-        state.phase = "triage"
-        state.save()
-        fmt.info(
-            f"phase 1 complete. profile: {state.repo_profile.get('summary', '')[:80]}"
-        )
-
-    # Resume rule: if force_review changed since the run was saved, apply
-    # any new matches before the Phase-2 gate. New matches re-promote saved
-    # SKIPs; removed entries are not honored (rescinding mid-audit causes
-    # more confusion than it fixes — re-run from scratch instead).
-    if resume and state.phase in ("triage", "deep_review") and force_review:
-        force_matches, force_warnings = _resolve_force_review(
-            force_review, force_review_sources, state.scope.mandatory_files
-        )
-        for w in force_warnings:
-            fmt.warning(w)
-        re_promoted = 0
-        for path, source in force_matches.items():
-            rec = state.triage_records.get(path)
-            if rec is None:
-                continue
-            reason = f"forced via swival.toml ({source})"
-            if reason in rec.promotion_reasons:
-                continue
-            rec.promotion_reasons.append(reason)
-            if rec.priority == "SKIP":
-                rec.priority = "ESCALATE_MEDIUM"
-                if path not in state.candidate_files:
-                    state.candidate_files.append(path)
-                re_promoted += 1
-        if re_promoted:
-            fmt.info(
-                f"resume: {re_promoted} file(s) promoted via updated "
-                f"swival.toml force_review"
-            )
-            state.save()
-
-    if state.phase == "triage" and state.select_all:
-        state.candidate_files = list(state.queued_files)
-        state.reviewed_files.update(state.queued_files)
-        state.phase = "deep_review"
-        state.save()
-        fmt.info(
-            f"phase 2: skipped (--all); {len(state.candidate_files)} files "
-            f"queued for deep review"
-        )
-
-    if state.phase == "triage":
-
-        def _triage(path):
-            return _phase2_triage_one(path, state, ctx)
-
-        def _collect_triage(results):
-            for rec in results:
-                if rec is not None:
-                    state.triage_records[rec.path] = rec
-                    state.reviewed_files.add(rec.path)
-
-        pending = [f for f in state.queued_files if f not in state.reviewed_files]
-        if pending:
-            fmt.info(f"phase 2: triaging {len(pending)} files...")
-            for batch_start in range(0, len(pending), workers * 2):
-                batch = pending[batch_start : batch_start + workers * 2]
-                _collect_triage(_run_batch(_triage, batch, max_workers=workers))
-                state.save()
-                done = len(state.reviewed_files)
-                total = len(state.queued_files)
-                fmt.info(f"  triage progress: {done}/{total}")
-
-        for _triage_retry in range(2):
-            still_pending = [
-                f for f in state.queued_files if f not in state.reviewed_files
-            ]
-            if not still_pending:
-                break
-            fmt.info(
-                f"phase 2: retrying {len(still_pending)} files "
-                f"(attempt {_triage_retry + 2})..."
-            )
-            _collect_triage(_run_batch(_triage, still_pending, max_workers=workers))
-            state.save()
-
-        force_matches, force_warnings = _resolve_force_review(
-            force_review, force_review_sources, state.scope.mandatory_files
-        )
-        for w in force_warnings:
-            fmt.warning(w)
-        promotions = _apply_promotions(state, force_matches)
-
-        # Confirmation pass for low-confidence SKIPs that promotion did not
-        # already rescue. Runs in parallel; bounded ~10-20% of triage cost.
-        confirm_targets = [
-            p
-            for p, r in state.triage_records.items()
-            if r.priority == "SKIP" and r.confidence == "low"
-        ]
-        if confirm_targets:
-            fmt.info(
-                f"phase 2: confirmation pass on {len(confirm_targets)} "
-                f"low-confidence SKIP(s)..."
-            )
-
-            def _confirm(p):
-                return _phase2_confirm_one(p, state, ctx)
-
-            results = _run_batch(_confirm, confirm_targets, max_workers=workers)
-            for original_path, new_rec in zip(confirm_targets, results):
-                old = state.triage_records[original_path]
-                if new_rec is None:
-                    old.confirmation_outcome = "kept"
-                    continue
-                if new_rec.priority in ("ESCALATE_HIGH", "ESCALATE_MEDIUM"):
-                    new_rec.confirmation_outcome = "promoted"
-                    new_rec.promotion_reasons = list(old.promotion_reasons)
-                    state.triage_records[original_path] = new_rec
-                else:
-                    old.confirmation_outcome = "kept"
-            state.save()
-
-        state.candidate_files = [
-            path
-            for path, rec in state.triage_records.items()
-            if rec.priority in ("ESCALATE_HIGH", "ESCALATE_MEDIUM")
-        ]
-        if state.measure_triage:
-            state.measurement_escalated_paths = set(state.candidate_files)
-            state.candidate_files = list(state.queued_files)
-            fmt.info(
-                f"phase 2 (measure-triage): expanding deep-review set from "
-                f"{len(state.measurement_escalated_paths)} to "
-                f"{len(state.candidate_files)} files"
-            )
-        state.phase = "deep_review"
-        state.save()
-
-        _emit_phase2_summary(state, promotions)
-
-    # Phase 3: deep review
-    if state.phase == "deep_review":
-
-        def _review(path):
-            return _deep_review_one(path, state, ctx)
-
-        def _collect_deep_review(results, pending_batch, total_files):
-            for result in results:
-                if result is None:
-                    continue
-                done = len(state.deep_reviewed_files)
-                if result.error is not None:
-                    fmt.warning(
-                        f"  [{done}/{total_files}] failed: {result.path} "
-                        f"({result.error[:80]})"
-                    )
-                    continue
-                n = len(result.findings) if result.findings else 0
-                if result.findings:
-                    if state.measure_triage:
-                        decision = (
-                            "escalated"
-                            if result.path in state.measurement_escalated_paths
-                            else "skipped"
-                        )
-                        for f in result.findings:
-                            f.triage_decision = decision
-                    state.proposed_findings.extend(result.findings)
-                state.deep_reviewed_files.add(result.path)
-                done = len(state.deep_reviewed_files)
-                label = f"{n} finding(s)" if n else "no findings"
-                fmt.info(f"  [{done}/{total_files}] {result.path}: {label}")
-
-        for _dr_attempt in range(3):
-            pending = [
-                f for f in state.candidate_files if f not in state.deep_reviewed_files
-            ]
-            if not pending:
-                break
-            total_files = len(state.candidate_files)
-            if _dr_attempt == 0:
-                fmt.info(f"phase 3: deep review of {len(pending)} files...")
-            else:
-                fmt.info(
-                    f"phase 3: retrying {len(pending)} files "
-                    f"(attempt {_dr_attempt + 1})..."
-                )
-
-            for batch_start in range(0, len(pending), workers * 2):
-                batch = pending[batch_start : batch_start + workers * 2]
-                results = _run_batch(_review, batch, max_workers=workers)
-                _collect_deep_review(results, batch, total_files)
-                state.save()
-
-        if any(f not in state.deep_reviewed_files for f in state.candidate_files):
-            remaining = [
-                f for f in state.candidate_files if f not in state.deep_reviewed_files
-            ]
-            return (
-                f"Audit incomplete: {len(remaining)} escalated files failed deep "
-                f"review after retries. Use /audit --resume to retry."
-            )
-
-        state.phase = "verification"
-        state.save()
-        metrics_summary = _format_audit_metrics(state.metrics)
-        fmt.info(
-            f"phase 3 complete. {len(state.proposed_findings)} proposed findings."
-            + (f" ({metrics_summary})" if metrics_summary else "")
-        )
-
-    # Phase 4: verification (parallel)
-    if state.phase == "verification":
-        seen_keys: set[str] = set()
-        deduped: list[FindingRecord] = []
-        deduped_keys: list[str] = []
-        for f in state.proposed_findings:
-            key = _finding_key(f)
-            if key not in seen_keys:
-                seen_keys.add(key)
-                deduped.append(f)
-                deduped_keys.append(key)
-        if len(deduped) < len(state.proposed_findings):
-            fmt.info(
-                f"  deduplicated {len(state.proposed_findings)} proposed findings "
-                f"to {len(deduped)}"
-            )
-            state.proposed_findings = deduped
-
-        stale = [k for k in state.verification_state if k not in seen_keys]
-        for k in stale:
-            del state.verification_state[k]
-
-        already_verified_keys = {
-            _finding_key(vf.finding) for vf in state.verified_findings
-        }
-        for key in deduped_keys:
-            if key not in state.verification_state:
-                state.verification_state[key] = {
-                    "status": "verified" if key in already_verified_keys else "pending",
-                    "attempts": 0,
-                    "last_error": None,
-                    "summary": None,
-                }
-
-        max_verify_attempts = 3
-
-        def _verify(item):
-            return _verify_one_finding(item, state, ctx)
-
-        for _v_attempt in range(max_verify_attempts):
-            for vs in state.verification_state.values():
-                if vs["status"] == "running":
-                    vs["status"] = "pending"
-
-            pending = [
-                (key, f)
-                for key, f in zip(deduped_keys, state.proposed_findings)
-                if state.verification_state[key]["status"] in ("pending", "failed")
-            ]
-
-            if not pending:
-                break
-
-            verify_workers = min(workers, 2)
-            if _v_attempt == 0:
-                fmt.info(
-                    f"phase 4: verifying {len(pending)} findings "
-                    f"with {verify_workers} workers..."
-                )
-            else:
-                fmt.info(
-                    f"phase 4: retry {_v_attempt}/{max_verify_attempts - 1}, "
-                    f"{len(pending)} findings remaining..."
-                )
-
-            for key, _ in pending:
-                state.verification_state[key]["status"] = "running"
-            state.save()
-
-            results = _run_batch(_verify, pending, max_workers=verify_workers)
-
-            verified_count = 0
-            discarded_count = 0
-            failed_count = 0
-            total = len(pending)
-
-            for i, result in enumerate(results):
-                key = pending[i][0]
-                finding_title = pending[i][1].title
-                vs = state.verification_state[key]
-                vs["attempts"] = vs.get("attempts", 0) + (
-                    result.attempts if isinstance(result, VerificationResult) else 1
-                )
-
-                if result is None or (
-                    isinstance(result, VerificationResult) and result.error is not None
-                ):
-                    vs["status"] = "failed"
-                    vs["last_error"] = (
-                        result.error
-                        if isinstance(result, VerificationResult)
-                        else "unexpected worker failure"
-                    )
-                    failed_count += 1
-                    fmt.info(f"  [{i + 1}/{total}] failed: {finding_title}")
-                elif result.discarded:
-                    vs["status"] = "discarded"
-                    vs["summary"] = "not reproduced"
-                    discarded_count += 1
-                    fmt.info(f"  [{i + 1}/{total}] discarded: {finding_title}")
-                elif result.verified_finding is not None:
-                    vs["status"] = "verified"
-                    vs["summary"] = "verified by proof-of-concept reproduction"
-                    state.verified_findings.append(result.verified_finding)
-                    verified_count += 1
-                    fmt.info(f"  [{i + 1}/{total}] verified: {finding_title}")
-
-                state.save()
-
-            fmt.info(
-                f"  batch complete: {verified_count} verified, "
-                f"{discarded_count} discarded, {failed_count} failed"
-            )
-
-        non_terminal = [
-            key
-            for key, vs in state.verification_state.items()
-            if vs["status"] not in ("verified", "discarded")
-        ]
-        if non_terminal:
-            n_failed = sum(
-                1
-                for key in non_terminal
-                if state.verification_state[key]["status"] == "failed"
-            )
-            return (
-                f"Audit incomplete: {len(non_terminal)} findings not verified "
-                f"after {max_verify_attempts} attempts ({n_failed} failed). "
-                f"Use /audit --resume to retry."
-            )
-
-        # Deduplicate verified_findings by content key
-        seen_vf_keys: set[str] = set()
-        deduped_vf: list[VerifiedFinding] = []
-        for vf in state.verified_findings:
-            vf_key = _finding_key(vf.finding)
-            if vf_key not in seen_vf_keys:
-                seen_vf_keys.add(vf_key)
-                deduped_vf.append(vf)
-        state.verified_findings = deduped_vf
-
-        state.phase = "artifacts"
-        state.save()
-        fmt.info(f"phase 4 complete. {len(state.verified_findings)} verified findings.")
-
-    # Phase 5: artifacts
-    if state.phase == "artifacts":
-        if state.verified_findings:
-            artifact_dir = Path(base_dir) / state.artifact_dir
-            artifact_dir.mkdir(parents=True, exist_ok=True)
-            _ensure_artifact_state(state)
-
-            targets = []
-            total = len(state.verified_findings)
-            for fi, vf in enumerate(state.verified_findings, 1):
-                key = _artifact_key(vf)
-                entry = state.artifact_state[key]
-                if selected_indexes is not None:
-                    if fi - 1 in selected_indexes:
-                        targets.append((fi, vf, key, entry))
-                elif entry.get("status") in ("pending", "failed"):
-                    targets.append((fi, vf, key, entry))
-
-            if targets:
-                fmt.info(
-                    f"phase 5: generating artifacts for {len(targets)} "
-                    f"of {len(state.verified_findings)} findings..."
-                )
-
-            for target_i, (fi, vf, key, entry) in enumerate(targets, 1):
-                patch_filename = entry["patch_filename"]
-                report_filename = entry["report_filename"]
-                if selected_indexes is None:
-                    progress = f"[{fi}/{total}] generating patch"
-                else:
-                    progress = (
-                        f"[{target_i}/{len(targets)}] regenerating finding {fi}/{total}"
-                    )
-
-                fmt.info(f"  {progress}: {vf.finding.title}")
-                patch_result = _phase5_patch(vf, ctx, state, patch_max_turns)
-                entry["attempts"] = int(entry.get("attempts", 0)) + 1
-                entry["last_patch_max_turns"] = patch_max_turns
-                if patch_result.patch_text is None:
-                    _mark_artifact_failed(
-                        entry,
-                        state,
-                        fi,
-                        total,
-                        patch_result.error_code or "patch_failed",
-                        patch_result.error or "patch generation failed",
-                    )
-                    continue
-
-                fmt.info(f"  [{fi}/{total}] generating report...")
-                try:
-                    report_text = _phase5_report(
-                        vf, patch_filename, patch_result.patch_text, ctx
-                    )
-                except Exception as e:
-                    _mark_artifact_failed(
-                        entry, state, fi, total, "report_generation_error", str(e)
-                    )
-                    continue
-
-                try:
-                    (artifact_dir / patch_filename).write_text(patch_result.patch_text)
-                    (artifact_dir / report_filename).write_text(report_text)
-                except OSError as e:
-                    _mark_artifact_failed(
-                        entry, state, fi, total, "write_artifact_error", str(e)
-                    )
-                    continue
-
-                entry["status"] = "written"
-                entry["last_error_code"] = None
-                entry["last_error"] = None
-                state.save()
-                fmt.info(f"  [{fi}/{total}] wrote {report_filename} + {patch_filename}")
-
-        # Safety-net checks before marking done — rewind to the phase that
-        # can fill the gap so /audit --resume actually recovers.
-        unreviewed = [
-            f for f in state.scope.mandatory_files if f not in state.reviewed_files
-        ]
-        if unreviewed:
-            state.phase = "triage"
-            state.save()
-            return (
-                f"Audit incomplete: {len(unreviewed)} files were not reviewed. "
-                f"Use /audit --resume to continue."
-            )
-        undeep_reviewed = [
-            f for f in state.candidate_files if f not in state.deep_reviewed_files
-        ]
-        if undeep_reviewed:
-            state.phase = "deep_review"
-            state.save()
-            return (
-                f"Audit incomplete: {len(undeep_reviewed)} escalated files failed "
-                f"deep review. Use /audit --resume to continue."
-            )
-
-        failed, pending, written = _artifact_summary(state)
-        if failed or pending:
-            state.phase = "artifacts"
-            state.save()
-            return (
-                "Audit incomplete: artifact generation has "
-                f"{failed} failed and {pending} pending out of "
-                f"{len(state.verified_findings)} verified finding(s). "
-                "Use /audit --resume --patch-max-turns 75 to retry incomplete "
-                "artifacts, or /audit --regen --finding 1 --patch-max-turns 75 "
-                "to retry a specific finding."
-            )
-
-        if state.measure_triage:
-            _emit_measure_triage_recall(state)
-
-        state.phase = "done"
-        state.save()
-    else:
-        _failed, _pending, written = _artifact_summary(state)
-
-    if written == 0:
-        return (
-            "No provable security bugs or security-control failures found "
-            "in Git-tracked files."
-        )
-
-    return (
-        f"Audit complete. {written} finding(s) written to {state.artifact_dir}/. "
-        f"Run `ls {state.artifact_dir}/` to review."
+    ui = AuditUI(
+        run_id=state.run_id,
+        branch=state.scope.branch,
+        commit=state.scope.commit,
+        workers=workers,
+        total_files=len(state.scope.mandatory_files),
     )
+    with ui:
+        return _run_pipeline(
+            state,
+            ui,
+            ctx,
+            base_dir,
+            workers,
+            resume=resume,
+            force_review=force_review,
+            force_review_sources=force_review_sources,
+            patch_max_turns=patch_max_turns,
+            selected_indexes=selected_indexes,
+        )

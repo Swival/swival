@@ -11,7 +11,15 @@ from rich.live import Live
 from rich.markdown import Markdown
 from rich.markup import escape
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 from rich.rule import Rule
 from rich.spinner import Spinner
 from rich.segment import Segment
@@ -846,6 +854,62 @@ def quick_shell(cmd: str, returncode: int, output: str) -> None:
             _console.print(output)
         if returncode != 0:
             _console.print(Text(f"  exit {returncode}", style="red dim"))
+
+
+_PHASE_COLORS: dict[str, str] = {
+    "inventory": "cyan",
+    "triage": "blue",
+    "deep_review": "magenta",
+    "verification": "yellow",
+    "artifacts": "green",
+}
+
+_SEVERITY_STYLES: dict[str, str] = {
+    "critical": "bold bright_red",
+    "high": "bold red",
+    "medium": "yellow",
+    "low": "dim white",
+}
+
+
+def phase_color(phase_key: str) -> str:
+    return _PHASE_COLORS.get(phase_key, "cyan")
+
+
+def severity_style(sev: str) -> str:
+    return _SEVERITY_STYLES.get((sev or "").lower(), "white")
+
+
+def phase_banner(title: str, *, color: str = "cyan") -> None:
+    """Print a gradient rule with a centered title in the given color."""
+    _console.print()
+    if _console.is_terminal:
+        _console.print(_GradientRule(title))
+    else:
+        _console.print(Rule(title, style=color))
+
+
+def bar_progress(*, transient: bool = False) -> Progress:
+    """Configured Progress with spinner, bar, count, elapsed, and ETA."""
+    return Progress(
+        SpinnerColumn("dots", style="cyan", speed=1.2),
+        TextColumn("[bold]{task.description}"),
+        BarColumn(bar_width=None),
+        MofNCompleteColumn(),
+        TextColumn("•"),
+        TimeElapsedColumn(),
+        TextColumn("•"),
+        TimeRemainingColumn(),
+        console=_console,
+        transient=transient,
+        refresh_per_second=10,
+        auto_refresh=False,
+        expand=True,
+    )
+
+
+def get_console() -> Console:
+    return _console
 
 
 def repl_banner() -> None:

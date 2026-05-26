@@ -1505,7 +1505,7 @@ class TestParseRecords:
         with pytest.raises(ValueError, match="exactly one"):
             _parse_records("just prose, nothing else", self._PROFILE_SCHEMA)
 
-    def test_cardinality_one_rejects_two_records(self):
+    def test_cardinality_one_keeps_first_when_two_records(self):
         text = (
             "@@ profile @@\n"
             "language: python\n"
@@ -1515,8 +1515,12 @@ class TestParseRecords:
             "language: rust\n"
             "summary: tool B\n"
         )
-        with pytest.raises(ValueError, match="exactly one"):
-            _parse_records(text, self._PROFILE_SCHEMA)
+        metrics: dict[str, int] = {}
+        result = _parse_records(text, self._PROFILE_SCHEMA, metrics=metrics)
+        assert len(result) == 1
+        assert result[0]["languages"] == ["python"]
+        assert result[0]["summary"] == "tool A"
+        assert metrics.get("lenient_corrections") == 1
 
     def test_enum_out_of_set_raises(self):
         text = (
@@ -1702,7 +1706,7 @@ class TestParseRecords:
         with pytest.raises(ValueError, match="empty"):
             _parse_records("", self._FINDING_SCHEMA)
 
-    def test_none_sentinel_mixed_with_records_raises(self):
+    def test_none_sentinel_mixed_with_records_keeps_records(self):
         text = (
             "@@ none @@\n"
             "\n"
@@ -1712,8 +1716,11 @@ class TestParseRecords:
             "location: x.py:1\n"
             "claim: it crashes\n"
         )
-        with pytest.raises(ValueError, match="mixed"):
-            _parse_records(text, self._FINDING_SCHEMA)
+        metrics: dict[str, int] = {}
+        result = _parse_records(text, self._FINDING_SCHEMA, metrics=metrics)
+        assert len(result) == 1
+        assert result[0]["title"] == "a bug"
+        assert metrics.get("lenient_corrections") == 1
 
 
 class TestParseRecordsWithRepair:
@@ -2366,7 +2373,7 @@ class TestPhase1Profile:
         with pytest.raises(ValueError, match="missing required key 'language'"):
             _parse_records(text, self._schema())
 
-    def test_two_profile_records_rejected(self):
+    def test_two_profile_records_keep_first(self):
         text = (
             "@@ profile @@\n"
             "language: python\n"
@@ -2376,8 +2383,12 @@ class TestPhase1Profile:
             "language: rust\n"
             "summary: second\n"
         )
-        with pytest.raises(ValueError, match="exactly one"):
-            _parse_records(text, self._schema())
+        metrics: dict[str, int] = {}
+        result = _parse_records(text, self._schema(), metrics=metrics)
+        assert len(result) == 1
+        assert result[0]["languages"] == ["python"]
+        assert result[0]["summary"] == "first"
+        assert metrics.get("lenient_corrections") == 1
 
     def test_source_inventory_reports_language_counts_and_examples(self):
         inventory = _phase1_source_inventory(
@@ -3076,7 +3087,7 @@ class TestVerificationGates:
         state.save()
         monkeypatch.setattr(
             "swival.audit._phase5_patch",
-            lambda vf, ctx, state, patch_max_turns=50: PatchGenerationResult(
+            lambda vf, ctx, state, patch_max_turns=50, ui=None: PatchGenerationResult(
                 error_code="patch_turn_budget_exhausted", error="turn budget exhausted"
             ),
         )
@@ -3108,7 +3119,7 @@ class TestVerificationGates:
         state.save()
         monkeypatch.setattr(
             "swival.audit._phase5_patch",
-            lambda vf, ctx, state, patch_max_turns=50: PatchGenerationResult(
+            lambda vf, ctx, state, patch_max_turns=50, ui=None: PatchGenerationResult(
                 error_code="patch_no_diff", error="no changes produced"
             ),
         )
@@ -3138,7 +3149,7 @@ class TestVerificationGates:
         state.save()
         monkeypatch.setattr(
             "swival.audit._phase5_patch",
-            lambda vf, ctx, state, patch_max_turns=50: PatchGenerationResult(
+            lambda vf, ctx, state, patch_max_turns=50, ui=None: PatchGenerationResult(
                 patch_text="diff\n"
             ),
         )
@@ -3179,7 +3190,7 @@ class TestVerificationGates:
         state.save()
         monkeypatch.setattr(
             "swival.audit._phase5_patch",
-            lambda vf, ctx, state, patch_max_turns=50: PatchGenerationResult(
+            lambda vf, ctx, state, patch_max_turns=50, ui=None: PatchGenerationResult(
                 patch_text="diff\n"
             ),
         )
@@ -3221,7 +3232,7 @@ class TestVerificationGates:
         patched = []
         monkeypatch.setattr(
             "swival.audit._phase5_patch",
-            lambda vf, ctx, state, patch_max_turns=50: (
+            lambda vf, ctx, state, patch_max_turns=50, ui=None: (
                 patched.append(vf.finding.title)
                 or PatchGenerationResult(patch_text="diff\n")
             ),
@@ -3264,7 +3275,7 @@ class TestVerificationGates:
         monkeypatch.setattr("swival.audit.fmt.info", info_lines.append)
         monkeypatch.setattr(
             "swival.audit._phase5_patch",
-            lambda vf, ctx, state, patch_max_turns=50: (
+            lambda vf, ctx, state, patch_max_turns=50, ui=None: (
                 patched.append(vf.finding.title)
                 or PatchGenerationResult(patch_text="diff\n")
             ),
@@ -3306,7 +3317,7 @@ class TestVerificationGates:
         state.save()
         monkeypatch.setattr(
             "swival.audit._phase5_patch",
-            lambda vf, ctx, state, patch_max_turns=50: PatchGenerationResult(
+            lambda vf, ctx, state, patch_max_turns=50, ui=None: PatchGenerationResult(
                 patch_text="diff\n"
             ),
         )
@@ -3379,7 +3390,7 @@ class TestVerificationGates:
         finding = self._make_finding()
         monkeypatch.setattr(
             "swival.audit._phase4c_reproduce",
-            lambda finding, state, ctx, work_dir: None,
+            lambda finding, state, ctx, work_dir, ui=None: None,
         )
 
         verified = _verify_single_finding(
@@ -3392,7 +3403,7 @@ class TestVerificationGates:
         finding = self._make_finding()
         monkeypatch.setattr(
             "swival.audit._phase4c_reproduce",
-            lambda finding, state, ctx, work_dir: {
+            lambda finding, state, ctx, work_dir, ui=None: {
                 "reproduced": True,
                 "summary": "crash observed\nREPRODUCED",
             },
@@ -3768,7 +3779,7 @@ class TestPhase4Parallelism:
 
         monkeypatch.setattr(
             "swival.audit._verify_single_finding",
-            lambda f, s, c, work_dir: vf,
+            lambda f, s, c, work_dir, ui=None: vf,
         )
 
         ctx = SimpleNamespace(base_dir=str(tmp_path))
@@ -3787,7 +3798,7 @@ class TestPhase4Parallelism:
 
         monkeypatch.setattr(
             "swival.audit._verify_single_finding",
-            lambda f, s, c, work_dir: None,
+            lambda f, s, c, work_dir, ui=None: None,
         )
 
         ctx = SimpleNamespace(base_dir=str(tmp_path))
@@ -3807,7 +3818,7 @@ class TestPhase4Parallelism:
         )
         calls = {"n": 0}
 
-        def mock_verify(f, s, c, work_dir):
+        def mock_verify(f, s, c, work_dir, ui=None):
             calls["n"] += 1
             if calls["n"] == 1:
                 raise _TransientVerifierError("provider timeout")
@@ -3829,7 +3840,7 @@ class TestPhase4Parallelism:
         key = _finding_key(finding)
         calls = {"n": 0}
 
-        def mock_verify(f, s, c, work_dir):
+        def mock_verify(f, s, c, work_dir, ui=None):
             calls["n"] += 1
             raise RuntimeError("worktree add failed")
 
@@ -4299,7 +4310,7 @@ class TestPhase4Parallelism:
             finding=finding, correctness_reason="ok", rebuttal_reason="n/a"
         )
 
-        def mock_verify(f, s, c, work_dir):
+        def mock_verify(f, s, c, work_dir, ui=None):
             calls["n"] += 1
             if calls["n"] == 1:
                 raise _TransientVerifierError("timeout")
@@ -4322,7 +4333,7 @@ class TestPhase4Parallelism:
 
         monkeypatch.setattr(
             "swival.audit._verify_single_finding",
-            lambda f, s, c, work_dir: None,
+            lambda f, s, c, work_dir, ui=None: None,
         )
 
         ctx = SimpleNamespace(base_dir=str(tmp_path))
@@ -4932,7 +4943,7 @@ class TestAutoRetry:
 
         calls = {"n": 0}
 
-        def fake_deep_review(path, state, ctx):
+        def fake_deep_review(path, state, ctx, ui=None):
             calls["n"] += 1
             if calls["n"] == 1:
                 return DeepReviewResult(path=path, error="transient failure")
@@ -4972,7 +4983,9 @@ class TestAutoRetry:
 
         monkeypatch.setattr(
             "swival.audit._deep_review_one",
-            lambda path, state, ctx: DeepReviewResult(path=path, error="always fails"),
+            lambda path, state, ctx, ui=None: DeepReviewResult(
+                path=path, error="always fails"
+            ),
         )
         monkeypatch.setattr(
             "swival.audit._phase1_repo_profile",
@@ -5015,7 +5028,7 @@ class TestAutoRetry:
         finding = self._make_finding()
         calls = {"n": 0}
 
-        def fake_verify(item, state, ctx):
+        def fake_verify(item, state, ctx, ui=None):
             calls["n"] += 1
             _key, _finding = item
             if calls["n"] == 1:
@@ -5041,11 +5054,13 @@ class TestAutoRetry:
         )
         monkeypatch.setattr(
             "swival.audit._deep_review_one",
-            lambda path, state, ctx: DeepReviewResult(path=path, findings=[finding]),
+            lambda path, state, ctx, ui=None: DeepReviewResult(
+                path=path, findings=[finding]
+            ),
         )
         monkeypatch.setattr(
             "swival.audit._phase5_patch",
-            lambda vf, ctx, state, patch_max_turns=50: PatchGenerationResult(
+            lambda vf, ctx, state, patch_max_turns=50, ui=None: PatchGenerationResult(
                 patch_text="--- patch ---"
             ),
         )
@@ -5078,7 +5093,7 @@ class TestAutoRetry:
 
         monkeypatch.setattr(
             "swival.audit._verify_one_finding",
-            lambda item, state, ctx: VerificationResult(
+            lambda item, state, ctx, ui=None: VerificationResult(
                 finding_key=item[0], error="always fails", attempts=1
             ),
         )
@@ -5092,7 +5107,9 @@ class TestAutoRetry:
         )
         monkeypatch.setattr(
             "swival.audit._deep_review_one",
-            lambda path, state, ctx: DeepReviewResult(path=path, findings=[finding]),
+            lambda path, state, ctx, ui=None: DeepReviewResult(
+                path=path, findings=[finding]
+            ),
         )
 
         ctx = SimpleNamespace(
@@ -5118,7 +5135,7 @@ class TestAutoRetry:
 
         monkeypatch.setattr(
             "swival.audit._verify_one_finding",
-            lambda item, state, ctx: VerificationResult(
+            lambda item, state, ctx, ui=None: VerificationResult(
                 finding_key=item[0], error="fail", attempts=2
             ),
         )
@@ -5132,7 +5149,9 @@ class TestAutoRetry:
         )
         monkeypatch.setattr(
             "swival.audit._deep_review_one",
-            lambda path, state, ctx: DeepReviewResult(path=path, findings=[finding]),
+            lambda path, state, ctx, ui=None: DeepReviewResult(
+                path=path, findings=[finding]
+            ),
         )
 
         ctx = SimpleNamespace(
@@ -5837,24 +5856,24 @@ class TestSelectAll:
             lambda state, ctx: {"summary": "stub"},
         )
 
-        def record_triage(path, state, ctx):
+        def record_triage(path, state, ctx, ui=None):
             triage_calls.append(path)
             return None
 
         monkeypatch.setattr("swival.audit._phase2_triage_one", record_triage)
         monkeypatch.setattr(
             "swival.audit._deep_review_one",
-            lambda path, state, ctx: DeepReviewResult(path=path, findings=[]),
+            lambda path, state, ctx, ui=None: DeepReviewResult(path=path, findings=[]),
         )
         monkeypatch.setattr(
             "swival.audit._verify_one_finding",
-            lambda item, state, ctx: VerificationResult(
+            lambda item, state, ctx, ui=None: VerificationResult(
                 finding_key=item[0], discarded=True
             ),
         )
         monkeypatch.setattr(
             "swival.audit._phase5_patch",
-            lambda vf, ctx, state, patch_max_turns=50: PatchGenerationResult(
+            lambda vf, ctx, state, patch_max_turns=50, ui=None: PatchGenerationResult(
                 patch_text="--- patch ---"
             ),
         )
@@ -6783,13 +6802,13 @@ class TestMeasureTriage:
         """
         import inspect
 
-        from swival.audit import _run_audit_phases
+        from swival.audit import _run_pipeline_body
 
-        src = inspect.getsource(_run_audit_phases)
+        src = inspect.getsource(_run_pipeline_body)
         recall_idx = src.find("_emit_measure_triage_recall(state)")
         done_idx = src.find('state.phase = "done"')
         artifacts_gate = src.find('if state.phase == "artifacts":')
-        assert recall_idx > 0, "recall call missing from _run_audit_phases"
+        assert recall_idx > 0, "recall call missing from _run_pipeline_body"
         assert recall_idx > artifacts_gate, (
             "recall must be inside the artifacts block, not before it"
         )
@@ -6841,7 +6860,7 @@ class TestResumeForceReview:
         # Stub heavy phases
         monkeypatch.setattr(
             "swival.audit._deep_review_one",
-            lambda path, state, ctx: DeepReviewResult(path=path, findings=[]),
+            lambda path, state, ctx, ui=None: DeepReviewResult(path=path, findings=[]),
         )
 
         run_audit_command("--resume", _make_ctx(tmp_path))
