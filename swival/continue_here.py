@@ -11,6 +11,14 @@ MAX_CONTINUE_CHARS = 4000
 STALENESS_SECONDS = 24 * 60 * 60  # 24 hours
 
 
+def _preview_text(text: str, limit: int) -> str:
+    """Return text capped at limit characters, appending ellipsis when truncated."""
+    preview = text[:limit]
+    if len(text) > limit:
+        preview += "..."
+    return preview
+
+
 _CONTINUE_SUMMARY_PROMPT = (
     "You are summarizing an interrupted AI coding session so it can be resumed.\n"
     "The session was working on a task and was interrupted before completion.\n\n"
@@ -70,9 +78,7 @@ def _extract_recent_tool_activity(messages: list, max_entries: int = 8) -> list[
             content = _msg_content(msg)
             if content:
                 # Truncate long tool results
-                preview = content[:120].replace("\n", " ")
-                if len(content) > 120:
-                    preview += "..."
+                preview = _preview_text(content, 120).replace("\n", " ")
                 entries.append(f"  → {preview}")
     entries.reverse()
     return entries
@@ -94,17 +100,11 @@ def _build_deterministic_continue(
 
     if last_task:
         sections.append("## Current task")
-        task_preview = last_task[:500]
-        if len(last_task) > 500:
-            task_preview += "..."
-        sections.append(task_preview)
+        sections.append(_preview_text(last_task, 500))
 
         if first_task and first_task != last_task:
             sections.append("\n## Original task")
-            orig_preview = first_task[:300]
-            if len(first_task) > 300:
-                orig_preview += "..."
-            sections.append(orig_preview)
+            sections.append(_preview_text(first_task, 300))
 
     # Goal state — if a goal is in flight it is the most important context.
     if goal_state is not None and goal_state.get() is not None:
@@ -129,19 +129,14 @@ def _build_deterministic_continue(
             label = entry.get("label", "investigation")
             summary = entry.get("summary", "")
             if summary:
-                summary_preview = summary[:400]
-                if len(summary) > 400:
-                    summary_preview += "..."
-                sections.append(f"- **{label}**: {summary_preview}")
+                sections.append(f"- **{label}**: {_preview_text(summary, 400)}")
 
     # Thinking history (last few reasoning steps)
     if thinking_state is not None and thinking_state.history:
         recent = thinking_state.history[-5:]
         sections.append("\n## Key reasoning")
         for entry in recent:
-            text = entry.thought[:200].replace("\n", " ")
-            if len(entry.thought) > 200:
-                text += "..."
+            text = _preview_text(entry.thought, 200).replace("\n", " ")
             sections.append(f"- {text}")
 
     # Recent tool activity
