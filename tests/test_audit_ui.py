@@ -270,6 +270,49 @@ class TestPause:
             assert ui._pause_depth == 0
 
 
+class TestPauseHeartbeat:
+    """While Live is paused, a daemon thread must keep printing per-worker
+    liveness to stderr. Without it the panel disappears and verifier child
+    agent loops (which run with verbose=False) leave the terminal frozen."""
+
+    def test_heartbeat_prints_while_paused(self, monkeypatch):
+        buf, _ = _swap_console(monkeypatch, force_terminal=True)
+        with audit_ui.AuditUI(
+            run_id="r1",
+            branch="main",
+            commit="c",
+            workers=2,
+            total_files=2,
+        ) as ui:
+            ui._heartbeat_interval = 0.05
+            ui.worker_started(1, "finding A")
+            ui.worker_started(2, "finding B")
+            time.sleep(0.1)
+            with ui.pause():
+                time.sleep(0.2)
+            time.sleep(0.05)
+        out = buf.getvalue()
+        assert "verifier worker 1" in out
+        assert "verifier worker 2" in out
+        assert "still running" in out
+        assert "finding A" in out
+        assert "finding B" in out
+
+    def test_heartbeat_stops_after_last_pause_exits(self, monkeypatch):
+        _swap_console(monkeypatch, force_terminal=True)
+        with audit_ui.AuditUI(
+            run_id="r1",
+            branch="main",
+            commit="c",
+            workers=1,
+            total_files=1,
+        ) as ui:
+            ui._heartbeat_interval = 0.05
+            with ui.pause():
+                assert ui._heartbeat_thread is not None
+            assert ui._heartbeat_thread is None
+
+
 class TestConcurrency:
     """Workers must be safe to call from many threads at once."""
 

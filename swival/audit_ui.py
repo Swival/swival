@@ -167,6 +167,9 @@ class AuditUI:
         self._pause_depth = 0
         self._pause_lock = threading.Lock()
         self._paused = False
+        self._heartbeat_stop: Optional[threading.Event] = None
+        self._heartbeat_thread: Optional[threading.Thread] = None
+        self._heartbeat_interval = 10.0
 
         self._progress = None  # set when enabled in __enter__
 
@@ -232,6 +235,7 @@ class AuditUI:
                     self._live.stop()
                 except Exception as e:
                     fmt.warning(f"audit-ui: pause failed to stop live region: {e}")
+                self._start_heartbeat()
         try:
             yield
         finally:
@@ -239,6 +243,7 @@ class AuditUI:
                 self._pause_depth -= 1
                 last = self._pause_depth == 0
                 if last:
+                    self._stop_heartbeat()
                     try:
                         self._live.start()
                     except Exception as e:
@@ -246,6 +251,50 @@ class AuditUI:
                             f"audit-ui: pause failed to restart live region: {e}"
                         )
                     self._paused = False
+
+    def _start_heartbeat(self) -> None:
+        """Spawn a daemon thread that prints worker liveness while Live is paused.
+
+        Caller must hold ``self._pause_lock``. Verifier and patch-gen child
+        agent loops run with ``verbose=False``, so they emit nothing on
+        stderr; without this heartbeat the terminal looks frozen for minutes
+        at a time.
+        """
+        if self._heartbeat_thread is not None:
+            return
+        stop = threading.Event()
+        self._heartbeat_stop = stop
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop,
+            args=(stop,),
+            name="audit-ui-heartbeat",
+            daemon=True,
+        )
+        self._heartbeat_thread.start()
+
+    def _stop_heartbeat(self) -> None:
+        """Signal the heartbeat thread to exit. Caller must hold ``_pause_lock``."""
+        if self._heartbeat_stop is not None:
+            self._heartbeat_stop.set()
+        thread = self._heartbeat_thread
+        self._heartbeat_thread = None
+        self._heartbeat_stop = None
+        if thread is not None:
+            thread.join(timeout=1.0)
+
+    def _heartbeat_loop(self, stop: threading.Event) -> None:
+        while not stop.wait(self._heartbeat_interval):
+            snapshot = sorted(self._workers.items())
+            if not snapshot:
+                continue
+            now = time.monotonic()
+            for slot, (label, started) in snapshot:
+                age = _fmt_duration(now - started)
+                self._console.print(
+                    f"      verifier worker {slot} · still running · {age} · {label}",
+                    style="dim cyan",
+                    highlight=False,
+                )
 
     # ------------------------------------------------------------------
     # Public API (thread-safe)
