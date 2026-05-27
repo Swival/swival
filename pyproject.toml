@@ -22,20 +22,20 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "litellm>=1.85.1",
+    "litellm>=1.86.1",
     "tiktoken>=0.13.0",
-    "html-to-markdown>=3.4.0,<4",
+    "html-to-markdown>=3.5.1,<4",
     "rich>=15.0.0",
     "prompt-toolkit>=3.0.52",
     "mcp>=1.27.1,<2",
     "rank-bm25>=0.2.2",
     "httpx>=0.28.1",
-    "starlette>=1.0.1",
-    "uvicorn>=0.47.0",
+    "starlette>=1.1.0",
+    "uvicorn>=0.48.0",
     "fast-cipher>=0.2.1",
-    "boto3>=1.43.12",
+    "boto3>=1.43.14",
     "starlark-go>=1.0.1",
-    "google-cloud-aiplatform>=1.100.0",
+    "google-cloud-aiplatform>=1.153.1",
 ]
 
 [project.urls]
@@ -74,7 +74,7 @@ override-dependencies = ["aiohttp>=3.13.5", "python-dotenv>=1.2.2"]
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
-    "ruff>=0.15.13",
+    "ruff>=0.15.14",
 ]
 website = [
     "markdown",
