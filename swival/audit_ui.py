@@ -90,6 +90,7 @@ class _Summary:
     artifact_dir: Optional[str]
     written: int
     done: threading.Event
+    readme_written: bool = False
 
 
 @dataclass
@@ -293,7 +294,13 @@ class AuditUI:
             key = (severity or "unknown").lower()
             self._verified_by_sev[key] = self._verified_by_sev.get(key, 0) + verified
 
-    def summary(self, *, artifact_dir: Optional[str], written: int) -> None:
+    def summary(
+        self,
+        *,
+        artifact_dir: Optional[str],
+        written: int,
+        readme_written: bool = False,
+    ) -> None:
         """Print the final summary panel.
 
         TTY: enqueued as a render-thread event so it runs after all prior
@@ -305,11 +312,15 @@ class AuditUI:
 
         Pass ``artifact_dir=None`` when no artifact directory was created
         (e.g., zero verified findings); the artifacts row is omitted.
+
+        When ``readme_written`` is True, the artifacts row points reviewers
+        at ``README.md`` so the TTY surface stays in sync with the CLI
+        return string.
         """
         if not self._enabled:
             return
         done = threading.Event()
-        self._enqueue(_Summary(artifact_dir, written, done))
+        self._enqueue(_Summary(artifact_dir, written, done, readme_written))
         done.wait(timeout=2.0)
 
     def incomplete(self, message: str) -> None:
@@ -352,14 +363,20 @@ class AuditUI:
             table.add_row("By severity", sev_line)
         return table
 
-    def _render_summary_panel(self, artifact_dir: Optional[str], written: int) -> None:
+    def _render_summary_panel(
+        self,
+        artifact_dir: Optional[str],
+        written: int,
+        readme_written: bool = False,
+    ) -> None:
         """Build and print the summary panel. Render-thread only."""
         table = self._build_outcome_table()
         if artifact_dir is not None:
-            table.add_row(
-                "Artifacts",
-                Text(f"{written} written to {artifact_dir}/", style="cyan"),
-            )
+            if readme_written:
+                artifacts_text = f"{written} written to {artifact_dir}/ — see README.md"
+            else:
+                artifacts_text = f"{written} written to {artifact_dir}/"
+            table.add_row("Artifacts", Text(artifacts_text, style="cyan"))
         if self._warnings_buffer:
             table.add_row(
                 "Warnings",
@@ -528,7 +545,11 @@ class AuditUI:
             self._print_above(Text(f"  {event.text}", style="dim"))
         elif isinstance(event, _Summary):
             try:
-                self._render_summary_panel(event.artifact_dir, event.written)
+                self._render_summary_panel(
+                    event.artifact_dir,
+                    event.written,
+                    event.readme_written,
+                )
             finally:
                 event.done.set()
         elif isinstance(event, _Incomplete):

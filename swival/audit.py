@@ -3575,6 +3575,224 @@ def _artifact_summary(state: AuditRunState) -> tuple[int, int, int]:
     return failed, pending, written
 
 
+_SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+
+
+def _audit_totals(state: AuditRunState) -> dict[str, int]:
+    """Single source of truth for the README's totals block.
+
+    Pulled directly from the live state objects rather than ``state.metrics``,
+    which is a parser/repair counter and would silently drift.
+    """
+    failed, pending, written = _artifact_summary(state)
+    discarded = sum(
+        1 for vs in state.verification_state.values() if vs.get("status") == "discarded"
+    )
+    return {
+        "files_triaged": len(state.triage_records),
+        "files_escalated": len(state.candidate_files),
+        "files_deep_reviewed": len(state.deep_reviewed_files),
+        "findings_proposed": len(state.proposed_findings),
+        "findings_verified": len(state.verified_findings),
+        "findings_discarded": discarded,
+        "artifacts_written": written,
+        "artifacts_failed": failed,
+        "artifacts_pending": pending,
+    }
+
+
+def _escape_cell(text: str) -> str:
+    """Make ``text`` safe for a single GFM table cell."""
+    if text is None:
+        return ""
+    return text.replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+
+
+def _severity_sort_key(severity: str) -> tuple[int, str]:
+    sev = (severity or "").lower()
+    return (_SEVERITY_RANK.get(sev, len(_SEVERITY_RANK)), sev)
+
+
+def _render_findings_readme(state: AuditRunState, *, repo_name: str = "audit") -> str:
+    """Render the audit-findings README as deterministic Markdown.
+
+    Pure function of ``state`` and ``repo_name``: no clock, no env, no
+    filesystem reads. Every link is relative inside the artifact directory.
+    ``repo_name`` is the human-readable label for the repo (typically the
+    basename of the working tree) and is the only piece of identity that
+    cannot be derived from ``state`` alone.
+    """
+    short_commit = (state.scope.commit or "")[:12] or "unknown"
+    title_hook = repo_name or "audit"
+
+    lines: list[str] = []
+    lines.append(f"# Security audit — {title_hook} @ {short_commit}")
+    lines.append("")
+
+    lines.append("## Run")
+    lines.append("")
+    lines.append(f"- run id: `{state.run_id}`")
+    lines.append(f"- commit: `{state.scope.commit}`")
+    lines.append(f"- branch: `{state.scope.branch}`")
+    scope_files = len(state.scope.mandatory_files)
+    if state.scope.focus:
+        focus_str = ", ".join(f"`{f}`" for f in state.scope.focus)
+        lines.append(f"- scope: {scope_files} file(s), focus: {focus_str}")
+    else:
+        lines.append(f"- scope: {scope_files} file(s)")
+    lines.append("")
+
+    indexed: list[tuple[int, VerifiedFinding, dict]] = []
+    for vf in state.verified_findings:
+        entry = state.artifact_state[_artifact_key(vf)]
+        indexed.append((int(entry["index"]), vf, entry))
+    indexed.sort(key=lambda t: t[0])
+
+    lines.append("## Findings")
+    lines.append("")
+    lines.append("| # | status | severity | type | title | file | report | patch |")
+    lines.append("|---|---|---|---|---|---|---|---|")
+    for idx, vf, entry in indexed:
+        status = str(entry.get("status", "pending"))
+        report_filename = str(entry.get("report_filename", ""))
+        patch_filename = str(entry.get("patch_filename", ""))
+        if status == "written":
+            report_cell = f"[{report_filename}]({report_filename})"
+            patch_cell = f"[{patch_filename}]({patch_filename})"
+        else:
+            report_cell = report_filename
+            patch_cell = patch_filename
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(idx),
+                    _escape_cell(status),
+                    _escape_cell(vf.finding.severity),
+                    _escape_cell(vf.finding.finding_type),
+                    _escape_cell(vf.finding.title),
+                    _escape_cell(vf.finding.source_file),
+                    report_cell,
+                    patch_cell,
+                ]
+            )
+            + " |"
+        )
+    lines.append("")
+
+    lines.append("## Findings by severity")
+    lines.append("")
+    by_sev: dict[str, list[tuple[int, VerifiedFinding, dict]]] = {}
+    for idx, vf, entry in indexed:
+        by_sev.setdefault((vf.finding.severity or "").lower(), []).append(
+            (idx, vf, entry)
+        )
+    sorted_sevs = sorted(by_sev.keys(), key=_severity_sort_key)
+    for sev in sorted_sevs:
+        rows = by_sev[sev]
+        label = sev or "unknown"
+        lines.append(f"### {label} ({len(rows)})")
+        lines.append("")
+        for idx, vf, entry in rows:
+            status = str(entry.get("status", "pending"))
+            report_filename = str(entry.get("report_filename", ""))
+            if status == "written":
+                report_ref = f"[{report_filename}]({report_filename})"
+            else:
+                report_ref = report_filename
+            source = _escape_cell(vf.finding.source_file)
+            title = _escape_cell(vf.finding.title)
+            lines.append(f"- **{idx:03d}** — {title} ({source}) — {report_ref}")
+        lines.append("")
+
+    totals = _audit_totals(state)
+    lines.append("## Totals")
+    lines.append("")
+    lines.append(f"- files triaged: {totals['files_triaged']}")
+    lines.append(f"- files escalated: {totals['files_escalated']}")
+    lines.append(f"- files deep-reviewed: {totals['files_deep_reviewed']}")
+    lines.append(f"- findings proposed: {totals['findings_proposed']}")
+    lines.append(f"- findings verified: {totals['findings_verified']}")
+    lines.append(f"- findings discarded: {totals['findings_discarded']}")
+    lines.append(
+        "- artifacts: "
+        f"{totals['artifacts_written']} written, "
+        f"{totals['artifacts_failed']} failed, "
+        f"{totals['artifacts_pending']} pending"
+    )
+    lines.append("")
+
+    failed_entries = [
+        (idx, vf, entry)
+        for idx, vf, entry in indexed
+        if entry.get("status") in ("failed", "pending")
+    ]
+    if failed_entries:
+        lines.append("## Failed or pending artifacts")
+        lines.append("")
+        for idx, vf, entry in failed_entries:
+            status = str(entry.get("status", "pending"))
+            err_code = entry.get("last_error_code") or "—"
+            err_msg = entry.get("last_error") or "—"
+            title = _escape_cell(vf.finding.title)
+            lines.append(f"- **{idx:03d}** ({status}) — {title}")
+            lines.append(f"  - error code: `{err_code}`")
+            lines.append(f"  - error: {err_msg}")
+            lines.append(
+                f"  - retry: `/audit --regen --finding {idx} --patch-max-turns 75`"
+            )
+        lines.append("")
+        lines.append(
+            "Run `/audit --resume --patch-max-turns 75` to retry all incomplete "
+            "artifacts at once."
+        )
+        lines.append("")
+
+    lines.append("## How to read this directory")
+    lines.append("")
+    lines.append(
+        "Each finding has a paired `NNN-<slug>.md` (the human report) and "
+        "`NNN-<slug>.patch` (the proposed fix as a unified diff). The report "
+        "carries the narrative; the patch is the suggested change. Regenerate "
+        "a single finding's artifacts with "
+        "`/audit --regen --finding N`."
+    )
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def _write_findings_readme(state: AuditRunState, base_dir: str) -> bool:
+    """Write ``audit-findings/README.md`` if there is something to index.
+
+    Returns ``True`` when a README was written, ``False`` when the gate
+    rejected the run (zero verified findings, or no artifact has reached
+    ``status == "written"`` yet).
+
+    When the gate rejects but a previous README is still on disk, the stale
+    file is removed. Otherwise a failed ``--regen`` that flipped every
+    written entry back to ``pending`` would leave the old README claiming
+    those artifacts are still current.
+    """
+    artifact_dir = Path(base_dir) / state.artifact_dir
+    target = artifact_dir / "README.md"
+    repo_name = Path(base_dir).resolve().name or "audit"
+
+    has_written = any(
+        entry.get("status") == "written" for entry in state.artifact_state.values()
+    )
+    if not state.verified_findings or not has_written:
+        if target.exists():
+            target.unlink()
+        return False
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    text = _render_findings_readme(state, repo_name=repo_name)
+    tmp = target.with_suffix(".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(target)
+    return True
+
+
 def _mark_artifact_failed(
     entry: dict,
     state: AuditRunState,
@@ -4399,6 +4617,8 @@ def _run_pipeline_body(
             if ph5 is not None:
                 ph5.complete(f"{len(targets)} artifact(s) written")
 
+        readme_written = _write_findings_readme(state, base_dir)
+
         # Safety-net rewinds.
         unreviewed = [
             f for f in state.scope.mandatory_files if f not in state.reviewed_files
@@ -4447,9 +4667,14 @@ def _run_pipeline_body(
         state.save()
     else:
         _failed, _pending, written = _artifact_summary(state)
+        readme_written = False
 
     artifact_dir_label = str(state.artifact_dir) if state.verified_findings else None
-    ui.summary(artifact_dir=artifact_dir_label, written=written)
+    ui.summary(
+        artifact_dir=artifact_dir_label,
+        written=written,
+        readme_written=readme_written,
+    )
 
     if written == 0:
         return (
@@ -4457,6 +4682,12 @@ def _run_pipeline_body(
             "in Git-tracked files."
         )
 
+    if readme_written:
+        return (
+            f"Audit complete. {written} finding(s) written to "
+            f"{state.artifact_dir}/. Open {state.artifact_dir}/README.md "
+            "to review."
+        )
     return (
         f"Audit complete. {written} finding(s) written to {state.artifact_dir}/. "
         f"Run `ls {state.artifact_dir}/` to review."

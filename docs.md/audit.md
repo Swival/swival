@@ -42,8 +42,10 @@ When the audit finishes, findings are written to `audit-findings/` in the projec
 
 ```text
 swival> /audit
-Audit complete. 2 finding(s) written to audit-findings/. Run `ls audit-findings/` to review.
+Audit complete. 2 finding(s) written to audit-findings/. Open audit-findings/README.md to review.
 ```
+
+That `README.md` is the entry point for a reviewer: it carries the run metadata (commit, branch, scope), a one-row-per-finding summary table grouped by severity, the run totals, and — when an audit only partially completed — a section listing each failed or pending artifact with its error code and the exact resume command. The per-finding `.md` and `.patch` files are still authoritative for the narrative and the fix; the README is what you open first.
 
 If no bugs are found:
 
@@ -119,6 +121,7 @@ Both are saved to the `audit-findings/` directory:
 
 ```text
 audit-findings/
+  README.md
   001-command-injection-in-handler.md
   001-command-injection-in-handler.patch
   002-missing-null-check-in-parser.md
@@ -126,6 +129,8 @@ audit-findings/
 ```
 
 Each verified finding is assigned a stable index when it is first reached, and that index sticks across retries: if patch generation runs out of turns, the next attempt writes `002-...` for the same finding rather than consuming a new number.
+
+Once at least one finding's artifacts have landed, the loop rewrites `README.md` as the last step of the artifact phase. The README is regenerated on every `--resume` and `--regen` invocation, so it always reflects the current state of the run — including any newly failed retries. The per-finding files stay authoritative; the README is the reviewer's index into them.
 
 Patch failures, report exceptions, and write errors are all persisted as retryable Phase 5 state, so an audit that finishes Phase 4 but stumbles in Phase 5 stays resumable. See [Options](#options) for `--patch-max-turns` and the targeted `--regen --finding` form.
 
