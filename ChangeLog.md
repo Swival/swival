@@ -2,6 +2,11 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.24
+
+- `/audit` now writes a `README.md` index into `audit-findings/` whenever artifacts land.
+- Spurious Pydantic serializer and LiteLLM warnings no longer leak into stderr at startup.
+
 ## 1.0.23
 
 - Swival now supports Google Enterprise Application Platform (GEAP) as a provider. Pass `--provider geap --gcp-project <id> --location <region> --model <gemini-model>` and Swival routes through Vertex AI under the hood, using your Google Cloud application-default credentials or a service account from `GOOGLE_APPLICATION_CREDENTIALS`.
