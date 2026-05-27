@@ -150,7 +150,7 @@ At startup, each basename is resolved to an absolute path using `which`. If a co
 
 At runtime in whitelist mode, only `run_command` is available and commands must be passed as argument arrays. This removes shell interpolation and injection risk from ordinary command calls. `run_shell_command` is not exposed in whitelist mode since shell strings bypass the whitelist entirely.
 
-With `--commands all` or `--yolo`, both `run_command` and `run_shell_command` are available. In ask mode, only `run_command` is exposed — shell access requires `--commands all`.
+With `--commands all` or `--yolo`, both `run_command` and `run_shell_command` are available. The experimental `python` tool joins them when a Python interpreter is present and the context window is at least 100,000 tokens; it runs arbitrary Python in a `python -c` subprocess, the same trust level as shell access. In ask mode, only `run_command` is exposed — shell access requires `--commands all`.
 
 ### Ask Mode
 

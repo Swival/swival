@@ -4,7 +4,7 @@ Swival gives the model a fixed set of tools at runtime. Most tools are always av
 
 Command execution tools are included by default (commands default to `"all"`): `run_command` takes an argv array and is available in every command mode except `--commands none`, while `run_shell_command` takes a shell string and is only available with `--commands all` or `--yolo`. Pass `--commands none` to remove both, or `--commands ask` for interactive approval (argv-only, no shell).
 
-`use_skill` appears only when skills are discovered, MCP tools appear when external MCP servers are configured, and A2A tools appear when remote A2A agents are configured.
+`use_skill` appears only when skills are discovered, MCP tools appear when external MCP servers are configured, and A2A tools appear when remote A2A agents are configured. The experimental `python` tool appears only with `--commands all` or `--yolo` when a Python interpreter is available and the context window is large enough.
 
 ## `read_file`
 
@@ -143,6 +143,12 @@ Setting `background=true` launches the command detached and returns immediately 
 
 `run_shell_command` is only available with `--commands all` or `--yolo`. It does not appear in ask mode or whitelist mode, since shell strings bypass command-level policy controls.
 
+## `python`
+
+`python` runs a Python snippet and returns its captured output. The code is handed straight to a fresh `python -c` subprocess in the workspace directory, with no shell in between, so there is nothing to quote or escape. It is meant for quickly evaluating a piece of Python without the argv-array or shell-string ceremony of `run_command` and `run_shell_command`. Parameters are `code` (required) and `timeout` (1-240 seconds, default 30). The subprocess runs with the same sanitized environment as the other command tools, so a snippet that shells out by name sees Swival's bundled dependency scripts stripped from `PATH`.
+
+Because it executes arbitrary code, `python` is only exposed with `--commands all` or `--yolo`, the same trust tier as `run_shell_command`. On top of that it appears only when a Python interpreter is available (the one running Swival, or `python3`/`python` on `PATH` for standalone builds) and when the detected context window is at least 100,000 tokens, the same floor that auto-enables subagents. This tool is experimental.
+
 ## `use_skill`
 
 When skills are discovered, Swival exposes `use_skill` so the model can load full instructions on demand. The system prompt only includes a compact skill catalog at startup, and full skill instructions are injected only when the tool is called. This keeps the default prompt smaller while still allowing rich task-specific guidance.
@@ -180,7 +186,7 @@ Calling `save` before `restore` is not required. The system automatically create
 
 ### Dirty Scopes
 
-Tools are classified as read-only or mutating. Read-only tools (`read_file`, `read_multiple_files`, `list_files`, `grep`, `outline`, `fetch_url`, `view_image`, `think`, `todo`, `snapshot`) are safe to collapse because they don't change anything on disk. Mutating tools (`write_file`, `edit_file`, `delete_file`, `run_command`, `run_shell_command`, unknown MCP tools, and A2A tools) dirty the scope.
+Tools are classified as read-only or mutating. Read-only tools (`read_file`, `read_multiple_files`, `list_files`, `grep`, `outline`, `fetch_url`, `view_image`, `think`, `todo`, `snapshot`) are safe to collapse because they don't change anything on disk. Mutating tools (`write_file`, `edit_file`, `delete_file`, `run_command`, `run_shell_command`, `python`, unknown MCP tools, and A2A tools) dirty the scope.
 
 If the scope contains mutating tool calls, `restore` fails with a list of the dirty tools. Pass `force=true` to override when you are confident the summary captures the mutations.
 

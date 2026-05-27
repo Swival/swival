@@ -739,6 +739,39 @@ RUN_SHELL_COMMAND_TOOL = {
     },
 }
 
+PYTHON_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "python",
+        "description": (
+            "Run a Python snippet and return its captured output. The code is "
+            "handed straight to a fresh `python -c` subprocess running in the "
+            "workspace directory, with no shell in between, so there is nothing "
+            "to quote or escape. Prefer this over invoking python through "
+            "run_command or run_shell_command when you just want to evaluate a "
+            "piece of Python."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": (
+                        "Python source to execute. Passed verbatim to the "
+                        "interpreter as the argument to `-c`."
+                    ),
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Timeout in seconds (1-240). Defaults to 30.",
+                    "default": 30,
+                },
+            },
+            "required": ["code"],
+        },
+    },
+}
+
 COMPLETE_GOAL_TOOL = {
     "type": "function",
     "function": {
@@ -763,6 +796,7 @@ GOAL_TOOLS = (COMPLETE_GOAL_TOOL,)
 _TOOL_NAMES = [t["function"]["name"] for t in TOOLS] + [
     USE_SKILL_TOOL["function"]["name"],
     RUN_COMMAND_TOOL["function"]["name"],
+    PYTHON_TOOL["function"]["name"],
     COMPLETE_GOAL_TOOL["function"]["name"],
 ]
 
@@ -782,6 +816,9 @@ def _build_schema_index() -> None:
     ].get("parameters", {})
     _TOOL_SCHEMA_INDEX[RUN_SHELL_COMMAND_TOOL["function"]["name"]] = (
         RUN_SHELL_COMMAND_TOOL["function"].get("parameters", {})
+    )
+    _TOOL_SCHEMA_INDEX[PYTHON_TOOL["function"]["name"]] = PYTHON_TOOL["function"].get(
+        "parameters", {}
     )
     for goal_tool in GOAL_TOOLS:
         fn = goal_tool["function"]
@@ -2981,6 +3018,64 @@ def _run_shell_command(
     return _capture_process(proc, timeout, base_dir, scratch_dir=scratch_dir)
 
 
+def _find_python_executable() -> str | None:
+    """Locate a Python interpreter for the python tool, or return None.
+
+    Swival runs under Python, so its own interpreter is the natural choice.
+    The exception is a frozen or standalone build, where ``sys.executable``
+    points at the bundled binary rather than a real interpreter.
+    In that case, and as a general fallback, look for ``python3`` and then
+    ``python`` on ``PATH``.
+    """
+    if sys.executable and not getattr(sys, "frozen", False):
+        return sys.executable
+    return shutil.which("python3") or shutil.which("python")
+
+
+def python_tool_available() -> bool:
+    """Whether a Python interpreter can be found for the python tool."""
+    return _find_python_executable() is not None
+
+
+def _run_python(
+    code: str, base_dir: str, timeout: int, scratch_dir: str | None = None
+) -> str:
+    """Execute *code* via a Python interpreter and return its captured output."""
+    if not isinstance(code, str):
+        return "error: python tool requires 'code' as a string"
+    if not code.strip():
+        return "error: python tool requires non-empty 'code'"
+
+    python = _find_python_executable()
+    if python is None:
+        return "error: no Python interpreter is available"
+
+    base_path = Path(base_dir)
+    if not base_path.exists():
+        return f"error: base directory does not exist: {base_dir}"
+    if not base_path.is_dir():
+        return f"error: base directory is not a directory: {base_dir}"
+
+    timeout = max(1, min(timeout, MAX_TIMEOUT))
+
+    try:
+        popen_kwargs: dict = dict(
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            cwd=base_dir,
+            env=child_env(),
+        )
+        if sys.platform != "win32":
+            popen_kwargs["start_new_session"] = True
+
+        proc = subprocess.Popen([python, "-c", code], **popen_kwargs)
+    except OSError as e:
+        return f"error: failed to start python interpreter: {e}"
+
+    return _capture_process(proc, timeout, base_dir, scratch_dir=scratch_dir)
+
+
 ExecutionMode = Literal["argv", "shell"]
 
 
@@ -3708,6 +3803,24 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             unrestricted=True if prefer_shell else unrestricted,
             scratch_dir=scratch_dir,
             background=bool(args.get("background", False)),
+        )
+    elif name == "python":
+        unrestricted = kwargs.get("commands_unrestricted", False)
+        if not unrestricted:
+            return (
+                "error: python tool is not available in this session. "
+                "Enable --commands all (or --yolo) to allow arbitrary code execution."
+            )
+        code = args.get("code")
+        try:
+            timeout = int(args.get("timeout", 30))
+        except (ValueError, TypeError):
+            return "error: timeout must be an integer"
+        return _run_python(
+            code if isinstance(code, str) else "",
+            base_dir,
+            timeout,
+            scratch_dir=scratch_dir,
         )
     elif name == "view_image":
         image_stash = kwargs.get("image_stash")

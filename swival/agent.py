@@ -100,6 +100,8 @@ from .mcp_client import McpShutdownError
 from .tools import (
     clamp_timeout,
     TOOLS,
+    PYTHON_TOOL,
+    python_tool_available,
     RUN_COMMAND_TOOL,
     RUN_SHELL_COMMAND_TOOL,  # noqa: F401 — used in build_tools()
     USE_SKILL_TOOL,
@@ -7889,6 +7891,7 @@ def build_tools(
     *,
     goal_tools: bool = False,
     metaskill_names: list[str] | None = None,
+    python_tool: bool = False,
 ) -> list:
     """Construct the tools list from base + conditionals.
 
@@ -7946,6 +7949,8 @@ def build_tools(
         tools.append(tool)
         if shell_allowed:
             tools.append(copy.deepcopy(RUN_SHELL_COMMAND_TOOL))
+        if python_tool:
+            tools.append(copy.deepcopy(PYTHON_TOOL))
     elif resolved_commands:
         tool = copy.deepcopy(RUN_COMMAND_TOOL)
         tool["function"]["description"] = (
@@ -8505,15 +8510,23 @@ def _run_main(args, report, _write_report, parser):
                 skill_read_roots.append(skill.path)
     args._resolved_skills = skills_catalog
 
+    # 100k tokens is the floor for features that can emit a lot of output:
+    # subagents and the python tool.
+    _large_context = context_length is not None and context_length >= 100_000
+
     _sa_val = getattr(args, "subagents", None)
     if _sa_val is True:
         _subagents = True
     elif _sa_val is False:
         _subagents = False
     else:
-        _subagents = args.provider in ("google", "geap", "chatgpt", "bedrock") or (
-            context_length is not None and context_length >= 100_000
+        _subagents = (
+            args.provider in ("google", "geap", "chatgpt", "bedrock") or _large_context
         )
+
+    # The python tool runs arbitrary code, so it also requires the
+    # unrestricted-commands grant and a real interpreter to run.
+    _python_tool = commands_unrestricted and _large_context and python_tool_available()
     # Resolve metaskill names for tool exposure
     _ms_arg = getattr(args, "metaskills", _UNSET)
     _metaskills_policy_val = _ms_arg if _ms_arg is not _UNSET and _ms_arg else "local"
@@ -8534,6 +8547,7 @@ def _run_main(args, report, _write_report, parser):
         shell_allowed=shell_allowed,
         subagents=_subagents,
         metaskill_names=_metaskill_names,
+        python_tool=_python_tool,
     )
 
     # Initialize MCP servers

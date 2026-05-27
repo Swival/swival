@@ -1,32 +1,32 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://swival.dev/</loc><lastmod>2026-07-03</lastmod></url>
-  <url><loc>https://swival.dev/pages/</loc><lastmod>2026-07-03</lastmod></url>
-  <url><loc>https://swival.dev/pages/getting-started.html</loc><lastmod>2026-06-29</lastmod></url>
+  <url><loc>https://swival.dev/</loc><lastmod>2026-05-28</lastmod></url>
+  <url><loc>https://swival.dev/pages/</loc><lastmod>2026-05-28</lastmod></url>
+  <url><loc>https://swival.dev/pages/getting-started.html</loc><lastmod>2026-07-03</lastmod></url>
   <url><loc>https://swival.dev/pages/usage.html</loc><lastmod>2026-07-03</lastmod></url>
-  <url><loc>https://swival.dev/pages/tools.html</loc><lastmod>2026-06-29</lastmod></url>
-  <url><loc>https://swival.dev/pages/audit.html</loc><lastmod>2026-06-29</lastmod></url>
-  <url><loc>https://swival.dev/pages/goal.html</loc><lastmod>2026-05-19</lastmod></url>
-  <url><loc>https://swival.dev/pages/context-management.html</loc><lastmod>2026-06-14</lastmod></url>
+  <url><loc>https://swival.dev/pages/tools.html</loc><lastmod>2026-07-03</lastmod></url>
+  <url><loc>https://swival.dev/pages/audit.html</loc><lastmod>2026-07-03</lastmod></url>
+  <url><loc>https://swival.dev/pages/goal.html</loc><lastmod>2026-07-03</lastmod></url>
+  <url><loc>https://swival.dev/pages/context-management.html</loc><lastmod>2026-07-03</lastmod></url>
   <url><loc>https://swival.dev/pages/open-models.html</loc><lastmod>2026-06-29</lastmod></url>
-  <url><loc>https://swival.dev/pages/safety-and-sandboxing.html</loc><lastmod>2026-06-05</lastmod></url>
-  <url><loc>https://swival.dev/pages/secrets.html</loc><lastmod>2026-06-29</lastmod></url>
-  <url><loc>https://swival.dev/pages/llm-filter.html</loc><lastmod>2026-04-09</lastmod></url>
+  <url><loc>https://swival.dev/pages/safety-and-sandboxing.html</loc><lastmod>2026-07-03</lastmod></url>
+  <url><loc>https://swival.dev/pages/secrets.html</loc><lastmod>2026-07-03</lastmod></url>
+  <url><loc>https://swival.dev/pages/llm-filter.html</loc><lastmod>2026-07-03</lastmod></url>
   <url><loc>https://swival.dev/pages/command-middleware.html</loc><lastmod>2026-06-29</lastmod></url>
-  <url><loc>https://swival.dev/pages/skills.html</loc><lastmod>2026-06-19</lastmod></url>
-  <url><loc>https://swival.dev/pages/library.html</loc><lastmod>2026-06-19</lastmod></url>
-  <url><loc>https://swival.dev/pages/metaskills.html</loc><lastmod>2026-06-20</lastmod></url>
-  <url><loc>https://swival.dev/pages/web-browsing.html</loc><lastmod>2026-06-16</lastmod></url>
+  <url><loc>https://swival.dev/pages/skills.html</loc><lastmod>2026-07-03</lastmod></url>
+  <url><loc>https://swival.dev/pages/library.html</loc><lastmod>2026-07-03</lastmod></url>
+  <url><loc>https://swival.dev/pages/metaskills.html</loc><lastmod>2026-07-03</lastmod></url>
+  <url><loc>https://swival.dev/pages/web-browsing.html</loc><lastmod>2026-07-03</lastmod></url>
   <url><loc>https://swival.dev/pages/mcp.html</loc><lastmod>2026-06-09</lastmod></url>
-  <url><loc>https://swival.dev/pages/a2a.html</loc><lastmod>2026-06-25</lastmod></url>
-  <url><loc>https://swival.dev/pages/acp.html</loc><lastmod>2026-05-31</lastmod></url>
-  <url><loc>https://swival.dev/pages/lifecycle-hooks.html</loc><lastmod>2026-06-29</lastmod></url>
-  <url><loc>https://swival.dev/pages/custom-commands.html</loc><lastmod>2026-04-13</lastmod></url>
-  <url><loc>https://swival.dev/pages/customization.html</loc><lastmod>2026-06-25</lastmod></url>
+  <url><loc>https://swival.dev/pages/a2a.html</loc><lastmod>2026-07-03</lastmod></url>
+  <url><loc>https://swival.dev/pages/acp.html</loc><lastmod>2026-07-03</lastmod></url>
+  <url><loc>https://swival.dev/pages/lifecycle-hooks.html</loc><lastmod>2026-07-03</lastmod></url>
+  <url><loc>https://swival.dev/pages/custom-commands.html</loc><lastmod>2026-07-03</lastmod></url>
+  <url><loc>https://swival.dev/pages/customization.html</loc><lastmod>2026-07-03</lastmod></url>
   <url><loc>https://swival.dev/pages/providers.html</loc><lastmod>2026-07-03</lastmod></url>
-  <url><loc>https://swival.dev/pages/reports.html</loc><lastmod>2026-06-29</lastmod></url>
-  <url><loc>https://swival.dev/pages/reviews.html</loc><lastmod>2026-06-29</lastmod></url>
-  <url><loc>https://swival.dev/pages/agentfs.html</loc><lastmod>2026-03-25</lastmod></url>
+  <url><loc>https://swival.dev/pages/reports.html</loc><lastmod>2026-07-03</lastmod></url>
+  <url><loc>https://swival.dev/pages/reviews.html</loc><lastmod>2026-07-03</lastmod></url>
+  <url><loc>https://swival.dev/pages/agentfs.html</loc><lastmod>2026-07-03</lastmod></url>
   <url><loc>https://swival.dev/pages/nono.html</loc><lastmod>2026-05-31</lastmod></url>
-  <url><loc>https://swival.dev/pages/python-api.html</loc><lastmod>2026-06-29</lastmod></url>
+  <url><loc>https://swival.dev/pages/python-api.html</loc><lastmod>2026-07-03</lastmod></url>
 </urlset>
