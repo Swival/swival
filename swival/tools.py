@@ -670,6 +670,11 @@ RUN_COMMAND_TOOL = {
                     "description": "Timeout in seconds (1-120). Defaults to 30.",
                     "default": 30,
                 },
+                "background": {
+                    "type": "boolean",
+                    "description": "If true, launch the command detached and return immediately with the PID and a log file path. stdout and stderr are appended to the log; the tool does not wait for the process to exit. Use this for long-running servers, watchers, or tasks that outlive a single tool call.",
+                    "default": False,
+                },
             },
             "required": ["command"],
         },
@@ -698,6 +703,11 @@ RUN_SHELL_COMMAND_TOOL = {
                     "type": "integer",
                     "description": "Timeout in seconds (1-120). Defaults to 30.",
                     "default": 30,
+                },
+                "background": {
+                    "type": "boolean",
+                    "description": "If true, launch the command detached and return immediately with the PID and a log file path. stdout and stderr are appended to the log; the tool does not wait for the process to exit.",
+                    "default": False,
                 },
             },
             "required": ["command"],
@@ -911,7 +921,7 @@ def safe_resolve(
 
     raise ValueError(
         f"Path {file_path!r} resolves to {resolved}, "
-        f"which is outside base directory {base}. You are not allowed to access that directory."
+        f"which is outside base directory {base}. You are not allowed to access that directory by any means."
     )
 
 
@@ -2564,6 +2574,100 @@ def _guard_a2a_output(
     return saved_notice
 
 
+MAX_BACKGROUND_PROCESSES = 8
+
+_BG_PROCESSES: dict[int, subprocess.Popen] = {}
+_BG_LOCK = threading.Lock()
+
+
+def _bg_slots_in_use() -> int:
+    with _BG_LOCK:
+        return len(_BG_PROCESSES)
+
+
+def _bg_reap(proc: subprocess.Popen) -> None:
+    try:
+        proc.wait()
+    except Exception:
+        pass
+    with _BG_LOCK:
+        _BG_PROCESSES.pop(proc.pid, None)
+
+
+def _open_background_log(
+    base_dir: str, scratch_dir: str | None
+) -> tuple[Path, str] | str:
+    """Create a fresh background log file. Returns (path, rel_path) or error string."""
+    scratch = Path(scratch_dir) if scratch_dir else Path(base_dir) / SWIVAL_DIR
+    bg_dir = scratch / "bg"
+    try:
+        bg_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return f"error: failed to create background log directory: {e}"
+
+    filename = f"bg_{uuid.uuid4().hex[:12]}.log"
+    filepath = bg_dir / filename
+    try:
+        rel_path = str(filepath.resolve().relative_to(Path(base_dir).resolve()))
+    except ValueError:
+        rel_path = str(filepath.resolve())
+    return filepath, rel_path
+
+
+def _track_background_process(proc: subprocess.Popen) -> None:
+    with _BG_LOCK:
+        _BG_PROCESSES[proc.pid] = proc
+    threading.Thread(target=_bg_reap, args=(proc,), daemon=True).start()
+
+
+def _format_background_result(pid: int, log_rel_path: str) -> str:
+    return (
+        f"Started background process.\n"
+        f"PID: {pid}\n"
+        f"Log: {log_rel_path}\n"
+        "The process runs detached; stdout and stderr are appended to the log file. "
+        "Use read_file on the log to inspect output, or shell tools "
+        "(kill, ps, wait) to manage the process."
+    )
+
+
+def _spawn_background_process(
+    popen_argv: list[str], base_dir: str, scratch_dir: str | None
+):
+    """Spawn a detached subprocess writing to a fresh background log file.
+
+    Returns ``(proc, log_rel_path)`` on success. On log-setup failure, returns
+    an error string. On Popen failure, deletes the empty log file and re-raises
+    the exception so the caller can map it to a tool-specific error message.
+    """
+    log_info = _open_background_log(base_dir, scratch_dir)
+    if isinstance(log_info, str):
+        return log_info
+    log_path, log_rel = log_info
+    try:
+        log_fh = open(log_path, "wb")
+    except OSError as e:
+        return f"error: failed to open background log file: {e}"
+    popen_kwargs: dict = dict(
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+        cwd=base_dir,
+        close_fds=True,
+    )
+    if sys.platform != "win32":
+        popen_kwargs["start_new_session"] = True
+    try:
+        proc = subprocess.Popen(popen_argv, **popen_kwargs)
+    except BaseException:
+        log_path.unlink(missing_ok=True)
+        raise
+    finally:
+        log_fh.close()
+    _track_background_process(proc)
+    return proc, log_rel
+
+
 def _capture_process(
     proc: subprocess.Popen, timeout: int, base_dir: str, scratch_dir: str | None = None
 ) -> str:
@@ -2671,7 +2775,11 @@ def _is_root_path(p: str) -> bool:
 
 
 def _run_shell_command(
-    command: str, base_dir: str, timeout: int, scratch_dir: str | None = None
+    command: str,
+    base_dir: str,
+    timeout: int,
+    scratch_dir: str | None = None,
+    background: bool = False,
 ) -> str:
     """Execute a shell string via sh -c (Unix) or cmd.exe /c (Windows)."""
     base_path = Path(base_dir)
@@ -2689,6 +2797,16 @@ def _run_shell_command(
         shell_cmd = ["cmd.exe", "/c", command]
     else:
         shell_cmd = ["/bin/sh", "-c", command]
+
+    if background:
+        try:
+            spawned = _spawn_background_process(shell_cmd, base_dir, scratch_dir)
+        except OSError as e:
+            return f"error: failed to start shell command: {e}"
+        if isinstance(spawned, str):
+            return spawned
+        proc, log_rel = spawned
+        return _format_background_result(proc.pid, log_rel)
 
     try:
         popen_kwargs: dict = dict(
@@ -2806,6 +2924,7 @@ def _run_argv_command(
     timeout: int = 30,
     unrestricted: bool = False,
     scratch_dir: str | None = None,
+    background: bool = False,
 ) -> str:
     """Execute an argv-form command and return its output."""
     if not command:
@@ -2854,6 +2973,22 @@ def _run_argv_command(
 
     timeout = max(1, min(timeout, MAX_TIMEOUT))
 
+    if background:
+        try:
+            spawned = _spawn_background_process(
+                [resolved_path] + command[1:], base_dir, scratch_dir
+            )
+        except FileNotFoundError:
+            return f'error: command executable not found: "{resolved_path}"'
+        except PermissionError:
+            return f'error: permission denied executing: "{resolved_path}"'
+        except OSError as e:
+            return f"error: failed to start command: {e}"
+        if isinstance(spawned, str):
+            return spawned
+        proc, log_rel = spawned
+        return _format_background_result(proc.pid, log_rel)
+
     try:
         popen_kwargs: dict = dict(
             stdout=subprocess.PIPE,
@@ -2883,11 +3018,24 @@ def _execute_normalized_command(
     timeout: int = 30,
     unrestricted: bool = False,
     scratch_dir: str | None = None,
+    background: bool = False,
 ) -> str:
     """Execute a pre-normalized command call."""
+    bg_capacity_note: str | None = None
+    if background and _bg_slots_in_use() >= MAX_BACKGROUND_PROCESSES:
+        background = False
+        bg_capacity_note = (
+            f"background slot limit reached ({MAX_BACKGROUND_PROCESSES} processes "
+            "already running); ran in foreground"
+        )
+
     if normalized.mode == "shell":
         result = _run_shell_command(
-            normalized.command, base_dir, timeout, scratch_dir=scratch_dir
+            normalized.command,
+            base_dir,
+            timeout,
+            scratch_dir=scratch_dir,
+            background=background,
         )
     else:
         result = _run_argv_command(
@@ -2897,10 +3045,13 @@ def _execute_normalized_command(
             timeout=timeout,
             unrestricted=unrestricted,
             scratch_dir=scratch_dir,
+            background=background,
         )
 
     if normalized.repair_note:
         result = f"{result}\n(auto-corrected: {normalized.repair_note})"
+    if bg_capacity_note:
+        result = f"{result}\n(note: {bg_capacity_note})"
 
     return result
 
@@ -2914,6 +3065,7 @@ def _execute_command_call(
     timeout: int = 30,
     unrestricted: bool = False,
     scratch_dir: str | None = None,
+    background: bool = False,
 ) -> str:
     """Normalize a command call and dispatch to the appropriate executor."""
     normalized, error = _normalize_command_call(
@@ -2931,6 +3083,7 @@ def _execute_command_call(
         timeout=timeout,
         unrestricted=unrestricted,
         scratch_dir=scratch_dir,
+        background=background,
     )
 
 
@@ -3391,6 +3544,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             timeout=args.get("timeout", 30),
             unrestricted=True if prefer_shell else unrestricted,
             scratch_dir=scratch_dir,
+            background=bool(args.get("background", False)),
         )
     elif name == "view_image":
         image_stash = kwargs.get("image_stash")

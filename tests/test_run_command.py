@@ -711,3 +711,188 @@ def test_cd_root_blocked_drive(tmp_base):
 def test_cd_subdir_not_blocked(tmp_base):
     result = _run_command(["cd", "src"], tmp_base, {})
     assert "filesystem root" not in result
+
+
+def _bg_log_path(result: str, base_dir: str) -> Path:
+    m = re.search(r"Log: (\S+)", result)
+    assert m, f"missing log path in result: {result!r}"
+    rel = m.group(1)
+    p = Path(rel)
+    return p if p.is_absolute() else Path(base_dir) / rel
+
+
+def _bg_pid(result: str) -> int:
+    m = re.search(r"PID: (\d+)", result)
+    assert m, f"missing PID in result: {result!r}"
+    return int(m.group(1))
+
+
+def _wait_for_pid_exit(pid: int, deadline: float = 5.0) -> bool:
+    end = time.monotonic() + deadline
+    while time.monotonic() < end:
+        try:
+            os.kill(pid, 0)
+        except OSError as e:
+            if e.errno == errno.ESRCH:
+                return True
+        time.sleep(0.05)
+    return False
+
+
+def test_background_returns_pid_and_log(tmp_base):
+    echo_path = _which("echo")
+    resolved = {"echo": echo_path}
+    result = _run_command(["echo", "hello_bg"], tmp_base, resolved)
+    assert "hello_bg" in result
+
+    result = dispatch(
+        "run_command",
+        {"command": ["echo", "hello_bg"], "background": True},
+        tmp_base,
+        resolved_commands=resolved,
+    )
+    assert "Started background process" in result
+    pid = _bg_pid(result)
+    log_path = _bg_log_path(result, tmp_base)
+
+    assert _wait_for_pid_exit(pid), f"background PID {pid} did not exit"
+    # Give the reaper a moment to flush the log file (already closed in parent).
+    for _ in range(20):
+        if log_path.exists() and log_path.read_text().strip():
+            break
+        time.sleep(0.05)
+    assert log_path.exists(), f"log file missing: {log_path}"
+    assert "hello_bg" in log_path.read_text()
+
+
+def test_background_log_under_swival_bg_dir(tmp_base):
+    echo_path = _which("echo")
+    resolved = {"echo": echo_path}
+    result = dispatch(
+        "run_command",
+        {"command": ["echo", "x"], "background": True},
+        tmp_base,
+        resolved_commands=resolved,
+    )
+    log_path = _bg_log_path(result, tmp_base)
+    assert log_path.parent.name == "bg"
+    assert log_path.parent.parent.name == ".swival"
+
+
+def test_background_timeout_ignored(tmp_base):
+    """A background sleep returns immediately even with a short timeout."""
+    sleep_path = _which("sleep")
+    resolved = {"sleep": sleep_path}
+    start = time.monotonic()
+    result = dispatch(
+        "run_command",
+        {"command": ["sleep", "30"], "background": True, "timeout": 1},
+        tmp_base,
+        resolved_commands=resolved,
+    )
+    elapsed = time.monotonic() - start
+    assert elapsed < 2.0, f"background launch took too long: {elapsed:.2f}s"
+    assert "Started background process" in result
+    pid = _bg_pid(result)
+    # Kill the still-running sleep so we don't leak it.
+    try:
+        os.kill(pid, 9)
+    except OSError:
+        pass
+
+
+def test_background_blocked_command_still_rejected(tmp_base):
+    """Background flag does not bypass the command allowlist."""
+    result = dispatch(
+        "run_command",
+        {"command": ["nonexistent_blocked_cmd"], "background": True},
+        tmp_base,
+        resolved_commands={},
+    )
+    assert result.startswith("error:")
+    assert "not allowed" in result
+
+
+def test_background_capacity_falls_back_to_foreground(tmp_base, monkeypatch):
+    """When the background slot cap is hit, the flag is ignored and we run in foreground."""
+    from swival import tools as _tools
+
+    echo_path = _which("echo")
+    resolved = {"echo": echo_path}
+    monkeypatch.setattr(_tools, "MAX_BACKGROUND_PROCESSES", 0)
+
+    result = dispatch(
+        "run_command",
+        {"command": ["echo", "cap_fallback_ok"], "background": True},
+        tmp_base,
+        resolved_commands=resolved,
+    )
+    assert "cap_fallback_ok" in result
+    assert "Started background process" not in result
+    assert "background slot limit reached" in result
+    assert "ran in foreground" in result
+
+
+def test_background_capacity_does_not_register_new_pid(tmp_base, monkeypatch):
+    """A capped call must not push a new entry into the background registry."""
+    from swival import tools as _tools
+
+    echo_path = _which("echo")
+    resolved = {"echo": echo_path}
+    monkeypatch.setattr(_tools, "MAX_BACKGROUND_PROCESSES", 0)
+
+    before = _tools._bg_slots_in_use()
+    dispatch(
+        "run_command",
+        {"command": ["echo", "x"], "background": True},
+        tmp_base,
+        resolved_commands=resolved,
+    )
+    assert _tools._bg_slots_in_use() == before
+
+
+def test_background_under_cap_still_runs_in_background(tmp_base, monkeypatch):
+    """With headroom in the cap, background launches still detach normally."""
+    from swival import tools as _tools
+
+    sleep_path = _which("sleep")
+    resolved = {"sleep": sleep_path}
+    monkeypatch.setattr(_tools, "MAX_BACKGROUND_PROCESSES", 4)
+
+    result = dispatch(
+        "run_command",
+        {"command": ["sleep", "30"], "background": True},
+        tmp_base,
+        resolved_commands=resolved,
+    )
+    assert "Started background process" in result
+    assert "background slot limit reached" not in result
+    pid = _bg_pid(result)
+    try:
+        os.kill(pid, 9)
+    except OSError:
+        pass
+
+
+def test_background_popen_failure_cleans_up_log(tmp_base):
+    """If Popen raises, the empty log file is not left behind in .swival/bg/."""
+    bogus = Path(tmp_base) / "not_a_real_binary_xyz"
+    resolved = {"missing": str(bogus)}
+    result = _run_command(["missing"], tmp_base, resolved, unrestricted=False)
+    assert result.startswith("error:")
+    bg_dir = Path(tmp_base) / ".swival" / "bg"
+    assert not bg_dir.exists() or not any(bg_dir.iterdir()), (
+        f"foreground failure should not have created any bg log files; found: "
+        f"{list(bg_dir.iterdir()) if bg_dir.exists() else []}"
+    )
+
+    result = dispatch(
+        "run_command",
+        {"command": ["missing"], "background": True},
+        tmp_base,
+        resolved_commands=resolved,
+    )
+    assert result.startswith("error:")
+    if bg_dir.exists():
+        leftovers = list(bg_dir.iterdir())
+        assert not leftovers, f"orphan bg log files after Popen failure: {leftovers}"
