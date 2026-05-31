@@ -86,6 +86,7 @@
 <li><a href="reports.html">Reports</a></li>
 <li><a href="reviews.html">Reviews</a></li>
 <li><a href="agentfs.html">AgentFS</a></li>
+<li><a href="nono.html">nono</a></li>
 </ul>
 </div>
 <div class="sidebar-section">
@@ -176,7 +177,7 @@ swival --oneshot-commands '/loop 30 sec check git status and report unusual acti
 <pre><code class="language-sh">swival --profile gpt5 &quot;review this patch&quot;
 </code></pre>
 <p><code>--list-profiles</code> prints available profiles and exits. The active profile is marked with an arrow and shows which layer selected it (CLI flag, project config, or global config).</p>
-<p><code>--provider</code> chooses the backend provider and defaults to <code>lmstudio</code>. Valid values are <code>lmstudio</code>, <code>llamacpp</code>, <code>huggingface</code>, <code>openrouter</code>, <code>generic</code>, <code>google</code>, <code>chatgpt</code> (for ChatGPT Plus/Pro subscriptions), <code>bedrock</code> (AWS Bedrock), and <code>command</code> (shells out to an external program).</p>
+<p><code>--provider</code> chooses the backend provider and defaults to <code>lmstudio</code>. Valid values are <code>lmstudio</code>, <code>llamacpp</code>, <code>huggingface</code>, <code>openrouter</code>, <code>generic</code>, <code>google</code>, <code>geap</code> (Gemini Enterprise / Vertex AI; <code>vertexai</code> is an accepted alias), <code>chatgpt</code> (for ChatGPT Plus/Pro subscriptions), <code>bedrock</code> (AWS Bedrock), and <code>command</code> (shells out to an external program).</p>
 <p><code>--model</code> overrides auto-discovery with a fixed model identifier.</p>
 <p><code>--base-url</code> sets a custom API base URL. For LM Studio, the default is <code>http://127.0.0.1:1234</code>; for llamacpp, the default is <code>http://127.0.0.1:8080</code>.</p>
 <p><code>--api-key</code> provides a key directly on the command line and takes precedence over provider environment variables (<code>HF_TOKEN</code> for huggingface, <code>OPENROUTER_API_KEY</code> for openrouter, <code>OPENAI_API_KEY</code> for generic, <code>GEMINI_API_KEY</code> for google, <code>CHATGPT_API_KEY</code> for chatgpt). Bedrock uses the AWS credential chain instead (<code>AWS_PROFILE</code>, env vars, or IAM roles). Local providers (<code>lmstudio</code>, <code>llamacpp</code>) need no key.</p>
@@ -250,7 +251,7 @@ swival --oneshot-commands '/loop 30 sec check git status and report unusual acti
 <p><code>--trace-dir DIR</code> writes a HuggingFace-compatible JSONL session trace to <code>DIR</code>. Each session produces a <code>&lt;session_id&gt;.jsonl</code> file that HuggingFace auto-detects as <code>format:agent-traces</code> with harness <code>swival</code>. Works in both one-shot and REPL modes. See <a href="reports.html">Reports</a> for details.</p>
 <p><code>--reviewer COMMAND</code> runs an external reviewer after each answer. The command string is shell-split, so you can pass arguments inline (e.g. <code>--reviewer "swival --reviewer-mode"</code>). Requires a task; incompatible with <code>--repl</code>.</p>
 <p><code>--max-review-rounds N</code> limits how many times the reviewer can request retries and defaults to <code>15</code>. Set to <code>0</code> to accept the first answer without retries.</p>
-<p><code>--self-review</code> uses a second Swival instance as reviewer, inheriting provider, model, and skills-dir settings from the current invocation. Requires a task; incompatible with <code>--repl</code> and <code>--reviewer</code>. See <a href="reviews.html">Reviews</a> for details.</p>
+<p><code>--self-review</code> uses a second Swival instance as reviewer, inheriting provider, model, skills-dir, and files settings from the current invocation. Requires a task; incompatible with <code>--repl</code> and <code>--reviewer</code>. See <a href="reviews.html">Reviews</a> for details.</p>
 <p><code>--reviewer-mode</code> runs Swival as a reviewer process that speaks the reviewer protocol. It reads <code>base_dir</code> from the positional argument, the answer from standard input, evaluates with the LLM, and exits 0 (accept), 1 (retry), or 2 (error). Incompatible with <code>--repl</code> and <code>--reviewer</code>.</p>
 <p><code>--review-prompt TEXT</code> appends custom instructions to the built-in review prompt when running in reviewer mode.</p>
 <p><code>--objective FILE</code> reads the task description from a file instead of the <code>SWIVAL_TASK</code> environment variable when running in reviewer mode.</p>

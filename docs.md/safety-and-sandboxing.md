@@ -96,7 +96,7 @@ All of these are accepted only with `--sandbox nono`; using one without it is an
 
 Some providers need access to credentials stored on disk. Using `--provider chatgpt` under nono grants the sandbox read/write access to LiteLLM's local OAuth state directory (`~/.config/litellm`) so the provider can authenticate. For stronger credential isolation, prefer nono credential proxy support via `--nono-credential` once it is available for your provider flow.
 
-This requires the `nono` binary on PATH. If it is not found, Swival exits with an actionable error.
+This requires the `nono` binary on PATH. If it is not found, Swival exits with an actionable error. See [Using Swival With nono](nono.md) for practical workflows.
 
 `--sandbox nono` is a CLI feature: the automatic re-exec only happens for the `swival` command. Library callers using the `Session` API are not re-executed — instead, launch your own process under nono and pass `sandbox="nono"`:
 
@@ -251,4 +251,4 @@ MCP tool output uses higher thresholds: 20 KB inline, with larger output written
 
 URL fetch output is capped at 50 KB inline, with larger output saved to files.
 
-Response history is written to `.swival/HISTORY.md` until that file reaches 500 KB, after which new entries are skipped.
+Response history is written to `.swival/HISTORY.md`, which is capped at 500 KB. When a new entry would exceed the cap, the oldest entries are trimmed to make room.

@@ -56,7 +56,7 @@ cache = true
 # no_memory = false        # skip auto-memory loading
 # memory_full = false      # inject entire MEMORY.md instead of budgeted retrieval
 # no_history = false       # disable HISTORY.md writes
-# sandbox = "builtin"      # "builtin" or "agentfs"
+# sandbox = "builtin"      # "builtin", "agentfs", or "nono"
 # sandbox_session = "..."  # AgentFS session ID
 # sandbox_strict_read = false  # strict read isolation (agentfs only)
 # sandbox_auto_session = true  # auto session ID from project dir (agentfs only)
@@ -140,7 +140,7 @@ List available profiles with `--list-profiles`:
 swival --list-profiles
 ```
 
-Each profile requires `provider`. The allowed keys are: `provider`, `model`, `api_key`, `user_agent`, `base_url`, `aws_profile`, `max_output_tokens`, `max_context_tokens`, `temperature`, `top_p`, `seed`, `extra_body`, `reasoning_effort`, `sanitize_thinking`, and `description`.
+Each profile requires `provider`. The allowed keys are: `provider`, `model`, `api_key`, `user_agent`, `base_url`, `aws_profile`, `project`, `location`, `max_output_tokens`, `max_context_tokens`, `temperature`, `top_p`, `seed`, `extra_body`, `reasoning_effort`, `sanitize_thinking`, and `description`.
 
 Keys outside this set, like `files`, `commands`, or `reviewer`, are rejected with an error listing the allowed keys. Profiles are for choosing a model stack, not for changing agent behavior. The `description` key is metadata: it appears in profile listings but is not passed to the provider.
 

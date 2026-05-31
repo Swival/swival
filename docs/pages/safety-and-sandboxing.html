@@ -86,6 +86,7 @@
 <li><a href="reports.html">Reports</a></li>
 <li><a href="reviews.html">Reviews</a></li>
 <li><a href="agentfs.html">AgentFS</a></li>
+<li><a href="nono.html">nono</a></li>
 </ul>
 </div>
 <div class="sidebar-section">
@@ -179,7 +180,7 @@ swival --sandbox nono --nono-allow-domain api.openai.com --nono-allow-domain git
 </table>
 <p>All of these are accepted only with <code>--sandbox nono</code>; using one without it is an error. They can also be set in the config file (<code>nono_profile</code>, <code>nono_rollback</code>, <code>nono_block_net</code>, <code>nono_allow_domain</code>, <code>nono_network_profile</code>, <code>nono_credential</code>, <code>nono_audit_integrity</code>).</p>
 <p>Some providers need access to credentials stored on disk. Using <code>--provider chatgpt</code> under nono grants the sandbox read/write access to LiteLLM's local OAuth state directory (<code>~/.config/litellm</code>) so the provider can authenticate. For stronger credential isolation, prefer nono credential proxy support via <code>--nono-credential</code> once it is available for your provider flow.</p>
-<p>This requires the <code>nono</code> binary on PATH. If it is not found, Swival exits with an actionable error.</p>
+<p>This requires the <code>nono</code> binary on PATH. If it is not found, Swival exits with an actionable error. See <a href="nono.html">Using Swival With nono</a> for practical workflows.</p>
 <p><code>--sandbox nono</code> is a CLI feature: the automatic re-exec only happens for the <code>swival</code> command. Library callers using the <code>Session</code> API are not re-executed — instead, launch your own process under nono and pass <code>sandbox="nono"</code>:</p>
 <pre><code class="language-sh">nono run --allow . -- python my_agent.py
 </code></pre>
@@ -264,7 +265,7 @@ swival --yolo --files none &quot;commands only, no file access&quot;
 <p>Command output is capped at 10 KB inline, with larger output written to <code>.swival/</code> (hard-capped at 1 MB) for paginated reads and auto-cleaned after roughly ten minutes.</p>
 <p>MCP tool output uses higher thresholds: 20 KB inline, with larger output written to <code>.swival/</code> and hard-capped at 10 MB before writing. MCP error output is inline-capped at 20 KB without file save.</p>
 <p>URL fetch output is capped at 50 KB inline, with larger output saved to files.</p>
-<p>Response history is written to <code>.swival/HISTORY.md</code> until that file reaches 500 KB, after which new entries are skipped.</p>
+<p>Response history is written to <code>.swival/HISTORY.md</code>, which is capped at 500 KB. When a new entry would exceed the cap, the oldest entries are trimmed to make room.</p>
         </article>
     </div>
     <footer class="site-footer">

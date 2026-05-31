@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>nono — Swival</title>
+    <meta name="description" content="nono: Capability-based OS sandboxing with Landlock/Seatbelt, network filtering, and rollback">
+    <link rel="canonical" href="https://swival.dev/pages/nono.html">
+    <meta property="og:type" content="article">
+    <meta property="og:title" content="nono — Swival">
+    <meta property="og:description" content="nono: Capability-based OS sandboxing with Landlock/Seatbelt, network filtering, and rollback">
+    <meta property="og:image" content="https://swival.dev/img/logo.png">
+    <meta property="og:url" content="https://swival.dev/pages/nono.html">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="nono — Swival">
+    <meta name="twitter:description" content="nono: Capability-based OS sandboxing with Landlock/Seatbelt, network filtering, and rollback">
+    <meta name="twitter:image" content="https://swival.dev/img/logo.png">
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "TechArticle",
+        "headline": "nono — Swival",
+        "description": "nono: Capability-based OS sandboxing with Landlock/Seatbelt, network filtering, and rollback",
+        "url": "https://swival.dev/pages/nono.html",
+        "publisher": {
+            "@type": "Organization",
+            "name": "Swival",
+            "logo": { "@type": "ImageObject", "url": "https://swival.dev/img/logo.png" }
+        },
+        "isPartOf": {
+            "@type": "WebSite",
+            "name": "Swival",
+            "url": "https://swival.dev/"
+        }
+    }
+    </script>
+    <link rel="icon" href="../favicon.ico">
+    <link rel="stylesheet" href="../css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../" class="header-logo">
+                <img src="../img/logo.png" alt="Swival">
+            </a>
+            <nav class="header-nav">
+                <a href="./">Docs</a>
+                <a href="https://github.com/swival/swival">GitHub</a>
+            </nav>
+        </div>
+    </header>
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <div class="sidebar-section">
+<h4>Basics</h4>
+<ul>
+<li><a href="getting-started.html">Getting Started</a></li>
+<li><a href="usage.html">Usage</a></li>
+<li><a href="tools.html">Tools</a></li>
+<li><a href="audit.html">Security Audit</a></li>
+<li><a href="goal.html">Goals</a></li>
+<li><a href="context-management.html">Context Management</a></li>
+<li><a href="open-models.html">Not Just for Frontier Models</a></li>
+</ul>
+</div>
+<div class="sidebar-section">
+<h4>Configuration & Deployment</h4>
+<ul>
+<li><a href="safety-and-sandboxing.html">Safety & Sandboxing</a></li>
+<li><a href="secrets.html">Secret Encryption</a></li>
+<li><a href="llm-filter.html">Outbound LLM Filter</a></li>
+<li><a href="command-middleware.html">Command Middleware</a></li>
+<li><a href="skills.html">Skills</a></li>
+<li><a href="metaskills.html">Metaskills</a></li>
+<li><a href="web-browsing.html">Web Browsing</a></li>
+<li><a href="mcp.html">MCP</a></li>
+<li><a href="a2a.html">A2A</a></li>
+<li><a href="acp.html">ACP</a></li>
+<li><a href="lifecycle-hooks.html">Lifecycle Hooks</a></li>
+<li><a href="custom-commands.html">Custom Commands</a></li>
+<li><a href="customization.html">Customization</a></li>
+<li><a href="providers.html">Providers</a></li>
+<li><a href="reports.html">Reports</a></li>
+<li><a href="reviews.html">Reviews</a></li>
+<li><a href="agentfs.html">AgentFS</a></li>
+<li><a href="nono.html" class="active">nono</a></li>
+</ul>
+</div>
+<div class="sidebar-section">
+<h4>Reference</h4>
+<ul>
+<li><a href="python-api.html">Python API</a></li>
+</ul>
+</div>
+        </aside>
+        <article class="docs-content">
+            <h1 id="using-swival-with-nono">Using Swival With nono</h1>
+<p><a href="https://nono.sh">nono</a> is a capability-based sandbox that confines Swival at the operating-system level: Landlock on Linux, Seatbelt on macOS. Where AgentFS overlays the filesystem and lets you copy changes back afterwards, nono enforces access by path. The agent process simply cannot read, write, or reach anything it was not granted, and the denial happens in the kernel rather than in Swival's own guards.</p>
+<p>This makes nono the right choice for untrusted or destructive tasks, for runs where you want network egress under control, and for any situation where you would rather the operating system say no than rely on the agent behaving.</p>
+<h2 id="integrated-sandbox-mode">Integrated Sandbox Mode</h2>
+<p>The simplest way to use nono with Swival is the built-in sandbox mode:</p>
+<pre><code class="language-sh">swival --sandbox nono &quot;Refactor the auth module&quot; --yolo
+</code></pre>
+<p>This re-executes Swival inside <code>nono run</code> automatically. Your working directory and any <code>--add-dir</code> paths are granted read+write, the platform temporary directory is writable so tools can scratch, and the Python interpreter and install paths are granted read-only so the re-exec'd process can still import and run. Everything else on the filesystem is denied.</p>
+<p>See <a href="safety-and-sandboxing.html">Safety and Sandboxing</a> for how nono fits alongside Swival's other safety layers.</p>
+<p>The rest of this page covers how the integration works and the controls you can layer on top.</p>
+<h2 id="prerequisites">Prerequisites</h2>
+<p>Install nono by following the instructions at <a href="https://nono.sh">nono.sh</a>, then run its one-time setup:</p>
+<pre><code class="language-sh">nono setup
+</code></pre>
+<p>Confirm the binary is on your <code>PATH</code>:</p>
+<pre><code class="language-sh">nono --version
+</code></pre>
+<p>You also need a working model provider for Swival itself, such as LM Studio, llama.cpp, or a remote provider like OpenRouter. See <a href="providers.html">Providers</a>.</p>
+<h2 id="how-it-works">How It Works</h2>
+<p>When you pass <code>--sandbox nono</code>, Swival locates the <code>nono</code> binary and re-executes itself as:</p>
+<pre><code class="language-sh">nono run --allow &lt;workspace&gt; --allow &lt;tmp&gt; --read &lt;interpreter&gt; --profile swival -- swival ...
+</code></pre>
+<p>The parent process stays outside the sandbox and supervises the child: it provides the audit trail, the network proxy, and rollback services. The child Swival process runs under the enforced capabilities, so every tool it invokes — every <code>run_command</code>, every file write — inherits the same boundaries.</p>
+<p>By default the integration uses nono's built-in <code>swival</code> profile, which grants the Python runtime and Swival's own config and state directories. You do not need to configure anything for a basic run.</p>
+<h2 id="filesystem-boundaries">Filesystem Boundaries</h2>
+<p>Inside the sandbox, writes outside the granted directories fail. You can see this directly with nono before involving Swival:</p>
+<pre><code class="language-sh">nono run --profile swival -- sh -c 'echo nope &gt; /etc/swival-test'
+</code></pre>
+<p>That write is denied by the kernel. The same boundary applies to the agent: a task that tries to modify a file outside the workspace cannot succeed, regardless of the <code>--files</code> level.</p>
+<p>To grant additional directories, use Swival's <code>--add-dir</code> (read+write) — these become <code>--allow</code> grants inside nono:</p>
+<pre><code class="language-sh">swival --sandbox nono --add-dir ../shared-lib &quot;Update the shared client&quot; --yolo
+</code></pre>
+<h2 id="network-controls">Network Controls</h2>
+<p>By default nono allows outbound network, so the call to your model provider works without any extra flags.</p>
+<p>To restrict the agent to specific hosts, enable nono's filtering proxy with <code>--nono-network-profile</code> and allowlist the domains you trust with <code>--nono-allow-domain</code> (repeatable). Everything else is refused, which keeps your provider reachable while stopping the agent from reaching anything off the list:</p>
+<pre><code class="language-sh">swival --sandbox nono --nono-network-profile developer --nono-allow-domain openrouter.ai \
+    &quot;Refactor the parser&quot; --yolo
+</code></pre>
+<p>The proxy runs in the supervising parent and terminates TLS for the allowlisted hosts; nono makes its certificate trusted inside the sandbox automatically. You can also broker a service's credentials through the proxy with <code>--nono-credential</code>, so API keys never enter the sandboxed process environment.</p>
+<p><code>--nono-block-net</code> goes further and refuses every outbound connection, including loopback. Because that also blocks the call to your model provider, it fits only fully offline work — for example a local <code>command</code>-provider model that needs no network at all. For ordinary runs against a hosted model or a local model server, reach for the allowlist above instead.</p>
+<h2 id="rollback">Rollback</h2>
+<p>With <code>--nono-rollback</code>, nono records an atomic snapshot of the files the run touches so you can undo the whole thing afterwards.</p>
+<pre><code class="language-sh">swival --sandbox nono --nono-rollback &quot;Migrate the test suite to pytest&quot; --yolo
+</code></pre>
+<p>After the run, review and restore snapshots with nono directly:</p>
+<pre><code class="language-sh">nono rollback
+</code></pre>
+<p>This pairs well with high-autonomy runs: let the agent work freely, inspect the result, and roll back in one step if you do not want to keep it.</p>
+<h2 id="provider-credentials">Provider Credentials</h2>
+<p>The built-in <code>swival</code> profile deliberately denies credential and keychain locations, but Swival grants back exactly what your provider needs so authentication still works inside the sandbox:</p>
+<ul>
+<li><strong>chatgpt</strong> — read+write to <code>~/.config/litellm</code>, the directory that holds its OAuth token cache, since it refreshes tokens on disk.</li>
+<li><strong>geap / vertexai</strong> — read-only to the Google Cloud credentials directory (<code>~/.config/gcloud</code>, or <code>$CLOUDSDK_CONFIG</code>), plus the directory holding <code>$GOOGLE_APPLICATION_CREDENTIALS</code> when set.</li>
+<li><strong>bedrock</strong> — read-only to <code>~/.aws</code>, plus the directories of <code>$AWS_SHARED_CREDENTIALS_FILE</code> and <code>$AWS_CONFIG_FILE</code> when set.</li>
+</ul>
+<p>These grants are read-only where the provider only reads a long-lived credential and exchanges it for a short-lived token over the network, so the sandbox never gets write access to your credentials it does not need. No extra flags are required:</p>
+<pre><code class="language-sh">swival --sandbox nono --provider geap --gcp-project my-project --location us-central1 \
+    --model gemini-3.1-pro &quot;Explain this module&quot; --yolo
+</code></pre>
+<h2 id="audit">Audit</h2>
+<p>Every sandboxed run is recorded. Review the trail with nono:</p>
+<pre><code class="language-sh">nono audit
+</code></pre>
+<p>Add <code>--nono-audit-integrity</code> to include filesystem-state hashing in the audit log, which lets you verify exactly what changed:</p>
+<pre><code class="language-sh">swival --sandbox nono --nono-audit-integrity &quot;Apply the lint fixes&quot; --yolo
+</code></pre>
+<h2 id="profiles">Profiles</h2>
+<p>To use a profile other than the built-in <code>swival</code> one, pass <code>--nono-profile</code>:</p>
+<pre><code class="language-sh">swival --sandbox nono --nono-profile claude-code &quot;Run the migration&quot;
+</code></pre>
+<p>You can inspect and compare available profiles with <code>nono profile</code>.</p>
+<h2 id="manual-workflow">Manual Workflow</h2>
+<p>The integrated mode is the recommended path, but you can also wrap Swival with <code>nono run</code> yourself when you want full control over the grants. This mirrors how <code>nono</code> wraps any program.</p>
+<pre><code class="language-sh">cd ~/my-project
+
+nono run --allow &quot;$PWD&quot; --profile swival -- \
+    swival &quot;Add a config module that reads from env vars&quot; --yolo --max-turns 20
+</code></pre>
+<p>Because Swival detects that it is already inside nono (via nono's <code>NONO_CAP_FILE</code> marker), it does not try to re-exec a second time. Add <code>--read</code> and <code>--allow</code> grants as needed for extra paths.</p>
+<h2 id="repl-sessions">REPL Sessions</h2>
+<p>The integrated sandbox mode works with REPL mode directly:</p>
+<pre><code class="language-sh">swival --sandbox nono --yolo
+</code></pre>
+<p>This gives you an interactive agent session under enforced capabilities. Everything the agent does for the rest of the session stays within the granted directories and network policy.</p>
+<h2 id="combining-layers">Combining Layers</h2>
+<p>nono composes with Swival's own file and command controls. You can run under OS-level enforcement while still restricting the file tools to the workspace and the command tool to a whitelist:</p>
+<pre><code class="language-sh">swival --sandbox nono --files some --commands ls,git &quot;Audit this code for security issues&quot;
+</code></pre>
+<p>This gives you defense in depth: nono enforces the hard boundary at the kernel, and Swival's guards add a second layer inside it.</p>
+<h2 id="practical-guidance">Practical Guidance</h2>
+<p>For untrusted or destructive tasks, <code>--sandbox nono --yolo</code> is the combination to reach for: the agent gets full capability within the workspace while the operating system guarantees it cannot escape. Add <code>--nono-rollback</code> when you want a clean undo, and <code>--nono-block-net</code> or <code>--nono-allow-domain</code> when network egress matters. For everyday edits you trust, the lighter <code>builtin</code> or <code>agentfs</code> modes are usually enough.</p>
+<h2 id="further-reading">Further Reading</h2>
+<ul>
+<li><a href="safety-and-sandboxing.html">Safety and Sandboxing</a></li>
+<li><a href="agentfs.html">Using Swival With AgentFS</a></li>
+<li><a href="providers.html">Providers</a></li>
+</ul>
+        </article>
+    </div>
+    <footer class="site-footer">
+        <div class="footer-inner">
+            <div class="footer-grid">
+                <div class="footer-col">
+                    <img src="../img/logo.png" alt="Swival" class="footer-logo">
+                    <p class="footer-tagline">A coding agent for any model.<br>Free, open-source, and easy to set up.</p>
+                </div>
+                <div class="footer-col">
+                    <h4>Resources</h4>
+                    <ul>
+                        <li><a href="getting-started.html">Getting Started</a></li>
+                        <li><a href="usage.html">Usage</a></li>
+                        <li><a href="tools.html">Tools</a></li>
+                        <li><a href="context-management.html">Context Management</a></li>
+                    </ul>
+                </div>
+                <div class="footer-col">
+                    <h4>Guides</h4>
+                    <ul>
+                        <li><a href="providers.html">Providers</a></li>
+                        <li><a href="safety-and-sandboxing.html">Safety &amp; Sandboxing</a></li>
+                        <li><a href="python-api.html">Python API</a></li>
+                        <li><a href="open-models.html">Open Models</a></li>
+                    </ul>
+                </div>
+                <div class="footer-col">
+                    <h4>Community</h4>
+                    <ul>
+                        <li><a href="https://github.com/swival/swival">GitHub</a></li>
+                        <li><a href="https://calibra.swival.dev">Calibra</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2025&ndash;2026 Swival &middot; MIT License</p>
+            </div>
+        </div>
+    </footer>
+    <button class="back-to-top" aria-label="Back to top">&uarr;</button>
+    <script src="../js/site.js"></script>
+</body>
+</html>

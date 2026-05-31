@@ -69,7 +69,7 @@ The JSON below is from a verified local run using `--model dummy-model --max-tur
 
 `version` is the schema version and is currently `1`. `mode` is `"oneshot"` for single-task runs or `"repl"` for interactive sessions. `timestamp` is the run completion time in UTC ISO 8601 format.
 
-`task` is the original question string passed on the command line, or `"repl session (<N> turns)"` for REPL sessions. `model` is the resolved model identifier that was actually used. `provider` is one of `lmstudio`, `llamacpp`, `huggingface`, `openrouter`, `chatgpt`, `google`, `bedrock`, `generic`, or `command`.
+`task` is the original question string passed on the command line, or `"repl session (<N> turns)"` for REPL sessions. `model` is the resolved model identifier that was actually used. `provider` is one of `lmstudio`, `llamacpp`, `huggingface`, `openrouter`, `chatgpt`, `google`, `geap` (`vertexai` is an accepted alias), `bedrock`, `generic`, or `command`.
 
 `settings` captures run configuration. `sandbox` captures the sandbox backend in use. `result` captures outcome and exit semantics. `stats` captures aggregate counters. `timeline` captures ordered event records.
 
@@ -85,7 +85,7 @@ The JSON below is from a verified local run using `--model dummy-model --max-tur
 
 ### `sandbox`
 
-`mode` is always present and is `builtin` (application-layer path guards) or `agentfs` (OS-enforced write isolation). `session` appears when an AgentFS session ID is active. When `mode` is `agentfs`, `strict_read` is always present (whether strict read isolation is enabled). Additional fields may also appear: `agentfs_version` (the AgentFS binary version) and `diff_hint` (a hint for reviewing changes).
+`mode` is always present and is `builtin` (application-layer path guards), `agentfs` (OS-enforced write isolation via AgentFS), or `nono` (OS-enforced isolation via nono). `session` appears when an AgentFS session ID is active. When `mode` is `agentfs`, `strict_read` is always present (whether strict read isolation is enabled), and `agentfs_version` (the AgentFS binary version) and `diff_hint` (a hint for reviewing changes) may also appear. When `mode` is `nono`, `rollback` is always present (whether atomic rollback snapshots are enabled), and `nono_version` (the nono binary version) and `nono_profile` (the named profile applied) may also appear.
 
 ### `result`
 

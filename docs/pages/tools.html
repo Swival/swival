@@ -86,6 +86,7 @@
 <li><a href="reports.html">Reports</a></li>
 <li><a href="reviews.html">Reviews</a></li>
 <li><a href="agentfs.html">AgentFS</a></li>
+<li><a href="nono.html">nono</a></li>
 </ul>
 </div>
 <div class="sidebar-section">
@@ -138,7 +139,7 @@
 <p><code>todo</code> tracks work items during a run. The list lives in memory for the duration of the session, surviving context compaction because the state object exists outside the message history. Actions include <code>add</code>, <code>done</code>, <code>remove</code>, <code>clear</code>, and <code>list</code>, and each action returns the full current list.</p>
 <p>Matching for <code>done</code> and <code>remove</code> is fuzzy in a controlled way, so exact wording is not required every time. Swival tries exact matching first, then prefix matching, then substring matching. The list allows up to 50 items, and each item can be up to 500 characters.</p>
 <h2 id="history-logging">History Logging</h2>
-<p>Every final answer is appended to <code>.swival/HISTORY.md</code> with a timestamp and the originating question. This file is capped at 500 KB. Once full, new entries are skipped instead of rotating older content. Use <code>--no-history</code> if you do not want history writes.</p>
+<p>Every final answer is appended to <code>.swival/HISTORY.md</code> with a timestamp and the originating question. This file is capped at 500 KB. When a new entry would exceed the cap, the oldest entries are trimmed to make room rather than dropping the new one. Use <code>--no-history</code> if you do not want history writes.</p>
 <h2 id="view_image"><code>view_image</code></h2>
 <p><code>view_image</code> reads an image file from the filesystem and presents it to the model for visual analysis. It supports PNG, JPEG, GIF, WebP, and BMP formats. The tool takes a required <code>image_path</code> parameter and an optional <code>question</code> to focus the model's description.</p>
 <p>This tool is only available when the model supports vision. Swival checks vision support at startup and removes the tool if the model is known not to support image input. For unrecognized models, the tool is included optimistically.</p>
@@ -205,7 +206,7 @@ swival --commands ask &quot;Run the tests&quot;
 <p><code>spawn_subagent</code> launches an independent subagent in a background thread to work on a task in parallel. The subagent runs its own <code>run_agent_loop()</code> with isolated state (messages, thinking, todo, snapshot) but shares the parent's LLM config, MCP/A2A connections, secret encryption, and LLM filter.</p>
 <p>Subagents inherit the parent's full system prompt (instructions, memory, AGENTS.md) but have no access to the parent's conversation history. The <code>task</code> parameter must include all necessary context.</p>
 <p>Subagents cannot spawn their own subagents — the tool is removed from their tool list to prevent recursion. Up to 4 subagents can run concurrently.</p>
-<p>Subagents are auto-enabled for the <code>google</code>, <code>chatgpt</code>, and <code>bedrock</code> providers, or when the detected context window is at least 100,000 tokens. Pass <code>--subagents</code> or <code>--no-subagents</code> on the CLI (or <code>subagents=True</code>/<code>False</code> in Session or config) to override the default.</p>
+<p>Subagents are auto-enabled for the <code>google</code>, <code>geap</code>, <code>chatgpt</code>, and <code>bedrock</code> providers, or when the detected context window is at least 100,000 tokens. Pass <code>--subagents</code> or <code>--no-subagents</code> on the CLI (or <code>subagents=True</code>/<code>False</code> in Session or config) to override the default.</p>
 <h2 id="check_subagents"><code>check_subagents</code></h2>
 <p><code>check_subagents</code> monitors and manages spawned subagents. It supports three actions:</p>
 <p><code>poll</code> returns the status of all subagents: running, done, failed, or cancelled. Done subagents include a preview of their result (first 500 characters). Failed subagents include the error message.</p>

@@ -82,7 +82,7 @@ Matching for `done` and `remove` is fuzzy in a controlled way, so exact wording 
 
 ## History Logging
 
-Every final answer is appended to `.swival/HISTORY.md` with a timestamp and the originating question. This file is capped at 500 KB. Once full, new entries are skipped instead of rotating older content. Use `--no-history` if you do not want history writes.
+Every final answer is appended to `.swival/HISTORY.md` with a timestamp and the originating question. This file is capped at 500 KB. When a new entry would exceed the cap, the oldest entries are trimmed to make room rather than dropping the new one. Use `--no-history` if you do not want history writes.
 
 ## `view_image`
 
@@ -198,7 +198,7 @@ Subagents inherit the parent's full system prompt (instructions, memory, AGENTS.
 
 Subagents cannot spawn their own subagents — the tool is removed from their tool list to prevent recursion. Up to 4 subagents can run concurrently.
 
-Subagents are auto-enabled for the `google`, `chatgpt`, and `bedrock` providers, or when the detected context window is at least 100,000 tokens. Pass `--subagents` or `--no-subagents` on the CLI (or `subagents=True`/`False` in Session or config) to override the default.
+Subagents are auto-enabled for the `google`, `geap`, `chatgpt`, and `bedrock` providers, or when the detected context window is at least 100,000 tokens. Pass `--subagents` or `--no-subagents` on the CLI (or `subagents=True`/`False` in Session or config) to override the default.
 
 ## `check_subagents`
 

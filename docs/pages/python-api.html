@@ -86,6 +86,7 @@
 <li><a href="reports.html">Reports</a></li>
 <li><a href="reviews.html">Reviews</a></li>
 <li><a href="agentfs.html">AgentFS</a></li>
+<li><a href="nono.html">nono</a></li>
 </ul>
 </div>
 <div class="sidebar-section">
@@ -125,7 +126,7 @@ print(answer)
     temperature: float | None = None,
     top_p: float | None = None,
     seed: int | None = None,
-    files: str = &quot;some&quot;,
+    files: str = &quot;some&quot;,  # &quot;some&quot;, &quot;all&quot;, or &quot;none&quot;; yolo=True upgrades an unset value to &quot;all&quot;
     commands: str | list[str] | None = &quot;all&quot;,  # &quot;all&quot;, &quot;none&quot;, &quot;ask&quot;, or list (whitelist = run_command only)
     yolo: bool = False,
     verbose: bool = False,
@@ -140,6 +141,13 @@ print(answer)
     sandbox_session: str | None = None,
     sandbox_strict_read: bool = False,
     sandbox_auto_session: bool = True,
+    nono_profile: str | None = None,
+    nono_rollback: bool = False,
+    nono_block_net: bool = False,
+    nono_allow_domain: list[str] | None = None,
+    nono_network_profile: str | None = None,
+    nono_credential: list[str] | None = None,
+    nono_audit_integrity: bool = False,
     read_guard: bool = True,
     history: bool = True,
     memory: bool = True,
@@ -170,6 +178,8 @@ print(answer)
     lifecycle_enabled: bool = True,
     command_middleware: str | None = None,
     aws_profile: str | None = None,
+    project: str | None = None,
+    location: str | None = None,
     approved_buckets: set[str] | None = None,
     metaskills: str = &quot;local&quot;,  # &quot;local&quot;, &quot;all&quot;, or &quot;off&quot;
     repair_truncated_args: bool = True,
@@ -193,7 +203,7 @@ print(answer)
 </tr>
 <tr>
 <td><code>provider</code></td>
-<td>LLM provider: <code>"lmstudio"</code>, <code>"llamacpp"</code>, <code>"huggingface"</code>, <code>"openrouter"</code>, <code>"chatgpt"</code>, <code>"google"</code>, <code>"bedrock"</code>, <code>"generic"</code>, <code>"command"</code>, or a command string.</td>
+<td>LLM provider: <code>"lmstudio"</code>, <code>"llamacpp"</code>, <code>"huggingface"</code>, <code>"openrouter"</code>, <code>"chatgpt"</code>, <code>"google"</code>, <code>"geap"</code> (<code>"vertexai"</code> is an alias), <code>"bedrock"</code>, <code>"generic"</code>, <code>"command"</code>, or a command string.</td>
 </tr>
 <tr>
 <td><code>model</code></td>

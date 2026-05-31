@@ -86,6 +86,7 @@
 <li><a href="reports.html">Reports</a></li>
 <li><a href="reviews.html">Reviews</a></li>
 <li><a href="agentfs.html">AgentFS</a></li>
+<li><a href="nono.html">nono</a></li>
 </ul>
 </div>
 <div class="sidebar-section">
@@ -141,8 +142,8 @@
 <ul>
 <li><code>initialize</code>, with version negotiation and capability echo</li>
 <li><code>authenticate</code> (no-op; provider credentials live in your swival config, not in ACP)</li>
-<li><code>session/new</code> with a working directory</li>
-<li><code>session/prompt</code> for a single text turn, returning when the model finishes or hits the turn limit</li>
+<li><code>session/new</code> with a working directory, followed by an <code>available_commands_update</code> notification advertising the supported slash commands</li>
+<li><code>session/prompt</code> for a single text turn, returning when the model finishes or hits the turn limit. A prompt whose text begins with a slash (<code>/</code>) or bang (<code>!</code>) runs that command, exactly as the REPL would</li>
 <li><code>session/cancel</code> to interrupt a running prompt; the prompt response then carries <code>stopReason: "cancelled"</code></li>
 <li><code>session/update</code> notifications: <code>agent_message_chunk</code> for assistant text, <code>tool_call</code> and <code>tool_call_update</code> for tool activity (with kinds <code>read</code>, <code>edit</code>, <code>execute</code>, <code>search</code>, <code>think</code>, <code>delete</code>, <code>fetch</code>, <code>other</code>)</li>
 </ul>

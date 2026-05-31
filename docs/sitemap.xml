@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://swival.dev/</loc><lastmod>2026-05-30</lastmod></url>
-  <url><loc>https://swival.dev/pages/</loc><lastmod>2026-05-30</lastmod></url>
+  <url><loc>https://swival.dev/</loc><lastmod>2026-05-31</lastmod></url>
+  <url><loc>https://swival.dev/pages/</loc><lastmod>2026-05-31</lastmod></url>
   <url><loc>https://swival.dev/pages/getting-started.html</loc><lastmod>2026-05-27</lastmod></url>
   <url><loc>https://swival.dev/pages/usage.html</loc><lastmod>2026-05-19</lastmod></url>
   <url><loc>https://swival.dev/pages/tools.html</loc><lastmod>2026-05-19</lastmod></url>
@@ -9,7 +9,7 @@
   <url><loc>https://swival.dev/pages/goal.html</loc><lastmod>2026-05-19</lastmod></url>
   <url><loc>https://swival.dev/pages/context-management.html</loc><lastmod>2026-05-13</lastmod></url>
   <url><loc>https://swival.dev/pages/open-models.html</loc><lastmod>2026-04-07</lastmod></url>
-  <url><loc>https://swival.dev/pages/safety-and-sandboxing.html</loc><lastmod>2026-05-13</lastmod></url>
+  <url><loc>https://swival.dev/pages/safety-and-sandboxing.html</loc><lastmod>2026-05-30</lastmod></url>
   <url><loc>https://swival.dev/pages/secrets.html</loc><lastmod>2026-04-09</lastmod></url>
   <url><loc>https://swival.dev/pages/llm-filter.html</loc><lastmod>2026-04-09</lastmod></url>
   <url><loc>https://swival.dev/pages/command-middleware.html</loc><lastmod>2026-04-12</lastmod></url>
@@ -26,5 +26,6 @@
   <url><loc>https://swival.dev/pages/reports.html</loc><lastmod>2026-05-13</lastmod></url>
   <url><loc>https://swival.dev/pages/reviews.html</loc><lastmod>2026-05-13</lastmod></url>
   <url><loc>https://swival.dev/pages/agentfs.html</loc><lastmod>2026-03-25</lastmod></url>
+  <url><loc>https://swival.dev/pages/nono.html</loc><lastmod>2026-05-31</lastmod></url>
   <url><loc>https://swival.dev/pages/python-api.html</loc><lastmod>2026-05-26</lastmod></url>
 </urlset>

@@ -39,7 +39,7 @@ Session(
     temperature: float | None = None,
     top_p: float | None = None,
     seed: int | None = None,
-    files: str = "some",
+    files: str = "some",  # "some", "all", or "none"; yolo=True upgrades an unset value to "all"
     commands: str | list[str] | None = "all",  # "all", "none", "ask", or list (whitelist = run_command only)
     yolo: bool = False,
     verbose: bool = False,
@@ -54,6 +54,13 @@ Session(
     sandbox_session: str | None = None,
     sandbox_strict_read: bool = False,
     sandbox_auto_session: bool = True,
+    nono_profile: str | None = None,
+    nono_rollback: bool = False,
+    nono_block_net: bool = False,
+    nono_allow_domain: list[str] | None = None,
+    nono_network_profile: str | None = None,
+    nono_credential: list[str] | None = None,
+    nono_audit_integrity: bool = False,
     read_guard: bool = True,
     history: bool = True,
     memory: bool = True,
@@ -84,6 +91,8 @@ Session(
     lifecycle_enabled: bool = True,
     command_middleware: str | None = None,
     aws_profile: str | None = None,
+    project: str | None = None,
+    location: str | None = None,
     approved_buckets: set[str] | None = None,
     metaskills: str = "local",  # "local", "all", or "off"
     repair_truncated_args: bool = True,
@@ -98,7 +107,7 @@ All parameters are keyword-only. The important ones:
 | Parameter               | Description                                                                                                                                                                                                                                                                            |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `base_dir`              | Project root. Tools resolve paths relative to this.                                                                                                                                                                                                                                    |
-| `provider`              | LLM provider: `"lmstudio"`, `"llamacpp"`, `"huggingface"`, `"openrouter"`, `"chatgpt"`, `"google"`, `"bedrock"`, `"generic"`, `"command"`, or a command string.                                                                                                                        |
+| `provider`              | LLM provider: `"lmstudio"`, `"llamacpp"`, `"huggingface"`, `"openrouter"`, `"chatgpt"`, `"google"`, `"geap"` (`"vertexai"` is an alias), `"bedrock"`, `"generic"`, `"command"`, or a command string.                                                                                    |
 | `model`                 | Model identifier. Required for most providers; LM Studio and llama.cpp auto-discover.                                                                                                                                                                                                  |
 | `api_key`               | API key. Can also be set via provider-specific env vars.                                                                                                                                                                                                                               |
 | `user_agent`            | `User-Agent` header for LLM API requests. Defaults to `Swival/<version>`.                                                                                                                                                                                                              |

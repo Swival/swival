@@ -427,9 +427,10 @@ For providers that support explicit cache annotations, Swival automatically mark
 | AWS Bedrock                  | Explicit `cache_control` injected by Swival | Supported for Anthropic models on Bedrock                       |
 | OpenAI / Deepseek            | Automatic (provider-side)                   | No annotation needed; prompts >1024 tokens cached automatically |
 | LM Studio                    | None                                        | Local inference, no server-side cache                           |
-| Generic with custom base_url | None                                        | Swival cannot identify the upstream provider from the URL alone |
+| Vertex AI (`geap`/`vertexai`)| None                                        | Excluded: Vertex AI rejects cached content when tools or system instructions are in the same request |
+| Generic with custom base_url | Best effort                                 | Annotation injected only when LiteLLM recognizes the model as cache-capable |
 
-Cache annotation is applied automatically when the model is known to support it. If the call succeeds with an unexpected provider, the extra annotation is silently ignored.
+Cache annotation is applied automatically when the model is known to support it (Swival defers to LiteLLM's `supports_prompt_caching` check). It is injected for every provider except LM Studio and Vertex AI; if the call succeeds with a provider that ignores the annotation, the extra field is silently dropped.
 
 When diagnostics are enabled (the default unless `--quiet` is set), Swival prints cache hit and write stats to stderr after each turn:
 

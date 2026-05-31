@@ -69,8 +69,8 @@ The exact field names depend on your plugin version; consult its README. The sha
 
 - `initialize`, with version negotiation and capability echo
 - `authenticate` (no-op; provider credentials live in your swival config, not in ACP)
-- `session/new` with a working directory
-- `session/prompt` for a single text turn, returning when the model finishes or hits the turn limit
+- `session/new` with a working directory, followed by an `available_commands_update` notification advertising the supported slash commands
+- `session/prompt` for a single text turn, returning when the model finishes or hits the turn limit. A prompt whose text begins with a slash (`/`) or bang (`!`) runs that command, exactly as the REPL would
 - `session/cancel` to interrupt a running prompt; the prompt response then carries `stopReason: "cancelled"`
 - `session/update` notifications: `agent_message_chunk` for assistant text, `tool_call` and `tool_call_update` for tool activity (with kinds `read`, `edit`, `execute`, `search`, `think`, `delete`, `fetch`, `other`)
 

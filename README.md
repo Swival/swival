@@ -356,3 +356,5 @@ Full documentation is available at [swival.dev](https://swival.dev/).
   built to work well with small and open models too
 - [Using Swival with AgentFS](docs.md/agentfs.md) -- copy-on-write filesystem
   sandboxing for safe agent runs
+- [Using Swival with nono](docs.md/nono.md) -- OS-enforced sandboxing with
+  network controls and atomic rollback
