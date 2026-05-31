@@ -83,9 +83,8 @@ def _has_schema_affinity(keys: set[str], properties: dict[str, Any]) -> bool:
     for key in keys:
         if key in known:
             return True
-        if key in _FIELD_ALIASES:
-            if any(t in known for t in _FIELD_ALIASES[key]):
-                return True
+        if key in _FIELD_ALIASES and any(t in known for t in _FIELD_ALIASES[key]):
+            return True
         if difflib.get_close_matches(key, known, n=1, cutoff=0.8):
             return True
     return False

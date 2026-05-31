@@ -1991,9 +1991,7 @@ def is_pinned(turn: list) -> bool:
     for msg in turn:
         if _msg_role(msg) == "user":
             content = _msg_content(msg)
-            if content.startswith(_DROPPABLE_USER_PREFIXES):
-                return False
-            return True
+            return not content.startswith(_DROPPABLE_USER_PREFIXES)
     return False
 
 

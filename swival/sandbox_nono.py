@@ -69,6 +69,17 @@ def _has_nono_env() -> bool:
     return bool(os.environ.get(_NONO_ENV))
 
 
+def _append_resolved_unique(
+    paths: list[str], seen: set[str], p: "str | Path | None"
+) -> None:
+    if not p:
+        return
+    resolved = str(Path(p).resolve())
+    if resolved not in seen:
+        seen.add(resolved)
+        paths.append(resolved)
+
+
 def _find_nono() -> str:
     """Locate the nono binary. Raises ConfigError if not found."""
     path = shutil.which("nono")
@@ -113,19 +124,11 @@ def _runtime_read_paths() -> list[str]:
     paths: list[str] = []
     seen: set[str] = set()
 
-    def _add(p: "str | Path | None") -> None:
-        if not p:
-            return
-        resolved = str(Path(p).resolve())
-        if resolved not in seen:
-            seen.add(resolved)
-            paths.append(resolved)
-
     # The directory on sys.path that contains the `swival` package: repo root
     # for an editable install, site-packages for a regular install.
-    _add(Path(__file__).parent.parent)
-    _add(sys.prefix)
-    _add(sys.base_prefix)
+    _append_resolved_unique(paths, seen, Path(__file__).parent.parent)
+    _append_resolved_unique(paths, seen, sys.prefix)
+    _append_resolved_unique(paths, seen, sys.base_prefix)
     return paths
 
 
@@ -145,17 +148,9 @@ def writable_temp_dirs() -> list[str]:
     paths: list[str] = []
     seen: set[str] = set()
 
-    def _add(p: "str | Path | None") -> None:
-        if not p:
-            return
-        resolved = str(Path(p).resolve())
-        if resolved not in seen:
-            seen.add(resolved)
-            paths.append(resolved)
-
-    _add(tempfile.gettempdir())
+    _append_resolved_unique(paths, seen, tempfile.gettempdir())
     if os.path.isdir("/tmp"):
-        _add("/tmp")
+        _append_resolved_unique(paths, seen, "/tmp")
     return paths
 
 
