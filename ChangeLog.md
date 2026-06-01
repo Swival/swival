@@ -2,6 +2,13 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.25
+
+- Swival now has built-in support for the Nono sandbox. Just pass `--sandbox nono` (and optional flags like `--nono-profile`, `--nono-block-net`, `--nono-rollback`, `--nono-credential`, etc.) to re-exec the process inside a Nono-managed sandbox with OS-enforced filesystem and network isolation. Provider-specific credential directories (GEAP, Bedrock) and temp directories are granted read access automatically.
+- `run_command` and `run_shell_command` accept a new `background` parameter. When true, the command is launched detached and the tool returns immediately with the PID and a log file path — useful for long-running servers, watchers, and tasks that outlive a single tool call.
+- The ACP server now advertises available slash commands via an `available_commands_update` notification after session creation, and prompts that begin with `/` or `!` are dispatched as commands the same way the REPL would.
+- DeepSeek models routed through `api.deepseek.com` now receive reasoning content in tool-calling turns.
+
 ## 1.0.24
 
 - `/audit` now writes a `README.md` index into `audit-findings/` whenever artifacts land.
