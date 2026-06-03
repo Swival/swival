@@ -6332,6 +6332,27 @@ def main():
             sys.exit(1)
 
 
+def _import_litellm():
+    """Import litellm, preferring a freshly downloaded model cost map.
+
+    litellm fetches its model cost map from GitHub at import time and, in
+    recent versions, falls back to the bundled offline copy when the download
+    fails. Older versions raise instead, so if the first import blows up we
+    force the offline map and retry rather than letting Swival die when there
+    is no network.
+    """
+    try:
+        import litellm
+
+        return litellm
+    except Exception:
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        sys.modules.pop("litellm", None)
+        import litellm
+
+        return litellm
+
+
 def _litellm_context_length(model_str: str) -> int | None:
     """Query litellm for max_input_tokens, returning None on any failure."""
     try:
@@ -6370,7 +6391,7 @@ def resolve_provider(
         provider = "geap"
     provider_name = provider
     llm_provider = provider
-    os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    _import_litellm()
     if provider == "lmstudio":
         api_base = base_url or "http://127.0.0.1:1234"
         if model:

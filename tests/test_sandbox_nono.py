@@ -16,6 +16,7 @@ from swival.sandbox_nono import (
     _find_nono,
     build_nono_argv,
     check_sandbox_available,
+    cost_map_host_reachable,
     effective_profile,
     get_nono_version,
     is_inside_nono,
@@ -370,6 +371,52 @@ class TestMaybeReexec:
         dash_idx = captured["args"].index("--")
         assert captured["args"][dash_idx + 1 :] == ["swival", "--repl"]
 
+    def test_open_network_lets_cost_map_download(self, tmp_path, monkeypatch):
+        """With no network restriction the child must not force the offline map."""
+        _clear_sandboxed(monkeypatch)
+        _mock_nono_script(tmp_path)
+        monkeypatch.setenv("PATH", str(tmp_path))
+        monkeypatch.setattr(sys, "argv", ["swival", "task"])
+        monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
+
+        captured = {}
+        monkeypatch.setattr(os, "execvpe", lambda f, a, e: captured.update(env=e))
+        maybe_reexec(sandbox="nono", base_dir=str(tmp_path), add_dirs=[])
+        assert "LITELLM_LOCAL_MODEL_COST_MAP" not in captured["env"]
+
+    def test_block_net_forces_offline_cost_map(self, tmp_path, monkeypatch):
+        """A blocked network would doom the download, so force the offline map."""
+        _clear_sandboxed(monkeypatch)
+        _mock_nono_script(tmp_path)
+        monkeypatch.setenv("PATH", str(tmp_path))
+        monkeypatch.setattr(sys, "argv", ["swival", "task"])
+        monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
+
+        captured = {}
+        monkeypatch.setattr(os, "execvpe", lambda f, a, e: captured.update(env=e))
+        maybe_reexec(
+            sandbox="nono", base_dir=str(tmp_path), add_dirs=[], block_net=True
+        )
+        assert captured["env"]["LITELLM_LOCAL_MODEL_COST_MAP"] == "True"
+
+    def test_allowlist_with_cost_map_host_downloads(self, tmp_path, monkeypatch):
+        """If the cost-map host is in the allowlist the download can proceed."""
+        _clear_sandboxed(monkeypatch)
+        _mock_nono_script(tmp_path)
+        monkeypatch.setenv("PATH", str(tmp_path))
+        monkeypatch.setattr(sys, "argv", ["swival", "task"])
+        monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
+
+        captured = {}
+        monkeypatch.setattr(os, "execvpe", lambda f, a, e: captured.update(env=e))
+        maybe_reexec(
+            sandbox="nono",
+            base_dir=str(tmp_path),
+            add_dirs=[],
+            allow_domain=["raw.githubusercontent.com"],
+        )
+        assert "LITELLM_LOCAL_MODEL_COST_MAP" not in captured["env"]
+
     def test_does_not_chdir(self, tmp_path, monkeypatch):
         """nono enforces by path, so re-exec must not change the CWD."""
         _clear_sandboxed(monkeypatch)
@@ -483,6 +530,32 @@ class TestMisc:
 
     def test_effective_profile_explicit(self):
         assert effective_profile("python-dev") == "python-dev"
+
+
+class TestCostMapHostReachable:
+    def test_open_network_is_reachable(self):
+        assert cost_map_host_reachable(False, None) is True
+        assert cost_map_host_reachable(False, []) is True
+
+    def test_block_net_is_unreachable(self):
+        assert cost_map_host_reachable(True, None) is False
+        assert cost_map_host_reachable(True, ["raw.githubusercontent.com"]) is False
+
+    def test_allowlist_without_host_is_unreachable(self):
+        assert cost_map_host_reachable(False, ["api.openai.com"]) is False
+
+    def test_allowlist_with_exact_host_is_reachable(self):
+        assert cost_map_host_reachable(False, ["raw.githubusercontent.com"]) is True
+
+    def test_allowlist_with_parent_domain_is_reachable(self):
+        assert cost_map_host_reachable(False, ["githubusercontent.com"]) is True
+
+    def test_honors_cost_map_url_override(self, monkeypatch):
+        monkeypatch.setenv(
+            "LITELLM_MODEL_COST_MAP_URL", "https://mirror.internal/costs.json"
+        )
+        assert cost_map_host_reachable(False, ["mirror.internal"]) is True
+        assert cost_map_host_reachable(False, ["raw.githubusercontent.com"]) is False
 
 
 class TestProviderStateDirs:

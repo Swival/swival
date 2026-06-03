@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .report import ConfigError
 from .sandbox_agentfs import _absolutize_argv
@@ -25,6 +26,38 @@ from .sandbox_agentfs import _absolutize_argv
 _ENV_MARKER = "SWIVAL_NONO_ACTIVE"
 _NONO_ENV = "NONO_CAP_FILE"
 _VERSION_ENV = "SWIVAL_NONO_VERSION"
+
+# litellm fetches its model cost map from this host at import time. Knowing it
+# lets us decide whether the sandbox's network policy will let the download
+# through. The URL is overridable via LITELLM_MODEL_COST_MAP_URL.
+_COST_MAP_DEFAULT_URL = (
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/"
+    "model_prices_and_context_window.json"
+)
+
+
+def cost_map_host_reachable(block_net: bool, allow_domain: list[str] | None) -> bool:
+    """Return True if the nono network policy can reach the cost-map host.
+
+    litellm tries to download a fresh model cost map when it is imported, and
+    that import happens inside the sandbox. A blocked or allowlisted network
+    turns the fetch into a doomed request that wastes litellm's timeout on
+    every startup and trips ``--audit-integrity``. When we can tell the host is
+    unreachable we force litellm's bundled offline map instead.
+
+    Conservative on purpose: only ``--block-net`` and a non-empty
+    ``--allow-domain`` allowlist are treated as restrictions we can reason
+    about. A bare ``--network-profile`` is opaque, so we let the download try
+    and rely on litellm's own offline fallback.
+    """
+    if block_net:
+        return False
+    if allow_domain:
+        url = os.environ.get("LITELLM_MODEL_COST_MAP_URL", _COST_MAP_DEFAULT_URL)
+        host = urlparse(url).hostname or ""
+        return any(host == d or host.endswith("." + d) for d in allow_domain)
+    return True
+
 
 # nono ships a built-in "swival" profile that grants the Python runtime,
 # user tools, and Swival's own config/state directories.  Without it the
@@ -347,6 +380,12 @@ def maybe_reexec(
     env = os.environ.copy()
     env[_ENV_MARKER] = "1"
     env[_VERSION_ENV] = probe["version"]
+
+    # The re-exec'd Swival imports litellm inside the sandbox, which would try
+    # to download the model cost map. If the network policy cannot reach the
+    # host, skip the doomed fetch and use litellm's bundled offline map.
+    if not cost_map_host_reachable(block_net, allow_domain):
+        env.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
     os.execvpe(argv[0], argv, env)
 
