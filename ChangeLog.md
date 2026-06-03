@@ -2,6 +2,14 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.26
+
+- Shell commands now show live stderr progress while they run: short commands get a spinner, and timed commands show a progress bar against their timeout. The command timeout cap has also been raised from 120 seconds to 240 seconds.
+- Streaming assistant output now prints and refreshes progressively instead of using a narrow scrolling marquee, making long responses easier to read as they arrive.
+- Reasoning content is preserved by default when providers expose it, improving follow-up turns for reasoning-capable routes while still stripping it for strict OpenAI-compatible endpoints that reject the field.
+- Swival now exports `swival.__version__`, so scripts and integrations can inspect the installed package version directly.
+- Swival can now keep estimating tokens when `tiktoken` cannot load its encoding offline, instead of failing before a request is sent.
+
 ## 1.0.25
 
 - Swival now has built-in support for the Nono sandbox. Just pass `--sandbox nono` (and optional flags like `--nono-profile`, `--nono-block-net`, `--nono-rollback`, `--nono-credential`, etc.) to re-exec the process inside a Nono-managed sandbox with OS-enforced filesystem and network isolation. Provider-specific credential directories (GEAP, Bedrock) and temp directories are granted read access automatically.
