@@ -191,8 +191,7 @@
 <p>For the full command reference, see <a href="usage.html">Usage</a>.</p>
 <h2 id="configuration">Configuration</h2>
 <p>Most context management works automatically. A few settings let you tune it.</p>
-<p><code>--max-context-tokens</code> tells Swival how large the context window is. When you omit it, Swival auto-detects the window for most providers: LM Studio and llama.cpp report it directly (via <code>/api/v1/models</code> and <code>/props</code>), other OpenAI-compatible servers are probed through <code>/v1/models</code>, and hosted providers (HuggingFace, OpenRouter, Google, ChatGPT, GEAP, Bedrock) are looked up in LiteLLM's model registry. Set the flag explicitly only when a provider does not advertise its window, or when you want to cap it lower. Without a known window, Swival may not trigger compaction at the right time.</p>
-<p>Once the window is known, every turn header shows how much of it is in use, for example <code>Turn 3/100 (~4,200 / 131,072 tokens, 3%)</code>, so you can see compaction approaching.</p>
+<p><code>--max-context-tokens</code> tells Swival how large the context window is.</p>
 <p><code>--proactive-summaries</code> enables the periodic checkpoint summarization described above. Recommended for long-running sessions where the agent will go through many investigation and implementation cycles.</p>
 <p><code>--max-output-tokens</code> controls the maximum generation budget per LLM call. Before every call, Swival dynamically shrinks this to fit the remaining context space, so you don't need to tune it carefully — but setting it to a reasonable value (the default is 32,768) helps Swival estimate budgets accurately.</p>
 <p>These can be set via CLI flags, project config (<code>swival.toml</code>), or global config (<code>~/.config/swival/config.toml</code>). See <a href="usage.html">Usage</a> for the full flag reference.</p>
