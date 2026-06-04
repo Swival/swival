@@ -6334,24 +6334,21 @@ def main():
 
 
 def _import_litellm():
-    """Import litellm, preferring a freshly downloaded model cost map.
+    """Import litellm, using the bundled offline model cost map.
 
-    litellm fetches its model cost map from GitHub at import time and, in
-    recent versions, falls back to the bundled offline copy when the download
-    fails. Older versions raise instead, so if the first import blows up we
-    force the offline map and retry rather than letting Swival die when there
-    is no network.
+    Left to itself, litellm fetches its model cost map from GitHub on import,
+    adding a blocking network round-trip to every startup that turns into a
+    multi-second stall on a slow or flaky connection. Forcing the offline copy
+    bundled with the package keeps startup deterministic; the only cost is
+    slightly stale context-window defaults, which the live server discovery and
+    --max-context-tokens already override. The package __init__ sets this var
+    before any import, but we set it here too so direct callers and tests get
+    the same behavior.
     """
-    try:
-        import litellm
+    os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    import litellm
 
-        return litellm
-    except Exception:
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        sys.modules.pop("litellm", None)
-        import litellm
-
-        return litellm
+    return litellm
 
 
 def _litellm_context_length(model_str: str) -> int | None:

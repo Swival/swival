@@ -49,6 +49,41 @@ def _patch_urlopen_error(monkeypatch):
     monkeypatch.setattr(agent.urllib.request, "urlopen", _boom)
 
 
+class TestImportLitellm:
+    """The bundled offline cost map must be forced before litellm is imported."""
+
+    def test_sets_local_cost_map_before_import(self, monkeypatch):
+        # Drop the var and any cached litellm so the import path runs fresh.
+        monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
+        for name in list(sys.modules):
+            if name == "litellm" or name.startswith("litellm."):
+                monkeypatch.delitem(sys.modules, name, raising=False)
+
+        seen = {}
+
+        import builtins
+
+        real_import = builtins.__import__
+
+        def _spy_import(name, *a, **k):
+            if name == "litellm" and "env" not in seen:
+                seen["env"] = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+            return real_import(name, *a, **k)
+
+        monkeypatch.setattr(builtins, "__import__", _spy_import)
+
+        agent._import_litellm()
+
+        # The env var was already "True" at the moment litellm got imported.
+        assert seen["env"] == "True"
+        assert os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] == "True"
+
+    def test_does_not_override_explicit_setting(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "False")
+        agent._import_litellm()
+        assert os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] == "False"
+
+
 # ---------------------------------------------------------------------------
 # call_llm routing
 # ---------------------------------------------------------------------------

@@ -1,4 +1,7 @@
+import os
 from importlib import metadata as _metadata
+
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 from .session import Result as Result
 from .session import Session as Session
