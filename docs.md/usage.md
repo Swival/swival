@@ -172,7 +172,7 @@ When `--profile` is combined with explicit flags like `--provider` or `--model`,
 
 `--max-output-tokens` sets the model output budget per call and defaults to `32768`.
 
-`--max-context-tokens` requests a context window size. With LM Studio, this may trigger a model reload.
+`--max-context-tokens` requests a context window size. When omitted, Swival auto-detects it from the model server (or LiteLLM's registry for hosted providers); with LM Studio, passing it may trigger a model reload to the requested size. When the window is known, each turn header shows usage against it, e.g. `Turn 3/100 (~4,200 / 131,072 tokens, 3%)`.
 
 `--temperature` controls sampling temperature and defaults to the provider default when omitted.
 

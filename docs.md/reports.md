@@ -53,6 +53,9 @@ The JSON below is from a verified local run using `--model dummy-model --max-tur
     "turn_drops": 0,
     "guardrail_interventions": 0,
     "recovered_responses": 0,
+    "truncation_repairs": 0,
+    "scavenged_calls": 0,
+    "stormed_calls": 0,
     "llm_calls": 0,
     "total_llm_time_s": 0.0,
     "total_tool_time_s": 0.0,
@@ -101,9 +104,13 @@ A `success` outcome means the model produced a final non-tool response. An `exha
 
 `compactions` counts `compact_messages` and `aggressive_drop` events. `turn_drops` counts `drop_middle_turns` events. `guardrail_interventions` counts injected correction prompts for repeated tool failures. `recovered_responses` counts model outputs that could not be used as emitted and triggered a recovery step, such as output cut off by the token limit, tool calls with malformed JSON arguments, or tool-call markup leaked into the text channel.
 
+`truncation_repairs` counts tool calls whose truncated or unbalanced JSON arguments were structurally repaired and salvaged instead of being discarded. `scavenged_calls` counts tool calls recovered from the plain-text content channel when the model emitted them as text rather than as structured calls. `stormed_calls` counts repeat tool calls that the storm breaker suppressed to stop the model looping on an identical invocation. All three are always present in `stats`.
+
 `skills_used` records skill names successfully activated through `use_skill`. `review_rounds` records how many reviewer passes occurred when `--reviewer` is active.
 
 `todo` appears only when the `todo` tool was used and includes `added`, `completed`, and `remaining` counts. `snapshot` appears only when the `snapshot` tool was used and includes `saves`, `restores`, `cancels`, `blocked`, `force_restores`, and `tokens_saved` counts.
+
+`goal` appears only when the `goal` tool created or completed at least one objective. It includes `created_count` and `completed_count`, plus a `current` object holding the active goal payload when one is still open.
 
 `memory` appears when auto-memory was loaded and includes `total_entries`, `bootstrap_entries`, `retrievable_entries`, `bootstrap_tokens`, `retrieval_tokens`, `retrieved_ids`, and `mode` (either `budgeted` or `full`).
 
@@ -126,6 +133,12 @@ For `guardrail`, fields include `tool` and `level`, where `level` is `nudge` for
 For `review`, fields include `round`, `exit_code`, and `feedback` (reviewer standard output). When the reviewer produces standard error output, `stderr` is also included.
 
 For `recovered_response`, the event marks an LLM response that was not directly usable and prompted a recovery step. The optional `reason` field is `length` (output cut off by the token limit), `malformed_args` (tool call with unparseable JSON arguments), or `textual_tool_call_leak` (tool-call markup emitted as plain text). It is omitted for a plain text response truncated by the output limit.
+
+For `truncation_repair`, the event records a salvaged tool-call payload. Fields include `name`, `original_length`, and `repaired_length`, plus an optional `notes` array describing the repairs and an optional `original_preview` snippet of the truncated argument.
+
+For `scavenged_call`, fields include `name` (the recovered tool) and `source` (where the call text was found).
+
+For `storm_suppression`, fields include `name`, `args_hash` (a hash of the canonical arguments), and `count` (how many identical calls were suppressed).
 
 For `lifecycle`, fields include `event` (`startup` or `exit`), `exit_code`, `duration_s`, and optionally `error`. Lifecycle events appear when `--lifecycle-command` is configured. See [Lifecycle Hooks](lifecycle-hooks.md) for details.
 

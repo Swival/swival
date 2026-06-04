@@ -188,7 +188,7 @@ swival --oneshot-commands '/loop 30 sec check git status and report unusual acti
 <h3 id="behavior-tuning-flags">Behavior Tuning Flags</h3>
 <p><code>--max-turns</code> sets the maximum number of loop iterations and defaults to <code>100</code>.</p>
 <p><code>--max-output-tokens</code> sets the model output budget per call and defaults to <code>32768</code>.</p>
-<p><code>--max-context-tokens</code> requests a context window size. With LM Studio, this may trigger a model reload.</p>
+<p><code>--max-context-tokens</code> requests a context window size. When omitted, Swival auto-detects it from the model server (or LiteLLM's registry for hosted providers); with LM Studio, passing it may trigger a model reload to the requested size. When the window is known, each turn header shows usage against it, e.g. <code>Turn 3/100 (~4,200 / 131,072 tokens, 3%)</code>.</p>
 <p><code>--temperature</code> controls sampling temperature and defaults to the provider default when omitted.</p>
 <p><code>--top-p</code> controls nucleus sampling and defaults to the provider default when omitted.</p>
 <p><code>--seed</code> passes a random seed for providers that support reproducible sampling.</p>

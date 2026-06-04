@@ -38,7 +38,9 @@ Matching is done in three passes. Swival tries an exact string match first. If t
 
 When multiple matches are found and `replace_all` is false, the call fails with an error that nudges the model toward `line_number`. The optional `line_number` parameter accepts a 1-based line number from `read_file` output. When provided, Swival filters candidate matches to only those whose span includes that line.
 
-This is the preferred way to disambiguate repeated matches: the model copies the line number it just read rather than expanding `old_string` with more context. If no match touches the requested line, the error lists the actual candidate lines so the model can retry with the right one. `replace_all` ignores `line_number`.
+This is the preferred way to disambiguate repeated matches: the model copies the line number it just read rather than expanding `old_string` with more context. `replace_all` ignores `line_number`.
+
+A stale `line_number` no longer forces a retry. If the requested line misses every match but `old_string` still resolves to a single location across the three passes, Swival applies the edit there anyway. Matches that merely nest across passes (the exact substring sitting inside its line-trimmed or Unicode-normalized span) count as one location, so this fallback fires whenever the target is genuinely unique. Only when two or more distinct locations remain does the call fail, and then the error lists the actual candidate lines so the model can retry with the right one.
 
 ## `delete_file`
 
@@ -59,6 +61,8 @@ Set `case_insensitive` to `true` for case-insensitive matching. Results are capp
 ## `outline`
 
 `outline` shows the structural skeleton of one or more files: classes, functions, and top-level declarations with line numbers. No bodies are included. This is useful for surveying a file before reading specific sections.
+
+Pass a directory instead of a file and `outline` returns a shallow survey of the directory's source files rather than a single file's skeleton. The `depth` parameter controls nesting (`1` top-level only, `2` classes plus methods, `3` nested functions and classes); it defaults to `2` for files and `1` for directory surveys. Pass `files` for a batch of up to 20 paths, each optionally carrying its own `depth`.
 
 Pass `file_path` for a single file, or `files` for a batch (up to 20 files). The `depth` parameter controls nesting: 1 for top-level only, 2 for classes and methods (the default), 3 for nested functions and classes. In batch mode, each file can override the depth individually.
 
@@ -117,7 +121,11 @@ swival --commands ask "Run the tests"
 
 In ask mode, Swival prompts before each new command bucket. Interpreter inline-code flags (`bash -c`, `python3 -c`, `node -e`, `bun -e`) are classified as separate high-risk buckets distinct from the plain interpreter name, so approving `bash` to run scripts does not also approve `bash -c` for arbitrary code. See [Safety and Sandboxing](safety-and-sandboxing.md#ask-mode) for details.
 
-Timeout defaults to 30 seconds and is clamped to a maximum of 240 seconds. Inline command output is capped at 10 KB. Larger output is written to `.swival/cmd_output_*.txt` and hard-capped at 1 MB before writing to disk. Those files are cleaned up automatically after roughly ten minutes.
+Timeout defaults to 30 seconds and is clamped to a maximum of 240 seconds. While a command runs, Swival shows a transient progress indicator on stderr that fills toward the timeout, then wipes itself before the captured output prints. It is suppressed under `--quiet`, and for subagent and background commands.
+
+Output is sanitized as it streams from the process. Programs that draw progress bars, spinners, or any live-updating display repaint the same region over and over, so Swival emulates a small terminal and collapses those repaints down to the final frame, the way a human sees it after the command finishes. This keeps intermediate frames out of the model's context and out of your terminal. The 1 MB hard cap applies to the retained sanitized output, not the raw byte volume, so a command that repaints one screen forever is not counted as truncated. When the cap is exceeded, `[output truncated at 1MB]` is appended.
+
+Inline command output is capped at 10 KB. Larger output is written to `.swival/cmd_output_*.txt`. Those files are cleaned up automatically after roughly ten minutes.
 
 ## `run_shell_command`
 

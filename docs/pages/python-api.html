@@ -418,7 +418,7 @@ print(result.answer)
 </code></pre>
 <p>If <code>report=True</code>, the returned <code>Result</code> includes a <code>report</code> dict with timing, token usage, and tool stats (see <a href="reports.html">Reports</a>).</p>
 <p>The exit lifecycle hook runs automatically after <code>run()</code>, even if the agent loop raises.</p>
-<h3 id="sessionaskquestion-result"><code>Session.ask(question) -&gt; Result</code></h3>
+<h3 id="sessionaskquestion-parse_commandsfalse-result"><code>Session.ask(question, *, parse_commands=False) -&gt; Result</code></h3>
 <p>Multi-turn conversation. Shares message history across calls, like the REPL.</p>
 <pre><code class="language-python">session = Session(provider=&quot;lmstudio&quot;)
 r1 = session.ask(&quot;read src/auth.py and explain the login flow&quot;)
@@ -426,6 +426,7 @@ r2 = session.ask(&quot;now add rate limiting to that handler&quot;)
 session.close(outcome=&quot;success&quot;, exit_code=0)
 </code></pre>
 <p>On success, the assistant's reply is appended to the shared history so subsequent calls build on prior context.</p>
+<p>Set <code>parse_commands=True</code> to let an input that begins with a slash command (<code>/help</code>), a custom bang command (<code>!name</code>), or the quick shell prefix (<code>!! cmd</code>) run through the shared command executor instead of being sent to the model verbatim. This is what lets editors speaking ACP reuse the same commands as the REPL. Plain prompts are unaffected.</p>
 <p>On failure, the message list is rolled back to its state before the call — including any in-place mutations from compaction — so the session stays usable. State objects (thinking notes, todo items, file tracker) are not rolled back; partial progress from the failed turn is preserved.</p>
 <p>Raises <code>AgentError</code> (or one of its subclasses) on LLM, tool, or infrastructure failures. In particular, <code>ContextOverflowError</code> is raised when the context window is exhausted even after all compaction strategies have been tried. The first <code>ask()</code> call triggers setup, so <code>LifecycleError</code> can also be raised if a fail-closed startup hook fails.</p>
 <h3 id="sessionreset"><code>Session.reset()</code></h3>

@@ -199,7 +199,7 @@ If `report=True`, the returned `Result` includes a `report` dict with timing, to
 
 The exit lifecycle hook runs automatically after `run()`, even if the agent loop raises.
 
-### `Session.ask(question) -> Result`
+### `Session.ask(question, *, parse_commands=False) -> Result`
 
 Multi-turn conversation. Shares message history across calls, like the REPL.
 
@@ -211,6 +211,8 @@ session.close(outcome="success", exit_code=0)
 ```
 
 On success, the assistant's reply is appended to the shared history so subsequent calls build on prior context.
+
+Set `parse_commands=True` to let an input that begins with a slash command (`/help`), a custom bang command (`!name`), or the quick shell prefix (`!! cmd`) run through the shared command executor instead of being sent to the model verbatim. This is what lets editors speaking ACP reuse the same commands as the REPL. Plain prompts are unaffected.
 
 On failure, the message list is rolled back to its state before the call — including any in-place mutations from compaction — so the session stays usable. State objects (thinking notes, todo items, file tracker) are not rolled back; partial progress from the failed turn is preserved.
 

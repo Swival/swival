@@ -149,7 +149,7 @@ swival --profile gpt5 &quot;hard task&quot;
 <pre><code class="language-sh">export HF_TOKEN=hf_your_token_here
 swival --provider huggingface --model zai-org/GLM-5.1 &quot;task&quot;
 </code></pre>
-<p>Serverless HuggingFace endpoints often expose smaller context windows than local deployments, so long multi-turn coding sessions can hit context pressure sooner.</p>
+<p>Serverless HuggingFace endpoints often expose smaller context windows than local deployments, so long multi-turn coding sessions can hit context pressure sooner. When <code>--max-context-tokens</code> is not set, Swival looks the window up in LiteLLM's model registry; set the flag explicitly if your model is not listed there.</p>
 <p>For dedicated endpoints, keep the same model identifier and pass your endpoint URL and key.</p>
 <pre><code class="language-sh">swival --provider huggingface \
     --model zai-org/GLM-5.1 \
@@ -182,7 +182,7 @@ swival --provider openrouter --model z-ai/glm-5.1 &quot;task&quot;
     --api-key sk_or_key \
     &quot;task&quot;
 </code></pre>
-<p>OpenRouter models vary widely in context limits, so you should set <code>--max-context-tokens</code> to match the model you chose.</p>
+<p>OpenRouter models vary widely in context limits. When <code>--max-context-tokens</code> is not set, Swival looks the window up in LiteLLM's model registry. If the model is missing from the registry, or you want a different limit, set the value explicitly:</p>
 <pre><code class="language-sh">swival --provider openrouter --model z-ai/glm-5.1 \
     --max-context-tokens 131072 &quot;task&quot;
 </code></pre>
@@ -200,7 +200,7 @@ swival --provider openrouter --model z-ai/glm-5.1 &quot;task&quot;
 <p>Once the server is listening (default port 8080), connect Swival:</p>
 <pre><code class="language-sh">swival --provider llamacpp &quot;task&quot;
 </code></pre>
-<p>Swival auto-detects the model name from the server, so <code>--model</code> is not required. The default base URL is <code>http://127.0.0.1:8080</code>. To override either:</p>
+<p>Swival auto-detects the model name from the server, so <code>--model</code> is not required. It also auto-detects the context window: when <code>--max-context-tokens</code> is not set, it reads <code>n_ctx</code> from the server's <code>/props</code> endpoint, falling back to the OpenAI-compatible <code>/v1/models</code> payload. The default base URL is <code>http://127.0.0.1:8080</code>. To override either:</p>
 <pre><code class="language-sh">swival --provider llamacpp \
     --base-url http://192.168.1.10:9090 \
     --model my-model \
@@ -237,7 +237,7 @@ swival --provider generic \
     --model my-model \
     &quot;task&quot;
 </code></pre>
-<p>There is no model auto-discovery and no context window reload. Set <code>--max-context-tokens</code> manually if you need Swival to know the window size.</p>
+<p>There is no model auto-discovery, so <code>--model</code> is always required. The context window, however, is auto-detected: when <code>--max-context-tokens</code> is not set, Swival probes the server's <code>/v1/models</code> payload for a context-length field (<code>max_model_len</code>, <code>max_context_length</code>, <code>context_length</code>, or <code>context_window</code>). Set <code>--max-context-tokens</code> manually if your server does not advertise the window.</p>
 <p>Some providers gate access based on the <code>User-Agent</code> header. Use <code>--user-agent</code> to set it explicitly. For example, Kimi's coding API requires a <code>KimiCLI</code> user agent:</p>
 <pre><code class="language-sh">export KIMI_API_KEY=sk-kimi-...
 swival --provider generic \
@@ -280,7 +280,8 @@ swival --provider geap \
 <pre><code class="language-sh">export GOOGLE_CLOUD_PROJECT=my-gcp-project
 swival --provider geap --location us-central1 --model gemini-3.1-pro &quot;task&quot;
 </code></pre>
-<p>Pass bare model names like <code>gemini-3.1-pro</code>. Do not include a <code>vertex_ai/</code> prefix — Swival adds it automatically and rejects prefixed names with a clear error.</p>
+<p>Pass bare model names like <code>gemini-3.1-pro</code>. Do not include a <code>vertex_ai/</code> prefix; Swival adds it automatically and rejects prefixed names with a clear error.</p>
+<p>When <code>--max-context-tokens</code> is not set, Swival looks the window up in LiteLLM's model registry under the <code>vertex_ai/</code> prefix. Set the flag explicitly if your model is not listed there.</p>
 <p>In config:</p>
 <pre><code class="language-toml">provider = &quot;geap&quot;
 model = &quot;gemini-3.1-pro&quot;
@@ -296,6 +297,7 @@ location = &quot;us-central1&quot;
 </code></pre>
 <p>On the first run, you will see a device-code prompt with a URL and a code to enter in your browser. Once you complete the flow, the OAuth tokens are stored locally and refreshed automatically. To remove the cached tokens and force the device-code flow on the next run, use <code>swival --logout</code>.</p>
 <p>Supported model names may change over time. Check OpenAI's documentation for the current model list and naming conventions.</p>
+<p>When <code>--max-context-tokens</code> is not set, Swival looks the window up in LiteLLM's model registry. Set the flag explicitly if your model is not listed there.</p>
 <p>Two environment variables are available for advanced use. <code>CHATGPT_TOKEN_DIR</code> overrides the default token storage directory, and <code>CHATGPT_AUTH_FILE</code> overrides the token filename or path. Use <code>--base-url</code> to override the API base URL.</p>
 <pre><code class="language-sh">export CHATGPT_TOKEN_DIR=/path/to/tokens
 swival --provider chatgpt --model gpt-5.5 &quot;task&quot;
@@ -324,6 +326,7 @@ swival --provider bedrock --model global.anthropic.claude-opus-4-6-v1 &quot;task
     --base-url us-east-2 &quot;task&quot;
 </code></pre>
 <p>Note: the region env var is <code>AWS_REGION_NAME</code>, not <code>AWS_DEFAULT_REGION</code>.</p>
+<p>When <code>--max-context-tokens</code> is not set, Swival reads the window from LiteLLM's model registry for the Bedrock model ID. Set the flag explicitly if your model is not listed there.</p>
 <p>For cross-region inference, use the regional prefix in the model ID (e.g. <code>us.</code>, <code>eu.</code>, <code>apac.</code>).</p>
 <pre><code class="language-sh">swival --provider bedrock --model us.anthropic.claude-opus-4-6-v1 &quot;task&quot;
 </code></pre>

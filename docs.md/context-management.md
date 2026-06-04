@@ -159,7 +159,9 @@ For the full command reference, see [Usage](usage.md).
 
 Most context management works automatically. A few settings let you tune it.
 
-`--max-context-tokens` tells Swival how large the context window is. With LM Studio this is auto-detected, but for other providers you should set it to match your model. Without it, Swival may not trigger compaction at the right time.
+`--max-context-tokens` tells Swival how large the context window is. When you omit it, Swival auto-detects the window for most providers: LM Studio and llama.cpp report it directly (via `/api/v1/models` and `/props`), other OpenAI-compatible servers are probed through `/v1/models`, and hosted providers (HuggingFace, OpenRouter, Google, ChatGPT, GEAP, Bedrock) are looked up in LiteLLM's model registry. Set the flag explicitly only when a provider does not advertise its window, or when you want to cap it lower. Without a known window, Swival may not trigger compaction at the right time.
+
+Once the window is known, every turn header shows how much of it is in use, for example `Turn 3/100 (~4,200 / 131,072 tokens, 3%)`, so you can see compaction approaching.
 
 `--proactive-summaries` enables the periodic checkpoint summarization described above. Recommended for long-running sessions where the agent will go through many investigation and implementation cycles.
 

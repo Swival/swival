@@ -224,7 +224,7 @@ cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5.1
 <p>Then pass the model you want to use. OpenRouter has both free and paid tiers.</p>
 <pre><code class="language-sh">swival &quot;Hello world&quot; --provider openrouter --model z-ai/glm-5.1
 </code></pre>
-<p>OpenRouter models vary widely in context limits, so you should set <code>--max-context-tokens</code> to match the model you chose. Without it, Swival falls back to a conservative default that may not use the full window your model supports.</p>
+<p>OpenRouter models vary widely in context limits. When <code>--max-context-tokens</code> is not set, Swival looks the window up in LiteLLM's model registry; set it explicitly if your model is not listed there or you want a lower cap.</p>
 <pre><code class="language-sh">swival &quot;Hello world&quot; \
     --provider openrouter \
     --model z-ai/glm-5.1 \

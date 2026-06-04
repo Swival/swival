@@ -78,7 +78,7 @@ export HF_TOKEN=hf_your_token_here
 swival --provider huggingface --model zai-org/GLM-5.1 "task"
 ```
 
-Serverless HuggingFace endpoints often expose smaller context windows than local deployments, so long multi-turn coding sessions can hit context pressure sooner.
+Serverless HuggingFace endpoints often expose smaller context windows than local deployments, so long multi-turn coding sessions can hit context pressure sooner. When `--max-context-tokens` is not set, Swival looks the window up in LiteLLM's model registry; set the flag explicitly if your model is not listed there.
 
 For dedicated endpoints, keep the same model identifier and pass your endpoint URL and key.
 
@@ -133,7 +133,7 @@ swival --provider openrouter \
     "task"
 ```
 
-OpenRouter models vary widely in context limits, so you should set `--max-context-tokens` to match the model you chose.
+OpenRouter models vary widely in context limits. When `--max-context-tokens` is not set, Swival looks the window up in LiteLLM's model registry. If the model is missing from the registry, or you want a different limit, set the value explicitly:
 
 ```sh
 swival --provider openrouter --model z-ai/glm-5.1 \
@@ -164,7 +164,7 @@ Once the server is listening (default port 8080), connect Swival:
 swival --provider llamacpp "task"
 ```
 
-Swival auto-detects the model name from the server, so `--model` is not required. The default base URL is `http://127.0.0.1:8080`. To override either:
+Swival auto-detects the model name from the server, so `--model` is not required. It also auto-detects the context window: when `--max-context-tokens` is not set, it reads `n_ctx` from the server's `/props` endpoint, falling back to the OpenAI-compatible `/v1/models` payload. The default base URL is `http://127.0.0.1:8080`. To override either:
 
 ```sh
 swival --provider llamacpp \
@@ -216,7 +216,7 @@ swival --provider generic \
     "task"
 ```
 
-There is no model auto-discovery and no context window reload. Set `--max-context-tokens` manually if you need Swival to know the window size.
+There is no model auto-discovery, so `--model` is always required. The context window, however, is auto-detected: when `--max-context-tokens` is not set, Swival probes the server's `/v1/models` payload for a context-length field (`max_model_len`, `max_context_length`, `context_length`, or `context_window`). Set `--max-context-tokens` manually if your server does not advertise the window.
 
 Some providers gate access based on the `User-Agent` header. Use `--user-agent` to set it explicitly. For example, Kimi's coding API requires a `KimiCLI` user agent:
 
@@ -282,7 +282,9 @@ export GOOGLE_CLOUD_PROJECT=my-gcp-project
 swival --provider geap --location us-central1 --model gemini-3.1-pro "task"
 ```
 
-Pass bare model names like `gemini-3.1-pro`. Do not include a `vertex_ai/` prefix — Swival adds it automatically and rejects prefixed names with a clear error.
+Pass bare model names like `gemini-3.1-pro`. Do not include a `vertex_ai/` prefix; Swival adds it automatically and rejects prefixed names with a clear error.
+
+When `--max-context-tokens` is not set, Swival looks the window up in LiteLLM's model registry under the `vertex_ai/` prefix. Set the flag explicitly if your model is not listed there.
 
 In config:
 
@@ -310,6 +312,8 @@ swival --provider chatgpt --model gpt-5.5 "task"
 On the first run, you will see a device-code prompt with a URL and a code to enter in your browser. Once you complete the flow, the OAuth tokens are stored locally and refreshed automatically. To remove the cached tokens and force the device-code flow on the next run, use `swival --logout`.
 
 Supported model names may change over time. Check OpenAI's documentation for the current model list and naming conventions.
+
+When `--max-context-tokens` is not set, Swival looks the window up in LiteLLM's model registry. Set the flag explicitly if your model is not listed there.
 
 Two environment variables are available for advanced use. `CHATGPT_TOKEN_DIR` overrides the default token storage directory, and `CHATGPT_AUTH_FILE` overrides the token filename or path. Use `--base-url` to override the API base URL.
 
@@ -359,6 +363,8 @@ swival --provider bedrock --model global.anthropic.claude-opus-4-6-v1 \
 ```
 
 Note: the region env var is `AWS_REGION_NAME`, not `AWS_DEFAULT_REGION`.
+
+When `--max-context-tokens` is not set, Swival reads the window from LiteLLM's model registry for the Bedrock model ID. Set the flag explicitly if your model is not listed there.
 
 For cross-region inference, use the regional prefix in the model ID (e.g. `us.`, `eu.`, `apac.`).
 
