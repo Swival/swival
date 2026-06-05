@@ -2,6 +2,14 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.28
+
+- `/audit` gained an adjudication phase that runs between verification and artifact generation. Each verified finding faces a panel of three independent reviewers, each told to refute it from a different angle (reachability, threat model, severity), and only findings confirmed by a majority make it into reports and patches. Survivors get their severity recalibrated down to the realistic worst case, and dropped findings are listed in the README with the reason, so the gap between verified and written counts is always explained.
+- New `--max-output-lines` and `--max-output-kb` options (also available as config keys and `Session` parameters) make tool output caps tunable. The first sets the default number of lines a file read returns, the second the byte cap applied to file reads, directory listings, grep, outline, and fetched URLs.
+- Child processes spawned by Swival no longer inherit the bundled virtualenv `bin/` in their `PATH`. Packaged installs (such as Homebrew) used to leak that directory into every command the agent ran, which could shadow the user's own toolchain, most visibly a rustup-managed `cargo` being hijacked by a brew-installed Rust.
+- The `README.md` index that `/audit` writes into `audit-findings/` is now much more readable: a proper title, a summary with a severity breakdown, and sentence-case section headers with common security acronyms spelled correctly.
+- GEAP reliability fixes: the bundled LiteLLM has been updated to a version that restores GEAP routing, and background summarization calls no longer fail with credential errors.
+
 ## 1.0.27
 
 - Swival now auto-detects model context windows when `--max-context-tokens` is omitted. Hosted providers use LiteLLM's model registry, llama.cpp reads the server's runtime `n_ctx`, and OpenAI-compatible servers can advertise their limit via `/v1/models`.
