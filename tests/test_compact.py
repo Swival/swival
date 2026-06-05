@@ -1881,6 +1881,29 @@ class TestCompactionState:
             state.maybe_checkpoint(msgs, mock_llm, **self._llm_kwargs())
         assert len(state.summaries) == 0
 
+    def test_checkpoint_forwards_provider_kwargs(self):
+        """Provider auth extras (geap project/location, bedrock profile) must
+        reach the underlying call_llm or credential resolution fails."""
+        state = CompactionState(checkpoint_interval=1)
+        msgs = self._build_messages(2)
+        seen = {}
+
+        def capture_llm(**kwargs):
+            seen.update(kwargs)
+            return (SimpleNamespace(content="summary"), "stop")
+
+        state.maybe_checkpoint(
+            msgs,
+            capture_llm,
+            **self._llm_kwargs(),
+            provider_kwargs={
+                "vertex_project": "proj-1",
+                "vertex_location": "global",
+            },
+        )
+        assert seen["vertex_project"] == "proj-1"
+        assert seen["vertex_location"] == "global"
+
     def test_counter_resets_on_failure(self):
         """After a failed checkpoint, the counter resets and doesn't retry every turn."""
         state = CompactionState(checkpoint_interval=3)

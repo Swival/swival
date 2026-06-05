@@ -167,6 +167,7 @@ def write_continue_file(
     top_p: float | None = None,
     seed: int | None = None,
     provider: str | None = None,
+    provider_kwargs: dict | None = None,
 ) -> bool:
     """Write .swival/continue.md from current session state.
 
@@ -200,6 +201,7 @@ def write_continue_file(
             top_p=top_p,
             seed=seed,
             provider=provider,
+            provider_kwargs=provider_kwargs,
         )
         if llm_content:
             try:
@@ -223,6 +225,7 @@ def _try_llm_summary(
     top_p: float | None,
     seed: int | None,
     provider: str | None,
+    provider_kwargs: dict | None = None,
 ) -> str | None:
     """Call the LLM to generate a richer continue summary. Returns None on failure."""
     # Build a condensed view of the conversation
@@ -256,6 +259,7 @@ def _try_llm_summary(
             verbose=False,
             api_key=api_key,
             provider=provider,
+            **(provider_kwargs or {}),
         )
         resp = _result[0]
         content = resp.content if hasattr(resp, "content") else resp.get("content", "")

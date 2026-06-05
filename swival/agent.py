@@ -2140,6 +2140,7 @@ def _build_recap(
     seed,
     provider,
     compaction_state,
+    provider_kwargs=None,
 ):
     """Build a recap message via AI summarization, checkpoint, or static marker."""
     recap = None
@@ -2153,6 +2154,7 @@ def _build_recap(
             top_p=top_p,
             seed=seed,
             provider=provider,
+            provider_kwargs=provider_kwargs,
         )
         if summary:
             recap = {
@@ -2195,6 +2197,7 @@ def drop_middle_turns(
     provider=None,
     compaction_state: "CompactionState | None" = None,
     goal_state=None,
+    provider_kwargs=None,
 ) -> list:
     """Drop lowest-importance middle turns; pin user turns, keep leading block + tail.
 
@@ -2246,6 +2249,7 @@ def drop_middle_turns(
         seed,
         provider,
         compaction_state,
+        provider_kwargs=provider_kwargs,
     )
 
     result = []
@@ -2278,6 +2282,7 @@ def aggressive_drop_turns(
     provider=None,
     compaction_state: "CompactionState | None" = None,
     goal_state=None,
+    provider_kwargs=None,
 ) -> list:
     """Aggressive compaction: keep only system prompt + recap + last 2 turns.
 
@@ -2309,6 +2314,7 @@ def aggressive_drop_turns(
         seed,
         provider,
         compaction_state,
+        provider_kwargs=provider_kwargs,
     )
 
     result = []
@@ -2402,6 +2408,17 @@ def _emergency_truncate(messages: list, context_length: int) -> list:
     return messages
 
 
+def _provider_auth_kwargs(llm_kwargs):
+    """Extract provider auth extras (geap project/location, bedrock profile)
+    that secondary LLM calls (summaries, checkpoints, continue files) must
+    forward to ``call_llm`` or credential resolution fails."""
+    return {
+        key: llm_kwargs[key]
+        for key in ("aws_profile", "vertex_project", "vertex_location")
+        if llm_kwargs.get(key) is not None
+    }
+
+
 def _call_summarize_llm(
     text,
     system_prompt,
@@ -2414,6 +2431,7 @@ def _call_summarize_llm(
     provider,
     *,
     user_agent=None,
+    provider_kwargs=None,
 ):
     """Call the LLM to summarize text. Returns string or None on failure."""
     if len(text) > 8000:
@@ -2437,6 +2455,7 @@ def _call_summarize_llm(
             api_key=api_key,
             user_agent=user_agent,
             provider=provider,
+            **(provider_kwargs or {}),
         )
         resp = _result[0]
         content = resp.content if hasattr(resp, "content") else resp.get("content", "")
@@ -2446,7 +2465,15 @@ def _call_summarize_llm(
 
 
 def summarize_turns(
-    turns_to_drop, call_llm_fn, model_id, base_url, api_key, top_p, seed, provider
+    turns_to_drop,
+    call_llm_fn,
+    model_id,
+    base_url,
+    api_key,
+    top_p,
+    seed,
+    provider,
+    provider_kwargs=None,
 ):
     """Ask the model to summarize dropped turns into a compact recap.
 
@@ -2473,11 +2500,20 @@ def summarize_turns(
         top_p,
         seed,
         provider,
+        provider_kwargs=provider_kwargs,
     )
 
 
 def summarize_turns_from_text(
-    text, call_llm_fn, model_id, base_url, api_key, top_p, seed, provider
+    text,
+    call_llm_fn,
+    model_id,
+    base_url,
+    api_key,
+    top_p,
+    seed,
+    provider,
+    provider_kwargs=None,
 ):
     """Summarize pre-joined text (used for checkpoint consolidation).
 
@@ -2495,6 +2531,7 @@ def summarize_turns_from_text(
         top_p,
         seed,
         provider,
+        provider_kwargs=provider_kwargs,
     )
 
 
@@ -2528,6 +2565,7 @@ class CompactionState:
         top_p,
         seed,
         provider,
+        provider_kwargs=None,
     ):
         """Attempt a checkpoint after each agent turn.
 
@@ -2550,6 +2588,7 @@ class CompactionState:
             top_p=top_p,
             seed=seed,
             provider=provider,
+            provider_kwargs=provider_kwargs,
         )
         if summary is None:
             return
@@ -2563,10 +2602,20 @@ class CompactionState:
             top_p=top_p,
             seed=seed,
             provider=provider,
+            provider_kwargs=provider_kwargs,
         )
 
     def _maybe_consolidate(
-        self, call_llm_fn, *, model_id, base_url, api_key, top_p, seed, provider
+        self,
+        call_llm_fn,
+        *,
+        model_id,
+        base_url,
+        api_key,
+        top_p,
+        seed,
+        provider,
+        provider_kwargs=None,
     ):
         """Merge old summaries when the list exceeds MAX_CHECKPOINTS."""
         if len(self.summaries) <= MAX_CHECKPOINTS:
@@ -2582,6 +2631,7 @@ class CompactionState:
             top_p=top_p,
             seed=seed,
             provider=provider,
+            provider_kwargs=provider_kwargs,
         )
         if merged:
             self.summaries = [merged] + self.summaries[half:]
@@ -8357,6 +8407,7 @@ def run_agent_loop(
                 seed=seed,
                 provider=llm_kwargs.get("provider"),
                 compaction_state=compaction_state,
+                provider_kwargs=_provider_auth_kwargs(llm_kwargs),
             )
             compaction_levels = [
                 (
@@ -9332,6 +9383,7 @@ def run_agent_loop(
                 top_p=top_p,
                 seed=seed,
                 provider=llm_kwargs.get("provider"),
+                provider_kwargs=_provider_auth_kwargs(llm_kwargs),
             )
 
     # max_turns exhausted — extract last assistant text
@@ -9365,6 +9417,7 @@ def run_agent_loop(
             top_p=top_p,
             seed=seed,
             provider=llm_kwargs.get("provider"),
+            provider_kwargs=_provider_auth_kwargs(llm_kwargs),
         )
 
     _write_turns()
@@ -10305,6 +10358,7 @@ def _repl_snapshot_restore(
     top_p: float | None,
     seed: int | None,
     provider: str | None,
+    provider_kwargs: dict | None = None,
 ) -> tuple[str, bool]:
     """Returns ``(message, is_error)``."""
     if snapshot_state is None:
@@ -10324,6 +10378,7 @@ def _repl_snapshot_restore(
             seed,
             provider,
             user_agent=user_agent,
+            provider_kwargs=provider_kwargs,
         )
 
     result = snapshot_state.restore_with_autosummary(messages, summarize_fn)
@@ -10725,6 +10780,7 @@ def execute_input(
                 top_p=ctx.loop_kwargs["top_p"],
                 seed=ctx.loop_kwargs["seed"],
                 provider=ctx.loop_kwargs["llm_kwargs"].get("provider"),
+                provider_kwargs=_provider_auth_kwargs(ctx.loop_kwargs["llm_kwargs"]),
             )
             return StepResult(kind="state_change", text=msg, is_error=err)
 
