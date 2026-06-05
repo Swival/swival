@@ -2119,7 +2119,7 @@ requires-dist = [
     { name = "google-cloud-aiplatform", specifier = ">=1.154.0" },
     { name = "html-to-markdown", specifier = ">=3.5.7,<4" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "litellm", specifier = ">=1.86.2" },
+    { name = "litellm", specifier = ">=1.87.0" },
     { name = "mcp", specifier = ">=1.27.2,<2" },
     { name = "prompt-toolkit", specifier = ">=3.0.52" },
     { name = "rank-bm25", specifier = ">=0.2.2" },
