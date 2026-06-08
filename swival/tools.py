@@ -171,7 +171,11 @@ TOOLS = [
                     },
                     "old_string": {
                         "type": "string",
-                        "description": "The exact text to find and replace.",
+                        "description": (
+                            "The exact text to find and replace. If the text appears "
+                            "more than once, include line_number from read_file or use "
+                            "a larger unique old_string."
+                        ),
                     },
                     "new_string": {
                         "type": "string",
@@ -448,7 +452,9 @@ DELETE_FILE_TOOL = {
     "function": {
         "name": "delete_file",
         "description": (
-            "Delete a file by moving it to the trash. Cannot delete directories."
+            "Delete a file by moving it to the trash. Cannot delete directories. "
+            "For existing files, first inspect the exact path with read_file; "
+            "list_files alone does not satisfy the read-before-write guard."
         ),
         "parameters": {
             "type": "object",
@@ -668,7 +674,13 @@ RUN_COMMAND_TOOL = {
                 "command": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": 'Command as an array of strings (NOT a single string). Each argument is a separate element. Correct: ["ls", "-la", "src/"]. Wrong: "ls -la src/".',
+                    "description": (
+                        "Command as an array of strings (NOT a single string). "
+                        'Each argument is a separate element. Correct: ["ls", "-la", "src/"]. '
+                        'Wrong: "ls -la src/". If the user gives an exact command, keep '
+                        "the same argv; do not add flags, reorder arguments, or substitute "
+                        "a different runner unless the exact command fails."
+                    ),
                 },
                 "timeout": {
                     "type": "integer",
