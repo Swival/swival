@@ -5454,7 +5454,7 @@ def build_parser():
             "command",
         ],
         default=_UNSET,
-        help="LLM provider: lmstudio (local), llamacpp (llama.cpp server, auto-discovers model), huggingface (HF API), openrouter (multi-provider API), generic (any OpenAI-compatible server), applefm (Apple Foundation Models local server, --model system or pcc, defaults to http://127.0.0.1:1976/v1), google (Gemini via OpenAI-compatible endpoint), geap (Gemini Enterprise Agent Platform / Vertex AI, auth via Google Cloud credentials), chatgpt (ChatGPT Plus/Pro subscription via OAuth), bedrock (AWS Bedrock, auth via AWS credential chain), command (external command as LLM, --model is the command to run). 'vertexai' is an alias for 'geap'.",
+        help="LLM provider: lmstudio (local), llamacpp (llama.cpp server, auto-discovers model), huggingface (HF API), openrouter (multi-provider API), generic (any OpenAI-compatible server), applefm (experimental: Apple Foundation Models local server, defaults to --model pcc / Private Cloud Compute; on-device 'system' has a tiny context window; server at http://127.0.0.1:1976/v1), google (Gemini via OpenAI-compatible endpoint), geap (Gemini Enterprise Agent Platform / Vertex AI, auth via Google Cloud credentials), chatgpt (ChatGPT Plus/Pro subscription via OAuth), bedrock (AWS Bedrock, auth via AWS credential chain), command (external command as LLM, --model is the command to run). 'vertexai' is an alias for 'geap'.",
     )
     output_group.add_argument(
         "-q",
@@ -6587,22 +6587,20 @@ def resolve_provider(
         resolved_key = api_key or os.environ.get("OPENAI_API_KEY")
 
     elif provider == "applefm":
-        if not model:
-            raise ConfigError(
-                "--model is required when --provider is applefm "
-                "(e.g. --model system, or --model pcc for Private Cloud Compute)"
-            )
+        # Private Cloud Compute ("pcc") is the only model with enough room to do
+        # real work; the on-device "system" model tops out near 4K tokens and is
+        # experimental at best. Default to pcc when no model is named.
+        model_id = model or "pcc"
         api_base = _normalize_openai_base(base_url or _APPLEFM_DEFAULT_BASE)
-        model_id = model
         context_length = max_context_tokens
         if context_length is None:
-            # The on-device model ("system") tops out around 4K tokens, while
-            # Private Cloud Compute ("pcc") accepts roughly 32K. The server does
-            # not report either through /v1/models, so fall back to measured
-            # defaults that the user can still override with --max-context-tokens.
+            # The server does not report context length through /v1/models, so
+            # fall back to measured defaults: roughly 32K for pcc, roughly 4K for
+            # the on-device model. Either can be overridden with
+            # --max-context-tokens.
             context_length = discover_generic_context_length(
                 api_base, model_id, verbose
-            ) or (32768 if model_id == "pcc" else 4096)
+            ) or (4096 if model_id == "system" else 32768)
         resolved_key = api_key
 
     elif provider == _GOOGLE_PROVIDER:

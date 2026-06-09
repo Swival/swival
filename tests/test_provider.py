@@ -1392,9 +1392,15 @@ class TestAppleFoundationModelsProvider:
         )
         assert api_base == "http://host:1976/v1"
 
-    def test_resolve_requires_model(self):
-        with pytest.raises(ConfigError):
-            resolve_provider("applefm", None, None, None, None, False)
+    def test_defaults_to_pcc_when_model_omitted(self, monkeypatch):
+        monkeypatch.setattr(
+            agent, "discover_generic_context_length", lambda *a, **k: None
+        )
+        model_id, _, _, ctx, _ = resolve_provider(
+            "applefm", None, None, None, None, False
+        )
+        assert model_id == "pcc"
+        assert ctx == 32768
 
     def test_on_device_context_default(self, monkeypatch):
         monkeypatch.setattr(
