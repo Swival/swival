@@ -208,6 +208,22 @@ class TestReadFileTail:
         assert result.startswith("error:")
         assert "boolean" in result
 
+    def test_offset_boolean_returns_error(self, tmp_path):
+        self._make_file(tmp_path, 5)
+        result = dispatch(
+            "read_file", {"file_path": "data.txt", "offset": True}, str(tmp_path)
+        )
+        assert result.startswith("error:")
+        assert "offset must be an integer, not a boolean" in result
+
+    def test_limit_boolean_returns_error(self, tmp_path):
+        self._make_file(tmp_path, 5)
+        result = dispatch(
+            "read_file", {"file_path": "data.txt", "limit": False}, str(tmp_path)
+        )
+        assert result.startswith("error:")
+        assert "limit must be an integer, not a boolean" in result
+
     def test_tail_via_dispatch(self, tmp_path):
         """End-to-end through dispatch('read_file', ...)."""
         self._make_file(tmp_path, 10)

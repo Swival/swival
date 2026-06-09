@@ -145,6 +145,24 @@ class TestReadMultipleFilesErrors:
         assert "status: error" in result
         assert "error: limit must be an integer" in result
 
+    def test_boolean_offset(self, tmp_path):
+        (tmp_path / "a.txt").write_text("x\n")
+        result = _read_files(
+            [{"file_path": "a.txt", "offset": True}],
+            str(tmp_path),
+        )
+        assert "status: error" in result
+        assert "error: offset must be an integer, not a boolean" in result
+
+    def test_boolean_limit(self, tmp_path):
+        (tmp_path / "a.txt").write_text("x\n")
+        result = _read_files(
+            [{"file_path": "a.txt", "limit": False}],
+            str(tmp_path),
+        )
+        assert "status: error" in result
+        assert "error: limit must be an integer, not a boolean" in result
+
     def test_invalid_tail(self, tmp_path):
         (tmp_path / "a.txt").write_text("x\n")
         result = _read_files(

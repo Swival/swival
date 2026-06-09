@@ -1631,6 +1631,15 @@ def _format_read_request(offset: int, limit: int, tail: int | None) -> str:
     return f"offset={offset} limit={limit}"
 
 
+def _coerce_int_arg(value, name: str) -> tuple[int | None, str | None]:
+    if isinstance(value, bool):
+        return None, f"error: {name} must be an integer, not a boolean"
+    try:
+        return int(value), None
+    except (ValueError, TypeError):
+        return None, f"error: {name} must be an integer"
+
+
 def _offset_tail_conflict(offset: int, tail: int) -> str:
     return (
         "error: cannot combine 'offset' and 'tail_lines'. "
@@ -1813,28 +1822,26 @@ def _read_files(
         limit = spec.get("limit", MAX_READ_LINES)
         tail = spec.get("tail_lines") or spec.get("tail")
 
-        try:
-            offset = int(offset)
-        except (ValueError, TypeError):
+        offset, offset_error = _coerce_int_arg(offset, "offset")
+        if offset_error is not None:
             sections.append(
                 _build_read_multiple_files_section(
                     file_path,
                     "error",
                     _format_read_request(1, MAX_READ_LINES, None),
-                    "error: offset must be an integer",
+                    offset_error,
                 )
             )
             files_with_errors += 1
             continue
-        try:
-            limit = int(limit)
-        except (ValueError, TypeError):
+        limit, limit_error = _coerce_int_arg(limit, "limit")
+        if limit_error is not None:
             sections.append(
                 _build_read_multiple_files_section(
                     file_path,
                     "error",
                     _format_read_request(offset, MAX_READ_LINES, None),
-                    "error: limit must be an integer",
+                    limit_error,
                 )
             )
             files_with_errors += 1
@@ -2998,6 +3005,12 @@ def _normalize_command_call(
 
     # Rule 1: list → argv
     if isinstance(command, list):
+        for i, arg in enumerate(command):
+            if not isinstance(arg, str):
+                return None, (
+                    'error: "command" must be an array of strings; '
+                    f"argument {i + 1} is {type(arg).__name__}"
+                )
         if prefer_shell:
             return NormalizedCommandCall(
                 mode="argv",
@@ -3421,14 +3434,12 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             return "error: think tool is not available"
         return thinking_state.process(args)
     elif name == "read_file":
-        try:
-            offset = int(args.get("offset", 1))
-        except (ValueError, TypeError):
-            return "error: offset must be an integer"
-        try:
-            limit = int(args.get("limit", MAX_READ_LINES))
-        except (ValueError, TypeError):
-            return "error: limit must be an integer"
+        offset, offset_error = _coerce_int_arg(args.get("offset", 1), "offset")
+        if offset_error is not None:
+            return offset_error
+        limit, limit_error = _coerce_int_arg(args.get("limit", MAX_READ_LINES), "limit")
+        if limit_error is not None:
+            return limit_error
         tail = args.get("tail_lines") or args.get("tail")
         if tail is not None:
             if isinstance(tail, bool):

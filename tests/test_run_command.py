@@ -76,6 +76,12 @@ def test_empty_command_list(tmp_base):
     assert "empty" in result
 
 
+def test_command_list_rejects_non_string_args(tmp_base):
+    result = _run_command(["echo", 123], tmp_base, {"echo": "/bin/echo"})
+    assert result.startswith('error: "command" must be an array of strings')
+    assert "argument 2 is int" in result
+
+
 # ---------- Test 5b: String command errors are explicit ----------
 
 
