@@ -2,6 +2,15 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.30
+
+- Swival now supports Apple Foundation Models as an LLM backend via `--provider applefm`. Point it at an `fm serve` instance (defaults to `http://127.0.0.1:1976/v1`) and choose `--model system` for the on-device model or `--model pcc` for Private Cloud Compute.
+- The interactive setup wizard (`--init` / onboarding) now includes an MLX option for `mlx_lm`, `omlx`, `mtpmlx`, etc.
+- You can now enter literal newlines in the REPL with Shift+Enter instead of having to remember Ctrl+J.
+- `write_file` and `edit_file` both return a `[checksum=...]` trailer on every successful invocation. The agent can now chain consecutive file writes and edits without a follow-up `read_file` to obtain the latest checksum, making multi-step file workflows more efficient.
+- Interrupting a tool call mid-dispatch (Ctrl+C) no longer wedges the session on Anthropic-format providers like Bedrock. Orphaned tool-use blocks in the conversation history are now backfilled with a synthetic tool result, so a single accidental interruption no longer forces a full restart. Thanks to Cameron Walters.
+- `read_file`, `read_multiple_files`, `run_command`, and `run_shell_command` now reject boolean values for integer parameters (`offset`, `limit`) and non-string elements in argv arrays with clear `error:` messages, instead of relying on Python's `bool`-is-`int` quirk or crashing later.
+
 ## 1.0.29
 
 - `/audit` now tries to inline function definitions alongside their callers, so that more relevant information is packed together and held in the context.
