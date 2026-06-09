@@ -124,7 +124,7 @@ state file and one set of reports:</p>
 <pre><code class="language-text">swival&gt; /audit
 Audit complete. 2 finding(s) written to audit-findings/. Open audit-findings/README.md to review.
 </code></pre>
-<p>That <code>README.md</code> is the entry point for a reviewer: it carries the run metadata (commit, branch, scope), a one-row-per-finding summary table grouped by severity, the run totals, and — when an audit only partially completed — a section listing each failed or pending artifact with its error code and the exact resume command. The per-finding <code>.md</code> and <code>.patch</code> files are still authoritative for the narrative and the fix; the README is what you open first.</p>
+<p>That <code>README.md</code> is the entry point for a reviewer: it carries the run metadata (commit, branch, scope), a one-row-per-finding table grouped by finding type (severity-ordered within each group), the run totals, and, when an audit only partially completed, a section listing each failed or pending artifact with its error code and the exact retry command. The per-finding <code>.md</code> and <code>.patch</code> files are still authoritative for the narrative and the fix; the README is what you open first.</p>
 <p>If no bugs are found:</p>
 <pre><code class="language-text">No provable security bugs or security-control failures found in Git-tracked files.
 </code></pre>
@@ -156,8 +156,8 @@ Audit complete. 2 finding(s) written to audit-findings/. Open audit-findings/REA
 <h3 id="phase-3-deep-review">Phase 3: Deep Review</h3>
 <p>Each escalated file goes through a two-step deep review.</p>
 <p><strong>Inventory (3a):</strong> The LLM produces a compact list of finding stubs (title, severity, exact <code>path:line</code> location, and a one-line claim under 20 words). At most 3 findings per file. Speculative findings are explicitly rejected.</p>
-<p><strong>Expansion (3b):</strong> Each finding stub is expanded with proof details: finding type, preconditions, a propagation-path proof, and a minimal fix outline. Expansion runs in parallel (up to 2 workers per file).</p>
-<p>Both steps see more than the file itself. Swival resolves the cross-file functions the file actually calls, preferring explicit imports and falling back to the dependency index built in Phase 1, and appends their exact committed bodies as a "Called function definitions" section, each labeled with its own path and line span. A validation helper that lives two files away is reviewed next to its call site, which is what lets a finding land on the helper that is actually broken rather than on the caller. The section is budgeted (8KB per definition, 24KB per prompt); callees that do not fit degrade to one-line pointers instead of vanishing. The same enrichment rides along on the evidence bundles used in verification, adjudication, and report generation.</p>
+<p><strong>Expansion (3b):</strong> Each finding stub is expanded with proof details: finding type, preconditions, a propagation-path proof, and a minimal fix outline. A file's stubs are expanded one after another; files themselves are deep-reviewed in parallel across the worker pool.</p>
+<p>Both steps see more than the file itself. Swival resolves the cross-file functions the file actually calls, preferring explicit imports and falling back to the dependency index built in Phase 1, and appends their exact committed bodies as a "Called function definitions" section, each labeled with its own path and line span. A validation helper that lives two files away is reviewed next to its call site, which is what lets a finding land on the helper that is actually broken rather than on the caller. The section is budgeted (8000 bytes per definition, 24000 bytes per prompt); callees that do not fit degrade to one-line pointers instead of vanishing. The same enrichment rides along on the evidence bundles used in verification, adjudication, and report generation.</p>
 <p>The two are merged into canonical <code>FindingRecord</code> objects. JSON parse failures trigger an automatic LLM repair pass; if repair also fails, the entire file gets one analytical retry.</p>
 <h3 id="phase-4-verification">Phase 4: Verification</h3>
 <p>Each proposed finding is treated as a hypothesis. A verifier agent runs in an isolated Git worktree at HEAD with full access to the committed source code.</p>
@@ -191,7 +191,7 @@ Audit complete. 2 finding(s) written to audit-findings/. Open audit-findings/REA
   002-missing-null-check-in-parser.patch
 </code></pre>
 <p>Each verified finding is assigned a stable index when it is first reached, and that index sticks across retries: if patch generation runs out of turns, the next attempt writes <code>002-...</code> for the same finding rather than consuming a new number.</p>
-<p>Once at least one finding's artifacts have landed, the loop rewrites <code>README.md</code> as the last step of the artifact phase. The README is regenerated on every <code>--resume</code> and <code>--regen</code> invocation, so it always reflects the current state of the run — including any newly failed retries. The per-finding files stay authoritative; the README is the reviewer's index into them.</p>
+<p>Once at least one finding's artifacts have landed, the loop rewrites <code>README.md</code> as the last step of the artifact phase. The README is regenerated on every <code>--resume</code> and <code>--regen</code> invocation, so it always reflects the current state of the run, including any newly failed retries. The per-finding files stay authoritative; the README is the reviewer's index into them.</p>
 <p>Patch failures, report exceptions, and write errors are all persisted as retryable Phase 5 state, so an audit that finishes Phase 4 but stumbles in Phase 5 stays resumable. See <a href="#options">Options</a> for <code>--patch-max-turns</code> and the targeted <code>--regen --finding</code> form.</p>
 <h2 id="report-format">Report Format</h2>
 <p>Each <code>.md</code> report follows a fixed structure:</p>
@@ -311,7 +311,7 @@ force_review = [&quot;swival/audit.py&quot;, &quot;swival/edit.py&quot;, &quot;s
 <li>Current phase and per-finding artifact state (status, stable index, filenames, attempts, last error code, last patch budget used)</li>
 <li><code>select_all</code> flag (whether the run was started with <code>--all</code>) and <code>measure_triage</code> flag (whether the run was started with <code>--measure-triage</code>)</li>
 </ul>
-<p>LLM interactions are traced to <code>.swival/audit/&lt;run_id&gt;/traces/</code> when <code>--trace-dir</code> is set on the outer session.</p>
+<p>When the outer session sets <code>--trace-dir</code>, every audit LLM call is written as a trace into that directory.</p>
 <p>Temporary worktrees for verification and patch generation are created under <code>.swival/audit/&lt;run_id&gt;/verify/</code> and <code>.swival/audit/&lt;run_id&gt;/patch-gen/</code>, and cleaned up automatically.</p>
 <p>Final artifacts go to <code>audit-findings/</code> in the project root.</p>
 <h2 id="interruption-and-recovery">Interruption and Recovery</h2>

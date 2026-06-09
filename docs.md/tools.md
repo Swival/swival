@@ -14,6 +14,8 @@ If output is truncated, Swival appends a continuation hint with the next offset.
 
 Large responses are capped at 50 KB per call by default, and individual long lines are truncated at 2,000 characters. Directory reads return sorted entries and mark subdirectories with a trailing `/`. Both the default line count (2000) and the size cap can be tuned with `--max-output-lines` and `--max-output-kb`, or the matching `max_output_lines` and `max_output_kb` config keys.
 
+Each file read ends with a `[checksum=...]` trailer that hashes the file's current contents. The model can pass that value back to `edit_file` as a guard, so an edit fails if the file changed since it was read. See [`edit_file`](#edit_file) for how that check works.
+
 ## `read_multiple_files`
 
 `read_multiple_files` reads several files in a single call. Each entry in the `files` array can specify its own `offset`, `limit`, and `tail_lines`, just like `read_file` (`offset` and `tail_lines` remain mutually exclusive per entry). Results are grouped by file with `--- path ---` headers and the same line-numbered format as `read_file`.
@@ -41,6 +43,8 @@ When multiple matches are found and `replace_all` is false, the call fails with 
 This is the preferred way to disambiguate repeated matches: the model copies the line number it just read rather than expanding `old_string` with more context. `replace_all` ignores `line_number`.
 
 A stale `line_number` no longer forces a retry. If the requested line misses every match but `old_string` still resolves to a single location across the three passes, Swival applies the edit there anyway. Matches that merely nest across passes (the exact substring sitting inside its line-trimmed or Unicode-normalized span) count as one location, so this fallback fires whenever the target is genuinely unique. Only when two or more distinct locations remain does the call fail, and then the error lists the actual candidate lines so the model can retry with the right one.
+
+The optional `checksum` parameter guards against editing a file that changed since it was last read. Pass the value from the `[checksum=...]` trailer that `read_file` reported for the path. If the file no longer hashes to that value, the edit fails before touching anything, which catches the case where another process (or a parallel subagent) rewrote the file in between. It is optional: empty or whitespace-only values are treated as no checksum supplied, so weaker models that omit it are not penalized.
 
 ## `delete_file`
 
@@ -127,9 +131,11 @@ Output is sanitized as it streams from the process. Programs that draw progress 
 
 Inline command output is capped at 10 KB. Larger output is written to `.swival/cmd_output_*.txt`. Those files are cleaned up automatically after roughly ten minutes.
 
+Setting `background=true` launches the command detached and returns immediately with its PID and a log file path instead of waiting for it to exit. Standard output and standard error are appended to that log, which the model can read back later with `read_file`. This is how the agent starts long-running servers, file watchers, or any task meant to outlive a single tool call. The timeout does not apply to a backgrounded process, and the progress indicator is suppressed for it.
+
 ## `run_shell_command`
 
-`run_shell_command` executes a shell command string and returns its output. It supports pipes, redirects, `&&` chains, and other shell syntax. Commands run through `/bin/sh -c` on Unix or `cmd.exe /c` on Windows.
+`run_shell_command` executes a shell command string and returns its output. It supports pipes, redirects, `&&` chains, and other shell syntax. Commands run through `/bin/sh -c` on Unix or `cmd.exe /c` on Windows. It accepts the same `timeout` and `background` parameters as `run_command`.
 
 `run_shell_command` is only available with `--commands all` or `--yolo`. It does not appear in ask mode or whitelist mode, since shell strings bypass command-level policy controls.
 

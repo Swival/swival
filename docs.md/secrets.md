@@ -132,7 +132,9 @@ The `command` provider (local subprocess) bypasses encryption entirely since it 
 
 ## Reviewer Integration
 
-When `--encrypt-secrets` is active and a reviewer is configured, Swival passes the encryption key to the reviewer subprocess via the `SWIVAL_ENCRYPT_KEY` environment variable. This allows `--self-review` and `swival --reviewer-mode` to decrypt any encrypted tokens that appear in the agent's answer.
+When `--encrypt-secrets` is active with a persistent `--encrypt-secrets-key` and a reviewer is configured, Swival passes that key to the reviewer subprocess via the `SWIVAL_ENCRYPT_KEY` environment variable. This allows `--self-review` and `swival --reviewer-mode` to decrypt any encrypted tokens that appear in the agent's answer.
+
+The key is only forwarded when you supply a persistent key. With the default per-session random key (no `--encrypt-secrets-key`), nothing is passed to the reviewer, since that ephemeral key is never serialized and the reviewer runs in a separate process.
 
 If you write a custom reviewer script that needs to handle encrypted tokens, you can read `SWIVAL_ENCRYPT_KEY` from the environment and use it with the `fast-cipher` library directly.
 

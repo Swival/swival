@@ -11806,6 +11806,33 @@ def run_input_script(
     return StepResult(kind="flow_control", text=last_text, exhausted=last_exhausted)
 
 
+_REPL_SHIFT_ENTER_SEQUENCES = ("\x1b[27;2;13~", "\x1b[13;2u")
+
+
+def _repl_key_bindings():
+    from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.keys import Keys
+
+    for sequence in _REPL_SHIFT_ENTER_SEQUENCES:
+        ANSI_SEQUENCES[sequence] = Keys.ControlM
+
+    kb = KeyBindings()
+
+    @kb.add("c-j")
+    def _insert_newline(event):
+        event.current_buffer.insert_text("\n")
+
+    @kb.add("c-m")
+    def _insert_newline_or_accept(event):
+        if event.data in _REPL_SHIFT_ENTER_SEQUENCES:
+            event.current_buffer.insert_text("\n")
+        else:
+            event.current_buffer.validate_and_handle()
+
+    return kb
+
+
 def repl_loop(
     messages: list,
     tools: list,
@@ -11865,7 +11892,6 @@ def repl_loop(
     from prompt_toolkit.filters import is_done
     from prompt_toolkit.formatted_text import FormattedText
     from prompt_toolkit.history import FileHistory
-    from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.styles import Style
     from prompt_toolkit.widgets.base import Border
 
@@ -11890,22 +11916,18 @@ def repl_loop(
         }
     )
     completer = SwivalCompleter(skills_catalog=skills_catalog)
-    kb = KeyBindings()
-
-    @kb.add("c-j")
-    def _insert_newline(event):
-        event.current_buffer.insert_text("\n")
+    kb = _repl_key_bindings()
 
     turn_state = {"max_turns": max_turns, "turns_used": 0}
     _context_limit = context_length or 128000
     _toolbar_tips = [
-        "^J newline │ @ file │ / commands │ ! shell",
+        "Shift+Enter newline │ @ file │ / commands │ ! shell",
         "/compact to free context │ /status for session info",
         "@ to attach files │ /add-dir to expand workspace",
         "/goal to set an objective │ /todo to track work items",
         "/save before risky changes │ /restore to roll back",
         "/copy to copy last answer to clipboard",
-        "^R to search history │ ^J for multiline input",
+        "^R history │ Shift+Enter/^J for multiline input",
         "pipe input: echo 'task' | swival │ output goes to stdout",
         "/clear to start fresh │ /continue to reset turn counter",
         "/profile to switch models mid-session",

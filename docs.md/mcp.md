@@ -66,9 +66,9 @@ The JSON format supports the same fields as TOML: `command`, `args`, `env` for s
 
 When both `swival.toml` and `.swival/mcp.json` define servers, the TOML config takes precedence by server name. Servers defined only in `.swival/mcp.json` are merged in.
 
-The full precedence order is:
+The rules are:
 
-`--no-mcp` (disables all) > `--mcp-config FILE` (explicit JSON path) > `swival.toml [mcp_servers.*]` > `.swival/mcp.json`
+`--no-mcp` disables everything, regardless of what is configured. Otherwise TOML servers (`swival.toml [mcp_servers.*]`) always win by server name over JSON servers, and JSON-only servers are merged in. The JSON source is `--mcp-config FILE` when that flag is set, or `.swival/mcp.json` otherwise. The `--mcp-config` path does not outrank TOML: it only replaces which JSON file is read.
 
 When the project and global config both define MCP servers, project-level servers win by name, and global-only servers are merged in.
 

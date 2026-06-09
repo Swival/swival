@@ -63,7 +63,7 @@ swival --provider huggingface --model zai-org/GLM-5.1 --yolo \
     "task"
 ```
 
-The synthesized reviewer command inherits `--provider`, `--model`, `--base-url`, `--files`, `--commands`, `--skills-dir`, `--max-context-tokens`, `--max-output-tokens`, `--encrypt-secrets`, `--retries`, `--aws-profile`, `--gcp-project`, and `--location` from the outer invocation (each only when it differs from the default). It always adds `--reviewer-mode` and `--quiet`.
+The synthesized reviewer command inherits `--provider`, `--model`, `--base-url`, `--files`, `--commands`, `--skills-dir`, `--max-context-tokens`, `--max-output-tokens`, `--max-output-lines`, `--max-output-kb`, `--encrypt-secrets`, `--retries`, `--aws-profile`, `--gcp-project`, and `--location` from the outer invocation (each only when it differs from the default). It always adds `--reviewer-mode` and `--quiet`.
 
 API keys are not placed on the reviewer command line to avoid exposing secrets in process listings. If `--api-key` was set on the outer invocation, Swival passes it to the reviewer subprocess via the provider-specific environment variable (`HF_TOKEN`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY` for generic, `GEMINI_API_KEY` for google, `CHATGPT_API_KEY` for chatgpt).
 

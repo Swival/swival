@@ -122,7 +122,7 @@ A `success` outcome means the model produced a final non-tool response. An `exha
 
 `timeline` is an ordered array of event objects. Each event includes `type`, and most include `turn` (the turn number when the event occurred). Review events are an exception — they include `round` instead of `turn` since they occur between agent loop iterations.
 
-For `llm_call`, fields include `duration_s`, `prompt_tokens_est`, `finish_reason`, `is_retry`, and optionally `provider_retries` (number of transient-error retries within this call; omitted when 0). Retry calls include `retry_reason`, which is one of `compact_messages`, `drop_middle_turns`, or `aggressive_drop`. When the provider returned prompt cache data, `cached_tokens` and `cache_write_tokens` are included (both integers; omitted when zero).
+For `llm_call`, fields include `duration_s`, `prompt_tokens_est`, `finish_reason`, `is_retry`, and optionally `provider_retries` (number of transient-error retries within this call; omitted when 0). Retry calls include `retry_reason`, which is one of `compact_messages`, `drop_middle_turns`, or `aggressive_drop`. Prompt cache counts are not recorded per call; they are summed into the run-level `stats.prompt_cache` object instead.
 
 For `tool_call`, fields include `name`, `arguments`, `succeeded`, `duration_s`, and `result_length`. If arguments were invalid JSON, `arguments` is `null`. Failed tool calls include `error`.
 
@@ -142,7 +142,7 @@ For `storm_suppression`, fields include `name`, `args_hash` (a hash of the canon
 
 For `lifecycle`, fields include `event` (`startup` or `exit`), `exit_code`, `duration_s`, and optionally `error`. Lifecycle events appear when `--lifecycle-command` is configured. See [Lifecycle Hooks](lifecycle-hooks.md) for details.
 
-For `command_policy`, fields include `bucket` (the normalized command bucket) and `decision` (`allow`, `persist`, `once`, `always_ask`, `deny`, or `block`). These events are emitted when `--commands ask` is active.
+For `command_policy`, fields include `bucket` (the normalized command bucket) and `decision` (`allow`, `persist`, `once`, `always_ask`, `deny`, or `block`). The interactive decisions come from `--commands ask` approval prompts; a `block` decision is also recorded whenever any restricted policy (`none`, an allowlist, or a denied bucket) rejects a command.
 
 For `untrusted_input`, fields include `source` (the tool name, e.g. `fetch_url` or `mcp__server__tool`) and `origin` (the URL or empty string). These events are emitted when external content is successfully ingested.
 
@@ -236,7 +236,7 @@ Each session produces a `<session_id>.jsonl` file in the target directory. The f
 - `role: "assistant"` with `tool_calls` becomes `type: "assistant"` with `tool_use` content blocks
 - `role: "tool"` becomes `type: "user"` with `tool_result` content blocks
 - `role: "system"` becomes `type: "system"` with the prompt text
-- Every line includes `harness: "swival"` for HuggingFace detection
+- Each message line includes `harness: "swival"` for HuggingFace detection (a trailing `last-prompt` marker line closes the file)
 
 Works in one-shot mode, REPL mode, and through the Python API (`Session(trace_dir="traces/")`). When used with `Session.ask()`, all turns accumulate in a single file per session. Recognized credential tokens in the trace are always encrypted before the file is written, using the same key policy as report files.
 

@@ -141,8 +141,8 @@ env = { API_KEY = &quot;secret&quot; }
 <p>The JSON format supports the same fields as TOML: <code>command</code>, <code>args</code>, <code>env</code> for stdio, and <code>url</code>, <code>headers</code> for SSE.</p>
 <h2 id="config-precedence">Config Precedence</h2>
 <p>When both <code>swival.toml</code> and <code>.swival/mcp.json</code> define servers, the TOML config takes precedence by server name. Servers defined only in <code>.swival/mcp.json</code> are merged in.</p>
-<p>The full precedence order is:</p>
-<p><code>--no-mcp</code> (disables all) &gt; <code>--mcp-config FILE</code> (explicit JSON path) &gt; <code>swival.toml [mcp_servers.*]</code> &gt; <code>.swival/mcp.json</code></p>
+<p>The rules are:</p>
+<p><code>--no-mcp</code> disables everything, regardless of what is configured. Otherwise TOML servers (<code>swival.toml [mcp_servers.*]</code>) always win by server name over JSON servers, and JSON-only servers are merged in. The JSON source is <code>--mcp-config FILE</code> when that flag is set, or <code>.swival/mcp.json</code> otherwise. The <code>--mcp-config</code> path does not outrank TOML: it only replaces which JSON file is read.</p>
 <p>When the project and global config both define MCP servers, project-level servers win by name, and global-only servers are merged in.</p>
 <h2 id="cli-flags">CLI Flags</h2>
 <p><code>--no-mcp</code> disables MCP server connections entirely, even if servers are configured in <code>swival.toml</code> or <code>.swival/mcp.json</code>.</p>

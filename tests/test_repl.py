@@ -35,6 +35,8 @@ from swival.agent import (
     remember_agents_fact,
     _repl_remember,
     _repl_status,
+    _repl_key_bindings,
+    _REPL_SHIFT_ENTER_SEQUENCES,
     CompactionState,
 )
 from swival.command_policy import CommandPolicy
@@ -404,6 +406,61 @@ class TestReplLoop:
         assert "key_bindings" in kwargs
         assert kwargs["prompt_continuation"] == "    ... "
         assert kwargs.get("multiline", False) is not True
+
+    def test_shift_enter_inserts_newline_without_stealing_enter(self):
+        """Shift+Enter inserts a newline while plain Enter still submits."""
+        from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
+        from prompt_toolkit.input.vt100_parser import Vt100Parser
+        from prompt_toolkit.keys import Keys
+
+        kb = _repl_key_bindings()
+        binding_map = {tuple(b.keys): b for b in kb.bindings}
+        assert (Keys.ControlJ, Keys.ControlM) not in binding_map
+        assert (Keys.ControlJ,) in binding_map
+        assert (Keys.ControlM,) in binding_map
+
+        inserted = []
+        submitted = []
+        event = SimpleNamespace(
+            data="",
+            current_buffer=SimpleNamespace(
+                insert_text=inserted.append,
+                validate_and_handle=lambda: submitted.append(True),
+            ),
+        )
+        binding_map[(Keys.ControlJ,)].handler(event)
+        assert inserted == ["\n"]
+
+        event.data = _REPL_SHIFT_ENTER_SEQUENCES[0]
+        binding_map[(Keys.ControlM,)].handler(event)
+        assert inserted == ["\n", "\n"]
+        assert submitted == []
+
+        event.data = "\r"
+        binding_map[(Keys.ControlM,)].handler(event)
+        assert submitted == [True]
+        assert inserted == ["\n", "\n"]
+
+        parsed = []
+        parser = Vt100Parser(parsed.append)
+        for sequence in _REPL_SHIFT_ENTER_SEQUENCES:
+            assert ANSI_SEQUENCES[sequence] == Keys.ControlM
+            parser.feed(sequence)
+            parser.flush()
+
+        parser.feed("\r")
+        parser.flush()
+
+        assert [key.key for key in parsed] == [
+            Keys.ControlM,
+            Keys.ControlM,
+            Keys.ControlM,
+        ]
+        assert [key.data for key in parsed] == [
+            _REPL_SHIFT_ENTER_SEQUENCES[0],
+            _REPL_SHIFT_ENTER_SEQUENCES[1],
+            "\r",
+        ]
 
     def test_bottom_toolbar_shows_context_and_tokens(self, tmp_path):
         """Toolbar shows token spend and context utilization."""

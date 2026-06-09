@@ -45,7 +45,7 @@ swival> /audit
 Audit complete. 2 finding(s) written to audit-findings/. Open audit-findings/README.md to review.
 ```
 
-That `README.md` is the entry point for a reviewer: it carries the run metadata (commit, branch, scope), a one-row-per-finding summary table grouped by severity, the run totals, and — when an audit only partially completed — a section listing each failed or pending artifact with its error code and the exact resume command. The per-finding `.md` and `.patch` files are still authoritative for the narrative and the fix; the README is what you open first.
+That `README.md` is the entry point for a reviewer: it carries the run metadata (commit, branch, scope), a one-row-per-finding table grouped by finding type (severity-ordered within each group), the run totals, and, when an audit only partially completed, a section listing each failed or pending artifact with its error code and the exact retry command. The per-finding `.md` and `.patch` files are still authoritative for the narrative and the fix; the README is what you open first.
 
 If no bugs are found:
 
@@ -93,9 +93,9 @@ Each escalated file goes through a two-step deep review.
 
 **Inventory (3a):** The LLM produces a compact list of finding stubs (title, severity, exact `path:line` location, and a one-line claim under 20 words). At most 3 findings per file. Speculative findings are explicitly rejected.
 
-**Expansion (3b):** Each finding stub is expanded with proof details: finding type, preconditions, a propagation-path proof, and a minimal fix outline. Expansion runs in parallel (up to 2 workers per file).
+**Expansion (3b):** Each finding stub is expanded with proof details: finding type, preconditions, a propagation-path proof, and a minimal fix outline. A file's stubs are expanded one after another; files themselves are deep-reviewed in parallel across the worker pool.
 
-Both steps see more than the file itself. Swival resolves the cross-file functions the file actually calls, preferring explicit imports and falling back to the dependency index built in Phase 1, and appends their exact committed bodies as a "Called function definitions" section, each labeled with its own path and line span. A validation helper that lives two files away is reviewed next to its call site, which is what lets a finding land on the helper that is actually broken rather than on the caller. The section is budgeted (8KB per definition, 24KB per prompt); callees that do not fit degrade to one-line pointers instead of vanishing. The same enrichment rides along on the evidence bundles used in verification, adjudication, and report generation.
+Both steps see more than the file itself. Swival resolves the cross-file functions the file actually calls, preferring explicit imports and falling back to the dependency index built in Phase 1, and appends their exact committed bodies as a "Called function definitions" section, each labeled with its own path and line span. A validation helper that lives two files away is reviewed next to its call site, which is what lets a finding land on the helper that is actually broken rather than on the caller. The section is budgeted (8000 bytes per definition, 24000 bytes per prompt); callees that do not fit degrade to one-line pointers instead of vanishing. The same enrichment rides along on the evidence bundles used in verification, adjudication, and report generation.
 
 The two are merged into canonical `FindingRecord` objects. JSON parse failures trigger an automatic LLM repair pass; if repair also fails, the entire file gets one analytical retry.
 
@@ -148,7 +148,7 @@ audit-findings/
 
 Each verified finding is assigned a stable index when it is first reached, and that index sticks across retries: if patch generation runs out of turns, the next attempt writes `002-...` for the same finding rather than consuming a new number.
 
-Once at least one finding's artifacts have landed, the loop rewrites `README.md` as the last step of the artifact phase. The README is regenerated on every `--resume` and `--regen` invocation, so it always reflects the current state of the run — including any newly failed retries. The per-finding files stay authoritative; the README is the reviewer's index into them.
+Once at least one finding's artifacts have landed, the loop rewrites `README.md` as the last step of the artifact phase. The README is regenerated on every `--resume` and `--regen` invocation, so it always reflects the current state of the run, including any newly failed retries. The per-finding files stay authoritative; the README is the reviewer's index into them.
 
 Patch failures, report exceptions, and write errors are all persisted as retryable Phase 5 state, so an audit that finishes Phase 4 but stumbles in Phase 5 stays resumable. See [Options](#options) for `--patch-max-turns` and the targeted `--regen --finding` form.
 
@@ -311,7 +311,7 @@ Audit state is persisted in `.swival/audit/<run_id>/state.json`. This includes:
 - Current phase and per-finding artifact state (status, stable index, filenames, attempts, last error code, last patch budget used)
 - `select_all` flag (whether the run was started with `--all`) and `measure_triage` flag (whether the run was started with `--measure-triage`)
 
-LLM interactions are traced to `.swival/audit/<run_id>/traces/` when `--trace-dir` is set on the outer session.
+When the outer session sets `--trace-dir`, every audit LLM call is written as a trace into that directory.
 
 Temporary worktrees for verification and patch generation are created under `.swival/audit/<run_id>/verify/` and `.swival/audit/<run_id>/patch-gen/`, and cleaned up automatically.
 
