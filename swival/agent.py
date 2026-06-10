@@ -3423,7 +3423,7 @@ def discover_model(base_url, verbose):
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
-    except urllib.error.URLError as e:
+    except OSError as e:
         raise AgentError(f"could not connect to LM Studio at {base_url}: {e}")
     except json.JSONDecodeError as e:
         raise AgentError(f"invalid JSON from {url}: {e}")
@@ -3451,7 +3451,7 @@ def discover_llamacpp_model(base_url, verbose):
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
-    except urllib.error.URLError as e:
+    except OSError as e:
         raise AgentError(f"could not connect to llama.cpp server at {base_url}: {e}")
     except json.JSONDecodeError as e:
         raise AgentError(f"invalid JSON from {url}: {e}")
@@ -3473,7 +3473,7 @@ def _fetch_json(url, verbose):
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=3) as resp:
             return json.loads(resp.read().decode())
-    except (urllib.error.URLError, json.JSONDecodeError, ValueError) as e:
+    except (OSError, ValueError) as e:
         if verbose:
             fmt.model_info(f"Could not discover context window from {url}: {e}")
         return None
@@ -3570,7 +3570,7 @@ def configure_context(base_url, model_key, requested_context, current_context, v
         )
         with urllib.request.urlopen(req, timeout=120) as resp:
             resp.read()
-    except urllib.error.URLError as e:
+    except OSError as e:
         raise AgentError(f"failed to reload model with new context size: {e}")
 
     if verbose:
