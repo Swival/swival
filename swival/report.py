@@ -137,7 +137,7 @@ class ReportCollector:
     def record_compaction(
         self, turn: int, strategy: str, tokens_before: int, tokens_after: int
     ):
-        if strategy == "drop_middle_turns":
+        if "drop_middle_turns" in strategy.split("+"):
             self.turn_drops += 1
         else:
             self.compactions += 1

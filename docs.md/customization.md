@@ -142,7 +142,7 @@ List available profiles with `--list-profiles`:
 swival --list-profiles
 ```
 
-Each profile requires `provider`. The allowed keys are: `provider`, `model`, `api_key`, `user_agent`, `base_url`, `aws_profile`, `project`, `location`, `max_output_tokens`, `max_context_tokens`, `temperature`, `top_p`, `seed`, `extra_body`, `reasoning_effort`, `sanitize_thinking`, and `description`.
+Each profile requires `provider`. The allowed keys are: `provider`, `model`, `api_key`, `user_agent`, `base_url`, `aws_profile`, `project`, `location`, `max_output_tokens`, `max_context_tokens`, `temperature`, `top_p`, `seed`, `extra_body`, `reasoning_effort`, `sanitize_thinking`, `show_thinking`, and `description`.
 
 Keys outside this set, like `files`, `commands`, or `reviewer`, are rejected with an error listing the allowed keys. Profiles are for choosing a model stack, not for changing agent behavior. The `description` key is metadata: it appears in profile listings but is not passed to the provider.
 
@@ -345,6 +345,24 @@ session = Session(sanitize_thinking=True)
 ```
 
 The sanitizer strips `<think>...</think>` blocks, standalone `<think>` / `</think>` lines, and special tokens like `<|start_header_id|>`. Inline mentions of these tags in code examples or backtick-quoted text are preserved.
+
+## Showing Streamed Thinking
+
+When a reasoning model streams its thinking, Swival shows it live under a `thinking…` header while you wait. That live region is transient — it gets wiped from the terminal the moment the answer is reprinted. The `show_thinking` option keeps the full thinking in your scrollback instead, reprinting it to stderr after the answer. Without it, you get a collapsed one-line note (`thinking: N lines, hidden`) so the wipe isn't jarring.
+
+It is off by default. The thinking is a display-only artifact: it goes to stderr, never to stdout, history, traces, or reports. Showing it requires a verbose, interactive terminal and a provider that streams reasoning deltas.
+
+```toml
+show_thinking = true
+```
+
+In the library API:
+
+```python
+session = Session(show_thinking=True)
+```
+
+The matching CLI flag is `--show-thinking`. The unrelated `--sanitize-thinking` knob above is about cleaning leaked tags out of the answer; `show_thinking` only changes whether the streamed thinking stays visible in your terminal.
 
 ## Outbound LLM Filter
 

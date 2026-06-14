@@ -2461,6 +2461,7 @@ def _emergency_truncate(messages: list, context_length: int) -> list:
     return messages
 
 
+COMPACTION_GC_SCAFFOLDING = "gc_scaffolding"
 COMPACTION_COMPACT_MESSAGES = "compact_messages"
 COMPACTION_STRIP_REASONING = "strip_reasoning_content"
 COMPACTION_DROP_MIDDLE = "drop_middle_turns"
@@ -2469,6 +2470,7 @@ COMPACTION_DROP_TOOLS = "drop_tools"
 COMPACTION_EMERGENCY = "emergency_truncate"
 
 _COMPACTION_ORDER = (
+    COMPACTION_GC_SCAFFOLDING,
     COMPACTION_COMPACT_MESSAGES,
     COMPACTION_STRIP_REASONING,
     COMPACTION_DROP_MIDDLE,
@@ -2479,6 +2481,33 @@ _COMPACTION_ORDER = (
 
 _MAX_CONTEXT_COMPACTION_ATTEMPTS = 10
 _EMERGENCY_TRUNCATE_RATIOS = (1.0, 0.5, 0.25, 0.1)
+
+DEFAULT_COMPACTION_SAFETY_RATIO = 0.90
+PROACTIVE_COMPACTION_HYSTERESIS = 0.90
+REACTIVE_BUDGET_BACKOFF = 0.85
+
+
+def _prompt_budget(
+    context_length: int | None,
+    max_output_tokens: int | None,
+    safety_ratio: float = DEFAULT_COMPACTION_SAFETY_RATIO,
+) -> int | None:
+    """Target prompt-token budget that still leaves room for the answer.
+
+    Returns ``None`` when the context window is unknown — there is no budget to
+    target, so the proactive path stays idle and the reactive net falls back to
+    ratio-based shrinking. ``reserve_output`` is clamped to
+    ``[MIN_OUTPUT_TOKENS, context // 2]`` so a large ``max_output_tokens`` can
+    never starve the prompt and the prompt can never starve the answer. The
+    ``safety_ratio`` margin absorbs the residual error in our tiktoken estimate
+    on non-OpenAI tokenizers.
+    """
+    if context_length is None:
+        return None
+    reserve = max_output_tokens if max_output_tokens else MIN_OUTPUT_TOKENS
+    reserve = max(MIN_OUTPUT_TOKENS, min(reserve, context_length // 2))
+    budget = int(context_length * safety_ratio) - reserve
+    return max(budget, MIN_OUTPUT_TOKENS)
 
 
 @dataclass
@@ -2498,6 +2527,8 @@ class CompactionContext:
     attempted_strategies: tuple[str, ...] = ()
     requested_strategy: str | None = None
     allow_tool_drop: bool = True
+    allow_emergency: bool = True
+    allow_turn_drop: bool = True
     call_llm_fn: Callable | None = None
     model_id: str | None = None
     base_url: str | None = None
@@ -2522,6 +2553,7 @@ class CompactionResult:
     tokens_after: int
     history_mutated: bool = True
     dropped_tools: bool = False
+    met_budget: bool = True
 
 
 def _delete_msg_key(msg, key: str) -> None:
@@ -2564,6 +2596,62 @@ def _messages_compaction_signature(messages: list) -> tuple:
             )
         )
     return tuple(signature)
+
+
+def _is_spent_scaffolding(msg, *, before_index: int, last_assistant: int) -> bool:
+    """Whether *msg* is an expired synthetic nudge that can be garbage-collected.
+
+    A synthetic message earns its keep only until the model has responded to it.
+    Once a later assistant turn exists, loop scaffolding (tool-error guardrails,
+    think/todo/snapshot nudges, empty/cut-off retries, reviewer feedback) is
+    dead weight. Durable synthetic context — goal recaps, image and command-tool
+    placeholders, listed in :data:`_DROPPABLE_USER_PREFIXES` — is preserved here
+    and left for the destructive rungs to handle.
+    """
+    if isinstance(msg, str) or before_index >= last_assistant:
+        return False
+    if not _msg_get(msg, "_swival_synthetic"):
+        return False
+    return not (_msg_content(msg) or "").startswith(_DROPPABLE_USER_PREFIXES)
+
+
+def _last_assistant_index(messages: list) -> int:
+    last = -1
+    for i, msg in enumerate(messages):
+        if _msg_role(msg) == "assistant":
+            last = i
+    return last
+
+
+def _has_spent_scaffolding(messages: list) -> bool:
+    last_assistant = _last_assistant_index(messages)
+    if last_assistant < 0:
+        return False
+    return any(
+        _is_spent_scaffolding(msg, before_index=i, last_assistant=last_assistant)
+        for i, msg in enumerate(messages)
+    )
+
+
+def _gc_scaffolding(messages: list) -> bool:
+    """Drop spent synthetic nudges that already have a later assistant response.
+
+    This is the cheapest, most nearly lossless rung: it only removes loop
+    scaffolding the model has already acted on. Returns ``True`` when anything
+    was removed.
+    """
+    last_assistant = _last_assistant_index(messages)
+    if last_assistant < 0:
+        return False
+    kept = [
+        msg
+        for i, msg in enumerate(messages)
+        if not _is_spent_scaffolding(msg, before_index=i, last_assistant=last_assistant)
+    ]
+    if len(kept) != len(messages):
+        messages[:] = kept
+        return True
+    return False
 
 
 def _compact_assistant_tool_reasoning(messages: list) -> bool:
@@ -2646,6 +2734,10 @@ def _compaction_strategy_candidates(ctx: CompactionContext):
             continue
         if strategy in attempted:
             continue
+        if strategy == COMPACTION_GC_SCAFFOLDING and not _has_spent_scaffolding(
+            ctx.messages
+        ):
+            continue
         if strategy == COMPACTION_STRIP_REASONING and not _has_reasoning_payload(
             ctx.messages
         ):
@@ -2658,15 +2750,20 @@ def _compaction_strategy_candidates(ctx: CompactionContext):
                 for m in ctx.messages
             ):
                 continue
+        if (
+            strategy in (COMPACTION_DROP_MIDDLE, COMPACTION_AGGRESSIVE)
+            and not ctx.allow_turn_drop
+        ):
+            continue
         if strategy == COMPACTION_DROP_TOOLS and (
             not ctx.allow_tool_drop or ctx.tools is None
         ):
             continue
         yield strategy
 
-    if ctx.attempted_strategies.count(COMPACTION_EMERGENCY) < len(
-        _EMERGENCY_TRUNCATE_RATIOS
-    ):
+    if ctx.allow_emergency and ctx.attempted_strategies.count(
+        COMPACTION_EMERGENCY
+    ) < len(_EMERGENCY_TRUNCATE_RATIOS):
         yield COMPACTION_EMERGENCY
 
 
@@ -2695,7 +2792,10 @@ def compact_context(ctx: CompactionContext) -> CompactionResult:
         dropped_tools = False
         description = strategy
 
-        if strategy == COMPACTION_COMPACT_MESSAGES:
+        if strategy == COMPACTION_GC_SCAFFOLDING:
+            _gc_scaffolding(ctx.messages)
+            description = "removed spent scaffolding"
+        elif strategy == COMPACTION_COMPACT_MESSAGES:
             ctx.messages[:] = compact_messages(ctx.messages)
             description = "compacted large tool results"
         elif strategy == COMPACTION_STRIP_REASONING:
@@ -2770,6 +2870,117 @@ def compact_context(ctx: CompactionContext) -> CompactionResult:
             )
 
     raise ContextOverflowError("no compaction strategy available")
+
+
+def compact_to_budget(
+    messages: list,
+    tools: list | None,
+    *,
+    budget: int | None,
+    context_length: int | None,
+    max_output_tokens: int | None,
+    allow_tool_drop: bool = True,
+    allow_emergency: bool = True,
+    allow_turn_drop: bool = True,
+    call_llm_fn=None,
+    model_id=None,
+    base_url=None,
+    api_key=None,
+    top_p=None,
+    seed=None,
+    provider=None,
+    compaction_state: "CompactionState | None" = None,
+    goal_state: "GoalState | None" = None,
+    provider_kwargs=None,
+) -> CompactionResult:
+    """Compact ``messages`` toward ``budget``, then commit once. Best-effort.
+
+    This is the budget-targeted entrypoint shared by the proactive and reactive
+    paths. It works on a deep copy and loops the compaction ladder rung by rung
+    until the transcript fits ``budget`` or no further reduction is possible,
+    then writes the result back into ``messages`` in place. Because every rung
+    runs against the copy, a no-op or failed rung never leaves a partial
+    mutation behind in durable history: either the whole operation lands or none
+    of it does.
+
+    The contract is best-effort, not a guarantee: when the enabled rungs run out
+    before the budget is met, whatever real reduction was achieved is still
+    committed (leaner is better than not), and ``CompactionResult.met_budget`` is
+    ``False`` so callers can tell. The reactive caller relies on this — it keeps
+    tightening the budget across retries — and the proactive caller is happy with
+    partial progress.
+
+    ``allow_turn_drop``/``allow_tool_drop``/``allow_emergency`` gate the lossy
+    rungs (dropping conversation turns, dropping tool schemas, deterministic
+    truncation). The proactive path disables all three so it never destroys
+    history; the reactive net enables them.
+
+    ``budget`` of ``None`` (unknown context window) is a no-op — there is no
+    target to compact toward, so the reactive net handles overflow by ratio.
+    """
+    before = estimate_tokens(messages, tools)
+    if budget is None or before <= budget:
+        return CompactionResult(
+            messages=messages,
+            tools=tools,
+            strategy="noop",
+            description="within budget",
+            tokens_before=before,
+            tokens_after=before,
+            history_mutated=False,
+            dropped_tools=False,
+            met_budget=True,
+        )
+
+    working = copy.deepcopy(messages)
+    cur_tools = tools
+    applied: list[str] = []
+    dropped_tools = False
+
+    while estimate_tokens(working, cur_tools) > budget:
+        try:
+            step = compact_context(
+                CompactionContext(
+                    messages=working,
+                    tools=cur_tools,
+                    context_length=context_length,
+                    max_output_tokens=max_output_tokens,
+                    attempted_strategies=tuple(applied),
+                    allow_tool_drop=allow_tool_drop,
+                    allow_emergency=allow_emergency,
+                    allow_turn_drop=allow_turn_drop,
+                    call_llm_fn=call_llm_fn,
+                    model_id=model_id,
+                    base_url=base_url,
+                    api_key=api_key,
+                    top_p=top_p,
+                    seed=seed,
+                    provider=provider,
+                    compaction_state=compaction_state,
+                    goal_state=goal_state,
+                    provider_kwargs=provider_kwargs,
+                )
+            )
+        except ContextOverflowError:
+            break
+        applied.append(step.strategy)
+        cur_tools = step.tools
+        dropped_tools = dropped_tools or step.dropped_tools
+
+    messages[:] = working
+    after = estimate_tokens(messages, cur_tools)
+    history_mutated = any(s != COMPACTION_DROP_TOOLS for s in applied)
+    return CompactionResult(
+        messages=messages,
+        tools=cur_tools,
+        strategy="+".join(applied) if applied else "noop",
+        description=", ".join(applied) if applied else "within budget",
+        tokens_before=before,
+        tokens_after=after,
+        history_mutated=history_mutated,
+        dropped_tools=dropped_tools,
+        met_budget=after <= budget,
+    )
 
 
 def _provider_auth_kwargs(llm_kwargs):
@@ -8931,6 +9142,18 @@ def run_agent_loop(
         _is_tools_retry = True
         turns -= 1
 
+    _summary_kwargs = dict(
+        call_llm_fn=_call_llm_for_secondary,
+        model_id=model_id,
+        base_url=api_base,
+        api_key=llm_kwargs.get("api_key"),
+        top_p=top_p,
+        seed=seed,
+        provider=llm_kwargs.get("provider"),
+        compaction_state=compaction_state,
+        provider_kwargs=_provider_auth_kwargs(llm_kwargs),
+    )
+
     _is_tools_retry = False
     while turns < max_turns:
         turns += 1
@@ -9015,6 +9238,37 @@ def run_agent_loop(
                 )
 
         token_est = estimate_tokens(messages, effective_tools)
+
+        _budget = _prompt_budget(context_length, max_output_tokens)
+        if _budget is not None and token_est > _budget:
+            _pc = compact_to_budget(
+                messages,
+                effective_tools,
+                budget=int(_budget * PROACTIVE_COMPACTION_HYSTERESIS),
+                context_length=context_length,
+                max_output_tokens=max_output_tokens,
+                allow_tool_drop=False,
+                allow_emergency=False,
+                allow_turn_drop=False,
+                goal_state=goal_state,
+                **_summary_kwargs,
+            )
+            if _pc.history_mutated:
+                if snapshot_state is not None:
+                    snapshot_state.invalidate_index_checkpoint()
+                if report:
+                    report.record_compaction(
+                        turns + turn_offset,
+                        _pc.strategy,
+                        _pc.tokens_before,
+                        _pc.tokens_after,
+                    )
+                token_est = _pc.tokens_after
+                if verbose:
+                    fmt.context_stats(
+                        f"Proactive compaction ({_pc.strategy})", token_est
+                    )
+
         if verbose:
             fmt.turn_header(turns, max_turns, token_est, context_length)
 
@@ -9088,21 +9342,8 @@ def run_agent_loop(
                     **_tools_retry_kwargs(_is_tools_retry),
                 )
 
-            _llm_summary_kwargs = dict(
-                call_llm_fn=_call_llm_for_secondary,
-                model_id=model_id,
-                base_url=api_base,
-                api_key=llm_kwargs.get("api_key"),
-                top_p=top_p,
-                seed=seed,
-                provider=llm_kwargs.get("provider"),
-                compaction_state=compaction_state,
-                provider_kwargs=_provider_auth_kwargs(llm_kwargs),
-            )
-
             _tne_pending = None
             _compaction_success = False
-            _attempted_strategies: list[str] = []
 
             if _vision_pending:
                 _replace_last_image_message(
@@ -9114,24 +9355,43 @@ def run_agent_loop(
                 )
                 _vision_pending = False
 
-            for _ in range(_MAX_CONTEXT_COMPACTION_ATTEMPTS):
-                try:
-                    compaction = compact_context(
-                        CompactionContext(
-                            messages=messages,
-                            tools=effective_tools,
-                            context_length=context_length,
-                            max_output_tokens=max_output_tokens,
-                            attempted_strategies=tuple(_attempted_strategies),
-                            goal_state=goal_state,
-                            **_llm_summary_kwargs,
-                        )
-                    )
-                except ContextOverflowError:
-                    break
+            # The provider rejected a prompt our estimate believed fit, so the
+            # estimate undercounted. Compact to a budget below the current size
+            # and retry once; if it overflows again, tighten the budget by a
+            # fixed ratio and repeat. Each step shrinks the transcript by
+            # construction, so the loop converges on the deterministic floor.
+            _safe_budget = _prompt_budget(context_length, max_output_tokens)
+            _last_after = None
+            # Carry the tools the previous retry actually used forward. Once a
+            # round drops tools and the no-tools prompt still overflows, the
+            # next budget must be measured against that no-tools prompt so we
+            # shrink the messages — not re-measure with the full schemas and
+            # just drop tools again.
+            _active_tools = effective_tools
 
-                _attempted_strategies.append(compaction.strategy)
+            for _ in range(_MAX_CONTEXT_COMPACTION_ATTEMPTS):
+                _cur_est = estimate_tokens(messages, _active_tools)
+                _retry_budget = int(_cur_est * REACTIVE_BUDGET_BACKOFF)
+                if _safe_budget is not None:
+                    _retry_budget = min(_retry_budget, _safe_budget)
+
+                compaction = compact_to_budget(
+                    messages,
+                    _active_tools,
+                    budget=_retry_budget,
+                    context_length=context_length,
+                    max_output_tokens=max_output_tokens,
+                    goal_state=goal_state,
+                    **_summary_kwargs,
+                )
                 retry_tools = compaction.tools
+                _active_tools = retry_tools
+
+                # Always attempt at least one retry; bail out only once a later
+                # round can no longer shrink the transcript any further.
+                if _last_after is not None and compaction.tokens_after >= _last_after:
+                    break
+                _last_after = compaction.tokens_after
 
                 if verbose:
                     if compaction.dropped_tools:

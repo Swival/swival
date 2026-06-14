@@ -109,6 +109,18 @@ class TestReportCollector:
         assert rc.events[0]["strategy"] == "compact_messages"
         assert rc.events[1]["strategy"] == "drop_middle_turns"
 
+    def test_compaction_tracking_combined_strategy(self):
+        rc = ReportCollector()
+        # The unified compact_to_budget entrypoint records a "+"-joined string
+        # when one pass applies several rungs. A pass that includes turn
+        # dropping counts as a turn_drop, not a plain compaction.
+        rc.record_compaction(2, "gc_scaffolding+compact_messages", 95000, 70000)
+        rc.record_compaction(
+            4, "compact_messages+strip_reasoning_content+drop_middle_turns", 70000, 40000
+        )
+        assert rc.compactions == 1
+        assert rc.turn_drops == 1
+
     def test_guardrail_tracking(self):
         rc = ReportCollector()
         rc.record_guardrail(3, "edit_file", "nudge")

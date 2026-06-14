@@ -100,7 +100,7 @@
         <article class="docs-content">
             <h1 id="tools">Tools</h1>
 <p>Swival gives the model a fixed set of tools at runtime. Most tools are always available.</p>
-<p>Command execution tools are included by default (commands default to <code>"all"</code>): <code>run_command</code> takes an argv array and is available in all command modes, while <code>run_shell_command</code> takes a shell string and is only available with <code>--commands all</code> or <code>--yolo</code>. Pass <code>--commands none</code> to remove both, or <code>--commands ask</code> for interactive approval (argv-only, no shell).</p>
+<p>Command execution tools are included by default (commands default to <code>"all"</code>): <code>run_command</code> takes an argv array and is available in every command mode except <code>--commands none</code>, while <code>run_shell_command</code> takes a shell string and is only available with <code>--commands all</code> or <code>--yolo</code>. Pass <code>--commands none</code> to remove both, or <code>--commands ask</code> for interactive approval (argv-only, no shell).</p>
 <p><code>use_skill</code> appears only when skills are discovered, MCP tools appear when external MCP servers are configured, and A2A tools appear when remote A2A agents are configured.</p>
 <h2 id="read_file"><code>read_file</code></h2>
 <p><code>read_file</code> can read text files and directory listings inside allowed roots. File output is line-numbered, which makes later edits precise. The default window starts at <code>offset=1</code> with <code>limit=2000</code> lines.</p>

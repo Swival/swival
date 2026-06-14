@@ -2,7 +2,7 @@
 
 Swival gives the model a fixed set of tools at runtime. Most tools are always available.
 
-Command execution tools are included by default (commands default to `"all"`): `run_command` takes an argv array and is available in all command modes, while `run_shell_command` takes a shell string and is only available with `--commands all` or `--yolo`. Pass `--commands none` to remove both, or `--commands ask` for interactive approval (argv-only, no shell).
+Command execution tools are included by default (commands default to `"all"`): `run_command` takes an argv array and is available in every command mode except `--commands none`, while `run_shell_command` takes a shell string and is only available with `--commands all` or `--yolo`. Pass `--commands none` to remove both, or `--commands ask` for interactive approval (argv-only, no shell).
 
 `use_skill` appears only when skills are discovered, MCP tools appear when external MCP servers are configured, and A2A tools appear when remote A2A agents are configured.
 

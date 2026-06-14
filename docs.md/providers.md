@@ -7,6 +7,7 @@ Swival supports local, hosted, and API-based model providers:
 - [HuggingFace Inference API](#huggingface-inference-api) — hosted inference
 - [OpenRouter](#openrouter) — multi-provider access through a single API
 - [Generic (OpenAI-compatible)](#generic-openai-compatible) — any OpenAI-compatible server
+- [Apple Foundation Models](#apple-foundation-models) — experimental, local Apple Foundation Models server
 - [Google Gemini API](#google-gemini-api) — Google's models via API key
 - [Gemini Enterprise Agent Platform](#gemini-enterprise-agent-platform) — Gemini through Google Cloud (formerly Vertex AI)
 - [ChatGPT Plus/Pro](#chatgpt-pluspro) — OpenAI models via your existing subscription
@@ -229,6 +230,18 @@ swival --provider generic \
     --user-agent "KimiCLI/Swival" \
     "task"
 ```
+
+## Apple Foundation Models
+
+The `applefm` provider talks to a local Apple Foundation Models server that exposes an OpenAI-compatible endpoint at `http://127.0.0.1:1976/v1`. It is experimental, and tool support is limited — Swival sanitizes the tool schemas it sends, dropping any the Foundation Models runtime cannot handle.
+
+```sh
+swival --provider applefm "task"
+```
+
+Two models are available. Private Cloud Compute (`pcc`) is the default and the only one with enough room to do real work — roughly 32K tokens. The on-device `system` model tops out near 4K tokens and is experimental at best; select it with `--model system`. Swival defaults to `pcc` when you do not name a model.
+
+The server does not report its context window, so Swival falls back to measured defaults (about 32K for `pcc`, about 4K for `system`). Override either with `--max-context-tokens`, and point at a non-default server with `--base-url`.
 
 ## Google Gemini API
 

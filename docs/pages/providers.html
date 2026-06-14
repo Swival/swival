@@ -106,6 +106,7 @@
 <li><a href="#huggingface-inference-api">HuggingFace Inference API</a> — hosted inference</li>
 <li><a href="#openrouter">OpenRouter</a> — multi-provider access through a single API</li>
 <li><a href="#generic-openai-compatible">Generic (OpenAI-compatible)</a> — any OpenAI-compatible server</li>
+<li><a href="#apple-foundation-models">Apple Foundation Models</a> — experimental, local Apple Foundation Models server</li>
 <li><a href="#google-gemini-api">Google Gemini API</a> — Google's models via API key</li>
 <li><a href="#gemini-enterprise-agent-platform">Gemini Enterprise Agent Platform</a> — Gemini through Google Cloud (formerly Vertex AI)</li>
 <li><a href="#chatgpt-pluspro">ChatGPT Plus/Pro</a> — OpenAI models via your existing subscription</li>
@@ -247,6 +248,12 @@ swival --provider generic \
     --user-agent &quot;KimiCLI/Swival&quot; \
     &quot;task&quot;
 </code></pre>
+<h2 id="apple-foundation-models">Apple Foundation Models</h2>
+<p>The <code>applefm</code> provider talks to a local Apple Foundation Models server that exposes an OpenAI-compatible endpoint at <code>http://127.0.0.1:1976/v1</code>. It is experimental, and tool support is limited — Swival sanitizes the tool schemas it sends, dropping any the Foundation Models runtime cannot handle.</p>
+<pre><code class="language-sh">swival --provider applefm &quot;task&quot;
+</code></pre>
+<p>Two models are available. Private Cloud Compute (<code>pcc</code>) is the default and the only one with enough room to do real work — roughly 32K tokens. The on-device <code>system</code> model tops out near 4K tokens and is experimental at best; select it with <code>--model system</code>. Swival defaults to <code>pcc</code> when you do not name a model.</p>
+<p>The server does not report its context window, so Swival falls back to measured defaults (about 32K for <code>pcc</code>, about 4K for <code>system</code>). Override either with <code>--max-context-tokens</code>, and point at a non-default server with <code>--base-url</code>.</p>
 <h2 id="google-gemini-api">Google Gemini API</h2>
 <p>The <code>google</code> provider connects to Google's Gemini API through its OpenAI-compatible endpoint (<code>/v1beta/openai</code>).</p>
 <p><code>--model</code> is required. Authentication comes from <code>--api-key</code>, <code>GEMINI_API_KEY</code>, or <code>OPENAI_API_KEY</code>.</p>

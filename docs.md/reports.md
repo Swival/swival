@@ -72,7 +72,7 @@ The JSON below is from a verified local run using `--model dummy-model --max-tur
 
 `version` is the schema version and is currently `1`. `mode` is `"oneshot"` for single-task runs or `"repl"` for interactive sessions. `timestamp` is the run completion time in UTC ISO 8601 format.
 
-`task` is the original question string passed on the command line, or `"repl session (<N> turns)"` for REPL sessions. `model` is the resolved model identifier that was actually used. `provider` is one of `lmstudio`, `llamacpp`, `huggingface`, `openrouter`, `chatgpt`, `google`, `geap` (`vertexai` is an accepted alias), `bedrock`, `generic`, or `command`.
+`task` is the original question string passed on the command line, or `"repl session (<N> turns)"` for REPL sessions. `model` is the resolved model identifier that was actually used. `provider` is one of `lmstudio`, `llamacpp`, `huggingface`, `openrouter`, `generic`, `applefm`, `chatgpt`, `google`, `geap` (`vertexai` is an accepted alias), `bedrock`, or `command`.
 
 `settings` captures run configuration. `sandbox` captures the sandbox backend in use. `result` captures outcome and exit semantics. `stats` captures aggregate counters. `timeline` captures ordered event records.
 
@@ -102,7 +102,7 @@ A `success` outcome means the model produced a final non-tool response. An `exha
 
 `tool_calls_total`, `tool_calls_succeeded`, and `tool_calls_failed` are aggregate tool counters. `tool_calls_by_name` is a per-tool breakdown using `{succeeded, failed}` counts.
 
-`compactions` counts history-mutating compaction events such as `compact_messages`, `strip_reasoning_content`, `aggressive_drop`, and `emergency_truncate`. `turn_drops` counts `drop_middle_turns` events. Request-local tool drops are reported on the retrying `llm_call`, not as history compactions. `guardrail_interventions` counts injected correction prompts for repeated tool failures. `recovered_responses` counts model outputs that could not be used as emitted and triggered a recovery step, such as output cut off by the token limit, tool calls with malformed JSON arguments, or tool-call markup leaked into the text channel.
+`compactions` counts history-mutating compaction passes. Because a single proactive or reactive pass walks the ladder and can apply several rungs at once, the recorded `strategy` may be a `+`-joined combination such as `gc_scaffolding+compact_messages` or `compact_messages+strip_reasoning_content`. `turn_drops` counts passes that dropped middle turns — any pass whose `strategy` includes the `drop_middle_turns` rung, on its own or combined with others — and those passes are not also counted under `compactions`. Request-local tool drops are reported on the retrying `llm_call`, not as history compactions. `guardrail_interventions` counts injected correction prompts for repeated tool failures. `recovered_responses` counts model outputs that could not be used as emitted and triggered a recovery step, such as output cut off by the token limit, tool calls with malformed JSON arguments, or tool-call markup leaked into the text channel.
 
 `truncation_repairs` counts tool calls whose truncated or unbalanced JSON arguments were structurally repaired and salvaged instead of being discarded. `scavenged_calls` counts tool calls recovered from the plain-text content channel when the model emitted them as text rather than as structured calls. `stormed_calls` counts repeat tool calls that the storm breaker suppressed to stop the model looping on an identical invocation. All three are always present in `stats`.
 
@@ -122,11 +122,11 @@ A `success` outcome means the model produced a final non-tool response. An `exha
 
 `timeline` is an ordered array of event objects. Each event includes `type`, and most include `turn` (the turn number when the event occurred). Review events are an exception — they include `round` instead of `turn` since they occur between agent loop iterations.
 
-For `llm_call`, fields include `duration_s`, `prompt_tokens_est`, `finish_reason`, `is_retry`, and optionally `provider_retries` (number of transient-error retries within this call; omitted when 0). Retry calls include `retry_reason`, such as `compact_messages`, `strip_reasoning_content`, `drop_middle_turns`, `aggressive_drop`, `drop_tools`, or `emergency_truncate`. Prompt cache counts are not recorded per call; they are summed into the run-level `stats.prompt_cache` object instead.
+For `llm_call`, fields include `duration_s`, `prompt_tokens_est`, `finish_reason`, `is_retry`, and optionally `provider_retries` (number of transient-error retries within this call; omitted when 0). Retry calls include `retry_reason`, the compaction strategy that produced the retried request shape. Like the `compaction` event's `strategy`, it is a single rung (`gc_scaffolding`, `compact_messages`, `strip_reasoning_content`, `drop_middle_turns`, `aggressive_drop`, `drop_tools`, or `emergency_truncate`) or a `+`-joined combination of them. Prompt cache counts are not recorded per call; they are summed into the run-level `stats.prompt_cache` object instead.
 
 For `tool_call`, fields include `name`, `arguments`, `succeeded`, `duration_s`, and `result_length`. If arguments were invalid JSON, `arguments` is `null`. Failed tool calls include `error`.
 
-For `compaction`, fields include `strategy`, `tokens_before`, and `tokens_after`. Strategy is one of the history-mutating compaction strategies, currently `compact_messages`, `strip_reasoning_content`, `drop_middle_turns`, `aggressive_drop`, or `emergency_truncate`.
+For `compaction`, fields include `strategy`, `tokens_before`, and `tokens_after`. `strategy` is the rung or rungs applied in that pass — one of `gc_scaffolding`, `compact_messages`, `strip_reasoning_content`, `drop_middle_turns`, `aggressive_drop`, or `emergency_truncate`, or a `+`-joined combination when several ran together in a single pass.
 
 For `guardrail`, fields include `tool` and `level`, where `level` is `nudge` for repeated failures and `stop` for stronger intervention.
 

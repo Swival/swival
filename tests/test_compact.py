@@ -16,12 +16,19 @@ from swival.agent import (
     drop_middle_turns,
     aggressive_drop_turns,
     compact_context,
+    compact_to_budget,
     CompactionContext,
     COMPACTION_AGGRESSIVE,
     COMPACTION_COMPACT_MESSAGES,
     COMPACTION_DROP_MIDDLE,
     COMPACTION_DROP_TOOLS,
+    COMPACTION_GC_SCAFFOLDING,
     COMPACTION_STRIP_REASONING,
+    _gc_scaffolding,
+    _has_spent_scaffolding,
+    _prompt_budget,
+    GOAL_RECAP_PREFIX,
+    MIN_OUTPUT_TOKENS,
     _emergency_truncate,
     summarize_turns,
     _RECAP_PREFIX,
@@ -1503,11 +1510,12 @@ class TestDropToolsEmergencyRetry:
             nonlocal call_count
             call_count += 1
             tools_arg = args[7] if len(args) > 7 else kwargs.get("tools")
-            # Every call up to and including the drop-tools attempt fails
-            # with COE.  The first emergency-truncate retry succeeds.
-            if call_count <= 5:
+            # The server's real tokenizer counts the tool schemas higher than
+            # our estimate, so it rejects the clamped prompt while tools are
+            # attached. The reactive net compacts to a budget below the current
+            # size, drops the tools for the retry, and the call goes through.
+            if tools_arg is not None:
                 raise ContextOverflowError(f"too long (call {call_count})")
-            assert tools_arg is None
             return (
                 SimpleNamespace(
                     content="recovered after truncation",
@@ -1530,7 +1538,91 @@ class TestDropToolsEmergencyRetry:
 
         assert answer == "recovered after truncation"
         assert exhausted is False
-        assert call_count == 6
+        # Initial tools call rejected, then one compact-and-retry that drops
+        # tools succeeds — no round-trip storm.
+        assert call_count == 2
+
+    def test_reactive_carries_dropped_tools_into_next_budget(
+        self, tmp_path, monkeypatch
+    ):
+        """After a round drops tools and the no-tools retry still overflows,
+        the next round's budget must be measured against the no-tools prompt
+        (so messages shrink) — not re-measured with the full schemas, which
+        would just drop tools again and stall."""
+        from swival import agent
+        from swival.agent import run_agent_loop
+
+        budget_tools = []  # the `tools` arg compact_to_budget saw each round
+
+        def spy_compact_to_budget(messages, tools, **kwargs):
+            budget_tools.append(tools)
+            if len(budget_tools) == 1:
+                # First round: drop the tools for the retry.
+                return agent.CompactionResult(
+                    messages=messages,
+                    tools=None,
+                    strategy="drop_tools",
+                    description="dropped tools",
+                    tokens_before=999,
+                    tokens_after=500,
+                    history_mutated=False,
+                    dropped_tools=True,
+                    met_budget=True,
+                )
+            # Later rounds: shrink the (now no-tools) messages further.
+            return agent.CompactionResult(
+                messages=messages,
+                tools=None,
+                strategy="aggressive_drop",
+                description="shrank messages",
+                tokens_before=500,
+                tokens_after=300,
+                history_mutated=True,
+                dropped_tools=False,
+                met_budget=True,
+            )
+
+        monkeypatch.setattr(agent, "compact_to_budget", spy_compact_to_budget)
+
+        server_calls = 0
+
+        def fake_call_llm(*args, **kwargs):
+            nonlocal server_calls
+            server_calls += 1
+            tools_arg = args[7] if len(args) > 7 else kwargs.get("tools")
+            if server_calls == 1:
+                raise ContextOverflowError("initial overflow")
+            if server_calls == 2:
+                # First reactive retry: tools dropped, still overflows.
+                assert tools_arg is None
+                raise ContextOverflowError("still too big")
+            # Second reactive retry succeeds.
+            assert tools_arg is None
+            return (
+                SimpleNamespace(
+                    content="recovered by shrinking messages",
+                    tool_calls=None,
+                    role="assistant",
+                ),
+                "stop",
+                [],
+                0,
+                (0, 0),
+            )
+
+        messages = [_sys("system prompt"), _user("hello")]
+        with patch("swival.agent.call_llm", side_effect=fake_call_llm):
+            answer, _ = run_agent_loop(
+                messages,
+                _DUMMY_TOOLS,
+                **self._loop_kwargs(tmp_path),
+            )
+
+        assert answer == "recovered by shrinking messages"
+        # Round 1 measured against the full tools; round 2 against the dropped
+        # (None) tools — the carry-forward fix.
+        assert budget_tools[0] is not None
+        assert budget_tools[1] is None
 
     def test_eventual_failure_writes_continue_file(self, tmp_path):
         """If even the most aggressive emergency-truncate retry fails, we
@@ -1553,9 +1645,10 @@ class TestDropToolsEmergencyRetry:
                     **self._loop_kwargs(tmp_path),
                 )
 
-        # Bounded: initial + 3 compaction levels + 1 drop-tools + 3
-        # emergency-truncate retries = 8 calls maximum.
-        assert call_count <= 8
+        # Bounded: compact_to_budget collapses the whole ladder into one
+        # commit, so the initial call plus a couple of progress-checked retries
+        # is all it takes before the loop gives up. No round-trip storm.
+        assert call_count <= 4
 
 
 # ---------------------------------------------------------------------------
@@ -2466,3 +2559,264 @@ class TestEmergencyTruncate:
         _emergency_truncate(msgs, 100)
         # This is the actual contract: clamp must succeed
         clamp_output_tokens(msgs, None, 100, 100)
+
+
+# ---------------------------------------------------------------------------
+# Prompt budget (safety_ratio / reserve_output)
+# ---------------------------------------------------------------------------
+
+
+def _synthetic(content):
+    return {"role": "user", "content": content, "_swival_synthetic": True}
+
+
+class TestPromptBudget:
+    def test_unknown_window_returns_none(self):
+        assert _prompt_budget(None, 1024) is None
+
+    def test_reserves_output_room(self):
+        # budget = floor(context * 0.90) - reserve(output)
+        assert _prompt_budget(10_000, 1000) == 9000 - 1000
+
+    def test_reserve_clamped_to_half_context(self):
+        # A huge max_output cannot starve the prompt: reserve caps at ctx // 2.
+        budget = _prompt_budget(10_000, 999_999)
+        assert budget == 9000 - 5000
+
+    def test_reserve_floor(self):
+        # No requested output budget still reserves the minimum.
+        assert _prompt_budget(10_000, None) == 9000 - MIN_OUTPUT_TOKENS
+
+    def test_custom_safety_ratio(self):
+        assert _prompt_budget(10_000, 1000, safety_ratio=0.5) == 5000 - 1000
+
+    def test_never_negative(self):
+        # A tiny window can't produce a negative budget.
+        assert _prompt_budget(20, 1000) >= MIN_OUTPUT_TOKENS
+
+
+# ---------------------------------------------------------------------------
+# Synthetic scaffolding GC
+# ---------------------------------------------------------------------------
+
+
+class TestGcScaffolding:
+    def test_removes_spent_nudge(self):
+        msgs = [
+            _sys("system"),
+            _user("hello"),
+            _synthetic("IMPORTANT: stop repeating that error"),
+            _assistant("ok, fixed it"),
+        ]
+        assert _has_spent_scaffolding(msgs) is True
+        assert _gc_scaffolding(msgs) is True
+        contents = [m.get("content") for m in msgs]
+        assert "IMPORTANT: stop repeating that error" not in contents
+        # Real user turn and the assistant response survive.
+        assert msgs[0]["role"] == "system"
+        assert msgs[1]["content"] == "hello"
+        assert msgs[-1]["content"] == "ok, fixed it"
+
+    def test_preserves_active_nudge_without_later_assistant(self):
+        # The most recent nudge has not been acted on yet — keep it.
+        msgs = [
+            _sys("system"),
+            _user("hello"),
+            _assistant("first answer"),
+            _synthetic("Tip: consider using think"),
+        ]
+        assert _has_spent_scaffolding(msgs) is False
+        assert _gc_scaffolding(msgs) is False
+        assert msgs[-1]["content"] == "Tip: consider using think"
+
+    def test_preserves_durable_goal_recap(self):
+        # Goal recaps carry durable context, not loop scaffolding.
+        msgs = [
+            _sys("system"),
+            _user("hello"),
+            _synthetic(GOAL_RECAP_PREFIX + " objective: ship it"),
+            _assistant("working on it"),
+        ]
+        assert _gc_scaffolding(msgs) is False
+        assert any(GOAL_RECAP_PREFIX in (m.get("content") or "") for m in msgs)
+
+    def test_non_synthetic_user_untouched(self):
+        msgs = [
+            _sys("system"),
+            _user("IMPORTANT: this is a real user message"),
+            _assistant("ack"),
+        ]
+        assert _gc_scaffolding(msgs) is False
+
+    def test_gc_is_first_rung_in_compact_context(self):
+        msgs = [
+            _sys("system"),
+            _user("hello"),
+            _synthetic("Reminder: you have open todos"),
+            _assistant("done"),
+        ]
+        result = compact_context(
+            CompactionContext(
+                messages=msgs,
+                tools=None,
+                context_length=1000,
+                max_output_tokens=100,
+            )
+        )
+        assert result.strategy == COMPACTION_GC_SCAFFOLDING
+        assert result.history_mutated is True
+
+
+# ---------------------------------------------------------------------------
+# compact_to_budget: loop-to-budget, commit once
+# ---------------------------------------------------------------------------
+
+
+class TestCompactToBudget:
+    def _big_transcript(self):
+        big = "x" * 8000
+        return [
+            _sys("system prompt"),
+            _user("first task"),
+            _assistant_tc([("c1", "read_file", "{}")]),
+            _tool("c1", big),
+            _assistant("read it"),
+            _user("second task"),
+            _assistant_tc([("c2", "read_file", "{}")]),
+            _tool("c2", big),
+            _assistant("read it too"),
+            _user("third task"),
+            _assistant("almost done"),
+            _user("fourth task"),
+        ]
+
+    def test_noop_when_within_budget(self):
+        msgs = [_sys("system"), _user("hello")]
+        before = estimate_tokens(msgs, None)
+        result = compact_to_budget(
+            msgs,
+            None,
+            budget=10_000,
+            context_length=20_000,
+            max_output_tokens=1024,
+        )
+        assert result.strategy == "noop"
+        assert result.history_mutated is False
+        assert result.tokens_after == before
+
+    def test_unknown_window_is_noop(self):
+        msgs = self._big_transcript()
+        before_len = len(msgs)
+        before = estimate_tokens(msgs, None)
+        result = compact_to_budget(
+            msgs,
+            None,
+            budget=None,
+            context_length=None,
+            max_output_tokens=1024,
+        )
+        assert result.strategy == "noop"
+        assert len(msgs) == before_len
+        assert estimate_tokens(msgs, None) == before
+
+    def test_compacts_under_budget_and_commits_in_place(self):
+        msgs = self._big_transcript()
+        original_id = id(msgs)
+        before = estimate_tokens(msgs, None)
+        budget = 300
+        result = compact_to_budget(
+            msgs,
+            None,
+            budget=budget,
+            context_length=4000,
+            max_output_tokens=256,
+        )
+        assert result.tokens_after < before
+        assert result.tokens_after <= budget
+        # Commit once: the same list object is mutated in place.
+        assert id(msgs) == original_id
+        assert result.messages is msgs
+        assert estimate_tokens(msgs, None) == result.tokens_after
+
+    def test_drops_tools_when_messages_cannot_fit(self):
+        # A tiny budget on a minimal transcript forces the tool schemas off.
+        msgs = [_sys("system"), _user("hello")]
+        tools = _DUMMY_TOOLS
+        result = compact_to_budget(
+            msgs,
+            tools,
+            budget=MIN_OUTPUT_TOKENS,
+            context_length=4000,
+            max_output_tokens=256,
+        )
+        assert result.dropped_tools is True
+        assert result.tools is None
+
+    def test_proactive_flags_skip_emergency_and_tool_drop(self):
+        # Proactive mode must not truncate or strip tools — only the safe rungs.
+        msgs = [_sys("system"), _user("hello")]
+        tools = _DUMMY_TOOLS
+        result = compact_to_budget(
+            msgs,
+            tools,
+            budget=MIN_OUTPUT_TOKENS,
+            context_length=4000,
+            max_output_tokens=256,
+            allow_tool_drop=False,
+            allow_emergency=False,
+        )
+        assert result.dropped_tools is False
+        assert result.tools is tools
+
+    def test_proactive_does_not_drop_conversation_turns(self):
+        # With allow_turn_drop=False the destructive turn-dropping rungs must
+        # never fire, even when the budget can't otherwise be met.
+        msgs = self._big_transcript()
+
+        def _user_turns(ms):
+            return [m for m in ms if isinstance(m, dict) and m.get("role") == "user"]
+
+        before_users = _user_turns(msgs)
+        result = compact_to_budget(
+            msgs,
+            None,
+            budget=MIN_OUTPUT_TOKENS,
+            context_length=4000,
+            max_output_tokens=256,
+            allow_tool_drop=False,
+            allow_emergency=False,
+            allow_turn_drop=False,
+        )
+        assert COMPACTION_DROP_MIDDLE not in result.strategy
+        assert COMPACTION_AGGRESSIVE not in result.strategy
+        # Every real user turn still present — no history was dropped.
+        assert len(_user_turns(msgs)) == len(before_users)
+        # It couldn't reach the tiny budget with only the safe rungs.
+        assert result.met_budget is False
+
+    def test_met_budget_flag_reflects_outcome(self):
+        # Best-effort: an unreachable budget still commits real reductions but
+        # reports met_budget=False; a reachable one reports True.
+        msgs = self._big_transcript()
+        before = estimate_tokens(msgs, None)
+        impossible = compact_to_budget(
+            msgs,
+            None,
+            budget=1,
+            context_length=4000,
+            max_output_tokens=256,
+        )
+        assert impossible.met_budget is False
+        # Partial progress is still committed (leaner is better than not).
+        assert impossible.tokens_after < before
+
+        msgs2 = self._big_transcript()
+        ok = compact_to_budget(
+            msgs2,
+            None,
+            budget=400,
+            context_length=4000,
+            max_output_tokens=256,
+        )
+        assert ok.met_budget is True
+        assert ok.tokens_after <= 400

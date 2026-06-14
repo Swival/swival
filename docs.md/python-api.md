@@ -75,6 +75,7 @@ Session(
     reasoning_effort: str | None = None,
     continue_here: bool = True,
     sanitize_thinking: bool | None = None,
+    show_thinking: bool | None = None,
     prompt_cache: bool = True,
     cache: bool = False,
     cache_dir: str | None = None,

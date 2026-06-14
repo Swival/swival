@@ -47,7 +47,7 @@ REPL mode keeps a shared conversation state, so each new question can build on e
 swival
 ```
 
-It starts automatically when no task is given on a terminal. Pass `--repl` to force REPL mode even when a task argument is present or when stdin is not a terminal (useful for `expect`-style scripting). `--repl` is incompatible with `--serve`, `--reviewer`, `--self-review`, `--reviewer-mode`, and `--acp`.
+It starts automatically when no task is given on a terminal. Pass `--repl` to force REPL mode even when a task argument is present or when stdin is not a terminal (useful for `expect`-style scripting). `--repl` is incompatible with `--reviewer`, `--self-review`, `--reviewer-mode`, and `--acp`. (`--serve` and `--acp` are separate run modes; `--serve` simply takes precedence and starts the server instead of a REPL.)
 
 The REPL is built on `prompt-toolkit`, so it supports input history, history search, and normal terminal line editing.
 
@@ -152,7 +152,7 @@ swival --profile gpt5 "review this patch"
 
 `--list-profiles` prints available profiles and exits. The active profile is marked with an arrow and shows which layer selected it (CLI flag, project config, or global config).
 
-`--provider` chooses the backend provider and defaults to `lmstudio`. Valid values are `lmstudio`, `llamacpp`, `huggingface`, `openrouter`, `generic`, `google`, `geap` (Gemini Enterprise / Vertex AI; `vertexai` is an accepted alias), `chatgpt` (for ChatGPT Plus/Pro subscriptions), `bedrock` (AWS Bedrock), and `command` (shells out to an external program).
+`--provider` chooses the backend provider and defaults to `lmstudio`. Valid values are `lmstudio`, `llamacpp`, `huggingface`, `openrouter`, `generic`, `applefm` (experimental Apple Foundation Models local server; defaults to `--model pcc`), `google`, `geap` (Gemini Enterprise / Vertex AI; `vertexai` is an accepted alias), `chatgpt` (for ChatGPT Plus/Pro subscriptions), `bedrock` (AWS Bedrock), and `command` (shells out to an external program).
 
 `--model` overrides auto-discovery with a fixed model identifier.
 
@@ -171,6 +171,10 @@ When `--profile` is combined with explicit flags like `--provider` or `--model`,
 `--max-turns` sets the maximum number of loop iterations and defaults to `100`.
 
 `--max-output-tokens` sets the model output budget per call and defaults to `32768`.
+
+`--max-output-lines` sets the default number of lines a file read returns and defaults to `2000`. Reads can still paginate past it with explicit offset and limit.
+
+`--max-output-kb` caps the size of tool output sent to the model — file reads, grep, listings, outline, and fetched URLs — and defaults to `50`. Larger results are truncated to fit.
 
 `--max-context-tokens` requests a context window size. When omitted, Swival auto-detects it from the model server (or LiteLLM's registry for hosted providers); with LM Studio, passing it may trigger a model reload to the requested size. When the window is known, each turn header shows usage against it, e.g. `Turn 3/100 (~4,200 / 131,072 tokens, 3%)`.
 
@@ -193,6 +197,8 @@ swival --extra-body '{"chat_template_kwargs": {"enable_thinking": false}}' "task
 ```sh
 swival --provider chatgpt --model gpt-5.5 --reasoning-effort high "task"
 ```
+
+`--show-thinking` keeps the model's streamed thinking in your terminal scrollback after the answer is printed, instead of wiping it when the live stream ends. It only affects the display — the thinking goes to stderr, never into stdout, history, traces, or reports — and it needs a verbose, interactive terminal with a provider that streams reasoning. Without it, a collapsed one-line note (`thinking: N lines, hidden`) is shown instead. The config-file equivalent is `show_thinking = true`.
 
 ### Service Tiers
 

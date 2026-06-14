@@ -211,7 +211,7 @@ swival --profile fast-local &quot;write tests&quot;
 <p>List available profiles with <code>--list-profiles</code>:</p>
 <pre><code class="language-sh">swival --list-profiles
 </code></pre>
-<p>Each profile requires <code>provider</code>. The allowed keys are: <code>provider</code>, <code>model</code>, <code>api_key</code>, <code>user_agent</code>, <code>base_url</code>, <code>aws_profile</code>, <code>project</code>, <code>location</code>, <code>max_output_tokens</code>, <code>max_context_tokens</code>, <code>temperature</code>, <code>top_p</code>, <code>seed</code>, <code>extra_body</code>, <code>reasoning_effort</code>, <code>sanitize_thinking</code>, and <code>description</code>.</p>
+<p>Each profile requires <code>provider</code>. The allowed keys are: <code>provider</code>, <code>model</code>, <code>api_key</code>, <code>user_agent</code>, <code>base_url</code>, <code>aws_profile</code>, <code>project</code>, <code>location</code>, <code>max_output_tokens</code>, <code>max_context_tokens</code>, <code>temperature</code>, <code>top_p</code>, <code>seed</code>, <code>extra_body</code>, <code>reasoning_effort</code>, <code>sanitize_thinking</code>, <code>show_thinking</code>, and <code>description</code>.</p>
 <p>Keys outside this set, like <code>files</code>, <code>commands</code>, or <code>reviewer</code>, are rejected with an error listing the allowed keys. Profiles are for choosing a model stack, not for changing agent behavior. The <code>description</code> key is metadata: it appears in profile listings but is not passed to the provider.</p>
 <p>If <code>--profile</code> is combined with explicit flags like <code>--provider</code> or <code>--model</code>, the explicit flags win on a per-key basis, just like CLI flags override config everywhere else in Swival.</p>
 <pre><code class="language-sh">swival --profile gpt5 --reasoning-effort medium &quot;task&quot;
@@ -324,6 +324,15 @@ Don't add dependencies without asking.
 <pre><code class="language-python">session = Session(sanitize_thinking=True)
 </code></pre>
 <p>The sanitizer strips <code>&lt;think&gt;...&lt;/think&gt;</code> blocks, standalone <code>&lt;think&gt;</code> / <code>&lt;/think&gt;</code> lines, and special tokens like <code>&lt;|start_header_id|&gt;</code>. Inline mentions of these tags in code examples or backtick-quoted text are preserved.</p>
+<h2 id="showing-streamed-thinking">Showing Streamed Thinking</h2>
+<p>When a reasoning model streams its thinking, Swival shows it live under a <code>thinking…</code> header while you wait. That live region is transient — it gets wiped from the terminal the moment the answer is reprinted. The <code>show_thinking</code> option keeps the full thinking in your scrollback instead, reprinting it to stderr after the answer. Without it, you get a collapsed one-line note (<code>thinking: N lines, hidden</code>) so the wipe isn't jarring.</p>
+<p>It is off by default. The thinking is a display-only artifact: it goes to stderr, never to stdout, history, traces, or reports. Showing it requires a verbose, interactive terminal and a provider that streams reasoning deltas.</p>
+<pre><code class="language-toml">show_thinking = true
+</code></pre>
+<p>In the library API:</p>
+<pre><code class="language-python">session = Session(show_thinking=True)
+</code></pre>
+<p>The matching CLI flag is <code>--show-thinking</code>. The unrelated <code>--sanitize-thinking</code> knob above is about cleaning leaked tags out of the answer; <code>show_thinking</code> only changes whether the streamed thinking stays visible in your terminal.</p>
 <h2 id="outbound-llm-filter">Outbound LLM Filter</h2>
 <p>Swival can run a user-defined script before every outbound LLM request to redact or block sensitive content. See <a href="llm-filter.html">Outbound LLM Filter</a> for the script contract, configuration, and examples.</p>
 <h2 id="secret-encryption">Secret Encryption</h2>
