@@ -814,15 +814,15 @@ wheels = [
 
 [[package]]
 name = "html-to-markdown"
-version = "3.6.2"
+version = "3.6.6"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/dc/57/c2f12613ded239eeaa71a223bf8efc8991181d1554271cc1f4464f79c989/html_to_markdown-3.6.2.tar.gz", hash = "sha256:0856ff3f6eb3ba36506da1195576cc702b475babdf71db9002a90ae2bf5c3adc", size = 4455821, upload-time = "2026-06-13T14:57:05.662Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/72/39/00130ee1d719e0a17303772d2c5a00c4579b8a783928fc2c23529e457e26/html_to_markdown-3.6.6.tar.gz", hash = "sha256:63d6f1d16c6c04cc1d79e453d103c7cd57579dfa8c4a42cdc51fd17ddd3cd47d", size = 4362066, upload-time = "2026-06-14T22:40:12.399Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/41/1e/75102f153926528006ce069099e4d2932c3de2e69d93c6d04d9788f9e0d3/html_to_markdown-3.6.2-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:49b5c9dec7280ba19bd9a8521482f41c33366d8d07727e7bd974557544d90643", size = 6192226, upload-time = "2026-06-13T14:57:09.141Z" },
-    { url = "https://files.pythonhosted.org/packages/97/42/76bfbf45cb5d832b9b810031969029e22b06b131b03f999895448237a7e1/html_to_markdown-3.6.2-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:f9ddd16c79b20f3e8c835a4f1a691218e678e346bb9c2eb0ad8265f20defdf97", size = 5856841, upload-time = "2026-06-13T14:57:10.993Z" },
-    { url = "https://files.pythonhosted.org/packages/28/3c/6e597615d0cdd85da00db618b077038fac1998bcd838a16dc06bd9992d5c/html_to_markdown-3.6.2-cp310-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:a20b689b967673b484046b685976323abb9267ced4b42455731588829ed3de29", size = 6010959, upload-time = "2026-06-13T14:57:00.891Z" },
-    { url = "https://files.pythonhosted.org/packages/50/92/e1c88912f5ea4a1113f1481328db477424fc81be24b59d64f11c2dd4b6f7/html_to_markdown-3.6.2-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:19ead1133fe00577fb069aec7fdd67f7e354cdbc5717fb77f47970f43d5811db", size = 6383822, upload-time = "2026-06-13T14:57:07.344Z" },
-    { url = "https://files.pythonhosted.org/packages/53/57/9a192e0f3d2152f3351cbe5962806066a98255cd905d1145c9805ed76108/html_to_markdown-3.6.2-cp310-abi3-win_amd64.whl", hash = "sha256:e43465557c3ca5ba603ff65c3971bc3b6083f86df93821b605004ff872d5c973", size = 6406887, upload-time = "2026-06-13T14:57:02.936Z" },
+    { url = "https://files.pythonhosted.org/packages/1f/c2/0a3412b63a13c5651b0288a9f00cc395b328f415c634c3b85ac300058da8/html_to_markdown-3.6.6-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:b1aaaa6ee026baf5dfc0db55c4449ea646b4aef3aab04ace4abb50b94cce50cf", size = 6102936, upload-time = "2026-06-14T22:40:16.591Z" },
+    { url = "https://files.pythonhosted.org/packages/74/ef/51d451135bd1c953ece2d11153e51f44bfcd41417a9f71e50b00194b1674/html_to_markdown-3.6.6-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:4850a2467a27d58fabb80ba711ce1dc150d83fe1293b19f3b864da67d3b38471", size = 5767315, upload-time = "2026-06-14T22:40:15.065Z" },
+    { url = "https://files.pythonhosted.org/packages/0c/0b/9105ddc3faa76a0ebf3b5eb1c716abeaa87aeaaaf252691a77af012da3aa/html_to_markdown-3.6.6-cp310-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:0161d2fafd9478651c175d67acc271a8964dcbc2166d329023ee064ec027c4e3", size = 5920991, upload-time = "2026-06-14T22:40:13.733Z" },
+    { url = "https://files.pythonhosted.org/packages/46/ca/cf0e5860b50357b4fe4c37a90de8e61b8ca5bff6097768bf4dd8dd8fba9f/html_to_markdown-3.6.6-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:9842cf90482c8034bc03cd83d98501ab64d7b9ba529d01283ca4e4258a7ad3e6", size = 6292247, upload-time = "2026-06-14T22:40:08.971Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/e8/893b0e049c41695c60a028a13153239b8f09a2d6bab2ed98927026f6b8af/html_to_markdown-3.6.6-cp310-abi3-win_amd64.whl", hash = "sha256:bf61b22346765066bebd7db203f8215fd8c0d4465ccb9a55192e20b1a9dd7950", size = 6313462, upload-time = "2026-06-14T22:40:10.671Z" },
 ]
 
 [[package]]
@@ -2075,7 +2075,7 @@ wheels = [
 
 [[package]]
 name = "swival"
-version = "1.0.30"
+version = "1.0.31"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
@@ -2110,7 +2110,7 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.43.29" },
     { name = "fast-cipher", specifier = ">=0.2.2" },
     { name = "google-cloud-aiplatform", specifier = ">=1.157.0" },
-    { name = "html-to-markdown", specifier = ">=3.6.2,<4" },
+    { name = "html-to-markdown", specifier = ">=3.6.6,<4" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "litellm", specifier = ">=1.89.0" },
     { name = "mcp", specifier = ">=1.27.2,<2" },
@@ -2130,8 +2130,8 @@ dev = [
     { name = "ruff", specifier = ">=0.15.17" },
 ]
 website = [
-    { name = "markdown" },
-    { name = "pillow" },
+    { name = "markdown", specifier = ">=3.10.2" },
+    { name = "pillow", specifier = ">=12.2.0" },
 ]
 
 [[package]]

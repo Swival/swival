@@ -1,6 +1,6 @@
 [project]
 name = "swival"
-version = "1.0.30"
+version = "1.0.31"
 description = "A small, powerful CLI coding agent for open AI models"
 readme = "README.md"
 license = "MIT"
@@ -24,7 +24,7 @@ classifiers = [
 dependencies = [
     "litellm>=1.89.0",
     "tiktoken>=0.13.0",
-    "html-to-markdown>=3.6.2,<4",
+    "html-to-markdown>=3.6.6,<4",
     "rich>=15.0.0",
     "prompt-toolkit>=3.0.52",
     "mcp>=1.27.2,<2",
@@ -78,6 +78,6 @@ dev = [
     "httpx2>=2.4.0",
 ]
 website = [
-    "markdown",
-    "pillow",
+    "markdown>=3.10.2",
+    "pillow>=12.2.0",
 ]
