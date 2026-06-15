@@ -43,6 +43,13 @@ from swival.agent import (
     _run_terminal_floor_ladder,
     TerminalAttemptResult,
     _TERMINAL_FLOOR_BUDGETS,
+    _looks_like_context_overflow,
+    _parse_context_limit,
+    _terminal_floor_eligible,
+    AdaptiveContextBudget,
+    _CONTEXT_EXHAUSTED_FALLBACK,
+    _CONTEXT_EXHAUSTED_REASON,
+    REACTIVE_BUDGET_BACKOFF,
 )
 from swival.report import AgentError
 
@@ -1628,11 +1635,10 @@ class TestDropToolsEmergencyRetry:
         assert budget_tools[0] is not None
         assert budget_tools[1] is None
 
-    def test_eventual_failure_writes_continue_file(self, tmp_path):
-        """If even the most aggressive emergency-truncate retry fails, we
-        still raise ContextOverflowError (no infinite loop). The terminal floor
-        ladder makes its fixed set of minimal-prompt attempts before giving up,
-        and the final error names that last resort."""
+    def test_eventual_failure_degrades_to_fallback(self, tmp_path):
+        """If even the most aggressive emergency-truncate retry and the terminal
+        floor fail, the turn degrades to the local fallback (exhausted, no
+        raise) and preserves continue state — it never crashes the loop."""
         from swival.agent import run_agent_loop
 
         call_count = 0
@@ -1644,13 +1650,17 @@ class TestDropToolsEmergencyRetry:
 
         messages = [_sys("system prompt"), _user("hello")]
         with patch("swival.agent.call_llm", side_effect=fake_call_llm):
-            with pytest.raises(ContextOverflowError, match="minimal-prompt retry"):
-                run_agent_loop(
-                    messages,
-                    _DUMMY_TOOLS,
-                    **self._loop_kwargs(tmp_path),
-                )
+            answer, exhausted = run_agent_loop(
+                messages,
+                _DUMMY_TOOLS,
+                **self._loop_kwargs(tmp_path),
+            )
 
+        assert answer == _CONTEXT_EXHAUSTED_FALLBACK
+        assert exhausted is True
+        # Continue state preserved underneath the synthetic fallback.
+        assert (tmp_path / ".swival" / "continue.md").exists()
+        assert messages[-1].get("_swival_synthetic") is True
         # Bounded: compact_to_budget collapses the whole ladder into one commit,
         # so the initial call plus a couple of progress-checked retries is all
         # the reactive loop takes; the terminal floor then adds one attempt per
@@ -3049,33 +3059,7 @@ class TestTerminalFloorLoop:
 
     @staticmethod
     def _loop_kwargs(tmp_path, **overrides):
-        from swival.thinking import ThinkingState
-        from swival.todo import TodoState
-
-        defaults = dict(
-            api_base="http://127.0.0.1:1234",
-            model_id="test-model",
-            max_turns=2,
-            max_output_tokens=1024,
-            temperature=0.5,
-            top_p=None,
-            seed=None,
-            context_length=None,
-            base_dir=str(tmp_path),
-            thinking_state=ThinkingState(verbose=False),
-            resolved_commands={},
-            skills_catalog={},
-            skill_read_roots=[],
-            extra_write_roots=[],
-            files_mode="some",
-            verbose=False,
-            llm_kwargs={"provider": "lmstudio", "api_key": None},
-            file_tracker=None,
-            todo_state=TodoState(verbose=False),
-            continue_here=False,
-        )
-        defaults.update(overrides)
-        return defaults
+        return _loop_kwargs(tmp_path, **overrides)
 
     def test_terminal_floor_recovers_and_records(self, tmp_path):
         from swival.agent import run_agent_loop
@@ -3107,23 +3091,461 @@ class TestTerminalFloorLoop:
         llm_events = [e for e in report.events if e["type"] == "llm_call"]
         assert any(e.get("retry_reason") == "terminal_floor" for e in llm_events)
 
-    def test_terminal_floor_total_failure_raises_distinct(self, tmp_path):
+    def test_terminal_floor_total_failure_returns_fallback(self, tmp_path):
+        """The load-bearing no-crash regression: when even the minimal
+        terminal-floor prompt is rejected, the loop must end the turn with the
+        local fallback (exhausted, no raise), not crash."""
         from swival.agent import run_agent_loop
+        from swival.report import ReportCollector
+
+        calls = 0
 
         def always_overflow(*args, **kwargs):
+            nonlocal calls
+            calls += 1
             raise ContextOverflowError("context length exceeded")
 
+        report = ReportCollector()
         messages = [_sys("system"), _user("question " + "z" * 30000)]
         before = copy.deepcopy(messages)
         with (
             patch("swival.agent.compact_to_budget", side_effect=_noop_compact),
             patch("swival.agent.call_llm", side_effect=always_overflow),
         ):
-            with pytest.raises(ContextOverflowError, match="minimal-prompt retry"):
+            answer, exhausted = run_agent_loop(
+                messages,
+                _DUMMY_TOOLS,
+                **self._loop_kwargs(tmp_path, report=report),
+            )
+
+        # Degraded, not crashed: the fallback notice is returned as an exhausted
+        # (non-success) turn.
+        assert answer == _CONTEXT_EXHAUSTED_FALLBACK
+        assert exhausted is True
+        # Bounded provider calls — never an unbounded retry storm.
+        assert 0 < calls <= 20
+        # The synthetic fallback is appended; the real transcript is preserved
+        # underneath it for /continue.
+        assert messages[:-1] == before
+        assert messages[-1]["role"] == "assistant"
+        assert messages[-1].get("_swival_synthetic") is True
+        # The event is legible downstream.
+        recovered = [
+            e
+            for e in report.events
+            if e["type"] == "recovered_response"
+            and e.get("reason") == _CONTEXT_EXHAUSTED_REASON
+        ]
+        assert len(recovered) == 1
+
+    def test_terminal_floor_total_failure_writes_continue_file(self, tmp_path):
+        from swival.agent import run_agent_loop
+
+        def always_overflow(*args, **kwargs):
+            raise ContextOverflowError("context length exceeded")
+
+        messages = [_sys("system"), _user("question " + "z" * 30000)]
+        with (
+            patch("swival.agent.compact_to_budget", side_effect=_noop_compact),
+            patch("swival.agent.call_llm", side_effect=always_overflow),
+        ):
+            answer, exhausted = run_agent_loop(
+                messages,
+                _DUMMY_TOOLS,
+                **self._loop_kwargs(tmp_path, continue_here=True),
+            )
+        assert exhausted is True
+        assert answer == _CONTEXT_EXHAUSTED_FALLBACK
+        # Continue state was preserved on the no-crash path.
+        assert (tmp_path / ".swival" / "continue.md").exists()
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: unknown-window overflow detection (_looks_like_context_overflow)
+# ---------------------------------------------------------------------------
+
+
+def _bad_request(message):
+    import litellm
+
+    return litellm.BadRequestError(message=message, model="m", llm_provider="openai")
+
+
+def _api_error(message, status_code):
+    import litellm
+
+    return litellm.APIError(
+        message=message, status_code=status_code, model="m", llm_provider="openai"
+    )
+
+
+class TestUnknownWindowOverflowDetection:
+    """The loose tier engages only when the window is unknown; the strict tier
+    always engages; unrelated bad requests stay unclassified in both regimes."""
+
+    STRICT = [
+        "maximum context length is 8192 tokens",
+        "This model's maximum context length is 4096 tokens",
+        "the context window was exceeded",
+        "token limit reached",
+    ]
+    LOOSE = [
+        "prompt is too long: 219763 tokens > 200000 maximum",
+        "this input is too large",
+        "please reduce the length of the messages",
+        "string too long",
+        "input is too long for this model",
+        "request entity too large",
+    ]
+    UNRELATED = [
+        "invalid temperature value",
+        "unsupported parameter: foo",
+        "you are not authorized",
+    ]
+
+    @pytest.mark.parametrize("msg", STRICT)
+    def test_strict_classified_in_both_regimes(self, msg):
+        assert _looks_like_context_overflow(_bad_request(msg)) is True
+        assert (
+            _looks_like_context_overflow(_bad_request(msg), unknown_context_window=True)
+            is True
+        )
+
+    @pytest.mark.parametrize("msg", LOOSE)
+    def test_loose_only_when_unknown(self, msg):
+        # Known window: loose phrasing is NOT treated as overflow.
+        assert _looks_like_context_overflow(_bad_request(msg)) is False
+        # Unknown window: it is.
+        assert (
+            _looks_like_context_overflow(_bad_request(msg), unknown_context_window=True)
+            is True
+        )
+
+    @pytest.mark.parametrize("msg", UNRELATED)
+    def test_unrelated_never_classified(self, msg):
+        assert _looks_like_context_overflow(_bad_request(msg)) is False
+        assert (
+            _looks_like_context_overflow(_bad_request(msg), unknown_context_window=True)
+            is False
+        )
+
+    def test_413_only_when_unknown(self):
+        e = _api_error("Payload Too Large", 413)
+        assert _looks_like_context_overflow(e) is False
+        assert _looks_like_context_overflow(e, unknown_context_window=True) is True
+
+    def test_typed_exception_always(self):
+        import litellm
+
+        e = litellm.ContextWindowExceededError(
+            message="whatever", model="m", llm_provider="openai"
+        )
+        assert _looks_like_context_overflow(e) is True
+
+    def test_call_llm_loose_phrasing_unknown_window(self):
+        """call_llm classifies a loose phrasing as overflow only when told the
+        window is unknown."""
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.side_effect = _bad_request("Error: input is too long")
+            with pytest.raises(ContextOverflowError):
+                call_llm(
+                    "http://localhost",
+                    "model",
+                    [],
+                    100,
+                    0.1,
+                    1.0,
+                    None,
+                    None,
+                    False,
+                    unknown_context_window=True,
+                )
+
+    def test_call_llm_loose_phrasing_known_window_is_request_shaped(self):
+        """With a known window the same phrasing stays a plain AgentError, and
+        is marked request-shaped for the (non-applicable) backstop."""
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.side_effect = _bad_request("Error: input is too long")
+            with pytest.raises(AgentError) as ei:
+                call_llm(
+                    "http://localhost",
+                    "model",
+                    [],
+                    100,
+                    0.1,
+                    1.0,
+                    None,
+                    None,
+                    False,
+                    unknown_context_window=False,
+                )
+        assert not isinstance(ei.value, ContextOverflowError)
+        assert getattr(ei.value, "_request_shaped", False) is True
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: learning the window from the rejection (_parse_context_limit)
+# ---------------------------------------------------------------------------
+
+
+class TestParseContextLimit:
+    def test_named_maximum(self):
+        assert _parse_context_limit("maximum context length is 8192 tokens") == 8192
+
+    def test_actual_gt_limit_takes_smaller(self):
+        assert (
+            _parse_context_limit("prompt is too long: 219763 tokens > 200000 maximum")
+            == 200000
+        )
+
+    def test_context_window_of(self):
+        assert _parse_context_limit("the context window of 32768 was exceeded") == 32768
+
+    def test_max_input_tokens(self):
+        assert _parse_context_limit("max input tokens: 4096 exceeded") == 4096
+
+    def test_no_number_returns_none(self):
+        assert _parse_context_limit("the input is too long") is None
+        assert _parse_context_limit("") is None
+        assert _parse_context_limit(None) is None
+
+    def test_picks_limit_not_actual_when_both_present(self):
+        text = (
+            "This model's maximum context length is 8192 tokens. However, your "
+            "messages resulted in 10000 tokens."
+        )
+        # The named-maximum pattern wins and yields the ceiling, not the actual.
+        assert _parse_context_limit(text) == 8192
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: adaptive budget (AdaptiveContextBudget)
+# ---------------------------------------------------------------------------
+
+
+class TestAdaptiveContextBudget:
+    def test_idle_until_first_reject(self):
+        ab = AdaptiveContextBudget()
+        assert ab.target() is None
+        ab.record_accept(50000)
+        assert ab.target() is None  # no ceiling observed yet
+
+    def test_backs_off_below_lone_rejection(self):
+        ab = AdaptiveContextBudget()
+        ab.record_reject(50000)
+        assert ab.target() == int(50000 * REACTIVE_BUDGET_BACKOFF)
+
+    def test_binary_search_between_accept_and_reject(self):
+        ab = AdaptiveContextBudget()
+        ab.record_accept(20000)
+        ab.record_reject(50000)
+        assert ab.target() == (20000 + 50000) // 2
+
+    def test_reject_keeps_smallest(self):
+        ab = AdaptiveContextBudget()
+        ab.record_reject(60000)
+        ab.record_reject(40000)
+        assert ab.rejected_low == 40000
+
+    def test_accept_keeps_largest(self):
+        ab = AdaptiveContextBudget()
+        ab.record_accept(10000)
+        ab.record_accept(30000)
+        ab.record_accept(15000)
+        assert ab.accepted_high == 30000
+
+
+class TestTerminalFloorEligible:
+    """The Phase 4 backstop gate: only request-shaped 4xx rejections at an
+    unknown window, never auth/tools/vision categories a smaller prompt can't
+    fix."""
+
+    def test_request_shaped_unknown_window_eligible(self):
+        e = AgentError("LLM call failed: uncategorized 400")
+        e._request_shaped = True
+        assert _terminal_floor_eligible(e, None) is True
+
+    def test_request_shaped_known_window_not_eligible(self):
+        e = AgentError("LLM call failed: uncategorized 400")
+        e._request_shaped = True
+        assert _terminal_floor_eligible(e, 8192) is False
+
+    def test_unmarked_error_not_eligible(self):
+        assert _terminal_floor_eligible(AgentError("auth failed"), None) is False
+
+    def test_tools_not_supported_not_eligible(self):
+        from swival.report import ToolsNotSupportedError
+
+        e = ToolsNotSupportedError("no tools")
+        e._request_shaped = True  # even if marked, the category is excluded
+        assert _terminal_floor_eligible(e, None) is False
+
+    def test_vision_rejection_not_eligible(self):
+        e = AgentError("this model does not support image input")
+        e._request_shaped = True
+        assert _terminal_floor_eligible(e, None) is False
+
+
+# ---------------------------------------------------------------------------
+# Phase 4/5: detection-independent backstop and the no-crash invariant in
+# run_agent_loop (the loose tier and the unclassified-error backstop).
+# ---------------------------------------------------------------------------
+
+
+def _loop_kwargs(tmp_path, **overrides):
+    from swival.thinking import ThinkingState
+    from swival.todo import TodoState
+
+    defaults = dict(
+        api_base="http://127.0.0.1:1234",
+        model_id="test-model",
+        max_turns=2,
+        max_output_tokens=1024,
+        temperature=0.5,
+        top_p=None,
+        seed=None,
+        context_length=None,
+        base_dir=str(tmp_path),
+        thinking_state=ThinkingState(verbose=False),
+        resolved_commands={},
+        skills_catalog={},
+        skill_read_roots=[],
+        extra_write_roots=[],
+        files_mode="some",
+        verbose=False,
+        llm_kwargs={"provider": "lmstudio", "api_key": None},
+        file_tracker=None,
+        todo_state=TodoState(verbose=False),
+        continue_here=False,
+    )
+    defaults.update(overrides)
+    return defaults
+
+
+def _completion_ok(content="recovered"):
+    msg = SimpleNamespace(content=content, tool_calls=None, role="assistant")
+    choice = SimpleNamespace(message=msg, finish_reason="stop")
+    return SimpleNamespace(choices=[choice], usage=None)
+
+
+class TestUnknownWindowOverflowLoop:
+    """Integration: a loosely-phrased overflow at an unknown window is detected
+    and recovered, and an unclassified request rejection is probed by the
+    backstop rather than crashing."""
+
+    def test_loose_phrasing_recovers_in_loop(self, tmp_path):
+        from swival.agent import run_agent_loop
+
+        def fake_completion(**kwargs):
+            msgs = kwargs["messages"]
+            if estimate_tokens(msgs, None) > 4090:
+                raise _bad_request("Error code: 400 - input is too long")
+            return _completion_ok("recovered")
+
+        messages = [_sys("system"), _user("question " + "z" * 30000)]
+        with patch("litellm.completion", side_effect=fake_completion):
+            answer, exhausted = run_agent_loop(
+                messages, _DUMMY_TOOLS, **_loop_kwargs(tmp_path)
+            )
+        assert answer == "recovered"
+        assert exhausted is False
+
+    def test_backstop_recovers_unclassified_rejection(self, tmp_path):
+        """A non-overflow AgentError marked request-shaped at an unknown window
+        is probed with a minimal prompt; if the minimal prompt is accepted the
+        turn recovers instead of crashing."""
+        from swival.agent import run_agent_loop
+
+        def fake_call_llm(*args, **kwargs):
+            prompt = args[2]
+            if estimate_tokens(prompt, None) > 4090:
+                ae = AgentError("LLM call failed: an uncategorized 400")
+                ae._request_shaped = True
+                raise ae
+            return _ok_msg("recovered")
+
+        messages = [_sys("system"), _user("question " + "z" * 30000)]
+        with patch("swival.agent.call_llm", side_effect=fake_call_llm):
+            answer, exhausted = run_agent_loop(
+                messages, _DUMMY_TOOLS, **_loop_kwargs(tmp_path)
+            )
+        assert answer == "recovered"
+        assert exhausted is False
+
+    def test_backstop_surfaces_genuine_request_bug(self, tmp_path):
+        """When even a minimal prompt is rejected with the same non-overflow
+        error, the backstop surfaces it honestly rather than masking it."""
+        from swival.agent import run_agent_loop
+
+        def always_bad(*args, **kwargs):
+            ae = AgentError("LLM call failed: genuinely malformed request")
+            ae._request_shaped = True
+            raise ae
+
+        messages = [_sys("system"), _user("question " + "z" * 30000)]
+        with patch("swival.agent.call_llm", side_effect=always_bad):
+            with pytest.raises(AgentError, match="malformed request"):
+                run_agent_loop(messages, _DUMMY_TOOLS, **_loop_kwargs(tmp_path))
+
+    def test_known_window_unclassified_error_still_raises(self, tmp_path):
+        """The backstop is scoped to the unknown-window regime: a request-shaped
+        error under a known window surfaces as itself, today's behavior."""
+        from swival.agent import run_agent_loop
+
+        def always_bad(*args, **kwargs):
+            ae = AgentError("LLM call failed: bad request under known window")
+            ae._request_shaped = True
+            raise ae
+
+        messages = [_sys("system"), _user("hi")]
+        with patch("swival.agent.call_llm", side_effect=always_bad):
+            with pytest.raises(AgentError, match="known window"):
                 run_agent_loop(
                     messages,
                     _DUMMY_TOOLS,
-                    **self._loop_kwargs(tmp_path),
+                    **_loop_kwargs(tmp_path, context_length=8192),
                 )
-        # Pristine history on total failure (nothing committed).
-        assert messages == before
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: a mid-stream overflow still surfaces as ContextOverflowError through
+# _completion_with_retry, with the loose tier gated on the unknown-window flag.
+# ---------------------------------------------------------------------------
+
+
+class TestStreamingOverflow:
+    @staticmethod
+    def _retry(**overrides):
+        from swival.agent import _completion_with_retry
+
+        kwargs = dict(max_retries=1, verbose=False, stream=True)
+        kwargs.update(overrides)
+        return _completion_with_retry({"messages": []}, **kwargs)
+
+    def test_mid_stream_typed_overflow(self):
+        import litellm
+
+        def boom(*a, **k):
+            raise litellm.ContextWindowExceededError(
+                message="ctx", model="m", llm_provider="openai"
+            )
+
+        with patch("swival.agent._completion_via_stream", side_effect=boom):
+            with pytest.raises(ContextOverflowError):
+                self._retry()
+
+    def test_mid_stream_loose_overflow_unknown_window(self):
+        def boom(*a, **k):
+            raise RuntimeError("the input is too long")
+
+        with patch("swival.agent._completion_via_stream", side_effect=boom):
+            with pytest.raises(ContextOverflowError):
+                self._retry(unknown_context_window=True)
+
+    def test_mid_stream_loose_not_overflow_known_window(self):
+        def boom(*a, **k):
+            raise RuntimeError("the input is too long")
+
+        with patch("swival.agent._completion_via_stream", side_effect=boom):
+            with pytest.raises(RuntimeError):
+                self._retry(unknown_context_window=False)

@@ -467,6 +467,90 @@ _CONTEXT_OVERFLOW_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Looser overflow phrasings, only trusted when the context window is unknown.
+# With a known window the proactive pass already prevents nearly every overflow,
+# so the strict patterns stay strict there and an unrelated bad request is not
+# misread as overflow. When the window is unknown these are the only signal we
+# get from servers that never report a numeric limit.
+_UNKNOWN_WINDOW_OVERFLOW_RE = re.compile(
+    r"too long"
+    r"|too large"
+    r"|too many tokens"
+    r"|reduce the (?:length|size|number)"
+    r"|string too long"
+    r"|request entity too large"
+    r"|payload too large",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_context_overflow(exc, *, unknown_context_window: bool = False) -> bool:
+    """Single source of truth for classifying a provider error as overflow.
+
+    The strict tier (always on) is litellm's typed ``ContextWindowExceededError``
+    plus the established context/token phrasings in ``_CONTEXT_OVERFLOW_RE``. The
+    loose tier engages only when ``unknown_context_window`` is true — the regime
+    where the proactive pass can't help and providers are likeliest to phrase the
+    rejection in ways the strict patterns miss — and also treats a 413 Payload
+    Too Large as overflow.
+    """
+    import litellm
+
+    if isinstance(exc, litellm.ContextWindowExceededError):
+        return True
+    text = str(exc)
+    if _CONTEXT_OVERFLOW_RE.search(text):
+        return True
+    if unknown_context_window:
+        if _UNKNOWN_WINDOW_OVERFLOW_RE.search(text):
+            return True
+        if getattr(exc, "status_code", None) == 413:
+            return True
+    return False
+
+
+_CONTEXT_LIMIT_GT_RE = re.compile(r"(\d+)\s*tokens?\s*>\s*(\d+)", re.IGNORECASE)
+_CONTEXT_LIMIT_NAMED_RES = (
+    re.compile(r"maximum context length is (\d+)", re.IGNORECASE),
+    re.compile(r"context (?:window|size|length)\s*(?:of|is|:)?\s*(\d+)", re.IGNORECASE),
+    re.compile(r"max(?:imum)?(?:\s+input)?\s+tokens?\s*:?\s*(\d+)", re.IGNORECASE),
+)
+
+
+def _parse_context_limit(text: str) -> int | None:
+    """Pull the provider's real context window out of a rejection message.
+
+    Returns the maximum token count when the error names it, so a session that
+    started with an unknown window can adopt it and switch on the cheap proactive
+    path. For the ``<actual> tokens > <limit>`` shape the smaller number is the
+    ceiling we want; for the named shapes it is the single captured number.
+    Returns ``None`` when no limit is found.
+    """
+    if not text:
+        return None
+    m = _CONTEXT_LIMIT_GT_RE.search(text)
+    if m:
+        return min(int(m.group(1)), int(m.group(2)))
+    for pat in _CONTEXT_LIMIT_NAMED_RES:
+        m = pat.search(text)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+_CONTEXT_EXHAUSTED_REASON = "context_exhausted"
+
+# Returned as the turn's answer when even the smallest terminal-floor prompt is
+# rejected. Worded as an operational notice — not a model answer — so a later
+# turn or a downstream reader never mistakes it for the work product.
+_CONTEXT_EXHAUSTED_FALLBACK = (
+    "Swival could not send even its smallest context-recovery prompt to the "
+    "model because the provider kept reporting a context or output budget "
+    "overflow. I preserved the conversation state for /continue and did not run "
+    "further tools. Retry with a larger context window, a smaller request, or a "
+    "larger output-token budget if the response was length-capped."
+)
+
 _EMPTY_ASSISTANT_RE = re.compile(
     r"must have either content or tool_calls"
     r"|must have either 'content' or 'tool_calls'"
@@ -2512,6 +2596,63 @@ def _prompt_budget(
     return max(budget, MIN_OUTPUT_TOKENS)
 
 
+class AdaptiveContextBudget:
+    """A working prompt budget for a provider that never names its window.
+
+    When ``context_length`` is unknown ``_prompt_budget`` returns ``None`` and
+    the proactive pass is idle, so every long turn first pays a failed
+    round-trip. This learns a ceiling from experience instead: the largest
+    estimated prompt the provider has accepted and the smallest it has rejected.
+    ``target()`` is a point between them (binary search when both are known) that
+    the proactive pass can aim at, so after a couple of overflows the unknown
+    regime gets a real proactive defense for the first time.
+
+    It is advisory: it only sets the proactive target. The reactive net and the
+    terminal floor remain the actual guarantee, so an over-eager target can cost
+    some near-lossless compaction but can never destroy history or block a turn.
+    """
+
+    def __init__(self) -> None:
+        self.accepted_high = 0
+        self.rejected_low: int | None = None
+
+    def record_accept(self, estimate: int) -> None:
+        if estimate > self.accepted_high:
+            self.accepted_high = estimate
+
+    def record_reject(self, estimate: int) -> None:
+        if estimate > 0 and (self.rejected_low is None or estimate < self.rejected_low):
+            self.rejected_low = estimate
+
+    def target(self) -> int | None:
+        """Working prompt budget, or ``None`` until the provider has rejected
+        something (no ceiling has been observed yet)."""
+        if self.rejected_low is None:
+            return None
+        if 0 < self.accepted_high < self.rejected_low:
+            return (self.accepted_high + self.rejected_low) // 2
+        return max(int(self.rejected_low * REACTIVE_BUDGET_BACKOFF), MIN_OUTPUT_TOKENS)
+
+
+def _terminal_floor_eligible(exc, context_length: int | None) -> bool:
+    """Phase 4 backstop gate: should an uncategorized provider error get one
+    shrink-and-retry through the terminal floor before it aborts the turn?
+
+    Scoped deliberately to the unknown-window regime and to request-shaped 4xx
+    rejections (a ``BadRequestError`` ``call_llm`` could not categorize), because
+    shrinking the prompt can only fix oversized input. Auth, missing-model,
+    tools-not-supported, and vision rejections are never eligible — a smaller
+    prompt would not fix them and probing would just muddy the eventual error.
+    """
+    if context_length is not None:
+        return False
+    if isinstance(exc, ToolsNotSupportedError):
+        return False
+    if _is_vision_rejection(exc):
+        return False
+    return getattr(exc, "_request_shaped", False)
+
+
 @dataclass
 class CompactionContext:
     """Structured input for context compaction.
@@ -3019,6 +3160,7 @@ def _run_terminal_floor_ladder(
     turn=0,
     report=None,
     budgets=_TERMINAL_FLOOR_BUDGETS,
+    unknown_context_window=False,
 ) -> TerminalAttemptResult | None:
     """Last-resort absolute-budget retries on the path that would otherwise stop.
 
@@ -3036,6 +3178,7 @@ def _run_terminal_floor_ladder(
     """
     base_kwargs = dict(llm_kwargs)
     base_kwargs.pop("on_stream_start", None)
+    base_kwargs["unknown_context_window"] = unknown_context_window
     for budget in budgets:
         working = copy.deepcopy(messages)
         _emergency_truncate(working, budget)
@@ -4676,6 +4819,11 @@ def _call_command(command_str, messages, verbose, max_output_tokens=None):
 _COMMAND_TOOL_MAX_ROUNDS = 20
 _COMMAND_TOOL_MALFORMED_MAX_CONSECUTIVE = 1
 
+# A command-provider sub-program can print this marker (on stderr, then exit
+# non-zero) to declare it ran out of context, routing the failure into the same
+# overflow recovery a native provider gets instead of a hard stop.
+_COMMAND_OVERFLOW_MARKER = "SWIVAL_CONTEXT_OVERFLOW"
+
 
 def _run_command_once(parts, transcript, verbose, command_str):
     """Run command subprocess and return (response_text, stderr_text).
@@ -4700,6 +4848,17 @@ def _run_command_once(parts, transcript, verbose, command_str):
         error_text = (
             proc.stderr.strip() or proc.stdout.strip() or f"exit code {proc.returncode}"
         )
+        # The command provider's window is always unknown, so a sub-program that
+        # detects its own overflow can signal it — by emitting the reserved
+        # marker or by failing with an overflow-shaped message — and get the same
+        # compaction and terminal-floor recovery as a native provider, which
+        # re-runs it with a progressively smaller transcript.
+        if _COMMAND_OVERFLOW_MARKER in error_text or _looks_like_context_overflow(
+            error_text, unknown_context_window=True
+        ):
+            raise ContextOverflowError(
+                f"command provider reported context overflow: {error_text}"
+            )
         raise AgentError(f"command provider failed: {error_text}")
 
     if proc.stderr.strip() and verbose:
@@ -5133,6 +5292,7 @@ def _completion_with_retry(
     on_stream_start=None,
     stream_display=True,
     show_thinking=False,
+    unknown_context_window=False,
 ):
     """Call litellm.completion() with retry on transient errors.
 
@@ -5163,15 +5323,17 @@ def _completion_with_retry(
                     attempt,
                 )
             return litellm.completion(**completion_kwargs), attempt
-        except litellm.ContextWindowExceededError:
-            coe = ContextOverflowError("context window exceeded (typed)")
+        except litellm.ContextWindowExceededError as e:
+            coe = ContextOverflowError(f"context window exceeded (typed): {e}")
             coe._provider_retries = attempt
             raise coe
         except litellm.BadRequestError as e:
             e._provider_retries = attempt
             raise
         except Exception as e:
-            if _CONTEXT_OVERFLOW_RE.search(str(e)):
+            if _looks_like_context_overflow(
+                e, unknown_context_window=unknown_context_window
+            ):
                 coe = ContextOverflowError(f"context window exceeded (inferred): {e}")
                 coe._provider_retries = attempt
                 raise coe
@@ -5233,6 +5395,7 @@ def call_llm(
     on_stream_start=None,
     vertex_project=None,
     vertex_location=None,
+    unknown_context_window=False,
 ):
     """Call LiteLLM with the appropriate provider.
 
@@ -5606,12 +5769,15 @@ def call_llm(
                 on_stream_start=on_stream_start if _show_stream else None,
                 stream_display=_show_stream,
                 show_thinking=show_thinking,
+                unknown_context_window=unknown_context_window,
             )
     except ContextOverflowError:
         raise  # already has _provider_retries from _completion_with_retry
     except litellm.BadRequestError as e:
         msg_text = str(e)
-        if _CONTEXT_OVERFLOW_RE.search(msg_text):
+        if _looks_like_context_overflow(
+            e, unknown_context_window=unknown_context_window
+        ):
             coe = ContextOverflowError(f"context window exceeded (inferred): {e}")
             coe._provider_retries = _retries_from_exc(e)
             raise coe
@@ -5651,6 +5817,7 @@ def call_llm(
                             completion_kwargs,
                             max_retries=max_retries,
                             verbose=verbose,
+                            unknown_context_window=unknown_context_window,
                         )
                 except ContextOverflowError as coe2:
                     coe2._provider_retries = first_retries + getattr(
@@ -5660,7 +5827,9 @@ def call_llm(
                 except Exception as e2:
                     combined = first_retries + _retries_from_exc(e2)
                     msg2 = str(e2)
-                    if _CONTEXT_OVERFLOW_RE.search(msg2):
+                    if _looks_like_context_overflow(
+                        e2, unknown_context_window=unknown_context_window
+                    ):
                         coe = ContextOverflowError(
                             f"context window exceeded (inferred, post-sanitization): {e2}"
                         )
@@ -5691,6 +5860,7 @@ def call_llm(
                             completion_kwargs,
                             max_retries=max_retries,
                             verbose=verbose,
+                            unknown_context_window=unknown_context_window,
                         )
                 except ContextOverflowError as coe2:
                     coe2._provider_retries = first_retries + getattr(
@@ -5700,7 +5870,9 @@ def call_llm(
                 except Exception as e2:
                     combined = first_retries + _retries_from_exc(e2)
                     msg2 = str(e2)
-                    if _CONTEXT_OVERFLOW_RE.search(msg2):
+                    if _looks_like_context_overflow(
+                        e2, unknown_context_window=unknown_context_window
+                    ):
                         coe = ContextOverflowError(
                             f"context window exceeded (inferred, post-orphan-fix): {e2}"
                         )
@@ -5732,6 +5904,10 @@ def call_llm(
         msg += _geap_auth_hint(provider, msg_text)
         ae = AgentError(msg)
         ae._provider_retries = _retries_from_exc(e)
+        # A 400 we could not categorize. At an unknown window this may be an
+        # overflow the classifier missed, so mark it for the terminal-floor
+        # backstop (Phase 4) to probe with a minimal prompt before aborting.
+        ae._request_shaped = True
         _raise_with_retries(ae)
     except ToolsNotSupportedError:
         raise
@@ -9106,6 +9282,80 @@ def run_agent_loop(
             except Exception:
                 pass
 
+    # Learned working budget for a provider that never names its window. Idle
+    # until the provider rejects something; thereafter it gives the proactive
+    # pass a ceiling to aim at even with context_length unknown.
+    _adaptive_budget = AdaptiveContextBudget()
+
+    def _commit_terminal_floor(terminal, *, retry_reason="terminal_floor"):
+        """Commit a successful terminal-floor attempt: truncated history plus
+        bookkeeping. Returns the (msg, finish_reason, cmd_activity,
+        provider_retries, cache_stats) tuple for the caller to bind. Mutates
+        ``messages`` in place; the caller resets ``_last_request_tools``."""
+        messages[:] = terminal.working_messages
+        if snapshot_state is not None:
+            snapshot_state.invalidate_index_checkpoint()
+        if verbose:
+            fmt.warning(
+                "recovered with a minimal "
+                f"{terminal.budget}-token prompt; older history and the full "
+                "request were truncated to fit"
+            )
+            fmt.llm_timing(terminal.elapsed, terminal.finish_reason)
+        if report:
+            report.record_llm_call(
+                turns + turn_offset,
+                terminal.elapsed,
+                terminal.tokens_after,
+                terminal.finish_reason,
+                is_retry=True,
+                retry_reason=retry_reason,
+                provider_retries=terminal.provider_retries,
+                cached_tokens=terminal.cache_stats[0],
+                cache_write_tokens=terminal.cache_stats[1],
+            )
+        _account_goal_usage(
+            terminal.tokens_after, terminal.cache_stats, terminal.elapsed
+        )
+        return (
+            terminal.msg,
+            terminal.finish_reason,
+            terminal.cmd_activity,
+            terminal.provider_retries,
+            terminal.cache_stats,
+        )
+
+    def _finish_context_exhausted():
+        """End the turn with a local fallback instead of raising when even the
+        smallest terminal-floor prompt is rejected (Phase 5). Preserves continue
+        state, records the event, appends a synthetic operational notice, and
+        returns the fallback text for the caller to surface as an exhausted
+        (non-success) turn."""
+        if continue_here:
+            from .continue_here import write_continue_file
+
+            write_continue_file(
+                base_dir,
+                messages,
+                todo_state=todo_state,
+                snapshot_state=snapshot_state,
+                thinking_state=thinking_state,
+                goal_state=goal_state,
+            )
+        if report:
+            report.record_recovered_response(
+                turns + turn_offset, reason=_CONTEXT_EXHAUSTED_REASON
+            )
+        messages.append(
+            {
+                "role": "assistant",
+                "content": _CONTEXT_EXHAUSTED_FALLBACK,
+                "_swival_synthetic": True,
+            }
+        )
+        _write_turns()
+        return _CONTEXT_EXHAUSTED_FALLBACK
+
     # Reset dirty state only if the last message is a user message
     # (new scope boundary). Skip on /continue where the last message
     # is an assistant or tool message from the previous run.
@@ -9352,12 +9602,18 @@ def run_agent_loop(
 
         token_est = estimate_tokens(messages, effective_tools)
 
+        # Proactive target: the real budget when the window is known, else the
+        # adaptively-learned ceiling once the provider has rejected something.
+        # Either way the proactive pass runs only near-lossless rungs.
         _budget = _prompt_budget(context_length, max_output_tokens)
-        if _budget is not None and token_est > _budget:
+        _proactive_budget = (
+            _budget if _budget is not None else _adaptive_budget.target()
+        )
+        if _proactive_budget is not None and token_est > _proactive_budget:
             _pc = compact_to_budget(
                 messages,
                 effective_tools,
-                budget=int(_budget * PROACTIVE_COMPACTION_HYSTERESIS),
+                budget=int(_proactive_budget * PROACTIVE_COMPACTION_HYSTERESIS),
                 context_length=context_length,
                 max_output_tokens=max_output_tokens,
                 allow_tool_drop=False,
@@ -9421,7 +9677,10 @@ def run_agent_loop(
                 _waiting_cm = nullcontext()
             with _waiting_cm as _dismiss_waiting:
                 _llm_result = _call_llm_with_dismiss(
-                    _dismiss_waiting, _llm_args, **llm_kwargs
+                    _dismiss_waiting,
+                    _llm_args,
+                    unknown_context_window=context_length is None,
+                    **llm_kwargs,
                 )
                 msg, finish_reason = _llm_result[0], _llm_result[1]
                 cmd_activity = _llm_result[2] if len(_llm_result) > 2 else []
@@ -9457,6 +9716,31 @@ def run_agent_loop(
 
             _tne_pending = None
             _compaction_success = False
+
+            # The provider rejected this prompt size; remember it so the
+            # proactive pass can hold future turns under the learned ceiling
+            # even when the window is never reported (Phase 3).
+            _adaptive_budget.record_reject(token_est)
+
+            # Most providers name their real limit in the rejection. Adopt it as
+            # the session window so the rest of the run uses the cheap proactive
+            # path instead of paying a failed round-trip again (Phase 2).
+            if context_length is None:
+                _learned = _parse_context_limit(str(_coe))
+                if _learned and _learned >= MIN_OUTPUT_TOKENS * 4:
+                    context_length = _learned
+                    if (
+                        session is not None
+                        and getattr(session, "_context_length", None) is None
+                    ):
+                        try:
+                            session._context_length = _learned
+                        except Exception:
+                            pass
+                    if verbose:
+                        fmt.info(
+                            f"learned context window from provider: {_learned} tokens"
+                        )
 
             if _vision_pending:
                 _replace_last_image_message(
@@ -9564,7 +9848,10 @@ def run_agent_loop(
                         else nullcontext()
                     ) as _dismiss_waiting:
                         _llm_result = _call_llm_with_dismiss(
-                            _dismiss_waiting, _llm_args, **llm_kwargs
+                            _dismiss_waiting,
+                            _llm_args,
+                            unknown_context_window=context_length is None,
+                            **llm_kwargs,
                         )
                         msg, finish_reason = _llm_result[0], _llm_result[1]
                         cmd_activity = _llm_result[2] if len(_llm_result) > 2 else []
@@ -9645,11 +9932,9 @@ def run_agent_loop(
                 # Absolute terminal floor. The reactive ladder shrinks only
                 # relative to the current size, so an unknown context window has
                 # no hard target to descend to. Try a few fixed minimal-prompt
-                # budgets (no tools, minimal output) before stopping. This sits
-                # on the path that otherwise always raises, so it can only turn
-                # a hard stop into a heavily truncated continuation. History is
-                # left pristine until a terminal retry actually succeeds, so the
-                # failure path still hands the full transcript to continue-here.
+                # budgets (no tools, minimal output) before falling back. History
+                # is left pristine until a terminal retry actually succeeds, so a
+                # total failure still hands the full transcript to continue-here.
                 terminal = _run_terminal_floor_ladder(
                     messages,
                     api_base=api_base,
@@ -9662,59 +9947,24 @@ def run_agent_loop(
                     tools=tools,
                     turn=turns + turn_offset,
                     report=report,
+                    unknown_context_window=context_length is None,
                 )
                 if terminal is not None:
-                    messages[:] = terminal.working_messages
-                    if snapshot_state is not None:
-                        snapshot_state.invalidate_index_checkpoint()
-                    msg = terminal.msg
-                    finish_reason = terminal.finish_reason
-                    cmd_activity = terminal.cmd_activity
-                    _provider_retries = terminal.provider_retries
-                    _cache_stats = terminal.cache_stats
+                    (
+                        msg,
+                        finish_reason,
+                        cmd_activity,
+                        _provider_retries,
+                        _cache_stats,
+                    ) = _commit_terminal_floor(terminal)
                     _last_request_tools = None
-                    if verbose:
-                        fmt.warning(
-                            "recovered with a minimal "
-                            f"{terminal.budget}-token prompt; older history and "
-                            "the full request were truncated to fit"
-                        )
-                        fmt.llm_timing(terminal.elapsed, finish_reason)
-                    if report:
-                        report.record_llm_call(
-                            turns + turn_offset,
-                            terminal.elapsed,
-                            terminal.tokens_after,
-                            finish_reason,
-                            is_retry=True,
-                            retry_reason="terminal_floor",
-                            provider_retries=terminal.provider_retries,
-                            cached_tokens=terminal.cache_stats[0],
-                            cache_write_tokens=terminal.cache_stats[1],
-                        )
-                    _account_goal_usage(
-                        terminal.tokens_after,
-                        terminal.cache_stats,
-                        terminal.elapsed,
-                    )
                     _compaction_success = True
 
             if not _compaction_success and _tne_pending is None:
-                if continue_here:
-                    from .continue_here import write_continue_file
-
-                    write_continue_file(
-                        base_dir,
-                        messages,
-                        todo_state=todo_state,
-                        snapshot_state=snapshot_state,
-                        thinking_state=thinking_state,
-                        goal_state=goal_state,
-                    )
-                raise ContextOverflowError(
-                    "context window exceeded even after compaction and "
-                    "minimal-prompt retry"
-                )
+                # Phase 5: even the smallest terminal-floor prompt was rejected.
+                # Do not raise — end the turn with a local fallback so a context
+                # overflow can never crash or abort the loop.
+                return _finish_context_exhausted(), True
 
             if _tne_pending is not None:
                 _drop_tools(_tne_pending, time.monotonic() - t0, token_est)
@@ -9737,17 +9987,69 @@ def run_agent_loop(
                         "Model rejected image content, retrying without image..."
                     )
                 continue  # retry the LLM call with text-only
-            elapsed = time.monotonic() - t0
-            if report:
-                report.record_llm_call(
-                    turns + turn_offset,
-                    elapsed,
-                    token_est,
-                    "error",
-                    provider_retries=getattr(e, "_provider_retries", 0),
-                    **_tools_retry_kwargs(_is_tools_retry),
-                )
-            raise
+            _recovered = False
+            if _terminal_floor_eligible(e, context_length):
+                # Phase 4: at an unknown window an uncategorized 4xx may be an
+                # overflow the classifier missed. Probe with a minimal prompt
+                # before aborting — shrinking either recovers, fails honestly on
+                # a genuine request bug, or ends in the Phase 5 local fallback.
+                if verbose:
+                    fmt.warning(
+                        "uncategorized provider rejection at an unknown context "
+                        "window; probing with a minimal terminal-floor prompt"
+                    )
+                try:
+                    terminal = _run_terminal_floor_ladder(
+                        messages,
+                        api_base=api_base,
+                        model_id=model_id,
+                        temperature=temperature,
+                        top_p=top_p,
+                        seed=seed,
+                        verbose=verbose,
+                        llm_kwargs=llm_kwargs,
+                        tools=tools,
+                        turn=turns + turn_offset,
+                        report=report,
+                        unknown_context_window=True,
+                    )
+                    _probe_rejected_minimal = False
+                except Exception:
+                    terminal = None
+                    _probe_rejected_minimal = True
+                if terminal is not None:
+                    (
+                        msg,
+                        finish_reason,
+                        cmd_activity,
+                        _provider_retries,
+                        _cache_stats,
+                    ) = _commit_terminal_floor(
+                        terminal, retry_reason="terminal_floor_backstop"
+                    )
+                    _last_request_tools = None
+                    _is_tools_retry = False
+                    _vision_pending = False
+                    _recovered = True
+                elif not _probe_rejected_minimal:
+                    # Every minimal budget was rejected as overflow: the input
+                    # genuinely cannot be served. End on the Phase 5 fallback.
+                    return _finish_context_exhausted(), True
+                # Else the provider rejected even a ~256-token prompt with the
+                # same non-overflow error — a real request problem, not overflow.
+                # Fall through and surface it honestly below.
+            if not _recovered:
+                elapsed = time.monotonic() - t0
+                if report:
+                    report.record_llm_call(
+                        turns + turn_offset,
+                        elapsed,
+                        token_est,
+                        "error",
+                        provider_retries=getattr(e, "_provider_retries", 0),
+                        **_tools_retry_kwargs(_is_tools_retry),
+                    )
+                raise
         else:
             _last_request_tools = effective_tools
             _vision_pending = False  # success — clear the flag
@@ -9767,6 +10069,9 @@ def run_agent_loop(
                 )
             _is_tools_retry = False
             _account_goal_usage(token_est, _cache_stats, elapsed)
+            # The provider accepted this prompt size; raise the learned floor so
+            # the proactive pass keeps room for it when the window is unknown.
+            _adaptive_budget.record_accept(token_est)
         # Handle empty assistant response (no content, no tool_calls).
         # Some providers return these occasionally; appending them as-is
         # would poison the history and cause BadRequestError on the next call.

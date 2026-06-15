@@ -116,7 +116,10 @@ class TestReportCollector:
         # dropping counts as a turn_drop, not a plain compaction.
         rc.record_compaction(2, "gc_scaffolding+compact_messages", 95000, 70000)
         rc.record_compaction(
-            4, "compact_messages+strip_reasoning_content+drop_middle_turns", 70000, 40000
+            4,
+            "compact_messages+strip_reasoning_content+drop_middle_turns",
+            70000,
+            40000,
         )
         assert rc.compactions == 1
         assert rc.turn_drops == 1

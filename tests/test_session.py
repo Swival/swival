@@ -310,9 +310,12 @@ class TestAskFailureRollback:
         # Third ask should build on first (shared context), not include failed second
         assert len(r3.messages) > len(r1.messages)
 
-    def test_context_overflow_rolls_back(self, tmp_path, monkeypatch):
-        """ContextOverflowError is caught internally and becomes AgentError,
-        but messages should still be rolled back."""
+    def test_context_overflow_degrades_to_exhausted(self, tmp_path, monkeypatch):
+        """A context overflow that even the terminal floor cannot clear no
+        longer raises — it degrades to an exhausted Result carrying the local
+        fallback, and the session stays usable for the next ask."""
+        from swival.agent import _CONTEXT_EXHAUSTED_FALLBACK
+
         call_count = 0
 
         def overflow_on_second(*args, **kwargs):
@@ -328,13 +331,22 @@ class TestAskFailureRollback:
         monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
 
         s = Session(base_dir=str(tmp_path), history=False)
-        r1 = s.ask("first")
-        msg_count = len(r1.messages)
+        s.ask("first")
 
-        with pytest.raises(AgentError, match="context window exceeded"):
-            s.ask("second")
+        r2 = s.ask("second")
+        assert r2.exhausted is True
+        assert r2.answer == _CONTEXT_EXHAUSTED_FALLBACK
+        # Not rolled back (a rollback would have restored the prior "ok" turn):
+        # the degraded turn ends with the synthetic fallback in the transcript.
+        last = s._conv_state["messages"][-1]
+        assert last["role"] == "assistant"
+        assert last.get("_swival_synthetic") is True
 
-        assert len(s._conv_state["messages"]) == msg_count
+        # The session is still usable: a later ask that fits succeeds.
+        call_count = 0
+        r3 = s.ask("third")
+        assert r3.answer == "ok"
+        assert r3.exhausted is False
 
     def test_history_not_written_on_failure(self, tmp_path, monkeypatch):
         call_count = 0

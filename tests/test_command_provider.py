@@ -15,6 +15,8 @@ from swival.agent import (
     is_pinned,
     resolve_provider,
     SYNTHETIC_USER_PREFIXES,
+    ContextOverflowError,
+    _COMMAND_OVERFLOW_MARKER,
 )
 from swival.config import _resolve_command_model
 from swival.report import AgentError, ConfigError
@@ -999,3 +1001,48 @@ class TestCommandProviderToolCatalog:
             command_tool_schemas=None,
         )
         assert "swival:call" not in content
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: a command sub-program can signal its own context overflow so the
+# failure routes into compaction + terminal-floor recovery instead of stopping.
+# ---------------------------------------------------------------------------
+
+
+class TestCommandProviderOverflow:
+    @staticmethod
+    def _failed(returncode=1, stderr="", stdout=""):
+        return sp.CompletedProcess(
+            args=["x"], returncode=returncode, stdout=stdout, stderr=stderr
+        )
+
+    def _call(self, cp, monkeypatch):
+        monkeypatch.setattr(sp, "run", lambda *a, **k: cp)
+        return call_llm(
+            None,
+            "mycmd",
+            [{"role": "user", "content": "hi"}],
+            100,
+            0.5,
+            1.0,
+            None,
+            None,
+            False,
+            provider="command",
+        )
+
+    def test_overflow_marker_maps_to_context_overflow(self, monkeypatch):
+        cp = self._failed(stderr=f"out of room {_COMMAND_OVERFLOW_MARKER}")
+        with pytest.raises(ContextOverflowError):
+            self._call(cp, monkeypatch)
+
+    def test_overflow_shaped_message_maps_to_context_overflow(self, monkeypatch):
+        cp = self._failed(stderr="error: prompt is too long for the model")
+        with pytest.raises(ContextOverflowError):
+            self._call(cp, monkeypatch)
+
+    def test_ordinary_failure_stays_agent_error(self, monkeypatch):
+        cp = self._failed(stderr="segmentation fault")
+        with pytest.raises(AgentError) as ei:
+            self._call(cp, monkeypatch)
+        assert not isinstance(ei.value, ContextOverflowError)
