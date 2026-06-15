@@ -9729,6 +9729,9 @@ def run_agent_loop(
                 _learned = _parse_context_limit(str(_coe))
                 if _learned and _learned >= MIN_OUTPUT_TOKENS * 4:
                     context_length = _learned
+                    # Propagate into metaskill sub-loops so they inherit the
+                    # learned window instead of re-discovering it themselves.
+                    _metaskill_loop_kwargs["context_length"] = _learned
                     if (
                         session is not None
                         and getattr(session, "_context_length", None) is None
