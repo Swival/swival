@@ -104,6 +104,10 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "proactive_summaries": bool,
     "no_mcp": bool,
     "no_a2a": bool,
+    "no_browser": bool,
+    "browser_headful": bool,
+    "browser_path": str,
+    "browser_profile": str,
     "extra_body": dict,
     "reasoning_effort": str,
     "cache": bool,
@@ -155,6 +159,8 @@ _INVERT_BOOL_KEYS: dict[str, str] = {
     "no_continue": "continue_here",
     "no_sandbox_auto_session": "sandbox_auto_session",
     "no_lifecycle": "lifecycle_enabled",
+    "no_browser": "browser",
+    "browser_headful": "browser_headless",
     "quiet": "verbose",
 }
 
@@ -215,6 +221,10 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "mcp_config": None,
     "no_a2a": False,
     "a2a_config": None,
+    "no_browser": False,
+    "browser_headful": False,
+    "browser_path": None,
+    "browser_profile": None,
     "extra_body": None,
     "reasoning_effort": None,
     "sanitize_thinking": False,
@@ -1159,6 +1169,8 @@ def args_to_session_kwargs(args, base_dir: str) -> dict:
         "storm_breaker",
         "flatten_mcp_schemas",
         "location",
+        "browser_path",
+        "browser_profile",
     ]
 
     kwargs: dict = {"base_dir": base_dir}

@@ -116,6 +116,28 @@ All `fetch_url` output is wrapped with an `[UNTRUSTED EXTERNAL CONTENT]` header 
 
 SSRF protections are built in. Swival resolves every URL in the redirect chain and blocks private, loopback, link-local, and reserved addresses.
 
+## `browser_open`
+
+`browser_open` loads a URL in a real Chrome (or Chromium) instance and opens it as a **live, interactive session**, returning the page *after* its JavaScript has run, as markdown, plain text, or HTML. The page stays open after the call — the point is not a one-shot read but a session you then drive with `browser_eval`. Reach for it instead of `fetch_url` whenever a page only renders with a browser or needs interaction, including web search: open a search engine, then type into its box, submit, and read the results.
+
+Chrome is driven directly over the DevTools Protocol — no Puppeteer or Playwright. The browser launches lazily the first time a browser tool is used and is shut down when Swival exits. By default it runs headless in a throwaway profile; pass `--browser-profile DIR` to keep a persistent profile so logins and cookies survive across runs, or `--browser-headful` to watch it work. Swival auto-detects the Chrome binary; override it with `--browser-path` or the `SWIVAL_CHROME` environment variable.
+
+The `format` parameter picks the output (`"markdown"` default, `"text"`, or `"html"`). `timeout` is the navigation timeout in seconds (1–120, default 30), and `wait_ms` adds a short pause after load for content that arrives late. As with `fetch_url`, output is wrapped as untrusted content and large pages spill to `.swival/`. The result is prefixed with a trusted reminder that the page is still open and that `browser_eval` is how to act on it — grounded in what the page actually offers (it counts forms, inputs, buttons, and links) and including a copy-pasteable `browser_eval` call to start from: a fill-and-submit template when the page has a form, an extract-or-click template otherwise.
+
+The browser tools are registered only when Chrome is found; disable them entirely with `--no-browser`.
+
+## `browser_eval`
+
+`browser_eval` runs a JavaScript function in the page currently open from the last `browser_open`. It is the way you *interact* with the page, not just read it: fill in form fields, submit forms, click links or buttons, scroll, and extract data.
+
+```
+read:    () => [...document.querySelectorAll('h3')].map(h => h.textContent)
+search:  () => { document.querySelector('input[name=q]').value = 'my query'; document.forms[0].submit(); }
+click:   () => document.querySelector('a.result__a')?.click()
+```
+
+The function is evaluated as `(<your function>)()`; its return value (awaited if it is a promise) comes back as JSON. When a script triggers a navigation — submitting a form, clicking a link, or setting `location` — the tool waits for the new page to finish loading before returning, so the next `browser_eval` reads the navigated page rather than a half-loaded one. JavaScript errors are returned as `error:` strings.
+
 ## `run_command`
 
 `run_command` executes a command given as an array of strings and returns its output. It is available in all command modes except `--commands none`.
@@ -180,7 +202,7 @@ Calling `save` before `restore` is not required. The system automatically create
 
 ### Dirty Scopes
 
-Tools are classified as read-only or mutating. Read-only tools (`read_file`, `read_multiple_files`, `list_files`, `grep`, `outline`, `fetch_url`, `view_image`, `think`, `todo`, `snapshot`) are safe to collapse because they don't change anything on disk. Mutating tools (`write_file`, `edit_file`, `delete_file`, `run_command`, unknown MCP tools, and A2A tools) dirty the scope.
+Tools are classified as read-only or mutating. Read-only tools (`read_file`, `read_multiple_files`, `list_files`, `grep`, `outline`, `fetch_url`, `browser_open`, `browser_eval`, `view_image`, `think`, `todo`, `snapshot`) are safe to collapse because they don't change anything on disk. Mutating tools (`write_file`, `edit_file`, `delete_file`, `run_command`, unknown MCP tools, and A2A tools) dirty the scope.
 
 If the scope contains mutating tool calls, `restore` fails with a list of the dirty tools. Pass `force=true` to override when you are confident the summary captures the mutations.
 

@@ -114,6 +114,10 @@ class Session:
         llm_filter: str | None = None,
         trace_dir: str | None = None,
         subagents: bool = False,
+        browser: bool = True,
+        browser_headless: bool = True,
+        browser_path: str | None = None,
+        browser_profile: str | None = None,
         lifecycle_command: str | None = None,
         lifecycle_timeout: int = 300,
         lifecycle_fail_closed: bool = False,
@@ -201,6 +205,10 @@ class Session:
         self.trace_dir = trace_dir
         self._trace_session_id: str | None = None
         self.subagents = subagents
+        self.browser = browser
+        self.browser_headless = browser_headless
+        self.browser_path = browser_path
+        self.browser_profile = browser_profile
         self.lifecycle_command = lifecycle_command
         self.lifecycle_timeout = lifecycle_timeout
         self.lifecycle_fail_closed = lifecycle_fail_closed
@@ -384,6 +392,14 @@ class Session:
             )
 
         # Build tools
+        from . import browser as _browser
+
+        _browser.configure(
+            enabled=self.browser,
+            headless=self.browser_headless,
+            chrome_path=self.browser_path,
+            profile=self.browser_profile,
+        )
         self._tools = build_tools(
             self._resolved_commands,
             self._skills_catalog,
@@ -391,6 +407,7 @@ class Session:
             shell_allowed=self._shell_allowed,
             subagents=self.subagents,
             metaskill_names=self._metaskill_names,
+            browser=self.browser and _browser.is_available(),
         )
 
         # Initialize MCP servers
@@ -982,6 +999,9 @@ class Session:
         if self._secret_shield is not None:
             self._secret_shield.destroy()
             self._secret_shield = None
+        from . import browser as _browser
+
+        _browser.shutdown()
 
     def __enter__(self):
         return self

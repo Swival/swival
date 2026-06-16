@@ -510,6 +510,97 @@ FETCH_URL_TOOL = {
 
 TOOLS.append(FETCH_URL_TOOL)
 
+BROWSER_OPEN_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "browser_open",
+        "description": (
+            "Open a URL in a real Chrome browser and load it into a LIVE, "
+            "interactive session, returning the fully rendered page (after its "
+            "JavaScript runs) as markdown, text, or html. The page STAYS OPEN "
+            "after this call: drive it with browser_eval to type into and submit "
+            "forms (e.g. a search box), click links and buttons, follow results to "
+            "new pages, scroll, and read content that appears after those actions. "
+            "This is how you search the web and operate interactive sites — open "
+            "the site, then act on it with browser_eval. Prefer fetch_url only for "
+            "a single static document you just need to read once."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL to open (must start with http:// or https://).",
+                },
+                "format": {
+                    "type": "string",
+                    "enum": ["markdown", "text", "html"],
+                    "description": (
+                        "Output format for the rendered page. 'markdown' (default) "
+                        "converts the rendered DOM to readable markdown. 'text' "
+                        "returns visible text only. 'html' returns the rendered HTML."
+                    ),
+                },
+                "wait_ms": {
+                    "type": "integer",
+                    "description": (
+                        "Extra milliseconds to wait after load before reading the "
+                        "page, for content that appears late. Usually unnecessary."
+                    ),
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Navigation timeout in seconds (1-120, default 30).",
+                },
+            },
+            "required": ["url"],
+        },
+    },
+}
+
+BROWSER_EVAL_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "browser_eval",
+        "description": (
+            "Run a JavaScript function in the page currently open in the browser "
+            "(from the last browser_open) and return its JSON result. This is the "
+            "primary way to INTERACT with the open page — not just read it. Use it "
+            "to fill in form fields, submit forms, click links or buttons, scroll, "
+            "and extract data. If the script triggers a navigation (submit/click/"
+            "location change), the tool waits for the new page to load, so a "
+            "follow-up browser_eval reads the new page. The function may be async. "
+            "Examples:\n"
+            "  read:    () => [...document.querySelectorAll('h3')].map(h => h.textContent)\n"
+            "  search:  () => { document.querySelector('input[name=q]').value = 'my query'; "
+            "document.querySelector('form').submit(); }\n"
+            "  click:   () => document.querySelector('a.result__a')?.click()"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "function": {
+                    "type": "string",
+                    "description": (
+                        "A JavaScript function expression to execute, e.g. "
+                        "() => document.title , or one that acts on the page like "
+                        "() => { document.querySelector('input').value='x'; "
+                        "document.forms[0].submit(); }. Its return value is "
+                        "JSON-serialized; functions that only act can return nothing."
+                    ),
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Execution timeout in seconds (1-120, default 30).",
+                },
+            },
+            "required": ["function"],
+        },
+    },
+}
+
+BROWSER_TOOLS = [BROWSER_OPEN_TOOL, BROWSER_EVAL_TOOL]
+
 SNAPSHOT_TOOL = {
     "type": "function",
     "function": {
@@ -2653,6 +2744,50 @@ def _wrap_untrusted(result: str, tool_name: str, origin: str = "") -> str:
     return _untrusted_header(tool_name, origin) + result
 
 
+def _browser_open_hint(summary: dict) -> str:
+    """Trusted reminder, prepended to browser_open output, that the page is live.
+
+    Models tend to treat browser_open like a one-shot fetch and never follow up
+    with browser_eval. This spells out that the snapshot is static and the page
+    stays open, grounds the suggestion in the affordances actually detected
+    (``summary`` carries integer counts only — no page-controlled strings), and
+    hands the model a copy-pasteable browser_eval call to start from.
+    """
+    forms = summary.get("forms", 0)
+    text_inputs = summary.get("text_inputs", 0)
+    lines = [
+        "[browser] The page is now OPEN and stays open. The snapshot below is a "
+        "static copy — to actually use the page (search, fill forms, click, "
+        "paginate, or read JavaScript-rendered content) you must call "
+        "browser_eval next with a JS function. It runs in the live page.",
+    ]
+    if forms and text_inputs:
+        lines.append(
+            f"This page has {forms} form(s) and {text_inputs} text input(s) — likely "
+            "a search or entry page. Fill and submit it, e.g.:\n"
+            "  browser_eval(() => { const i = document.querySelector("
+            "'input:not([type=hidden]), textarea'); i.value = 'YOUR QUERY'; "
+            "(i.form.requestSubmit ? i.form.requestSubmit() : i.form.submit()); })\n"
+            "then read the results, e.g.:\n"
+            "  browser_eval(() => [...document.querySelectorAll('h3, h2, a')]"
+            ".map(e => e.innerText).filter(Boolean).slice(0, 30))"
+        )
+    else:
+        lines.append(
+            "Extract specific data, e.g.:\n"
+            "  browser_eval(() => [...document.querySelectorAll('h1, h2, h3, a')]"
+            ".map(e => e.innerText).filter(Boolean).slice(0, 30))\n"
+            "or click something, e.g.:\n"
+            "  browser_eval(() => [...document.querySelectorAll('a, button')]"
+            ".find(e => /next|more|sign in/i.test(e.innerText))?.click())"
+        )
+    lines.append(
+        "After a submit or click the page navigates; just call browser_eval "
+        "again to read the new page."
+    )
+    return "\n".join(lines) + "\n\n"
+
+
 def _guard_mcp_output(
     result: str, base_dir: str, tool_name: str, scratch_dir: str | None = None
 ) -> str:
@@ -3614,6 +3749,36 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
         if _report is not None:
             _report.record_untrusted_input("fetch_url", origin=url)
         return _wrap_untrusted(fetch_result.body, "fetch_url", origin=url)
+    elif name == "browser_open":
+        from . import browser
+
+        url = args.get("url", "")
+        body = browser.browser_open(
+            url,
+            format=args.get("format", "markdown"),
+            base_dir=base_dir,
+            scratch_dir=scratch_dir,
+            timeout=args.get("timeout", browser.DEFAULT_TIMEOUT),
+            wait_ms=args.get("wait_ms"),
+        )
+        if body.startswith("error:"):
+            return body
+        if _report is not None:
+            _report.record_untrusted_input("browser_open", origin=url)
+        hint = _browser_open_hint(browser.interaction_summary())
+        return hint + _wrap_untrusted(body, "browser_open", origin=url)
+    elif name == "browser_eval":
+        from . import browser
+
+        body = browser.browser_eval(
+            args.get("function", ""),
+            timeout=args.get("timeout", browser.DEFAULT_TIMEOUT),
+        )
+        if body.startswith("error:"):
+            return body
+        if _report is not None:
+            _report.record_untrusted_input("browser_eval")
+        return _wrap_untrusted(body, "browser_eval")
     elif name == "use_skill":
         from .skills import activate_skill
 

@@ -722,6 +722,8 @@ class TestReadOnlyAllowlist:
             "list_files",
             "grep",
             "fetch_url",
+            "browser_open",
+            "browser_eval",
             "think",
             "todo",
             "snapshot",

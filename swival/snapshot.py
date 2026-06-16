@@ -30,6 +30,8 @@ READ_ONLY_TOOLS = frozenset(
         "list_files",
         "grep",
         "fetch_url",
+        "browser_open",
+        "browser_eval",
         "view_image",
         "think",
         "todo",

@@ -98,6 +98,7 @@ from .mcp_client import McpShutdownError
 from .tools import (
     clamp_timeout,
     TOOLS,
+    BROWSER_TOOLS,
     RUN_COMMAND_TOOL,
     RUN_SHELL_COMMAND_TOOL,  # noqa: F401 — used in build_tools()
     USE_SKILL_TOOL,
@@ -6397,6 +6398,31 @@ def build_parser():
         help="Disable parallel subagent support.",
     )
     integrations_group.add_argument(
+        "--no-browser",
+        action="store_true",
+        default=_UNSET,
+        help="Disable the Chrome-backed browser_open / browser_eval tools.",
+    )
+    integrations_group.add_argument(
+        "--browser-headful",
+        action="store_true",
+        default=_UNSET,
+        help="Run the browser with a visible window instead of headless.",
+    )
+    integrations_group.add_argument(
+        "--browser-path",
+        metavar="PATH",
+        default=_UNSET,
+        help="Path to the Chrome/Chromium executable (default: auto-detect).",
+    )
+    integrations_group.add_argument(
+        "--browser-profile",
+        metavar="DIR",
+        default=_UNSET,
+        help="Persistent browser profile directory (default: a fresh temp profile). "
+        "Use a persistent profile to reuse logins and cookies across runs.",
+    )
+    integrations_group.add_argument(
         "--lifecycle-command",
         metavar="COMMAND",
         default=_UNSET,
@@ -7878,14 +7904,18 @@ def build_tools(
     *,
     goal_tools: bool = False,
     metaskill_names: list[str] | None = None,
+    browser: bool = False,
 ) -> list:
     """Construct the tools list from base + conditionals.
 
     ``goal_tools`` registers ``complete_goal`` when True. The normal path leaves
     it out until the user starts `/goal`; subagents also keep it disabled since
-    v1 keeps goals parent-session-only.
+    v1 keeps goals parent-session-only. ``browser`` registers the Chrome-backed
+    browser_open / browser_eval tools.
     """
     tools = list(TOOLS)
+    if browser:
+        tools.extend(copy.deepcopy(t) for t in BROWSER_TOOLS)
     if goal_tools:
         from .tools import GOAL_TOOLS
 
@@ -8516,6 +8546,17 @@ def _run_main(args, report, _write_report, parser):
             skills_catalog, _metaskills_policy_val
         )
 
+    from . import browser as _browser
+
+    _browser_enabled = not getattr(args, "no_browser", False)
+    _browser.configure(
+        enabled=_browser_enabled,
+        headless=not getattr(args, "browser_headful", False),
+        chrome_path=getattr(args, "browser_path", None) or None,
+        profile=getattr(args, "browser_profile", None) or None,
+    )
+    _browser_available = _browser_enabled and _browser.is_available()
+
     tools = build_tools(
         resolved_commands,
         skills_catalog,
@@ -8523,6 +8564,7 @@ def _run_main(args, report, _write_report, parser):
         shell_allowed=shell_allowed,
         subagents=_subagents,
         metaskill_names=_metaskill_names,
+        browser=_browser_available,
     )
 
     # Initialize MCP servers
