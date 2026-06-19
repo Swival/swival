@@ -22,20 +22,20 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "litellm>=1.89.0",
+    "litellm>=1.89.2",
     "tiktoken>=0.13.0",
-    "html-to-markdown>=3.6.2,<4",
+    "html-to-markdown>=3.6.13,<4",
     "rich>=15.0.0",
     "prompt-toolkit>=3.0.52",
-    "mcp>=1.27.2,<2",
+    "mcp>=1.28.0,<2",
     "rank-bm25>=0.2.2",
     "httpx>=0.28.1",
     "starlette>=1.3.1",
     "uvicorn>=0.49.0",
     "fast-cipher>=0.2.2",
-    "boto3>=1.43.29",
+    "boto3>=1.43.32",
     "starlark-go>=1.0.1",
-    "google-cloud-aiplatform>=1.157.0",
+    "google-cloud-aiplatform>=1.158.0",
 ]
 
 [project.urls]
