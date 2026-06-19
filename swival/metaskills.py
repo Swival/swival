@@ -497,7 +497,14 @@ def run_metaskill(
 
 
 def get_executable_metaskills(catalog: dict[str, SkillInfo], policy: str) -> list[str]:
-    """Return names of metaskills that can be executed under the given policy."""
+    """Return names of metaskills that can be executed under the given policy.
+
+    Returns an empty list when the Starlark runtime is not installed, so a
+    Swival installed without the ``metaskills`` extra transparently treats
+    metaskill-bearing skills as ordinary static skills.
+    """
+    if not _check_starlark_available():
+        return []
     names = []
     for name, skill in catalog.items():
         if skill.metaskill_path is None:

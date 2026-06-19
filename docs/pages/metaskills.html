@@ -106,6 +106,15 @@ determines they are needed.</p>
 <p>They are a dynamic extension to a regular agent
 skill: they sit next to a normal <code>SKILL.md</code> file and help an agent do the parts
 of a task that should be repeatable, bounded, and easy to inspect.</p>
+<h2 id="0-installation">0. Installation</h2>
+<p>Metaskill execution needs the Starlark runtime, which ships as an optional
+extra so the base install stays lean:</p>
+<pre><code class="language-sh">pip install 'swival[metaskills]'
+</code></pre>
+<p>Without it Swival still discovers metaskill-bearing skills, but treats them as
+ordinary static skills: the <code>run_metaskill</code> tool is not offered and the skill's
+<code>SKILL.md</code> instructions are used directly. Everything in the rest of this
+document assumes the extra is installed.</p>
 <h2 id="1-motivation">1. Motivation</h2>
 <p>Static skills are great when the useful thing is instruction:</p>
 <pre><code class="language-text">When deploying, run the deploy command, check the health endpoint, and report

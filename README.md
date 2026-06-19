@@ -294,7 +294,8 @@ Audit](docs.md/audit.md) for the full flag reference.
 
 **Skills, MetaSKILLs, MCP, ACP, and A2A.** Extend the agent with SKILL.md-based
 skills for reusable workflows, write dynamic skill programs in a safe Python
-subset with [MetaSKILLs](docs.md/metaskills.md), connect to external tools via
+subset with [MetaSKILLs](docs.md/metaskills.md) (optional extra, install with
+`uv tool install 'swival[metaskills]'`), connect to external tools via
 the Model Context Protocol, plug into editors via the Agent Client Protocol,
 and talk to remote agents via the Agent-to-Agent (A2A) protocol.
 

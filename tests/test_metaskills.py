@@ -292,7 +292,8 @@ class TestTrace:
 
 
 class TestGetExecutableMetaskills:
-    def test_local_only(self, tmp_path):
+    @patch("swival.metaskills._check_starlark_available", return_value=True)
+    def test_local_only(self, _starlark, tmp_path):
         local_skill = SkillInfo(
             name="local-ms",
             description="local",
@@ -326,6 +327,19 @@ class TestGetExecutableMetaskills:
 
         names = get_executable_metaskills(catalog, "all")
         assert names == ["ext-ms", "local-ms"]
+
+    @patch("swival.metaskills._check_starlark_available", return_value=False)
+    def test_empty_without_starlark(self, _starlark, tmp_path):
+        local_skill = SkillInfo(
+            name="local-ms",
+            description="local",
+            path=tmp_path / "local-ms",
+            is_local=True,
+            metaskill_path=tmp_path / "local-ms" / "SKILL.star",
+            metaskill_language="starlark",
+        )
+        catalog = {"local-ms": local_skill}
+        assert get_executable_metaskills(catalog, "all") == []
 
 
 # =========================================================================

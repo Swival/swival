@@ -2,6 +2,10 @@
 
 All notable user-facing changes to Swival.
 
+## Unreleased
+
+- Metaskill execution is now an optional feature. The Starlark runtime ships as the `metaskills` extra (`pip install 'swival[metaskills]'` or `uv tool install 'swival[metaskills]'`), so the base install no longer pulls it in. Without the extra, Swival still discovers metaskill-bearing skills but treats them as ordinary static skills: the `run_metaskill` tool is not offered and the `SKILL.md` instructions are followed directly.
+
 ## 1.0.32
 
 - New `swival skills` command to install, remove, and list agent skills from the command line instead of copying directories by hand. `swival skills add <name-or-URL>` installs into the current project, `--global` into the every-project set, and `swival skills delete` / `swival skills list` round out the management commands.
