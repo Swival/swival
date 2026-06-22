@@ -237,6 +237,10 @@ def command_spinner(label: str, timeout: float | None = None):
         yield _noop
         return
 
+    label = " ".join((label or "command").split())
+    if len(label) > 50:
+        label = label[:49] + "…"
+
     determinate = bool(timeout and timeout > 0)
     columns = [
         SpinnerColumn("dots", style="cyan", speed=1.5),
@@ -261,7 +265,7 @@ def command_spinner(label: str, timeout: float | None = None):
     dismissed = threading.Event()
     progress.start()
     task_id = progress.add_task(
-        escape(label or "command"), total=timeout if determinate else None
+        escape(label), total=timeout if determinate else None
     )
 
     advancer: threading.Thread | None = None
