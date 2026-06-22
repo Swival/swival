@@ -43,3 +43,6 @@ jobs:
           --no-deps
           --disable-pip
           -r /dev/stdin
+
+      - name: Run tests
+        run: uv run python -m pytest tests/ -v
