@@ -20,6 +20,7 @@ import threading
 import time
 import urllib.request
 import urllib.error
+import uuid as _uuid
 import warnings
 from importlib import metadata
 from pathlib import Path
@@ -1258,8 +1259,6 @@ def _maybe_scavenge_tool_calls(
     result = scavenge_tool_calls(content, reasoning, allowed, max_calls=4)
     if not result.calls:
         return 0
-
-    import uuid as _uuid
 
     added = 0
     new_calls: list = []
@@ -9449,8 +9448,6 @@ def run_agent_loop(
                     enabled_metaskills=enabled_metaskills,
                 )
                 if activations:
-                    import uuid as _uuid
-
                     tool_calls = []
                     _uid = _uuid.uuid4().hex[:8]
                     for name, _result in activations:

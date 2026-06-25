@@ -7,6 +7,7 @@ the telemetry pipeline can measure which fixes actually help.
 """
 
 import difflib
+import json as _json
 import re
 from typing import Any
 
@@ -32,8 +33,6 @@ def repair_tool_args(
         *repairs* is a list of repair-action dicts, empty if nothing changed.
         Each action has at least ``{"type": ..., "field": ...}``.
     """
-    import json as _json
-
     repairs: list[dict[str, Any]] = []
 
     # Handle double-encoded JSON: entire args is a string that parses to
@@ -108,8 +107,6 @@ def _repair_unwrap_nested(
     affinity.  It will *not* fire when the schema expects an ``object``
     type for the outer key (that could be intentional nesting).
     """
-    import json as _json  # deferred to avoid top-level import when unused
-
     if len(result) != 1:
         return
 
@@ -356,8 +353,6 @@ def format_repair_feedback(
         Optional tool parameter schema.  When provided, the "Corrected"
         display upgrades string values to arrays where the schema says so.
     """
-    import json as _json
-
     structural = [r for r in repairs if r["type"] in _STRUCTURAL_REPAIRS]
     if not structural:
         return ""

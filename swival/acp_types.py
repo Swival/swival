@@ -93,11 +93,7 @@ _TOOL_NAME_TO_KIND: dict[str, str] = {
 
 def tool_kind_for(name: str) -> str:
     """Map a swival tool name to an ACP tool kind."""
-    if name in _TOOL_NAME_TO_KIND:
-        return _TOOL_NAME_TO_KIND[name]
-    if name.startswith("mcp__") or name.startswith("a2a__"):
-        return TOOL_KIND_OTHER
-    return TOOL_KIND_OTHER
+    return _TOOL_NAME_TO_KIND.get(name, TOOL_KIND_OTHER)
 
 
 def tool_title_for(name: str, arguments: Any) -> str:
