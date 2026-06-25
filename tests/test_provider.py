@@ -1309,6 +1309,23 @@ class TestGenericProviderRouting:
         )
         assert api_base == "http://host:9000/v1"
 
+    def test_resolve_provider_preserves_non_v1_version(self, monkeypatch):
+        """A URL ending in a /vN segment (Z.AI's /v4) is left untouched."""
+        monkeypatch.setattr(agent, "discover_generic_context_length", lambda *a: None)
+        _, api_base, _, _, _ = resolve_provider(
+            "generic", "m", None, "https://api.z.ai/api/paas/v4", None, False
+        )
+        assert api_base == "https://api.z.ai/api/paas/v4"
+
+    def test_resolve_provider_preserves_non_v1_version_trailing_slash(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(agent, "discover_generic_context_length", lambda *a: None)
+        _, api_base, _, _, _ = resolve_provider(
+            "generic", "m", None, "https://api.z.ai/api/paas/v4/", None, False
+        )
+        assert api_base == "https://api.z.ai/api/paas/v4"
+
     def test_resolve_provider_discovers_context_length(self, monkeypatch):
         """When max_context_tokens is unset, generic reads it from /v1/models."""
         monkeypatch.setattr(

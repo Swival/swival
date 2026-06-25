@@ -7572,10 +7572,21 @@ def _litellm_context_length(model_str: str) -> int | None:
         return None
 
 
+_OPENAI_VERSION_SUFFIX = re.compile(r"/v\d+$")
+
+
 def _normalize_openai_base(url: str) -> str:
-    """Ensure an OpenAI-compatible base URL ends with /v1."""
+    """Ensure an OpenAI-compatible base URL carries an API version segment.
+
+    Most servers expose the API under /v1, so a bare host gets /v1 appended.
+    A URL that already ends in a version segment is left alone: that covers
+    the usual /v1 as well as providers that version differently, such as
+    Z.AI serving from /api/paas/v4.
+    """
     stripped = url.rstrip("/")
-    return stripped if stripped.endswith("/v1") else f"{stripped}/v1"
+    if _OPENAI_VERSION_SUFFIX.search(stripped):
+        return stripped
+    return f"{stripped}/v1"
 
 
 def resolve_provider(

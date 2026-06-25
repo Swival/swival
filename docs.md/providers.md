@@ -178,7 +178,7 @@ swival --provider llamacpp \
 
 The generic provider works with any server that exposes an OpenAI-compatible chat completions endpoint. This covers mlx_lm.server, ollama, vLLM, LocalAI, text-generation-webui, DeepSeek API, and similar tools.
 
-Both `--model` and `--base-url` are required. Pass the server's root URL without `/v1` — Swival appends it automatically. If your URL already ends in `/v1`, that's fine too.
+Both `--model` and `--base-url` are required. Pass the server's root URL without `/v1` — Swival appends it automatically. If your URL already ends in a version segment, that's fine too: `/v1`, or a provider that versions differently such as Z.AI's `/api/paas/v4`, is left untouched.
 
 ```sh
 # mlx_lm.server
@@ -204,6 +204,16 @@ swival --provider generic \
     --model deepseek-chat \
     --api-key "$DEEPSEEK_API_KEY" \
     --max-output-tokens 8192 \
+    "task"
+```
+
+```sh
+# Z.AI — note the /v4 endpoint, which Swival keeps as-is
+export ZAI_API_KEY=...
+swival --provider generic \
+    --base-url https://api.z.ai/api/paas/v4 \
+    --model glm-5.2 \
+    --api-key "$ZAI_API_KEY" \
     "task"
 ```
 
