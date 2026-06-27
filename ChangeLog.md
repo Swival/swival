@@ -2,6 +2,11 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.34
+
+- The `generic` provider no longer forces a `/v1` suffix onto base URLs that already carry an API version. A bare host still gets `/v1` appended, but a URL that already ends in a version segment is left untouched, so servers that version their API differently work out of the box. This is what makes Z.AI usable: point `--provider generic` at `https://api.z.ai/api/paas/v4` with `--model glm-5.2` and the `/v4` endpoint is preserved.
+- Long shell commands shown beside the running-command spinner are now collapsed to a single line and truncated, so a multi-line or very long command no longer disrupts the progress display.
+
 ## 1.0.33
 
 - Metaskill execution is now an optional installation feature. The Starlark runtime ships as the `metaskills` extra (`pip install 'swival[metaskills]'` or `uv tool install 'swival[metaskills]'`), so the base install no longer pulls it in. Without the extra, Swival still discovers metaskill-bearing skills but treats them as ordinary static skills.
