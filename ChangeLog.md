@@ -2,6 +2,10 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.35
+
+- Added compatibility for litellm 1.90+ when using the ChatGPT provider.
+
 ## 1.0.34
 
 - The `generic` provider no longer forces a `/v1` suffix onto base URLs that already carry an API version. A bare host still gets `/v1` appended, but a URL that already ends in a version segment is left untouched, so servers that version their API differently work out of the box. This is what makes Z.AI usable: point `--provider generic` at `https://api.z.ai/api/paas/v4` with `--model glm-5.2` and the `/v4` endpoint is preserved.
