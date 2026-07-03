@@ -22,7 +22,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "litellm>=1.90,<1.91",
+    "litellm>=1.90.2,<1.91",
     "tiktoken>=0.13.0",
     "html-to-markdown>=3.7.2,<4",
     "rich>=15.0.0",
@@ -33,8 +33,8 @@ dependencies = [
     "starlette>=1.3.1",
     "uvicorn>=0.49.0",
     "fast-cipher>=0.2.2",
-    "boto3>=1.43.36",
-    "google-cloud-aiplatform>=1.158.0",
+    "boto3>=1.43.39",
+    "google-cloud-aiplatform>=1.159.0",
 ]
 
 [project.optional-dependencies]
@@ -88,5 +88,5 @@ dev = [
 ]
 website = [
     "markdown>=3.10.2",
-    "pillow>=12.2.0",
+    "pillow>=12.3.0",
 ]
