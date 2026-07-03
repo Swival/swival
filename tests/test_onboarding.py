@@ -596,6 +596,35 @@ class TestRequiredFieldValidation:
         _ask_api_key(s, env_var="TEST_KEY")
         assert "api_key" not in s
 
+    def test_ask_api_key_offers_env_value_when_set(self, monkeypatch):
+        buf = _capture_stderr(monkeypatch)
+        monkeypatch.setenv("TEST_KEY", "sk-live")
+        _patch_prompt_sequence(monkeypatch, ["1"])
+        s = {}
+        _ask_api_key(s, env_var="TEST_KEY")
+        assert "Use the TEST_KEY environment value" in buf.getvalue()
+        assert "api_key" not in s
+
+    def test_ask_api_key_offers_myself_when_unset(self, monkeypatch):
+        buf = _capture_stderr(monkeypatch)
+        monkeypatch.delenv("TEST_KEY", raising=False)
+        _patch_prompt_sequence(monkeypatch, ["1"])
+        s = {}
+        _ask_api_key(s, env_var="TEST_KEY")
+        assert "I'll set TEST_KEY myself" in buf.getvalue()
+
+    def test_ask_api_key_compound_env_var_detects_either(self, monkeypatch):
+        buf = _capture_stderr(monkeypatch)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-live")
+        _patch_prompt_sequence(monkeypatch, ["1"])
+        s = {}
+        _ask_api_key(s, env_var="GEMINI_API_KEY or OPENAI_API_KEY")
+        assert (
+            "Use the GEMINI_API_KEY or OPENAI_API_KEY environment value"
+            in buf.getvalue()
+        )
+
     def test_ask_huggingface_rejects_bare_model(self, monkeypatch):
         buf = _capture_stderr(monkeypatch)
         _patch_prompt_sequence(

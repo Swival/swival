@@ -738,9 +738,15 @@ def _ask_command(s: dict) -> None:
 
 def _ask_api_key(s: dict, *, env_var: str, label: str = "API key") -> None:
     """Ask whether to store an API key in config or use an env var."""
+    already_set = any(os.environ.get(v) for v in env_var.split(" or "))
+    env_choice = (
+        f"Use the {env_var} environment value"
+        if already_set
+        else f"I'll set {env_var} myself"
+    )
     idx = _prompt_choice(
         label,
-        [f"I'll set {env_var} myself", "Enter it now (stored in config)"],
+        [env_choice, "Enter it now (stored in config)"],
     )
     if idx == 1:
         s["api_key"] = _prompt_text_required(label, secret=True)
