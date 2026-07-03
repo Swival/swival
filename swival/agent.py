@@ -7672,8 +7672,22 @@ def resolve_provider(
             )
         context_length = max_context_tokens
         if context_length is None:
-            _bare = model_id.removeprefix("openrouter/")
-            context_length = _litellm_context_length(f"openrouter/{_bare}")
+            # _resolve_model_str owns the reading of a leading "openrouter/"
+            # (litellm routing prefix vs OpenRouter's own model namespace);
+            # probing its key keeps this lookup in lockstep with call time.
+            litellm_key = _resolve_model_str("openrouter", model_id)
+            context_length = _litellm_context_length(litellm_key)
+            if context_length is None:
+                # litellm's static table lags behind OpenRouter's lineup; the
+                # live catalog knows the context window of models added since.
+                from .model_catalog import catalog_context_length
+
+                context_length = catalog_context_length(
+                    "openrouter",
+                    litellm_key.removeprefix("openrouter/"),
+                    base_url,
+                    resolved_key,
+                )
     elif provider == "llamacpp":
         api_base = _normalize_openai_base(base_url or "http://127.0.0.1:8080")
         if model:

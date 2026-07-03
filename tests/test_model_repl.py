@@ -41,9 +41,6 @@ CATALOG = Catalog(
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    mc.clear_cache()
-    yield
-    mc.clear_cache()
 
 
 def _resolve_return(model="zai-org/GLM-5.2", context=128000):

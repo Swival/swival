@@ -4,6 +4,7 @@ import argparse
 import io
 import tomllib
 import types
+
 from swival.onboarding import (
     run_onboarding,
     render_minimal_config,
@@ -908,6 +909,85 @@ class TestModelExplorerIntegration:
         s = {}
         _ask_openrouter(s)
         assert s["model"] == "openai/gpt-5.5"
+
+    def test_ask_openrouter_skips_context_prompt_when_catalog_knows(self, monkeypatch):
+        from swival.model_catalog import ModelEntry
+
+        buf = _capture_stderr(monkeypatch)
+        monkeypatch.setattr(
+            "swival.onboarding._browse_models", lambda *a, **k: "openai/gpt-5.5"
+        )
+        monkeypatch.setattr(
+            "swival.model_catalog.cached_entries",
+            lambda provider, base_url: [
+                ModelEntry(id="openai/gpt-5.5", context_length=400_000)
+            ],
+        )
+        _patch_prompt_sequence(
+            monkeypatch,
+            [
+                "1",  # browse the catalog
+                "1",  # I'll set OPENROUTER_API_KEY myself
+            ],
+        )
+        s = {}
+        _ask_openrouter(s)
+        assert s["model"] == "openai/gpt-5.5"
+        assert "max_context_tokens" not in s
+        assert "400,000" in buf.getvalue()
+
+    def test_ask_openrouter_prompts_when_model_not_in_catalog(self, monkeypatch):
+        from swival.model_catalog import ModelEntry
+
+        _capture_stderr(monkeypatch)
+        monkeypatch.setattr(
+            "swival.onboarding._browse_models", lambda *a, **k: "openai/gpt-5.5"
+        )
+        monkeypatch.setattr(
+            "swival.model_catalog.cached_entries",
+            lambda provider, base_url: [
+                ModelEntry(id="other/model", context_length=8192)
+            ],
+        )
+        _patch_prompt_sequence(
+            monkeypatch,
+            [
+                "1",  # browse the catalog
+                "1",  # I'll set OPENROUTER_API_KEY myself
+                "131072",  # context prompt still runs
+            ],
+        )
+        s = {}
+        _ask_openrouter(s)
+        assert s["max_context_tokens"] == 131072
+
+    def test_ask_generic_skips_context_prompt_when_catalog_knows(self, monkeypatch):
+        from swival.model_catalog import ModelEntry
+
+        buf = _capture_stderr(monkeypatch)
+        monkeypatch.setattr(
+            "swival.onboarding._browse_models", lambda *a, **k: "served-model"
+        )
+        seen = {}
+
+        def fake_cached_entries(provider, base_url):
+            seen["key"] = (provider, base_url)
+            return [ModelEntry(id="served-model", context_length=65536)]
+
+        monkeypatch.setattr("swival.model_catalog.cached_entries", fake_cached_entries)
+        _patch_prompt_sequence(
+            monkeypatch,
+            [
+                "http://localhost:11434",  # base URL
+                "1",  # I'll set OPENAI_API_KEY myself
+            ],
+        )
+        s = {}
+        _ask_generic(s)
+        assert s["model"] == "served-model"
+        assert "max_context_tokens" not in s
+        assert seen["key"] == ("generic", "http://localhost:11434")
+        assert "65,536" in buf.getvalue()
 
     def test_ask_google_offers_browse_with_env_key(self, monkeypatch):
         _capture_stderr(monkeypatch)

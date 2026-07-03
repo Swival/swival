@@ -9,13 +9,6 @@ import pytest
 from swival import model_catalog as mc
 
 
-@pytest.fixture(autouse=True)
-def _fresh_cache():
-    mc.clear_cache()
-    yield
-    mc.clear_cache()
-
-
 def _fake_get_json(responses):
     """Return a _get_json stand-in serving canned payloads keyed by URL substring."""
 
@@ -311,6 +304,39 @@ def test_openrouter_catalog(monkeypatch):
     free = catalog.entries[1]
     assert free.supports_tools is False
     assert "free" in free.tags
+
+
+def test_catalog_context_length(monkeypatch):
+    payload = {
+        "data": [
+            {"id": "acme/big-model", "context_length": 262144},
+            {"id": "acme/no-context"},
+        ]
+    }
+    monkeypatch.setattr(mc, "_get_json", _fake_get_json({"openrouter.ai": payload}))
+    assert mc.catalog_context_length("openrouter", "acme/big-model") == 262144
+    assert mc.catalog_context_length("openrouter", "ACME/Big-Model") == 262144
+    assert mc.catalog_context_length("openrouter", "acme/no-context") is None
+    assert mc.catalog_context_length("openrouter", "acme/absent") is None
+
+
+def test_catalog_context_length_unavailable(monkeypatch):
+    def boom(url, api_key, timeout):
+        raise mc.CatalogUnavailable("network down")
+
+    monkeypatch.setattr(mc, "_get_json", boom)
+    assert mc.catalog_context_length("openrouter", "acme/big-model") is None
+
+
+def test_cached_context_length(monkeypatch):
+    payload = {"data": [{"id": "served", "max_model_len": 65536}]}
+    monkeypatch.setattr(mc, "_get_json", _fake_get_json({"/models": payload}))
+    assert mc.cached_context_length("generic", "served", "http://x") is None
+    mc.list_models("generic", base_url="http://x")
+    assert mc.cached_context_length("generic", "served", "http://x") == 65536
+    assert mc.cached_context_length("generic", "SERVED", "http://x") == 65536
+    assert mc.cached_context_length("generic", "absent", "http://x") is None
+    assert mc.cached_context_length("generic", "served", "http://other") is None
 
 
 def test_google_requires_key(monkeypatch):

@@ -607,6 +607,30 @@ def _ask_chatgpt(s: dict) -> None:
         s["reasoning_effort"] = effort
 
 
+def _ask_max_context(s: dict, provider: str, base_url: str | None = None) -> None:
+    """Ask for a context cap, unless the catalog already knows the answer.
+
+    When the model listing was fetched (the explorer populates the cache) and
+    carries a context length, Swival rediscovers it at startup, so there is
+    nothing for the user to configure and the prompt is skipped.
+    """
+    from .model_catalog import cached_context_length
+
+    known = cached_context_length(provider, s["model"], base_url)
+    if known:
+        _console.print(
+            Text(
+                f"  Context window: {known:,} tokens, detected automatically.",
+                style="dim",
+            )
+        )
+        return
+
+    ctx = _prompt_int("Max context tokens (blank to skip)", default=None)
+    if ctx is not None:
+        s["max_context_tokens"] = ctx
+
+
 def _ask_openrouter(s: dict) -> None:
     idx = _prompt_choice(
         "Model",
@@ -622,9 +646,7 @@ def _ask_openrouter(s: dict) -> None:
 
     _ask_api_key(s, env_var="OPENROUTER_API_KEY")
 
-    ctx = _prompt_int("Max context tokens (blank to skip)", default=None)
-    if ctx is not None:
-        s["max_context_tokens"] = ctx
+    _ask_max_context(s, "openrouter")
 
 
 def _ask_google(s: dict) -> None:
@@ -653,9 +675,7 @@ def _ask_generic(s: dict) -> None:
 
     _ask_api_key(s, env_var="OPENAI_API_KEY")
 
-    ctx = _prompt_int("Max context tokens (blank to skip)", default=None)
-    if ctx is not None:
-        s["max_context_tokens"] = ctx
+    _ask_max_context(s, "generic", s["base_url"])
 
 
 def _ask_huggingface(s: dict) -> None:

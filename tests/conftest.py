@@ -73,6 +73,16 @@ def which_or_skip(name: str) -> str:
 
 
 @pytest.fixture(autouse=True)
+def _fresh_model_catalog_cache():
+    """The model-catalog cache is module-global; reset it around every test."""
+    from swival import model_catalog
+
+    model_catalog.clear_cache()
+    yield
+    model_catalog.clear_cache()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_global_skills(monkeypatch):
     """Prevent all tests from picking up real ~/.agents/skills/ or ~/.config/swival/skills/.
 

@@ -939,6 +939,9 @@ class TestAPIKeyResolution:
             ],
         )
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk_or_env")
+        monkeypatch.setattr(
+            "swival.model_catalog.catalog_context_length", lambda *a, **k: None
+        )
 
         captured = {}
 
@@ -974,6 +977,9 @@ class TestAPIKeyResolution:
         )
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk_or_env")
         monkeypatch.setattr(config, "load_config", lambda *a, **kw: {})
+        monkeypatch.setattr(
+            "swival.model_catalog.catalog_context_length", lambda *a, **k: None
+        )
 
         captured = {}
 
@@ -1225,6 +1231,97 @@ class TestDiscoverLlamacppContextLength:
     def test_unreachable_returns_none(self, monkeypatch):
         _patch_urlopen_error(monkeypatch)
         assert discover_llamacpp_context_length("http://h:8080", False) is None
+
+
+class TestOpenrouterContextFallback:
+    """The OpenRouter catalog fills in the context window when litellm can't."""
+
+    def _resolve(self, monkeypatch, litellm_ctx, catalog_ctx, max_context_tokens=None):
+        from swival import agent
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk_or_test")
+        monkeypatch.setattr(agent, "_litellm_context_length", lambda s: litellm_ctx)
+        seen = {}
+
+        def fake_catalog(provider, model_id, base_url=None, api_key=None, **kw):
+            seen["args"] = (provider, model_id, base_url, api_key)
+            return catalog_ctx
+
+        monkeypatch.setattr("swival.model_catalog.catalog_context_length", fake_catalog)
+        _, _, _, ctx, _ = resolve_provider(
+            "openrouter", "qwen/new-model", None, None, max_context_tokens, False
+        )
+        return ctx, seen
+
+    def test_catalog_fallback_when_litellm_unknown(self, monkeypatch):
+        ctx, seen = self._resolve(monkeypatch, litellm_ctx=None, catalog_ctx=262144)
+        assert ctx == 262144
+        assert seen["args"] == ("openrouter", "qwen/new-model", None, "sk_or_test")
+
+    def test_litellm_value_wins_over_catalog(self, monkeypatch):
+        ctx, seen = self._resolve(monkeypatch, litellm_ctx=100000, catalog_ctx=262144)
+        assert ctx == 100000
+        assert "args" not in seen
+
+    def test_explicit_max_context_tokens_wins(self, monkeypatch):
+        ctx, seen = self._resolve(
+            monkeypatch, litellm_ctx=None, catalog_ctx=262144, max_context_tokens=50000
+        )
+        assert ctx == 50000
+        assert "args" not in seen
+
+    def test_catalog_miss_leaves_context_unknown(self, monkeypatch):
+        ctx, seen = self._resolve(monkeypatch, litellm_ctx=None, catalog_ctx=None)
+        assert ctx is None
+        assert seen["args"] == ("openrouter", "qwen/new-model", None, "sk_or_test")
+
+    @pytest.mark.parametrize(
+        "model, expected",
+        [
+            ("qwen/new-model", 262144),
+            ("openrouter/cypher-alpha:free", 32768),  # OpenRouter's own namespace
+            ("openrouter/openrouter/cypher-alpha:free", 32768),  # litellm form
+        ],
+    )
+    def test_catalog_matches_every_id_spelling(self, monkeypatch, model, expected):
+        from swival import agent
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk_or_test")
+        monkeypatch.setattr(agent, "_litellm_context_length", lambda s: None)
+        _patch_urlopen_json(
+            monkeypatch,
+            {
+                "data": [
+                    {"id": "qwen/new-model", "context_length": 262144},
+                    {"id": "openrouter/cypher-alpha:free", "context_length": 32768},
+                ]
+            },
+        )
+        _, _, _, ctx, _ = resolve_provider("openrouter", model, None, None, None, False)
+        assert ctx == expected
+
+    def test_litellm_probe_uses_call_time_key(self, monkeypatch):
+        from swival import agent
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk_or_test")
+        calls = []
+
+        def fake_litellm(model_str):
+            calls.append(model_str)
+            return 40960
+
+        monkeypatch.setattr(agent, "_litellm_context_length", fake_litellm)
+        monkeypatch.setattr(
+            "swival.model_catalog.catalog_context_length",
+            lambda *a, **k: pytest.fail("catalog consulted despite litellm hit"),
+        )
+        _, _, _, ctx, _ = resolve_provider(
+            "openrouter", "openrouter/auto", None, None, None, False
+        )
+        assert ctx == 40960
+        # A single leading "openrouter/" is OpenRouter's namespace, exactly
+        # as _resolve_model_str reads it when building the completion call.
+        assert calls == ["openrouter/openrouter/auto"]
 
 
 class TestGenericProviderRouting:

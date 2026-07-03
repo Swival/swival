@@ -138,6 +138,45 @@ def list_models(
     return catalog
 
 
+def _context_for(entries: list[ModelEntry], model_id: str) -> int | None:
+    wanted = model_id.lower()
+    for e in entries:
+        if e.id.lower() == wanted:
+            return e.context_length
+    return None
+
+
+def cached_context_length(
+    provider: str, model_id: str, base_url: str | None = None
+) -> int | None:
+    """Context length for *model_id* from the already-fetched catalog.
+
+    Never touches the network: returns None when nothing is cached for
+    (provider, base_url) or the cached listing does not carry the model.
+    """
+    return _context_for(cached_entries(provider, base_url) or [], model_id)
+
+
+def catalog_context_length(
+    provider: str,
+    model_id: str,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    *,
+    timeout: float = 6.0,
+) -> int | None:
+    """Best-effort context length for *model_id* from the provider catalog.
+
+    Fetches the catalog (or reuses the cache) and returns the listed context
+    length, or None when the catalog is unavailable or does not carry it.
+    """
+    try:
+        catalog = list_models(provider, base_url, api_key, timeout=timeout)
+    except CatalogUnavailable:
+        return None
+    return _context_for(catalog.entries, model_id)
+
+
 def search_hf_models(
     query: str,
     api_key: str | None = None,
