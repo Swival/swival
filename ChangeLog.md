@@ -2,6 +2,13 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.36
+
+- Added a new `/model` REPL command for switching providers/models in-session. It can open an interactive picker, accept fuzzy direct model IDs, and fall back to direct entry when needed.
+- Model browsing now uses live provider catalogs (with per-provider favorites/recents), and selection state is remembered per-provider in `~/.config/swival/models.toml`. Try it with the Hugging Face Hub!
+- `/model --fav` can be used to favorite/unfavorite models and keep quick-reorder lists; `/model -` now reverts to the previous model for the current provider.
+- GLM image-rejection handling is more robust.
+
 ## 1.0.35
 
 - Added compatibility for litellm 1.90+ when using the ChatGPT provider.
