@@ -403,7 +403,7 @@ def run_metaskill(
     if not _check_starlark_available():
         return (
             "error: starlark runtime not installed. "
-            "Install with: pip install 'swival[metaskills]'"
+            "Install with: uv tool install 'swival[metaskills]'"
         )
 
     try:

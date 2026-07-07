@@ -117,6 +117,6 @@ Project-local skills are already inside normal sandbox roots, so they use standa
 
 A skill directory can also contain a program file (`SKILL.star`) that turns it into an Agent MetaSKILL — a dynamic workflow that runs bounded loops with nested model calls, command execution, and structured tracing. When a `SKILL.star` file is present (or the `metaskill` frontmatter field points to one), Swival exposes the `run_metaskill` tool alongside `use_skill`.
 
-MetaSKILLs use Starlark as their runtime language and expose three host functions: `ask()`, `command()`, and `trace()`. Execution requires the optional Starlark runtime (installed with `pip install 'swival[metaskills]'`); without it, these skills behave as ordinary static skills. Local metaskills execute by default; external metaskills require `--metaskills all` or `metaskills = "all"` in config.
+MetaSKILLs use Starlark as their runtime language and expose three host functions: `ask()`, `command()`, and `trace()`. Execution requires the optional Starlark runtime (installed with `uv tool install 'swival[metaskills]'`); without it, these skills behave as ordinary static skills. Local metaskills execute by default; external metaskills require `--metaskills all` or `metaskills = "all"` in config.
 
 See the [Agent MetaSKILLs specification](metaskills.md) for the full format, host API, budgets, and authoring guide.

@@ -11,10 +11,11 @@ of a task that should be repeatable, bounded, and easy to inspect.
 ## 0. Installation
 
 Metaskill execution needs the Starlark runtime, which ships as an optional
-extra so the base install stays lean:
+extra so the base install stays lean. Install it with the same tool you used
+to install Swival:
 
 ```sh
-pip install 'swival[metaskills]'
+uv tool install 'swival[metaskills]'
 ```
 
 Without it Swival still discovers metaskill-bearing skills, but treats them as
