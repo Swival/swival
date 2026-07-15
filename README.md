@@ -59,7 +59,7 @@ writes a starter config to `~/.config/swival/config.toml`.
 3. Install Swival (requires Python 3.13+):
 
 ```sh
-uv tool install swival
+uv tool install --python 3.14 swival
 ```
 
 On macOS you can also use Homebrew. Trust the tap first, then install:
@@ -87,7 +87,7 @@ That's it. Swival finds the model, connects, and goes to work.
    ```
 2. Install Swival:
    ```sh
-   uv tool install swival
+   uv tool install --python 3.14 swival
    ```
 3. Run (model is auto-discovered from the server):
    ```sh
@@ -100,7 +100,7 @@ The default base URL is `http://127.0.0.1:8080`. Override with `--base-url`.
 
 ```sh
 export HF_TOKEN=hf_...
-uv tool install swival
+uv tool install --python 3.14 swival
 swival "Refactor the error handling in src/api.py" \
     --provider huggingface --model zai-org/GLM-5.2
 ```
@@ -111,7 +111,7 @@ You can also point it at a dedicated endpoint with `--base-url` and `--api-key`.
 
 ```sh
 export OPENROUTER_API_KEY=sk_or_...
-uv tool install swival
+uv tool install --python 3.14 swival
 swival "Refactor the error handling in src/api.py" \
     --provider openrouter --model z-ai/glm-5.2
 ```
@@ -120,7 +120,7 @@ swival "Refactor the error handling in src/api.py" \
 
 ```sh
 export GEMINI_API_KEY=...
-uv tool install swival
+uv tool install --python 3.14 swival
 swival "Refactor the error handling in src/api.py" \
     --provider google --model gemini-2.5-flash
 ```
@@ -133,7 +133,7 @@ manage. `--provider vertexai` is accepted as an alias.
 
 ```sh
 gcloud auth application-default login
-uv tool install swival
+uv tool install --python 3.14 swival
 swival "Refactor the error handling in src/api.py" \
     --provider geap \
     --gcp-project my-gcp-project \
@@ -150,7 +150,7 @@ Use OpenAI models through your existing ChatGPT Plus or Pro subscription -- no
 API key needed.
 
 ```sh
-uv tool install swival
+uv tool install --python 3.14 swival
 swival "Refactor the error handling in src/api.py" \
     --provider chatgpt --model gpt-5.5
 ```
@@ -305,7 +305,7 @@ Audit](docs.md/audit.md) for the full flag reference.
 **Skills, MetaSKILLs, MCP, ACP, and A2A.** Extend the agent with SKILL.md-based
 skills for reusable workflows, write dynamic skill programs in a safe Python
 subset with [MetaSKILLs](docs.md/metaskills.md) (optional extra, install with
-`uv tool install 'swival[metaskills]'`), connect to external tools via
+`uv tool install --python 3.14 'swival[metaskills]'`), connect to external tools via
 the Model Context Protocol, plug into editors via the Agent Client Protocol,
 and talk to remote agents via the Agent-to-Agent (A2A) protocol.
 

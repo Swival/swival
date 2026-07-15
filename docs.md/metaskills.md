@@ -15,7 +15,7 @@ extra so the base install stays lean. Install it with the same tool you used
 to install Swival:
 
 ```sh
-uv tool install 'swival[metaskills]'
+uv tool install --python 3.14 'swival[metaskills]'
 ```
 
 Without it Swival still discovers metaskill-bearing skills, but treats them as

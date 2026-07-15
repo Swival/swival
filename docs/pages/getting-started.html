@@ -105,8 +105,8 @@
 <pre><code class="language-sh">curl -LsSf https://astral.sh/uv/install.sh | sh
 </code></pre>
 <h2 id="installation">Installation</h2>
-<p>Install the CLI with <code>uv tool install swival</code>. This places the <code>swival</code> command on your <code>PATH</code>, so you can run it from any directory.</p>
-<pre><code class="language-sh">uv tool install swival
+<p>Install the CLI with <code>uv tool install --python 3.14 swival</code>. This places the <code>swival</code> command on your <code>PATH</code>, so you can run it from any directory. The <code>--python 3.14</code> flag makes uv download a compatible Python if the system one is older.</p>
+<pre><code class="language-sh">uv tool install --python 3.14 swival
 </code></pre>
 <h3 id="homebrew-macos">Homebrew (macOS)</h3>
 <p>On macOS you can also install through the Homebrew tap. Trust the tap first, then install:</p>
