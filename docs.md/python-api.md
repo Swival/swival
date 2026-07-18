@@ -52,6 +52,7 @@ Session(
     skills_dir: list[str] | None = None,
     allowed_dirs: list[str] | None = None,
     allowed_dirs_ro: list[str] | None = None,
+    network: str = "full",  # "full", "provider-only", or "none"
     sandbox: str = "builtin",
     sandbox_session: str | None = None,
     sandbox_strict_read: bool = False,
@@ -122,6 +123,7 @@ All parameters are keyword-only. The important ones:
 | `files`                 | Filesystem access policy: `"some"` (workspace only, the default), `"all"` (unrestricted), or `"none"` (`.swival/` only).                                                                                                                                                               |
 | `commands`              | Command execution policy: `"all"` (unrestricted, the default), `"none"` (disabled), `"ask"` (interactive approval), or a list of whitelisted command names. With `"all"`, both `run_command` and `run_shell_command` are available. Ask and whitelist modes expose only `run_command`. |
 | `yolo`                  | Shorthand for `files="all"`. Explicit `files` takes precedence.                                                                                                                                                                                                                        |
+| `network`               | Network policy. `"provider-only"` is fully enforceable from the library: agent subprocesses are wrapped in `nono run --block-net` at dispatch time (requires the `nono` binary), and `fetch_url` plus remote MCP/A2A are disabled. `"none"` is different — `Session` never re-executes its host process, so it requires the `command` provider and is only accepted when the process already runs inside nono with the network verifiably blocked (launch it with `nono run --block-net -- python my_agent.py`; the capability file is checked, so a wrapper without `--block-net` is refused). Otherwise it raises rather than pretending to be air-gapped. |
 | `system_prompt`         | Override the default system prompt.                                                                                                                                                                                                                                                    |
 | `mcp_servers`           | MCP server configurations (see [MCP](mcp.html)).                                                                                                                                                                                                                                       |
 | `a2a_servers`           | A2A server configurations (see [A2A](a2a.html)).                                                                                                                                                                                                                                       |

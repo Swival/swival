@@ -4105,6 +4105,8 @@ def handle_tool_call(
     metaskill_loop_kwargs=None,
     cancel_flag=None,
     enabled_metaskills=None,
+    network_mode="full",
+    net_jail=None,
 ):
     """Execute a single tool call and return (tool_msg, metadata).
 
@@ -4213,6 +4215,8 @@ def handle_tool_call(
                 metaskill_loop_kwargs=metaskill_loop_kwargs,
                 cancel_flag=cancel_flag,
                 enabled_metaskills=enabled_metaskills,
+                network_mode=network_mode,
+                net_jail=net_jail,
             )
     except McpShutdownError:
         result = "error: MCP server is shutting down"
@@ -6470,6 +6474,15 @@ def build_parser():
         help="Disable read-before-write guard (allow writing files without reading them first).",
     )
     access_group.add_argument(
+        "--network",
+        choices=["full", "provider-only", "none"],
+        default=_UNSET,
+        help='Network policy: "full" (default), "provider-only" (model provider '
+        "reachable, agent commands/python/MCP subprocesses are network-blocked "
+        'via nono), or "none" (air-gapped under nono --block-net, command '
+        "provider only).",
+    )
+    access_group.add_argument(
         "--sandbox",
         choices=["builtin", "agentfs", "nono"],
         default=_UNSET,
@@ -7101,6 +7114,8 @@ def main():
     # Capture explicitness before apply_config_to_args sweeps _UNSET → defaults
     _files_explicit = args.files is not _UNSET
     _commands_explicit = args.commands is not _UNSET
+    _network_cli = args.network is not _UNSET
+    _sandbox_cli = args.sandbox is not _UNSET
     apply_config_to_args(args, file_config)
     # Config may have set them explicitly too
     args._files_explicit = _files_explicit or "files" in file_config
@@ -7170,6 +7185,38 @@ def main():
         parser.error("--reviewer is incompatible with --repl")
 
     fmt.init(color=args.color, no_color=args.no_color)
+
+    from .sandbox_nono import (
+        maybe_reexec as nono_maybe_reexec,
+        is_inside_nono,
+        verify_net_blocked,
+        get_nono_version,
+        effective_profile as nono_effective_profile,
+    )
+
+    # Network policy: resolve before sandbox validation and re-exec.
+    # Under "none" this runs again in the nono child, so it must stay repeatable.
+    try:
+        _network_error, _network_diag = _resolve_network_policy(
+            args,
+            base_dir,
+            network_cli=_network_cli,
+            sandbox_cli=_sandbox_cli,
+            sandbox_config="sandbox" in file_config,
+        )
+    except ConfigError as e:
+        parser.error(str(e))
+    if _network_error:
+        parser.error(_network_error)
+    # The nono child re-runs this path under "none"; only the parent prints.
+    if args.verbose and not is_inside_nono():
+        if _network_diag:
+            fmt.info(_network_diag)
+        if args.network == "provider-only":
+            fmt.info(
+                "Network: provider-only "
+                "(agent subprocesses are network-blocked via nono)"
+            )
 
     # Validation: --sandbox-session requires --sandbox agentfs
     if args.sandbox_session is not None and args.sandbox != "agentfs":
@@ -7243,13 +7290,6 @@ def main():
 
     # nono sandbox: re-exec inside nono if requested.
     # This replaces the current process on success (does not return).
-    from .sandbox_nono import (
-        maybe_reexec as nono_maybe_reexec,
-        is_inside_nono,
-        get_nono_version,
-        effective_profile as nono_effective_profile,
-    )
-
     nono_maybe_reexec(
         sandbox=args.sandbox,
         base_dir=str(Path(args.base_dir).resolve()),
@@ -7264,6 +7304,17 @@ def main():
         audit_integrity=args.nono_audit_integrity,
     )
 
+    # maybe_reexec does nothing when an outer `nono run` already wraps us,
+    # so at this point the offline promise rests entirely on that sandbox's
+    # policy.
+    if args.sandbox == "nono" and args.nono_block_net:
+        try:
+            verify_net_blocked(
+                "--network none" if args.network == "none" else "--nono-block-net"
+            )
+        except ConfigError as e:
+            parser.error(str(e))
+
     if args.sandbox == "nono" and is_inside_nono() and args.verbose:
         # Never print credential/proxy env values — they carry live secrets.
         parts = ["Sandbox: nono"]
@@ -7271,6 +7322,8 @@ def main():
         if version:
             parts.append(f"(v{version})")
         parts.append(f"profile={nono_effective_profile(args.nono_profile)}")
+        if args.nono_block_net:
+            parts.append("network=offline")
         if args.nono_rollback:
             parts.append("rollback=on")
         fmt.info(" ".join(parts))
@@ -7445,6 +7498,8 @@ def main():
                 else None
             ),
             nono_rollback=args.nono_rollback,
+            nono_block_net=args.nono_block_net,
+            network_mode=args.network,
             mode=mode,
         )
         try:
@@ -7936,14 +7991,26 @@ def build_tools(
     goal_tools: bool = False,
     metaskill_names: list[str] | None = None,
     python_tool: bool = False,
+    network: str = "full",
 ) -> list:
     """Construct the tools list from base + conditionals.
 
     ``goal_tools`` registers ``complete_goal`` when True. The normal path leaves
     it out until the user starts `/goal`; subagents also keep it disabled since
     v1 keeps goals parent-session-only.
+
+    A restricted ``network`` mode omits ``fetch_url`` from the schema. The
+    real enforcement lives in nono and in the ``dispatch()`` guard; the
+    filter just keeps the model from burning turns on a tool that cannot
+    succeed.
     """
     tools = list(TOOLS)
+    if network != "full":
+        from .tools import NETWORK_TOOLS
+
+        tools = [
+            t for t in tools if t.get("function", {}).get("name") not in NETWORK_TOOLS
+        ]
     if goal_tools:
         from .tools import GOAL_TOOLS
 
@@ -8345,8 +8412,133 @@ def _show_sandbox_review_hint(args) -> None:
         fmt.sandbox_hint(f"Review changes: {rollback_hint()}")
 
 
+def _resolve_network_policy(
+    args,
+    base_dir,
+    *,
+    network_cli: bool,
+    sandbox_cli: bool,
+    sandbox_config: bool,
+) -> tuple[str | None, str | None]:
+    """Resolve the network mode against the sandbox, provider, and integrations.
+
+    Mutates ``args`` only: under ``none`` it coerces ``args.sandbox`` to
+    ``"nono"`` when offline wins the sandbox selection and sets
+    ``args.nono_block_net``. Returns ``(error, diagnostic)`` where ``error``
+    is an actionable message for ``parser.error()`` and ``diagnostic`` a
+    verbose note about a replaced file-config sandbox. Under ``none`` this
+    runs again in the re-exec'd child, so it must stay deterministic and
+    free of other side effects.
+    """
+    mode = args.network
+    if mode == "full":
+        return None, None
+
+    what = (
+        f"--network {mode}" if network_cli else f'config sets network = "{mode}", which'
+    )
+
+    diagnostic = None
+    if mode == "none":
+        if args.sandbox != "nono":
+            if sandbox_cli:
+                return (
+                    f"{what} requires the nono sandbox; remove the CLI "
+                    f"--sandbox {args.sandbox} or pass --network full",
+                    None,
+                )
+            if sandbox_config:
+                diagnostic = (
+                    f'network = "none" replaced the configured sandbox '
+                    f"{args.sandbox!r} with 'nono'"
+                )
+            args.sandbox = "nono"
+        args.nono_block_net = True
+
+        if args.nono_allow_domain:
+            return (
+                f"{what} cannot be combined with --nono-allow-domain; "
+                f"use the nono allowlist without a network restriction",
+                diagnostic,
+            )
+        if args.nono_network_profile:
+            return (
+                f"{what} cannot be combined with --nono-network-profile; "
+                f"network profiles grant outbound access",
+                diagnostic,
+            )
+        if args.nono_credential:
+            return (
+                f"{what} cannot be combined with --nono-credential; "
+                f"credential injection uses the network proxy",
+                diagnostic,
+            )
+
+        if args.provider != "command":
+            return (
+                f"{what} requires the command provider; "
+                f'provider "{args.provider}" needs network access. '
+                f"For hosted or local HTTP providers use --network provider-only",
+                diagnostic,
+            )
+
+        if getattr(args, "serve", False):
+            return (
+                f"{what} cannot be used with --serve; "
+                f"the A2A server needs a listening socket",
+                diagnostic,
+            )
+    else:  # provider-only
+        if args.sandbox == "nono":
+            return (
+                f"{what} is incompatible with --sandbox nono; agent commands "
+                f"would need to nest nono inside nono. Use --sandbox builtin "
+                f"or agentfs, or --network none for an air-gapped run",
+                None,
+            )
+        from .sandbox_nono import check_wrapper_available
+
+        try:
+            check_wrapper_available()
+        except ConfigError as e:
+            return str(e), None
+
+    from .config import first_remote_integration
+
+    remote = first_remote_integration(
+        None
+        if getattr(args, "no_mcp", False)
+        else _resolve_mcp_servers(args, base_dir),
+        None if getattr(args, "no_a2a", False) else _resolve_a2a_servers(args),
+    )
+    if remote is not None:
+        kind, name = remote
+        if kind == "mcp":
+            return (
+                f"{what} is incompatible with URL-backed MCP server "
+                f"{name!r}; remove it or pass --no-mcp",
+                diagnostic,
+            )
+        return (
+            f"{what} is incompatible with A2A server {name!r}; "
+            f"remove it or pass --no-a2a",
+            diagnostic,
+        )
+
+    return None, diagnostic
+
+
 def _resolve_mcp_servers(args, base_dir) -> dict | None:
-    """Resolve MCP server configs from TOML + JSON sources. Returns merged dict or None."""
+    """Resolve MCP server configs from TOML + JSON sources. Returns merged dict or None.
+
+    The merged result is cached on ``args`` so early network-policy
+    validation and the later setup paths resolve the configuration only once
+    per process.
+    """
+    cached = getattr(args, "_resolved_mcp_servers", _UNSET)
+    if cached is not _UNSET:
+        return cached
+
     from .config import load_mcp_json, merge_mcp_configs
 
     toml_servers = getattr(args, "_mcp_servers_toml", None)
@@ -8363,11 +8555,20 @@ def _resolve_mcp_servers(args, base_dir) -> dict | None:
         if default_mcp.is_file():
             json_servers = load_mcp_json(default_mcp)
 
-    return merge_mcp_configs(toml_servers, json_servers) or None
+    result = merge_mcp_configs(toml_servers, json_servers) or None
+    args._resolved_mcp_servers = result
+    return result
 
 
 def _resolve_a2a_servers(args) -> dict | None:
-    """Resolve A2A server configs from TOML + config file. Returns merged dict or None."""
+    """Resolve A2A server configs from TOML + config file. Returns merged dict or None.
+
+    Cached on ``args`` for the same reason as ``_resolve_mcp_servers``.
+    """
+    cached = getattr(args, "_resolved_a2a_servers", _UNSET)
+    if cached is not _UNSET:
+        return cached
+
     a2a_servers = getattr(args, "_a2a_servers_toml", None) or {}
 
     a2a_config_path = getattr(args, "a2a_config", None)
@@ -8381,7 +8582,9 @@ def _resolve_a2a_servers(args) -> dict | None:
         file_servers.update(a2a_servers)
         a2a_servers = file_servers
 
-    return a2a_servers or None
+    result = a2a_servers or None
+    args._resolved_a2a_servers = result
+    return result
 
 
 def _validate_external_command(cmd_string: str, label: str) -> None:
@@ -8584,6 +8787,22 @@ def _run_main(args, report, _write_report, parser):
             skills_catalog, _metaskills_policy_val
         )
 
+    _network_mode = args.network
+
+    # Network jail for agent subprocesses (network = "provider-only"):
+    # a nono run --block-net prefix built once and threaded down to every
+    # command/python/MCP-stdio launch. The read grants must mirror what
+    # the file tools allow, external skill directories included.
+    net_jail = None
+    if _network_mode == "provider-only":
+        from .sandbox_nono import build_block_net_wrapper
+
+        net_jail = build_block_net_wrapper(
+            base_dir=base_dir,
+            add_dirs=allowed_dirs,
+            read_dirs=skill_read_roots,
+        )
+
     tools = build_tools(
         resolved_commands,
         skills_catalog,
@@ -8592,6 +8811,7 @@ def _run_main(args, report, _write_report, parser):
         subagents=_subagents,
         metaskill_names=_metaskill_names,
         python_tool=_python_tool,
+        network=_network_mode,
     )
 
     # Initialize MCP servers
@@ -8606,6 +8826,7 @@ def _run_main(args, report, _write_report, parser):
                 mcp_servers,
                 verbose=args.verbose,
                 flatten_schemas=getattr(args, "flatten_mcp_schemas", True),
+                net_jail=net_jail,
             )
             # start() connects to servers; individual connection failures
             # are logged and skipped (non-fatal), but ConfigError from
@@ -8790,6 +9011,8 @@ def _run_main(args, report, _write_report, parser):
         metaskills_policy=_metaskills_policy_val,
         enabled_metaskills=set(_metaskill_names or []),
         storm_breaker_enabled=getattr(args, "storm_breaker", True),
+        network_mode=_network_mode,
+        net_jail=net_jail,
     )
 
     # Validate and thread llm_filter
@@ -9216,6 +9439,8 @@ def run_agent_loop(
     repl_input_text: str | None = None,
     storm_breaker_enabled: bool = True,
     session: object | None = None,
+    network_mode: str = "full",
+    net_jail: list | None = None,
 ) -> tuple[str | None, bool]:
     """Run the tool-calling loop until a final answer or max turns.
 
@@ -9301,6 +9526,8 @@ def run_agent_loop(
         "tools": tools,
         "metaskills_policy": metaskills_policy,
         "enabled_metaskills": enabled_metaskills or set(),
+        "network_mode": network_mode,
+        "net_jail": net_jail,
     }
 
     # Goal-loop bookkeeping. last_turn_was_goal_continuation tracks whether the
@@ -9479,6 +9706,8 @@ def run_agent_loop(
             metaskill_loop_kwargs=_metaskill_loop_kwargs,
             cancel_flag=cancel_flag,
             enabled_metaskills=enabled_metaskills,
+            network_mode=network_mode,
+            net_jail=net_jail,
         )
         llm_kwargs = {
             **llm_kwargs,
@@ -10505,6 +10734,8 @@ def run_agent_loop(
                 metaskill_loop_kwargs=_metaskill_loop_kwargs,
                 cancel_flag=cancel_flag,
                 enabled_metaskills=enabled_metaskills,
+                network_mode=network_mode,
+                net_jail=net_jail,
             )
             messages.append(tool_msg)
 
@@ -13537,6 +13768,8 @@ def repl_loop(
     enabled_metaskills: set | None = None,
     storm_breaker_enabled: bool = True,
     session: object | None = None,
+    network_mode: str = "full",
+    net_jail: list | None = None,
 ):
     """Interactive read-eval-print loop."""
     from prompt_toolkit import PromptSession
@@ -13764,6 +13997,8 @@ def repl_loop(
         enabled_metaskills=enabled_metaskills,
         storm_breaker_enabled=storm_breaker_enabled,
         session=session,
+        network_mode=network_mode,
+        net_jail=net_jail,
     )
     _refresh_toolbar_state()
 

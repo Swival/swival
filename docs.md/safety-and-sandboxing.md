@@ -106,6 +106,30 @@ nono run --allow . -- python my_agent.py
 
 Inside that wrapped process, `Session(sandbox="nono")` detects the sandbox and proceeds; outside it, the session fails fast with a clear error rather than running unsandboxed.
 
+## Network Access Modes
+
+`--network` (config key `network`) is a top-level policy that separates the model transport from agent-controlled network access. It has three modes.
+
+`full` is the default and today's behavior: no network restrictions beyond whatever sandbox you chose.
+
+`provider-only` is the practical restricted mode. Swival's own process keeps normal network access, so provider calls work unchanged — hosted APIs, LM Studio, llama.cpp, anything. What changes is the agent's reach: every subprocess the agent can start (`run_command`, `run_shell_command`, the python tool, stdio MCP servers, and anything those spawn) is launched through `nono run --block-net`, so the operating system denies its entire subtree any outbound connection, loopback included. In-process network capability is removed at the application layer: `fetch_url` disappears from the tool schema and is rejected by dispatch even if the model hallucinates it, and URL-backed MCP servers and A2A clients are refused at startup. The result is an agent that can talk to its model but cannot browse, download, or exfiltrate through commands.
+
+```sh
+swival --network provider-only --provider openrouter --model qwen/qwen3-coder "Review this repo"
+```
+
+`provider-only` composes with `--sandbox builtin` (the default) and `--sandbox agentfs`, which keep owning filesystem policy. It cannot be combined with `--sandbox nono` (the wrapper would have to nest nono inside nono) and cannot run inside an external `nono run` wrapper for the same reason. Wrapped commands get the same filesystem grants a full nono run would give them — the base directory, `--add-dir` paths, temp directories, and nono's standard runtime allowances — which also means nono's built-in credential protections (`~/.ssh` and friends) apply inside them.
+
+`none` is the air-gapped expert mode. The entire Swival process tree is re-executed under `nono --block-net`: no DNS, no public hosts, no loopback, enforced by the OS for Swival itself and every child. Because that includes the provider call, only the `command` provider — a local model process speaking over stdin/stdout — is compatible. `--serve`, remote MCP/A2A, and the nono proxy flags (`--nono-allow-domain`, `--nono-network-profile`, `--nono-credential`) are rejected up front. The air gap is verified, not assumed: if you wrap Swival in `nono run` yourself instead of letting it re-exec, startup checks nono's capability file and fails unless the surrounding sandbox really was started with `--block-net`.
+
+```sh
+swival --network none --provider command --model "llama-cli -m /models/model.gguf --simple-io" "Summarize this codebase"
+```
+
+A `network` value inherited from a config file is treated as security policy: combining it with an incompatible CLI `--sandbox` choice is an error rather than a silent downgrade, and the explicit escape hatch is passing `--network full` (or `provider-only`) yourself.
+
+Two honest limitations. First, the boundary is what the agent executes *during* the run: code the agent wrote and you run later, or a lifecycle hook that executes agent-modified project files, is outside it. Lifecycle hooks, reviewers, and command middleware are user-authored configuration and run unwrapped. Second, on macOS, name resolution goes through the system's mDNSResponder daemon, so DNS lookups may appear to succeed inside a blocked sandbox — but no connection to any resolved address can be made.
+
 ## Base Directory Enforcement
 
 All filesystem operations are anchored to `--base-dir`, which defaults to the auto-detected project root (the nearest ancestor directory containing `.git` or `swival.toml`, falling back to the directory you launched from). Path checks resolve both the base directory and target path through symlinks, then verify that the resolved target remains inside an allowed root. If a path escapes through traversal or symlink indirection, the operation fails.

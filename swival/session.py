@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import tools
 from .agent import _InteractionPolicy, _apply_interaction_policy
-from .config import _UNSET
+from .config import _UNSET, NETWORK_MODES, first_remote_integration
 from .goal import GoalState
 from .report import ConfigError, ReportCollector
 from .snapshot import SnapshotState
@@ -78,6 +78,7 @@ class Session:
         skills_dir: list[str] | None = None,
         allowed_dirs: list[str] | None = None,
         allowed_dirs_ro: list[str] | None = None,
+        network: str = "full",
         sandbox: str = "builtin",
         sandbox_session: str | None = None,
         sandbox_strict_read: bool = False,
@@ -165,6 +166,12 @@ class Session:
         self.skills_dir = skills_dir or []
         self.allowed_dirs = allowed_dirs or []
         self.allowed_dirs_ro = allowed_dirs_ro or []
+        if network not in NETWORK_MODES:
+            raise ConfigError(
+                f"'network' must be one of {NETWORK_MODES!r}, got {network!r}"
+            )
+        self.network = network
+        self._net_jail: list[str] | None = None
         self.sandbox = sandbox
         self.sandbox_session = sandbox_session
         self.sandbox_strict_read = sandbox_strict_read
@@ -270,15 +277,68 @@ class Session:
 
             fmt.init()
 
+        # Network policy. Session never bootstraps a sandbox, so "none" is
+        # only honest when the process already runs inside nono with the
+        # network provably blocked (the CLI re-exec or an external
+        # `nono run --block-net` wrapper — the capability file records the
+        # policy, and a wrapper without --block-net fails closed here).
+        # "provider-only" is enforced in-library: agent subprocesses are
+        # wrapped at dispatch time, so it works from any Python process with
+        # nono installed. Checked before sandbox availability so
+        # configuration contradictions surface regardless of the host
+        # environment.
+        if self.network == "none":
+            from .sandbox_nono import is_inside_nono, verify_net_blocked
+
+            if self.provider != "command":
+                raise ConfigError(
+                    'network="none" requires the command provider; provider '
+                    f"{self.provider!r} needs network access. For hosted or "
+                    'local HTTP providers use network="provider-only".'
+                )
+            if not is_inside_nono():
+                raise ConfigError(
+                    'network="none" requires an OS-level sandbox that Session '
+                    "cannot bootstrap. Use the CLI (swival --network none) for "
+                    "automatic re-exec, or wrap your process with "
+                    "`nono run --block-net` externally."
+                )
+            verify_net_blocked('network="none"')
+        elif self.network == "provider-only":
+            if self.sandbox == "nono":
+                raise ConfigError(
+                    'network="provider-only" is incompatible with '
+                    'sandbox="nono"; agent commands would need to nest nono '
+                    "inside nono"
+                )
+            from .sandbox_nono import check_wrapper_available
+
+            check_wrapper_available()
+
+        if self.network != "full":
+            remote = first_remote_integration(self.mcp_servers, self.a2a_servers)
+            if remote is not None:
+                kind, name = remote
+                label = "URL-backed MCP server" if kind == "mcp" else "A2A server"
+                raise ConfigError(
+                    f'network="{self.network}" is incompatible with '
+                    f"{label} {name!r}; remove it"
+                )
+
         if self.sandbox == "agentfs":
             from .sandbox_agentfs import check_sandbox_available
 
             check_sandbox_available()
 
         if self.sandbox == "nono":
-            from .sandbox_nono import check_sandbox_available
+            from .sandbox_nono import check_sandbox_available, verify_net_blocked
 
             check_sandbox_available()
+            # nono_block_net is a claim about the external wrapper that the
+            # report repeats as sandbox.network = "offline"; don't take it
+            # on faith.
+            if self.nono_block_net:
+                verify_net_blocked("nono_block_net=True")
 
         from .agent import (
             resolve_provider,
@@ -373,6 +433,18 @@ class Session:
                 if not skill.is_local and skill.path not in self._allowed_dir_ro_paths:
                     self._allowed_dir_ro_paths.append(skill.path)
 
+        # Build the provider-only jail only after skill discovery: its read
+        # grants must include external skill directories, or wrapped
+        # subprocesses cannot read skill files the file tools allow.
+        if self.network == "provider-only":
+            from .sandbox_nono import build_block_net_wrapper
+
+            self._net_jail = build_block_net_wrapper(
+                base_dir=self.base_dir,
+                add_dirs=list(self._allowed_dir_paths),
+                read_dirs=list(self._allowed_dir_ro_paths),
+            )
+
         # Resolve metaskills
         self._metaskills_policy = self.metaskills if self.metaskills != "off" else "off"
         self._metaskill_names: list[str] = []
@@ -391,6 +463,7 @@ class Session:
             shell_allowed=self._shell_allowed,
             subagents=self.subagents,
             metaskill_names=self._metaskill_names,
+            network=self.network,
         )
 
         # Initialize MCP servers
@@ -401,6 +474,7 @@ class Session:
                 self.mcp_servers,
                 verbose=self.verbose,
                 flatten_schemas=self.flatten_mcp_schemas,
+                net_jail=self._net_jail,
             )
             self._mcp_manager.start()
             mcp_tools = self._mcp_manager.list_tools()
@@ -597,6 +671,8 @@ class Session:
             enabled_metaskills=set(self._metaskill_names or []),
             storm_breaker_enabled=self.storm_breaker,
             session=self,
+            network_mode=self.network,
+            net_jail=self._net_jail,
         )
         if state.get("compaction_state") is not None:
             kwargs["compaction_state"] = state["compaction_state"]
@@ -716,6 +792,8 @@ class Session:
                 nono_version=nono_version,
                 nono_profile=self.nono_profile,
                 nono_rollback=self.nono_rollback,
+                nono_block_net=self.nono_block_net,
+                network_mode=self.network,
             )
 
         return Result(

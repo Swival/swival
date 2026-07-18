@@ -141,6 +141,7 @@ print(answer)
     skills_dir: list[str] | None = None,
     allowed_dirs: list[str] | None = None,
     allowed_dirs_ro: list[str] | None = None,
+    network: str = &quot;full&quot;,  # &quot;full&quot;, &quot;provider-only&quot;, or &quot;none&quot;
     sandbox: str = &quot;builtin&quot;,
     sandbox_session: str | None = None,
     sandbox_strict_read: bool = False,
@@ -259,6 +260,10 @@ print(answer)
 <tr>
 <td><code>yolo</code></td>
 <td>Shorthand for <code>files="all"</code>. Explicit <code>files</code> takes precedence.</td>
+</tr>
+<tr>
+<td><code>network</code></td>
+<td>Network policy. <code>"provider-only"</code> is fully enforceable from the library: agent subprocesses are wrapped in <code>nono run --block-net</code> at dispatch time (requires the <code>nono</code> binary), and <code>fetch_url</code> plus remote MCP/A2A are disabled. <code>"none"</code> is different — <code>Session</code> never re-executes its host process, so it requires the <code>command</code> provider and is only accepted when the process already runs inside nono with the network verifiably blocked (launch it with <code>nono run --block-net -- python my_agent.py</code>; the capability file is checked, so a wrapper without <code>--block-net</code> is refused). Otherwise it raises rather than pretending to be air-gapped.</td>
 </tr>
 <tr>
 <td><code>system_prompt</code></td>

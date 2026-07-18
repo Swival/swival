@@ -11,6 +11,7 @@ the process early in startup, plus detection helpers.  It does not route
 through the unused ``SandboxBackend`` interface.
 """
 
+import json
 import os
 import re
 import shutil
@@ -94,6 +95,42 @@ def is_inside_nono() -> bool:
     return _has_nono_env()
 
 
+def is_net_blocked() -> bool:
+    """Return True if the surrounding nono sandbox provably blocks the network.
+
+    nono writes its effective policy to the capability file that
+    ``NONO_CAP_FILE`` points at; ``net_blocked`` is true only when the
+    sandbox was started with ``--block-net``.  The marker alone proves
+    nothing about network policy, so an externally wrapped ``nono run``
+    without ``--block-net`` must not pass for an air gap.  Anything short
+    of positive proof — no marker, unreadable file, missing key — returns
+    False so offline claims fail closed.
+    """
+    cap_path = os.environ.get(_NONO_ENV)
+    if not cap_path:
+        return False
+    try:
+        with open(cap_path, encoding="utf-8") as fh:
+            cap = json.load(fh)
+    except (OSError, ValueError):
+        return False
+    return isinstance(cap, dict) and cap.get("net_blocked") is True
+
+
+def verify_net_blocked(claim: str) -> None:
+    """Raise ConfigError unless the surrounding sandbox provably blocks the net.
+
+    *claim* names whatever promised the air gap (a CLI flag, a Session
+    kwarg) so the message points at the caller's own configuration.
+    """
+    if not is_net_blocked():
+        raise ConfigError(
+            f"{claim} requires the surrounding nono sandbox to block the "
+            "network, but its capability file does not record --block-net. "
+            "Re-run the outer `nono run` with --block-net."
+        )
+
+
 def _has_swival_marker() -> bool:
     return os.environ.get(_ENV_MARKER) == "1"
 
@@ -113,15 +150,23 @@ def _append_resolved_unique(
         paths.append(resolved)
 
 
-def _find_nono() -> str:
-    """Locate the nono binary. Raises ConfigError if not found."""
+def _find_nono(missing_error: str | None = None) -> str:
+    """Locate the nono binary. Raises ConfigError with *missing_error*
+    (or a --sandbox-flavored default) if not found."""
     path = shutil.which("nono")
     if path is None:
         raise ConfigError(
-            "nono binary not found on PATH. "
+            missing_error
+            or "nono binary not found on PATH. "
             "Install nono (https://nono.sh) or use --sandbox builtin."
         )
     return path
+
+
+_WRAPPER_MISSING_NONO = (
+    'network = "provider-only" requires the nono binary to sandbox '
+    "agent commands. Install nono (https://nono.sh) or use --network full."
+)
 
 
 def probe_nono(nono_bin: str) -> dict:
@@ -276,6 +321,7 @@ def build_nono_argv(
     audit_integrity: bool = False,
     read_dirs: list[str] | None = None,
     extra_allow_dirs: list[str] | None = None,
+    silent: bool = False,
     swival_argv: list[str],
 ) -> list[str]:
     """Build the full argv for re-execing Swival inside ``nono run``.
@@ -288,6 +334,8 @@ def build_nono_argv(
     config/state directories are reachable inside the sandbox.
     """
     argv = [nono_bin, "run"]
+    if silent:
+        argv.append("--silent")
 
     resolved_base = str(Path(base_dir).resolve())
     argv.extend(["--allow", resolved_base])
@@ -388,6 +436,53 @@ def maybe_reexec(
         env.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
     os.execvpe(argv[0], argv, env)
+
+
+def build_block_net_wrapper(
+    *,
+    base_dir: str,
+    add_dirs: list[str] | None = None,
+    read_dirs: list[str] | None = None,
+) -> list[str]:
+    """Build the ``nono run`` prefix that network-jails agent subprocesses.
+
+    Used by ``network = "provider-only"``: the Swival process keeps its
+    normal network access for provider calls, while every agent-initiated
+    subprocess (commands, shell, python tool, stdio MCP servers) is launched
+    through this prefix so its entire subtree runs under ``--block-net``.
+
+    The returned argv ends with ``--``; callers append the payload command.
+    Filesystem grants mirror the full nono re-exec (base dir, extra dirs,
+    temp dirs, Python runtime, and the built-in ``swival`` profile) because
+    this layer is only meant to restrict the network. ``--silent`` keeps
+    nono's banner and summary out of captured tool output, and denials fail
+    closed because wrapped children never have a TTY to prompt on.
+    """
+    return build_nono_argv(
+        nono_bin=_find_nono(_WRAPPER_MISSING_NONO),
+        base_dir=base_dir,
+        add_dirs=list(add_dirs or []),
+        block_net=True,
+        read_dirs=_runtime_read_paths() + list(read_dirs or []),
+        silent=True,
+        swival_argv=[],
+    )
+
+
+def check_wrapper_available() -> None:
+    """Raise ConfigError unless the block-net child wrapper can work here.
+
+    ``network = "provider-only"`` needs a nono binary to jail agent
+    subprocesses, and it cannot run inside an existing nono sandbox because
+    the wrapper would have to nest nono inside nono.
+    """
+    if is_inside_nono():
+        raise ConfigError(
+            'network = "provider-only" cannot run inside an existing nono '
+            "sandbox; the outer sandbox already owns network policy. "
+            'Use --network none for an air-gapped run, or drop the outer "nono run".'
+        )
+    _find_nono(_WRAPPER_MISSING_NONO)
 
 
 def check_sandbox_available() -> None:

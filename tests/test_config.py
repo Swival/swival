@@ -2055,3 +2055,62 @@ def test_load_config_resolves_slash_in_command_middleware(tmp_path, monkeypatch)
     )
     result = load_config(tmp_path)
     assert result["command_middleware"] == f"{tmp_path / 'scripts' / 'hook.py'} --arg"
+
+
+# ===========================================================================
+# Network mode config plumbing
+# ===========================================================================
+
+
+class TestNetworkConfig:
+    def test_network_defaults_full(self):
+        args = _make_args()
+        apply_config_to_args(args, {})
+        assert args.network == "full"
+
+    def test_project_config_sets_network(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(tmp_path / "swival.toml", 'network = "provider-only"\n')
+        result = load_config(tmp_path)
+        assert result["network"] == "provider-only"
+
+    def test_global_config_sets_network(self, tmp_path, monkeypatch):
+        global_dir = tmp_path / "global"
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(global_dir))
+        _write_toml(global_dir / "swival" / "config.toml", 'network = "none"\n')
+        result = load_config(tmp_path / "project")
+        assert result["network"] == "none"
+
+    def test_cli_beats_config_network(self):
+        args = _make_args(network="full")
+        apply_config_to_args(args, {"network": "none"})
+        assert args.network == "full"
+
+    def test_config_fills_unset_network(self):
+        args = _make_args(network=_UNSET)
+        apply_config_to_args(args, {"network": "none"})
+        assert args.network == "none"
+
+    def test_invalid_network_value_rejected(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(tmp_path / "swival.toml", 'network = "offline"\n')
+        with pytest.raises(ConfigError, match="'network' must be one of"):
+            load_config(tmp_path)
+
+    def test_network_wrong_type_raises(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(tmp_path / "swival.toml", "network = true\n")
+        with pytest.raises(ConfigError, match="network.*expected str.*got bool"):
+            load_config(tmp_path)
+
+    def test_profiles_reject_network(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(
+            tmp_path / "swival.toml",
+            '[profiles.local]\nprovider = "command"\nnetwork = "none"\n',
+        )
+        with pytest.raises(ConfigError, match="not allowed in a profile"):
+            load_config(tmp_path)
+
+    def test_generate_config_mentions_network(self):
+        assert 'network = "full"' in generate_config()

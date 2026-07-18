@@ -24,6 +24,15 @@ class McpShutdownError(Exception):
     """Raised when call_tool() is invoked during or after shutdown."""
 
 
+def _jail_stdio_command(
+    command: str, args: list[str], net_jail: list[str] | None
+) -> tuple[str, list[str]]:
+    """Rewrite a stdio server launch through the network-jail prefix, if any."""
+    if not net_jail:
+        return command, list(args)
+    return net_jail[0], [*net_jail[1:], command, *args]
+
+
 class McpManager:
     """Manages connections to multiple MCP servers.
 
@@ -43,6 +52,7 @@ class McpManager:
         server_configs: dict[str, dict],
         verbose: bool = False,
         flatten_schemas: bool = True,
+        net_jail: list[str] | None = None,
     ):
         """
         server_configs: {
@@ -55,9 +65,14 @@ class McpManager:
                 "headers": {"Authorization": "Bearer ..."},
             }
         }
+
+        net_jail: optional ``nono run ... --block-net --`` prefix; when set,
+        stdio server processes are launched through it so their whole
+        subtree is denied network access (network = "provider-only").
         """
         self._server_configs = server_configs
         self._verbose = verbose
+        self._net_jail = list(net_jail) if net_jail else None
         self._flatten_schemas = flatten_schemas
         self._flatten_meta: dict[str, object] = {}
 
@@ -333,9 +348,12 @@ class McpManager:
             else:
                 # Stdio transport
                 env = child_env(config.get("env"))
+                command, cmd_args = _jail_stdio_command(
+                    config["command"], config.get("args", []), self._net_jail
+                )
                 params = mcp.StdioServerParameters(
-                    command=config["command"],
-                    args=config.get("args", []),
+                    command=command,
+                    args=cmd_args,
                     env=env,
                 )
                 read_stream, write_stream = await stack.enter_async_context(

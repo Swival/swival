@@ -77,6 +77,8 @@ The proxy runs in the supervising parent and terminates TLS for the allowlisted 
 
 `--nono-block-net` goes further and refuses every outbound connection, including loopback. Because that also blocks the call to your model provider, it fits only fully offline work — for example a local `command`-provider model that needs no network at all. For ordinary runs against a hosted model or a local model server, reach for the allowlist above instead.
 
+If what you actually want is "the model works, the agent's commands don't", you do not need to assemble that from these flags: the top-level `--network provider-only` option launches every agent subprocess through `nono run --block-net` while leaving the provider call alone, and `--network none` is the convenient spelling of the fully air-gapped setup (it selects this sandbox and `--nono-block-net` for you, and validates the provider and integrations up front). The `--nono-*` flags remain the expert layer for domain-scoped policies the top-level modes deliberately do not cover. See [Safety and Sandboxing](safety-and-sandboxing.md).
+
 ## Rollback
 
 With `--nono-rollback`, nono records an atomic snapshot of the files the run touches so you can undo the whole thing afterwards.
@@ -144,6 +146,8 @@ nono run --allow "$PWD" --profile swival -- \
 ```
 
 Because Swival detects that it is already inside nono (via nono's `NONO_CAP_FILE` marker), it does not try to re-exec a second time. Add `--read` and `--allow` grants as needed for extra paths.
+
+One thing Swival does not take on faith in this setup is the network policy. If you combine an external wrapper with `--nono-block-net` or `--network none`, Swival checks the capability file nono hands the child and refuses to start unless it records that the network is actually blocked. An outer `nono run` without `--block-net` cannot masquerade as an air gap.
 
 ## REPL Sessions
 

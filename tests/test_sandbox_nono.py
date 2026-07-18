@@ -655,3 +655,45 @@ class TestWritableTempDirs:
     def test_no_duplicates(self):
         dirs = writable_temp_dirs()
         assert len(dirs) == len(set(dirs))
+
+
+class TestNetworkNoneReexec:
+    """--network none must reach the existing --block-net argv construction."""
+
+    def test_resolved_none_mode_builds_block_net_once(self, tmp_path, monkeypatch):
+        from swival.agent import _resolve_network_policy, build_parser
+        from swival.config import apply_config_to_args
+
+        args = build_parser().parse_args(
+            ["--network", "none", "--provider", "command", "--model", "cat", "task"]
+        )
+        apply_config_to_args(args, {})
+        error, _ = _resolve_network_policy(
+            args, tmp_path, network_cli=True, sandbox_cli=False, sandbox_config=False
+        )
+        assert error is None
+        assert args.sandbox == "nono"
+        assert args.nono_block_net is True
+
+        _clear_sandboxed(monkeypatch)
+        _mock_nono_script(tmp_path)
+        monkeypatch.setenv("PATH", str(tmp_path))
+        monkeypatch.setattr(sys, "argv", ["swival", "--network", "none", "task"])
+        monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
+
+        captured = {}
+        monkeypatch.setattr(
+            os, "execvpe", lambda f, a, e: captured.update(args=a, env=e)
+        )
+        maybe_reexec(
+            sandbox=args.sandbox,
+            base_dir=str(tmp_path),
+            add_dirs=[],
+            provider=args.provider,
+            block_net=args.nono_block_net,
+            allow_domain=args.nono_allow_domain or [],
+            network_profile=args.nono_network_profile,
+            credential=args.nono_credential or [],
+        )
+        assert captured["args"].count("--block-net") == 1
+        assert captured["env"]["LITELLM_LOCAL_MODEL_COST_MAP"] == "True"

@@ -139,6 +139,7 @@
 </code></pre>
 <p>The proxy runs in the supervising parent and terminates TLS for the allowlisted hosts; nono makes its certificate trusted inside the sandbox automatically. You can also broker a service's credentials through the proxy with <code>--nono-credential</code>, so API keys never enter the sandboxed process environment.</p>
 <p><code>--nono-block-net</code> goes further and refuses every outbound connection, including loopback. Because that also blocks the call to your model provider, it fits only fully offline work — for example a local <code>command</code>-provider model that needs no network at all. For ordinary runs against a hosted model or a local model server, reach for the allowlist above instead.</p>
+<p>If what you actually want is "the model works, the agent's commands don't", you do not need to assemble that from these flags: the top-level <code>--network provider-only</code> option launches every agent subprocess through <code>nono run --block-net</code> while leaving the provider call alone, and <code>--network none</code> is the convenient spelling of the fully air-gapped setup (it selects this sandbox and <code>--nono-block-net</code> for you, and validates the provider and integrations up front). The <code>--nono-*</code> flags remain the expert layer for domain-scoped policies the top-level modes deliberately do not cover. See <a href="safety-and-sandboxing.html">Safety and Sandboxing</a>.</p>
 <h2 id="rollback">Rollback</h2>
 <p>With <code>--nono-rollback</code>, nono records an atomic snapshot of the files the run touches so you can undo the whole thing afterwards.</p>
 <pre><code class="language-sh">swival --sandbox nono --nono-rollback &quot;Migrate the test suite to pytest&quot; --yolo
@@ -178,6 +179,7 @@ nono run --allow &quot;$PWD&quot; --profile swival -- \
     swival &quot;Add a config module that reads from env vars&quot; --yolo --max-turns 20
 </code></pre>
 <p>Because Swival detects that it is already inside nono (via nono's <code>NONO_CAP_FILE</code> marker), it does not try to re-exec a second time. Add <code>--read</code> and <code>--allow</code> grants as needed for extra paths.</p>
+<p>One thing Swival does not take on faith in this setup is the network policy. If you combine an external wrapper with <code>--nono-block-net</code> or <code>--network none</code>, Swival checks the capability file nono hands the child and refuses to start unless it records that the network is actually blocked. An outer <code>nono run</code> without <code>--block-net</code> cannot masquerade as an air gap.</p>
 <h2 id="repl-sessions">REPL Sessions</h2>
 <p>The integrated sandbox mode works with REPL mode directly:</p>
 <pre><code class="language-sh">swival --sandbox nono --yolo

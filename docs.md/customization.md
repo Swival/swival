@@ -58,6 +58,7 @@ cache = true
 # no_memory = false        # skip auto-memory loading
 # memory_full = false      # inject entire MEMORY.md instead of budgeted retrieval
 # no_history = false       # disable HISTORY.md writes
+# network = "full"         # "full", "provider-only" (agent commands network-blocked), or "none" (air-gapped)
 # sandbox = "builtin"      # "builtin", "agentfs", or "nono"
 # sandbox_session = "..."  # AgentFS session ID
 # sandbox_strict_read = false  # strict read isolation (agentfs only)

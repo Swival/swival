@@ -23,6 +23,7 @@ _UNSET = object()  # Sentinel for "not set by CLI"
 # --- Schema ---
 
 SANDBOX_MODES = ("builtin", "agentfs", "nono")
+NETWORK_MODES = ("full", "provider-only", "none")
 REASONING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "default")
 
 PROFILE_KEYS: set[str] = {
@@ -73,6 +74,7 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "yolo": bool,
     "allowed_dirs": list,
     "allowed_dirs_ro": list,
+    "network": str,
     "sandbox": str,
     "sandbox_session": str,
     "sandbox_strict_read": bool,
@@ -181,6 +183,7 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "yolo": False,
     "add_dir": [],
     "add_dir_ro": [],
+    "network": "full",
     "sandbox": "builtin",
     "sandbox_session": None,
     "sandbox_strict_read": False,
@@ -334,6 +337,13 @@ def _validate_config(config: dict, source: str) -> None:
         raise ConfigError(
             f"{source}: 'sandbox' must be one of {SANDBOX_MODES!r}, "
             f"got {config['sandbox']!r}"
+        )
+
+    # Validate network enum value
+    if "network" in config and config["network"] not in NETWORK_MODES:
+        raise ConfigError(
+            f"{source}: 'network' must be one of {NETWORK_MODES!r}, "
+            f"got {config['network']!r}"
         )
 
     # Validate reasoning_effort enum value
@@ -708,6 +718,24 @@ def load_mcp_json(path: Path) -> dict[str, dict]:
 
     _validate_mcp_server_configs(servers_raw, str(path))
     return servers_raw
+
+
+def first_remote_integration(
+    mcp_servers: dict | None, a2a_servers: dict | None
+) -> tuple[str, str] | None:
+    """Return ("mcp"|"a2a", server_name) for the first network-backed
+    integration in the given configs, or None when everything is local.
+
+    Shared by the CLI network-policy resolution and Session validation so
+    the classification of what needs the network lives in one place; the
+    callers format their own error messages.
+    """
+    for name, cfg in sorted((mcp_servers or {}).items()):
+        if "url" in cfg:
+            return "mcp", name
+    if a2a_servers:
+        return "a2a", sorted(a2a_servers)[0]
+    return None
 
 
 def merge_mcp_configs(
@@ -1142,6 +1170,7 @@ def args_to_session_kwargs(args, base_dir: str) -> dict:
         "no_system_prompt",
         "no_instructions",
         "no_skills",
+        "network",
         "sandbox",
         "sandbox_session",
         "sandbox_strict_read",
@@ -1409,6 +1438,7 @@ def generate_config(
         "# no_system_prompt = false",
         "",
         "# --- Sandbox / security ---",
+        '# network = "full"                # "full" | "provider-only" (agent commands cannot reach the network) | "none" (air-gapped, command provider only)',
         '# sandbox = "builtin"             # "builtin" | "agentfs" | "nono"',
         '# sandbox_session = "my-session"  # agentfs session ID (optional)',
         "# sandbox_strict_read = false",

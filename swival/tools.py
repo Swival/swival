@@ -510,6 +510,11 @@ FETCH_URL_TOOL = {
 
 TOOLS.append(FETCH_URL_TOOL)
 
+# Tools that reach the network from inside the Swival process. Restricted
+# network modes remove these from the schema (build_tools) and reject them
+# in dispatch(); both checks key off this set.
+NETWORK_TOOLS = frozenset({FETCH_URL_TOOL["function"]["name"]})
+
 SNAPSHOT_TOOL = {
     "type": "function",
     "function": {
@@ -2822,11 +2827,21 @@ def _format_background_result(pid: int, log_rel_path: str) -> str:
     )
 
 
+def _jail(argv: list[str], net_jail: list[str] | None) -> list[str]:
+    """Prefix *argv* with the network-jail wrapper when one is active.
+
+    ``net_jail`` is the ``nono run ... --block-net --`` prefix built once per
+    run for ``network = "provider-only"``. ``None`` means no restriction.
+    """
+    return [*net_jail, *argv] if net_jail else argv
+
+
 def _spawn_background_process(
     popen_argv: list[str],
     base_dir: str,
     scratch_dir: str | None,
     env: dict[str, str] | None = None,
+    net_jail: list[str] | None = None,
 ):
     """Spawn a detached subprocess writing to a fresh background log file.
 
@@ -2853,7 +2868,7 @@ def _spawn_background_process(
     if sys.platform != "win32":
         popen_kwargs["start_new_session"] = True
     try:
-        proc = subprocess.Popen(popen_argv, **popen_kwargs)
+        proc = subprocess.Popen(_jail(popen_argv, net_jail), **popen_kwargs)
     except BaseException:
         log_path.unlink(missing_ok=True)
         raise
@@ -2971,6 +2986,7 @@ def _run_shell_command(
     timeout: int,
     scratch_dir: str | None = None,
     background: bool = False,
+    net_jail: list[str] | None = None,
 ) -> str:
     """Execute a shell string via sh -c (Unix) or cmd.exe /c (Windows)."""
     base_path = Path(base_dir)
@@ -2992,7 +3008,9 @@ def _run_shell_command(
 
     if background:
         try:
-            spawned = _spawn_background_process(shell_cmd, base_dir, scratch_dir, env)
+            spawned = _spawn_background_process(
+                shell_cmd, base_dir, scratch_dir, env, net_jail=net_jail
+            )
         except OSError as e:
             return f"error: failed to start shell command: {e}"
         if isinstance(spawned, str):
@@ -3011,7 +3029,7 @@ def _run_shell_command(
         if sys.platform != "win32":
             popen_kwargs["start_new_session"] = True
 
-        proc = subprocess.Popen(shell_cmd, **popen_kwargs)
+        proc = subprocess.Popen(_jail(shell_cmd, net_jail), **popen_kwargs)
     except OSError as e:
         return f"error: failed to start shell command: {e}"
 
@@ -3038,7 +3056,11 @@ def python_tool_available() -> bool:
 
 
 def _run_python(
-    code: str, base_dir: str, timeout: int, scratch_dir: str | None = None
+    code: str,
+    base_dir: str,
+    timeout: int,
+    scratch_dir: str | None = None,
+    net_jail: list[str] | None = None,
 ) -> str:
     """Execute *code* via a Python interpreter and return its captured output."""
     if not isinstance(code, str):
@@ -3069,7 +3091,7 @@ def _run_python(
         if sys.platform != "win32":
             popen_kwargs["start_new_session"] = True
 
-        proc = subprocess.Popen([python, "-c", code], **popen_kwargs)
+        proc = subprocess.Popen(_jail([python, "-c", code], net_jail), **popen_kwargs)
     except OSError as e:
         return f"error: failed to start python interpreter: {e}"
 
@@ -3182,6 +3204,7 @@ def _run_argv_command(
     unrestricted: bool = False,
     scratch_dir: str | None = None,
     background: bool = False,
+    net_jail: list[str] | None = None,
 ) -> str:
     """Execute an argv-form command and return its output."""
     if not command:
@@ -3235,7 +3258,11 @@ def _run_argv_command(
     if background:
         try:
             spawned = _spawn_background_process(
-                [resolved_path] + command[1:], base_dir, scratch_dir, env
+                [resolved_path] + command[1:],
+                base_dir,
+                scratch_dir,
+                env,
+                net_jail=net_jail,
             )
         except FileNotFoundError:
             return f'error: command executable not found: "{resolved_path}"'
@@ -3259,7 +3286,9 @@ def _run_argv_command(
         if sys.platform != "win32":
             popen_kwargs["start_new_session"] = True
 
-        proc = subprocess.Popen([resolved_path] + command[1:], **popen_kwargs)
+        proc = subprocess.Popen(
+            _jail([resolved_path] + command[1:], net_jail), **popen_kwargs
+        )
     except FileNotFoundError:
         return f'error: command executable not found: "{resolved_path}"'
     except PermissionError:
@@ -3279,6 +3308,7 @@ def _execute_normalized_command(
     unrestricted: bool = False,
     scratch_dir: str | None = None,
     background: bool = False,
+    net_jail: list[str] | None = None,
 ) -> str:
     """Execute a pre-normalized command call."""
     bg_capacity_note: str | None = None
@@ -3296,6 +3326,7 @@ def _execute_normalized_command(
             timeout,
             scratch_dir=scratch_dir,
             background=background,
+            net_jail=net_jail,
         )
     else:
         result = _run_argv_command(
@@ -3306,6 +3337,7 @@ def _execute_normalized_command(
             unrestricted=unrestricted,
             scratch_dir=scratch_dir,
             background=background,
+            net_jail=net_jail,
         )
 
     if normalized.repair_note:
@@ -3326,6 +3358,7 @@ def _execute_command_call(
     unrestricted: bool = False,
     scratch_dir: str | None = None,
     background: bool = False,
+    net_jail: list[str] | None = None,
 ) -> str:
     """Normalize a command call and dispatch to the appropriate executor."""
     normalized, error = _normalize_command_call(
@@ -3344,6 +3377,7 @@ def _execute_command_call(
         unrestricted=unrestricted,
         scratch_dir=scratch_dir,
         background=background,
+        net_jail=net_jail,
     )
 
 
@@ -3489,6 +3523,15 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
     scratch_dir = kwargs.get("scratch_dir")
 
     _report = kwargs.get("report")
+
+    # Network-dependent tools are filtered from the schema in restricted
+    # modes; this guard covers models that call them anyway.
+    _network_mode = kwargs.get("network_mode", "full")
+    if _network_mode != "full" and name in NETWORK_TOOLS:
+        return (
+            f"error: {name} is disabled in this session "
+            f'(network = "{_network_mode}"); agent tools cannot access the network'
+        )
 
     goal_state = kwargs.get("goal_state")
     if goal_state is not None and goal_state.budget_exhausted():
@@ -3803,6 +3846,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             unrestricted=True if prefer_shell else unrestricted,
             scratch_dir=scratch_dir,
             background=bool(args.get("background", False)),
+            net_jail=kwargs.get("net_jail"),
         )
     elif name == "python":
         unrestricted = kwargs.get("commands_unrestricted", False)
@@ -3821,6 +3865,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             base_dir,
             timeout,
             scratch_dir=scratch_dir,
+            net_jail=kwargs.get("net_jail"),
         )
     elif name == "view_image":
         image_stash = kwargs.get("image_stash")
