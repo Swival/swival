@@ -1021,3 +1021,38 @@ class TestFlattenToggle:
         assert "config" in props
         assert "config.nested.value" not in props
         assert mgr._flatten_meta == {}
+
+
+class TestManagerLifecycle:
+    """start()/close() must not leak the background loop's file descriptors."""
+
+    @staticmethod
+    def _open_fds() -> int:
+        import os
+
+        return len(os.listdir("/dev/fd"))
+
+    def test_close_releases_event_loop_fds(self):
+        # close() must close the loop, not just stop it, or a host that builds a
+        # fresh manager per unit of work (nbclaw, once per cron firing) leaks an
+        # fd each cycle. Warm up first so one-time machinery isn't counted.
+        for _ in range(3):
+            m = McpManager({})
+            m.start()
+            m.close()
+
+        cycles = 10
+        before = self._open_fds()
+        for _ in range(cycles):
+            m = McpManager({})
+            m.start()
+            m.close()
+        after = self._open_fds()
+
+        assert after - before <= 2, f"leaked {after - before} fds over {cycles} cycles"
+
+    def test_close_is_idempotent(self):
+        m = McpManager({})
+        m.start()
+        m.close()
+        m.close()  # must not raise even though the loop is already closed

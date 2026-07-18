@@ -190,6 +190,15 @@ class A2aManager:
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=5)
 
+        # Free the loop's selector fd (kqueue/epoll); stop() leaves it open.
+        # Mirrors McpManager.close() — the two are torn down together, so a host
+        # that leaks one leaks both. Skip a loop still running past the join.
+        if self._loop is not None and not self._loop.is_running():
+            self._loop.close()
+
+        # Undo start()'s atexit.register so closed managers don't pile up.
+        atexit.unregister(self.close)
+
         self._closed = True
         self._closing = False
 

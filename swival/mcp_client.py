@@ -232,6 +232,18 @@ class McpManager:
                     f"servers: {residual_servers}"
                 )
 
+        # stop() breaks run_forever() but leaves the loop's selector fd (a
+        # kqueue/epoll) open; close() frees it. Without this a host that builds a
+        # fresh manager per unit of work — nbclaw makes one per cron firing —
+        # leaks an fd each time until it hits "too many open files". Skip a loop
+        # still running past the join; is_running() also covers never-started.
+        if self._loop is not None and not self._loop.is_running():
+            self._loop.close()
+
+        # Undo start()'s atexit.register so closed managers don't pile up in the
+        # registry for the life of the process.
+        atexit.unregister(self.close)
+
         self._closed = True
         self._closing = False
 
