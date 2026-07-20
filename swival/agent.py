@@ -14053,8 +14053,11 @@ def repl_loop(
                 _fire_due_loops(ctx)
                 print(file=sys.stderr)  # blank line before prompt
                 line = session.prompt(prompt_text)
-            except (EOFError, KeyboardInterrupt):
-                print(file=sys.stderr)  # newline after ^D / ^C
+            except KeyboardInterrupt:
+                print(file=sys.stderr)  # newline after ^C
+                continue
+            except EOFError:
+                print(file=sys.stderr)  # newline after ^D
                 if continue_here and any(_msg_role(m) != "system" for m in messages):
                     from .continue_here import write_continue_file
 
