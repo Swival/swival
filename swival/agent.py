@@ -644,6 +644,13 @@ _TRANSIENT_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# ChatGPT's OAuth endpoint sometimes emits this retryable server failure as a
+# 400-level LiteLLM APIError rather than a 5xx error.
+_CHATGPT_RETRYABLE_ERROR_RE = re.compile(
+    r"\bChatgptException\b.*\bYou can retry your request\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
 _SSO_TOKEN_ERROR_RE = re.compile(
     r"Token has expired and refresh failed"
     r"|Error loading SSO Token:.*does not exist",
@@ -704,6 +711,8 @@ def _is_transient(exc):
     ):
         return True
     if isinstance(exc, _lt.APIError):
+        if _CHATGPT_RETRYABLE_ERROR_RE.search(str(exc)):
+            return True
         status = getattr(exc, "status_code", None)
         if status is None or 500 <= status < 600:
             return True

@@ -90,6 +90,20 @@ class TestIsTransient:
         )
         assert _is_transient(exc) is False
 
+    def test_chatgpt_explicit_retry_api_error_400(self):
+        import litellm
+
+        exc = litellm.APIError(
+            status_code=400,
+            message=(
+                "ChatgptException - An error occurred while processing your request. "
+                "You can retry your request, or contact us through our help center."
+            ),
+            llm_provider="openai",
+            model="x",
+        )
+        assert _is_transient(exc) is True
+
     def test_string_pattern_connection_reset(self):
         exc = OSError("[Errno 54] Connection reset by peer")
         assert _is_transient(exc) is True
@@ -155,6 +169,28 @@ class TestCompletionWithRetry:
         assert result is resp
         assert retries == 2
         assert mock.call_count == 3
+
+    def test_retries_chatgpt_explicit_retry_api_error(self):
+        import litellm
+
+        response = _make_response()
+        exc = litellm.APIError(
+            status_code=400,
+            message=(
+                "ChatgptException - An error occurred while processing your request. "
+                "You can retry your request, or contact us through our help center."
+            ),
+            llm_provider="openai",
+            model="x",
+        )
+        mock = MagicMock(side_effect=[exc, response])
+        with patch("litellm.completion", mock), patch("time.sleep"):
+            result, retries = _completion_with_retry(
+                {"model": "x", "messages": []}, max_retries=2, verbose=False
+            )
+        assert result is response
+        assert retries == 1
+        assert mock.call_count == 2
 
     def test_exhausts_retries(self):
         import litellm
