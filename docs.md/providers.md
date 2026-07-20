@@ -203,7 +203,7 @@ swival --provider generic \
 export DEEPSEEK_API_KEY=sk-...
 swival --provider generic \
     --base-url https://api.deepseek.com \
-    --model deepseek-chat \
+    --model deepseek-v4-pro \
     --api-key "$DEEPSEEK_API_KEY" \
     --max-output-tokens 8192 \
     "task"
