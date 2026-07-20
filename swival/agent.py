@@ -7123,8 +7123,8 @@ def main():
     # Capture explicitness before apply_config_to_args sweeps _UNSET → defaults
     _files_explicit = args.files is not _UNSET
     _commands_explicit = args.commands is not _UNSET
-    _network_cli = args.network is not _UNSET
-    _sandbox_cli = args.sandbox is not _UNSET
+    _network_cli = getattr(args, "network", _UNSET) is not _UNSET
+    _sandbox_cli = getattr(args, "sandbox", _UNSET) is not _UNSET
     apply_config_to_args(args, file_config)
     # Config may have set them explicitly too
     args._files_explicit = _files_explicit or "files" in file_config
