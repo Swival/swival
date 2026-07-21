@@ -396,6 +396,63 @@ def command_spinner(label: str, timeout: float | None = None):
         dismiss()
 
 
+@contextlib.contextmanager
+def step_spinner(label: str):
+    """Spinner with a live-updatable label plus an elapsed timer on stderr.
+
+    Yields an ``update(text)`` callable that replaces the displayed label,
+    safe to call from worker threads. Transient: the line is wiped on exit.
+    No-op when stderr is not a terminal.
+
+    Only one Rich live display may be active at a time, so callers must not
+    start this while another live display is running.
+    """
+    if not _console.is_terminal:
+        yield _noop
+        return
+
+    progress = Progress(
+        SpinnerColumn("dots", style="cyan", speed=1.5),
+        TextColumn("  {task.description}"),
+        TimeElapsedColumn(),
+        console=_console,
+        transient=True,
+        refresh_per_second=12,
+    )
+    progress.start()
+    task_id = progress.add_task(escape(label), total=None)
+    stopped = threading.Event()
+
+    def update(text: str) -> None:
+        if stopped.is_set():
+            return
+        try:
+            progress.update(task_id, description=escape(text))
+        except Exception:
+            pass
+
+    def _suspend():
+        progress.stop()
+
+        def _resume():
+            if stopped.is_set():
+                return
+            progress.start()
+
+        return _resume
+
+    global _active_live_suspend
+    _active_live_suspend = _suspend
+
+    try:
+        yield update
+    finally:
+        stopped.set()
+        if _active_live_suspend is _suspend:
+            _active_live_suspend = None
+        progress.stop()
+
+
 _INPUT_MARQUEE_PREFIX = "  > "
 _INPUT_MARQUEE_SEPARATOR = "   ·   "
 

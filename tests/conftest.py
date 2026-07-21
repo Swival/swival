@@ -95,6 +95,47 @@ def which_or_skip(name: str) -> str:
     return str(Path(path).resolve())
 
 
+def init_git(tmp_path: Path) -> None:
+    """Initialize a git repository with a test identity."""
+    import subprocess
+
+    subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@test.com"],
+        cwd=tmp_path,
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=tmp_path,
+        capture_output=True,
+        check=True,
+    )
+
+
+def commit_file(tmp_path: Path, rel_path: str, content: str, msg: str = "c") -> str:
+    """Write and commit a file; returns the resulting HEAD commit."""
+    import subprocess
+
+    fp = tmp_path / rel_path
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    fp.write_text(content)
+    subprocess.run(
+        ["git", "add", rel_path], cwd=tmp_path, capture_output=True, check=True
+    )
+    subprocess.run(
+        ["git", "commit", "-m", msg], cwd=tmp_path, capture_output=True, check=True
+    )
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
 @pytest.fixture(autouse=True)
 def _fresh_model_catalog_cache():
     """The model-catalog cache is module-global; reset it around every test."""

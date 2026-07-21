@@ -348,111 +348,6 @@ def validate_agents_md(path: Path) -> tuple[str | None, str | None]:
     return None, content
 
 
-SIMPLIFY_PROMPT = """\
-You are an extremely careful senior software engineer working on an existing production codebase.
-
-Your task is to simplify the current project's codebase, in whatever programming language(s) it uses, while preserving behavior exactly.
-
-Your top priority is safety, correctness, and strict behavioral equivalence.
-
-Goals:
-- Reduce unnecessary code duplication.
-- Make the code smaller where appropriate.
-- Make the code more idiomatic for the language/framework already used.
-- Improve clarity and maintainability.
-- Preserve the current architecture, style, naming conventions, coding patterns, and project-specific conventions.
-- Keep all user-facing behavior, public APIs, side effects, outputs, error behavior, timing-sensitive semantics, and observable behavior exactly the same.
-
-Hard constraints:
-- Do not break anything.
-- Do not introduce regressions.
-- Do not change existing conventions unless absolutely required for correctness.
-- Do not change user-facing functions, public interfaces, external behavior, CLI/API contracts, file formats, logs, error messages, exit codes, serialization formats, network behavior, database behavior, or configuration semantics.
-- Do not change behavior for any input, including edge cases, invalid inputs, unusual runtime states, partial failures, concurrency situations, or environment-dependent behavior.
-- Do not change dependency versions, build tooling, infrastructure, test semantics, or formatting configuration unless explicitly necessary.
-- Do not perform broad refactors, redesigns, or "cleanups" that increase risk.
-- Do not make speculative improvements.
-- Do not remove code unless you can justify that it is provably redundant and behavior-preserving.
-
-Definition of success:
-The resulting code must be behaviorally equivalent to the original for all possible inputs and environments. The only allowed changes are internal simplifications that preserve exact semantics.
-
-Working method:
-1. First, inspect the codebase carefully and identify only low-risk simplification opportunities.
-2. Prioritize:
-   - obvious duplication,
-   - repeated logic that can be safely unified,
-   - overly verbose but equivalent constructions,
-   - language-idiomatic simplifications that do not alter semantics,
-   - dead-simple extract/helper opportunities that preserve conventions.
-3. For every proposed change, assume there is hidden business logic unless you can prove otherwise.
-4. Prefer the smallest safe change over the cleverest change.
-5. Preserve naming style, file organization style, error-handling style, and existing abstractions.
-6. Do not change function signatures or call patterns unless they are purely internal and provably behavior-preserving.
-7. Be especially careful with:
-   - null/none/nil/undefined handling,
-   - truthiness differences,
-   - short-circuit behavior,
-   - mutation and aliasing,
-   - evaluation order,
-   - exception/error behavior,
-   - async/concurrency behavior,
-   - resource cleanup,
-   - floating-point behavior,
-   - integer overflow/underflow semantics,
-   - string/encoding behavior,
-   - locale/timezone/date behavior,
-   - environment variables and platform-specific behavior,
-   - logging and metrics side effects,
-   - caching/memoization,
-   - lazy vs eager evaluation,
-   - reflection, macros, metaprogramming, decorators, annotations, generics, templates, and inheritance,
-   - serialization/deserialization formats.
-8. If there is any meaningful doubt that a simplification is perfectly safe, do not apply it.
-9. When choosing where to inspect first, prefer files or areas changed recently, but only if doing so does not reduce confidence or cause you to miss safer opportunities elsewhere.
-
-Execution rules:
-- Work incrementally.
-- Make a small number of high-confidence changes rather than many risky ones.
-- After each change, reason explicitly about why behavior is unchanged.
-- Prefer local refactors over cross-cutting refactors.
-- Preserve comments unless they become inaccurate; if you update comments, keep intent unchanged.
-- Preserve test coverage and add tests only if needed to lock down existing behavior, not to redefine it.
-
-Output format:
-For each proposed or applied change, provide:
-1. A short title.
-2. Why the original code is more complex or duplicated than necessary.
-3. Why the new version is behaviorally equivalent.
-4. Any risks or edge cases considered.
-5. The exact patch or rewritten code.
-
-Mandatory safety check before finalizing:
-Before presenting the final result, perform a strict self-review and reject any change that could possibly alter:
-- public behavior,
-- edge-case handling,
-- side effects,
-- ordering,
-- error semantics,
-- performance characteristics in a way that could affect observable behavior.
-
-If a change is not provably safe, do not include it.
-
-Decision policy:
-- When choosing between "more simplified" and "more certain to preserve behavior," always choose certainty.
-- When choosing between "more idiomatic" and "more aligned with existing project conventions," always choose existing conventions.
-- When unsure, keep the original code.
-
-Continuation rule:
-- Keep iterating on additional small, high-confidence simplifications after each successful change.
-- Only stop when you have positively determined that no further simplifications are provably safe under the constraints above.
-- Do not stop just because you already made a few good changes; continue searching for more safe opportunities until the remaining candidates are meaningfully risky, behaviorally uncertain, or too trivial to justify touching.
-- When you stop, explicitly state that you searched for more candidates and rejected the remaining ones as not provably safe.
-
-Final instruction:
-Be conservative, precise, and skeptical. Your job is not to improve the design. Your job is to simplify implementation details only where semantic equivalence is extremely likely and defensible."""
-
-
 LEARN_PROMPT = (
     "Review this session for concrete mistakes, confusions, or surprises you "
     "encountered with tools, commands, APIs, or syntax. Persist concise notes "
@@ -4125,6 +4020,7 @@ def handle_tool_call(
     enabled_metaskills=None,
     network_mode="full",
     net_jail=None,
+    tool_policy=None,
 ):
     """Execute a single tool call and return (tool_msg, metadata).
 
@@ -4235,6 +4131,7 @@ def handle_tool_call(
                 enabled_metaskills=enabled_metaskills,
                 network_mode=network_mode,
                 net_jail=net_jail,
+                tool_policy=tool_policy,
             )
     except McpShutdownError:
         result = "error: MCP server is shutting down"
@@ -9326,6 +9223,10 @@ def _run_main(args, report, _write_report, parser):
                     continue_here=_continue_here,
                     verbose=args.verbose,
                     loop_kwargs=loop_kwargs,
+                    # A one-shot command script is not a human at a keyboard,
+                    # so agent-turn failures propagate instead of being printed
+                    # and swallowed by the interactive REPL.
+                    interactive=False,
                     current_profile=_active_profile,
                     profiles=getattr(args, "_all_profiles", None) or {},
                     startup_profile=_active_profile,
@@ -9672,6 +9573,7 @@ def _run_agent_loop(
     network_mode: str = "full",
     net_jail: list | None = None,
     session_cost: SessionCost | None = None,
+    tool_policy=None,
 ) -> tuple[str | None, bool]:
     """Run the tool-calling loop until a final answer or max turns.
 
@@ -9765,6 +9667,7 @@ def _run_agent_loop(
         "network_mode": network_mode,
         "net_jail": net_jail,
         "session_cost": session_cost,
+        "tool_policy": tool_policy,
     }
 
     # Goal-loop bookkeeping. last_turn_was_goal_continuation tracks whether the
@@ -9953,6 +9856,7 @@ def _run_agent_loop(
             enabled_metaskills=enabled_metaskills,
             network_mode=network_mode,
             net_jail=net_jail,
+            tool_policy=tool_policy,
         )
         llm_kwargs = {
             **llm_kwargs,
@@ -10983,6 +10887,7 @@ def _run_agent_loop(
                 enabled_metaskills=enabled_metaskills,
                 network_mode=network_mode,
                 net_jail=net_jail,
+                tool_policy=tool_policy,
             )
             messages.append(tool_msg)
 
@@ -13056,13 +12961,7 @@ def execute_input(
             )
 
         if cmd == "/simplify":
-            focus = cmd_arg.strip()
-            prompt = SIMPLIFY_PROMPT
-            if focus:
-                prompt += f"\n\nFocus area: {focus}"
-            return _run_agent_step(
-                prompt, "/simplify", ctx, interrupt_label="/simplify"
-            )
+            return _execute_simplify(cmd_arg, ctx)
 
         if cmd == "/audit":
             return _execute_audit(cmd_arg, ctx)
@@ -13172,23 +13071,53 @@ def _execute_init(cmd_arg: str, ctx: InputContext) -> StepResult:
     return StepResult(kind="agent_turn", text=last_answer, exhausted=any_exhausted)
 
 
+def _execute_delegated_command(
+    cmd_arg: str, ctx: InputContext, label: str, runner
+) -> StepResult:
+    """Run a command implemented by its own module (currently ``/audit``)."""
+    name = label.removeprefix("/")
+    try:
+        result = runner(cmd_arg, ctx)
+    except KeyboardInterrupt:
+        fmt.warning(f"interrupted, {name} aborted.")
+        return StepResult(kind="agent_turn", interrupted=True)
+    except Exception as e:
+        return StepResult(
+            kind="agent_turn",
+            text=f"error: {name} failed: {e}",
+            is_error=True,
+        )
+
+    if not ctx.no_history and result:
+        append_history(ctx.base_dir, label, result, diagnostics=ctx.verbose)
+    return StepResult(
+        kind="agent_turn", text=result, is_error=result.startswith("error:")
+    )
+
+
+def _execute_simplify(cmd_arg: str, ctx: InputContext) -> StepResult:
+    """Collect four prose reviews, then let the main agent apply them."""
+    from .simplify import prepare_simplify_prompt
+
+    try:
+        prompt = prepare_simplify_prompt(cmd_arg, ctx)
+    except KeyboardInterrupt:
+        fmt.warning("interrupted, simplify aborted.")
+        return StepResult(kind="agent_turn", interrupted=True)
+    except Exception as e:
+        return StepResult(
+            kind="agent_turn",
+            text=f"error: simplify failed: {e}",
+            is_error=True,
+        )
+    return _run_agent_step(prompt, "/simplify", ctx, interrupt_label="/simplify")
+
+
 def _execute_audit(cmd_arg: str, ctx: InputContext) -> StepResult:
     """Handle the /audit command by delegating to swival.audit."""
     from .audit import run_audit_command
 
-    try:
-        result = run_audit_command(cmd_arg, ctx)
-    except KeyboardInterrupt:
-        fmt.warning("interrupted, audit aborted.")
-        return StepResult(kind="agent_turn", interrupted=True)
-    except Exception as e:
-        return StepResult(
-            kind="agent_turn", text=f"error: audit failed: {e}", is_error=True
-        )
-
-    if not ctx.no_history and result:
-        append_history(ctx.base_dir, "/audit", result, diagnostics=ctx.verbose)
-    return StepResult(kind="agent_turn", text=result)
+    return _execute_delegated_command(cmd_arg, ctx, "/audit", run_audit_command)
 
 
 _LOOP_DURATION_RE = re.compile(r"^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$")

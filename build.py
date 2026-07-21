@@ -51,6 +51,11 @@ NAV = [
                 "Multi-phase security audit with triage, verification, and patch generation",
             ),
             (
+                "simplify",
+                "Simplification",
+                "Four plain-text reviewers find simplifications for the main agent to apply and validate",
+            ),
+            (
                 "goal",
                 "Goals",
                 "Persistent goal mode that keeps the agent on task across turns until the objective is done",

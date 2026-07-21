@@ -1,11 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://swival.dev/</loc><lastmod>2026-07-26</lastmod></url>
-  <url><loc>https://swival.dev/pages/</loc><lastmod>2026-07-26</lastmod></url>
+  <url><loc>https://swival.dev/</loc><lastmod>2026-07-21</lastmod></url>
+  <url><loc>https://swival.dev/pages/</loc><lastmod>2026-07-21</lastmod></url>
   <url><loc>https://swival.dev/pages/getting-started.html</loc><lastmod>2026-07-15</lastmod></url>
   <url><loc>https://swival.dev/pages/usage.html</loc><lastmod>2026-07-21</lastmod></url>
   <url><loc>https://swival.dev/pages/tools.html</loc><lastmod>2026-07-21</lastmod></url>
   <url><loc>https://swival.dev/pages/audit.html</loc><lastmod>2026-07-03</lastmod></url>
+  <url><loc>https://swival.dev/pages/simplify.html</loc><lastmod>2026-07-21</lastmod></url>
   <url><loc>https://swival.dev/pages/goal.html</loc><lastmod>2026-07-03</lastmod></url>
   <url><loc>https://swival.dev/pages/context-management.html</loc><lastmod>2026-07-03</lastmod></url>
   <url><loc>https://swival.dev/pages/open-models.html</loc><lastmod>2026-06-29</lastmod></url>

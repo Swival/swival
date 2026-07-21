@@ -3526,6 +3526,16 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
 
     _report = kwargs.get("report")
 
+    # Host-enforced tool restrictions for isolated pipeline loops. dispatch()
+    # is the choke point every caller goes through -- the agent loop and
+    # dispatch-direct callers like MetaskillHostAPI alike -- so a forbidden
+    # tool or write is never executed regardless of the entry path.
+    _tool_policy = kwargs.get("tool_policy")
+    if _tool_policy is not None:
+        _policy_error = _tool_policy.check(name, args if isinstance(args, dict) else {})
+        if _policy_error is not None:
+            return _policy_error
+
     # Network-dependent tools are filtered from the schema in restricted
     # modes; this guard covers models that call them anyway.
     _network_mode = kwargs.get("network_mode", "full")

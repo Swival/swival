@@ -126,7 +126,7 @@ Multiple paths or globs can be passed in a single invocation; they are unioned i
 
 `/learn` reviews the current session for mistakes and confusions, then persists notes to `.swival/memory/MEMORY.md` for future sessions to learn from. On subsequent runs, memory entries are parsed by heading and selectively injected into the prompt using BM25 retrieval keyed from the user's question, keeping memory token cost bounded.
 
-`/simplify [focus]` inspects the codebase for low-risk simplification opportunities and applies them, preserving all observable behavior. Optionally scope it to a file or area (e.g. `/simplify swival/edit.py`). Prefers recently changed code but expands outward as needed.
+`/simplify [focus]` starts three read-only reviewers in parallel for local simplification, reuse of existing mechanisms, and behavior contracts. They inspect the live workspace in any language and return plain-text reports; the main agent checks those reports against the code, applies only small, high-confidence simplifications, and runs the project's validation. The optional focus is free-form text (for example, `/simplify swival/edit.py` or `/simplify the command parser and its callers`). There is no JSON candidate protocol or committed-source allowlist. Works in interactive mode and in one-shot mode when `--oneshot-commands` is set. See [Simplification](simplify.md) for the full walkthrough.
 
 `/tools` lists all tools available in the current session — built-in, MCP, and A2A — grouped by source with full descriptions.
 

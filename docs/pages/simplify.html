@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Simplification — Swival</title>
+    <meta name="description" content="Simplification: Four plain-text reviewers find simplifications for the main agent to apply and validate">
+    <link rel="canonical" href="https://swival.dev/pages/simplify.html">
+    <meta property="og:type" content="article">
+    <meta property="og:title" content="Simplification — Swival">
+    <meta property="og:description" content="Simplification: Four plain-text reviewers find simplifications for the main agent to apply and validate">
+    <meta property="og:image" content="https://swival.dev/img/og.png">
+    <meta property="og:url" content="https://swival.dev/pages/simplify.html">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="Simplification — Swival">
+    <meta name="twitter:description" content="Simplification: Four plain-text reviewers find simplifications for the main agent to apply and validate">
+    <meta name="twitter:image" content="https://swival.dev/img/og.png">
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "TechArticle",
+        "headline": "Simplification — Swival",
+        "description": "Simplification: Four plain-text reviewers find simplifications for the main agent to apply and validate",
+        "url": "https://swival.dev/pages/simplify.html",
+        "publisher": {
+            "@type": "Organization",
+            "name": "Swival",
+            "logo": { "@type": "ImageObject", "url": "https://swival.dev/img/logo.png" }
+        },
+        "isPartOf": {
+            "@type": "WebSite",
+            "name": "Swival",
+            "url": "https://swival.dev/"
+        }
+    }
+    </script>
+    <link rel="icon" href="../favicon.ico">
+    <link rel="stylesheet" href="../css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../" class="header-logo">
+                <img src="../img/logo.png" alt="Swival">
+            </a>
+            <nav class="header-nav">
+                <a href="./">Docs</a>
+                <a href="https://github.com/swival/swival">GitHub</a>
+            </nav>
+        </div>
+    </header>
+    <main id="main" class="docs-layout-3col">
+        <aside class="sidebar">
+            <div class="sidebar-section">
+<h4>Basics</h4>
+<ul>
+<li><a href="getting-started.html">Getting Started</a></li>
+<li><a href="usage.html">Usage</a></li>
+<li><a href="tools.html">Tools</a></li>
+<li><a href="audit.html">Security Audit</a></li>
+<li><a href="simplify.html" class="active">Simplification</a></li>
+<li><a href="goal.html">Goals</a></li>
+<li><a href="context-management.html">Context Management</a></li>
+<li><a href="open-models.html">Not Just for Frontier Models</a></li>
+</ul>
+</div>
+<div class="sidebar-section">
+<h4>Configuration & Deployment</h4>
+<ul>
+<li><a href="safety-and-sandboxing.html">Safety & Sandboxing</a></li>
+<li><a href="secrets.html">Secret Encryption</a></li>
+<li><a href="llm-filter.html">Outbound LLM Filter</a></li>
+<li><a href="command-middleware.html">Command Middleware</a></li>
+<li><a href="skills.html">Skills</a></li>
+<li><a href="library.html">The Library</a></li>
+<li><a href="metaskills.html">Metaskills</a></li>
+<li><a href="web-browsing.html">Web Browsing</a></li>
+<li><a href="mcp.html">MCP</a></li>
+<li><a href="a2a.html">A2A</a></li>
+<li><a href="acp.html">ACP</a></li>
+<li><a href="lifecycle-hooks.html">Lifecycle Hooks</a></li>
+<li><a href="custom-commands.html">Custom Commands</a></li>
+<li><a href="customization.html">Customization</a></li>
+<li><a href="providers.html">Providers</a></li>
+<li><a href="reports.html">Reports</a></li>
+<li><a href="reviews.html">Reviews</a></li>
+<li><a href="agentfs.html">AgentFS</a></li>
+<li><a href="nono.html">nono</a></li>
+</ul>
+</div>
+<div class="sidebar-section">
+<h4>Reference</h4>
+<ul>
+<li><a href="python-api.html">Python API</a></li>
+</ul>
+</div>
+        </aside>
+        <article class="docs-content">
+            <h1 id="simplification">Simplification</h1>
+<p>The <code>/simplify</code> command runs three complementary code reviews in parallel, gives their plain-text reports to the main agent, and asks the main agent to apply only small, safe simplifications and validate the result.</p>
+<pre><code class="language-text">/simplify [focus]
+</code></pre>
+<p>The focus is free-form text, not a path schema or an option language:</p>
+<pre><code class="language-text">swival&gt; /simplify
+swival&gt; /simplify swival/edit.py
+swival&gt; /simplify the command parser and its callers
+swival&gt; /simplify the code changed for issue 123
+</code></pre>
+<p>Without a focus, the reviewers inspect the current workspace broadly. They see the workspace as it exists, including uncommitted changes, and are encouraged to inspect existing implementation code instead of stopping at the first obvious file.</p>
+<h2 id="how-it-works">How It Works</h2>
+<p>Three read-only subagents start together, each with a non-overlapping job:</p>
+<ul>
+<li><strong>Local</strong> finds small deletions and direct rewrites within one function or file.</li>
+<li><strong>Reuse</strong> finds code that an existing helper or an already-computed result can safely replace; it may not invent a new abstraction.</li>
+<li><strong>Contracts</strong> inspects callers and tests to identify behavior, edge cases, and risks that every proposed change must preserve.</li>
+</ul>
+<p>Each reviewer returns at most three ranked findings under short, consistent headings. This explicit structure is easy for smaller models to follow while remaining ordinary prose rather than a machine-parsed protocol.</p>
+<p>The reviewers discover the project's languages, layout, build system, and conventions from the workspace. <code>/simplify</code> does not classify files by extension, require particular filenames, or restrict the review to committed Git source.</p>
+<p>While the reviewers work, a live status line shows each one's turn count and the tool it is currently running, so a long review never looks stalled. As each reviewer completes, a summary line reports how many turns it took, how long it ran, and how much advice it produced. A reviewer that fails is called out with a warning; its report becomes an explicit gap in the advice instead of aborting the command.</p>
+<p>Each reviewer returns ordinary prose with concrete locations, reasoning, risks, and suggested validation. There is no JSON response format, candidate schema, parser, deterministic shortlist, or ratifier. A reviewer can report a promising but uncertain idea instead of suppressing it; the main agent decides whether it survives inspection.</p>
+<p>After collecting all three reports, the main agent:</p>
+<ol>
+<li>reads the referenced code and relevant callers or tests;</li>
+<li>reconciles proposals against the contracts review and project instructions;</li>
+<li>ranks ideas by safety and code removed;</li>
+<li>applies only small, high-confidence changes, normally within one file and never as an unrelated cleanup bundle; and</li>
+<li>runs the formatter, tests, lint, build, or other checks defined by the project.</li>
+</ol>
+<p>The main agent is explicitly told not to introduce new abstractions, dependencies, or architectural layers, change public APIs, or weaken tests. A successful run may make no changes. The final answer summarizes applied changes, validation, and notable suggestions that were rejected. The reports are advice, not an instruction to make three changes or to accept every finding.</p>
+<h2 id="safety-and-permissions">Safety and Permissions</h2>
+<p>Reviewer tool access is enforced as read-only. Their sessions cannot edit files, run project commands, or use the network. They can therefore inspect the live workspace in parallel without racing to change it.</p>
+<p>The main agent makes changes through the normal Swival tool and sandbox rules. Read-before-write enforcement, allowed-directory guards, command policy, project instructions, and user approvals work exactly as they do for any other task. <code>/simplify</code> does not create a shadow patch or a separate apply prompt; edits remain ordinary working-tree changes for you to review and commit.</p>
+<p>The command is programming-language agnostic and does not require a Git repository. It works in the REPL and in one-shot command mode when <code>--oneshot-commands</code> is enabled.</p>
+            <nav class="page-nav" aria-label="Page navigation"><a class="nav-prev" href="audit.html"><span class="nav-label">&larr; Previous</span><span class="nav-title">Security Audit</span></a><a class="nav-next" href="goal.html"><span class="nav-label">Next &rarr;</span><span class="nav-title">Goals</span></a></nav>
+        </article>
+        <aside class="page-toc" aria-label="On this page">
+            <p class="page-toc-title">On this page</p>
+            <div class="page-toc-list"></div>
+        </aside>
+    </main>
+    <footer class="site-footer">
+        <div class="footer-inner">
+            <div class="footer-grid">
+                <div class="footer-col">
+                    <img src="../img/logo.png" alt="Swival" class="footer-logo">
+                    <p class="footer-tagline">A coding agent for any model.<br>Free, open-source, and easy to set up.</p>
+                </div>
+                <div class="footer-col">
+                    <h4>Resources</h4>
+                    <ul>
+                        <li><a href="getting-started.html">Getting Started</a></li>
+                        <li><a href="usage.html">Usage</a></li>
+                        <li><a href="tools.html">Tools</a></li>
+                        <li><a href="context-management.html">Context Management</a></li>
+                    </ul>
+                </div>
+                <div class="footer-col">
+                    <h4>Guides</h4>
+                    <ul>
+                        <li><a href="providers.html">Providers</a></li>
+                        <li><a href="safety-and-sandboxing.html">Safety &amp; Sandboxing</a></li>
+                        <li><a href="python-api.html">Python API</a></li>
+                        <li><a href="open-models.html">Open Models</a></li>
+                    </ul>
+                </div>
+                <div class="footer-col">
+                    <h4>Community</h4>
+                    <ul>
+                        <li><a href="https://github.com/swival/swival">GitHub</a></li>
+                        <li><a href="https://calibra.swival.dev">Calibra</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2025&ndash;2026 Swival &middot; MIT License</p>
+            </div>
+        </div>
+    </footer>
+    <button class="back-to-top" aria-label="Back to top">&uarr;</button>
+    <script src="../js/site.js"></script>
+</body>
+</html>

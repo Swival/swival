@@ -52,37 +52,8 @@ from swival.input_commands import INPUT_COMMANDS
 # ---------------------------------------------------------------------------
 
 
-def _init_git(tmp_path: Path) -> None:
-    """Create a minimal git repo with one committed file."""
-    subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
-    subprocess.run(
-        ["git", "config", "user.email", "test@test.com"],
-        cwd=tmp_path,
-        capture_output=True,
-        check=True,
-    )
-    subprocess.run(
-        ["git", "config", "user.name", "Test"],
-        cwd=tmp_path,
-        capture_output=True,
-        check=True,
-    )
-
-
-def _commit_file(tmp_path: Path, rel_path: str, content: str) -> None:
-    """Write and commit a file."""
-    fp = tmp_path / rel_path
-    fp.parent.mkdir(parents=True, exist_ok=True)
-    fp.write_text(content)
-    subprocess.run(
-        ["git", "add", rel_path], cwd=tmp_path, capture_output=True, check=True
-    )
-    subprocess.run(
-        ["git", "commit", "-m", f"add {rel_path}"],
-        cwd=tmp_path,
-        capture_output=True,
-        check=True,
-    )
+from tests.conftest import commit_file as _commit_file
+from tests.conftest import init_git as _init_git
 
 
 def _make_ctx(tmp_path: Path):
@@ -3677,7 +3648,7 @@ class TestVerificationGates:
             def __exit__(self, *exc):
                 return False
 
-        def fake_kwargs(ctx, work_dir, max_turns=None):
+        def fake_kwargs(ctx, work_dir, max_turns=None, **_kw):
             captured["max_turns"] = max_turns
             return {"base_dir": str(work_dir)}
 

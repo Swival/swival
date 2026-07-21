@@ -25,35 +25,8 @@ from swival.audit import (
 )
 
 
-def _init_git(tmp_path: Path) -> None:
-    subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
-    subprocess.run(
-        ["git", "config", "user.email", "test@test.com"],
-        cwd=tmp_path,
-        capture_output=True,
-        check=True,
-    )
-    subprocess.run(
-        ["git", "config", "user.name", "Test"],
-        cwd=tmp_path,
-        capture_output=True,
-        check=True,
-    )
-
-
-def _commit_file(tmp_path: Path, rel_path: str, content: str) -> None:
-    fp = tmp_path / rel_path
-    fp.parent.mkdir(parents=True, exist_ok=True)
-    fp.write_text(content)
-    subprocess.run(
-        ["git", "add", rel_path], cwd=tmp_path, capture_output=True, check=True
-    )
-    subprocess.run(
-        ["git", "commit", "-m", f"add {rel_path}"],
-        cwd=tmp_path,
-        capture_output=True,
-        check=True,
-    )
+from tests.conftest import commit_file as _commit_file
+from tests.conftest import init_git as _init_git
 
 
 def _make_finding(**overrides) -> FindingRecord:

@@ -6,7 +6,6 @@ import hashlib
 import json
 import queue
 import re
-import shutil
 import subprocess
 import threading
 import time
@@ -21,6 +20,16 @@ if TYPE_CHECKING:
 
 from . import fmt
 from .audit_ui import AuditUI, PhaseHandle
+
+# Imported under audit-local names so existing monkeypatches of
+# swival.audit._git and friends keep working; in-module calls resolve
+# through these module globals at call time.
+from .worktree import (
+    Worktree as _Worktree,
+    git as _git,
+    make_isolated_loop_kwargs as _make_isolated_loop_kwargs,
+    match_path_glob as _match_path_glob,
+)
 from .tool_call_repair import _byte_capped_preview
 from .codeparse import (
     mask_noncode,
@@ -504,19 +513,6 @@ class AuditRunState:
 # ---------------------------------------------------------------------------
 
 
-def _git(args: list[str], cwd: str) -> str:
-    result = subprocess.run(
-        ["git"] + args,
-        capture_output=True,
-        text=True,
-        cwd=cwd,
-        timeout=30,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
-    return result.stdout.strip()
-
-
 def _resolve_scope(base_dir: str, focus: list[str]) -> AuditScope:
     branch = _git(["branch", "--show-current"], base_dir) or "HEAD"
     commit = _git(["rev-parse", "HEAD"], base_dir)
@@ -535,39 +531,6 @@ def _resolve_scope(base_dir: str, focus: list[str]) -> AuditScope:
         mandatory_files=mandatory,
         focus=focus,
     )
-
-
-def _match_path_glob(file: str, glob: str) -> bool:
-    """True when ``file`` (a repo-relative path) is selected by ``glob``.
-
-    Selection rules, in order:
-
-    - exact match: ``src/foo.rs`` selects only ``src/foo.rs``.
-    - prefix match (no wildcard): ``src`` and ``src/`` both select
-      anything under ``src/``.
-    - pathlib wildcard match via ``PurePosixPath.full_match``: ``*``
-      does *not* cross ``/``, ``?`` matches a single non-separator
-      character, ``**`` matches any number of intermediate directories,
-      and ``[abc]`` is a character class. A wildcard pattern with no
-      ``/`` is implicitly recursive: ``*.rs`` is rewritten to
-      ``**/*.rs`` so it keeps selecting every ``.rs`` file at any depth.
-      This means ``src/*.rs`` matches only direct ``.rs`` children of a
-      top-level ``src/``, and ``src/**/*.rs`` is the recursive form.
-    """
-    from pathlib import PurePosixPath
-
-    if file == glob:
-        return True
-
-    has_wildcard = any(c in glob for c in "*?[")
-    if not has_wildcard:
-        prefix = glob if glob.endswith("/") else glob + "/"
-        return file.startswith(prefix)
-
-    pattern = glob.rstrip("/") or glob
-    if "/" not in pattern:
-        pattern = f"**/{pattern}"
-    return PurePosixPath(file).full_match(pattern)
 
 
 def _is_auditable(path: str) -> bool:
@@ -2039,34 +2002,17 @@ def _call_audit_llm(
     shrank, appends exactly one record:
     ``{"shrinks": n, "final_limit": limit, "original_len": len(original_text)}``.
     """
-    from .agent import call_llm, ContextOverflowError, _provider_extra_kwargs
-    from ._msg import _msg_content
+    from .agent import ContextOverflowError
+    from .worktree import call_llm_text
 
     kw = ctx.loop_kwargs
-    llm_kwargs = kw.get("llm_kwargs", {})
 
     cache_info = None
 
     def _do_call(msgs):
         nonlocal cache_info
-        msg, _finish, _activity, _retries, cache_info = call_llm(
-            kw["api_base"],
-            kw["model_id"],
-            msgs,
-            kw.get("max_output_tokens"),
-            temperature,
-            kw.get("top_p"),
-            kw.get("seed"),
-            None,  # tools
-            False,  # verbose
-            provider=llm_kwargs.get("provider", "lmstudio"),
-            api_key=llm_kwargs.get("api_key"),
-            user_agent=llm_kwargs.get("user_agent"),
-            prompt_cache=True,
-            session_cost=kw.get("session_cost"),
-            **_provider_extra_kwargs(llm_kwargs),
-        )
-        return _msg_content(msg) or ""
+        text, cache_info = call_llm_text(kw, msgs, temperature=temperature)
+        return text
 
     user_msg = messages[-1]
     original_text = user_msg.get("content", "")
@@ -3723,7 +3669,11 @@ def _phase4c_reproduce(
             },
         ]
 
-        kw = _make_isolated_loop_kwargs(ctx, work_dir)
+        # Verifiers keep the parent session's file/network modes: evidence
+        # gathering may legitimately reach beyond the worktree.
+        kw = _make_isolated_loop_kwargs(
+            ctx, work_dir, files_mode=None, network_mode=None
+        )
 
         target_ui = ui if ui is not None else _get_current_ui()
         worker_slot = _get_current_worker_slot()
@@ -3819,7 +3769,13 @@ def _phase5_patch(
                 {"role": "user", "content": prompt},
             ]
 
-            kw = _make_isolated_loop_kwargs(ctx, work_dir, max_turns=patch_max_turns)
+            kw = _make_isolated_loop_kwargs(
+                ctx,
+                work_dir,
+                max_turns=patch_max_turns,
+                files_mode=None,
+                network_mode=None,
+            )
 
             # Pre-seed the file tracker so the agent can edit without a read_file
             # round-trip — the committed source is already in the prompt.
@@ -3901,76 +3857,16 @@ def _phase5_report(
     )
 
 
-def _make_isolated_loop_kwargs(
-    ctx: "InputContext",
-    work_dir: Path,
-    max_turns: int | None = None,
-) -> dict:
-    """Build loop kwargs for an isolated agent loop in a worktree."""
-    from .thinking import ThinkingState
-    from .todo import TodoState
-    from .tracker import FileAccessTracker
+class _worktree(_Worktree):
+    """HEAD-based temporary worktree (shared implementation).
 
-    kw = dict(ctx.loop_kwargs)
-    kw["base_dir"] = str(work_dir)
-    kw["max_turns"] = max_turns if max_turns is not None else kw.get("max_turns", 100)
-    kw["thinking_state"] = ThinkingState(verbose=False)
-    kw["todo_state"] = TodoState(verbose=False)
-    kw["snapshot_state"] = None
-    kw["file_tracker"] = FileAccessTracker()
-    kw["extra_write_roots"] = []
-    kw["skill_read_roots"] = []
-    kw["skills_catalog"] = {}
-    kw["verbose"] = False
-    for k in (
-        "compaction_state",
-        "mcp_manager",
-        "a2a_manager",
-        "subagent_manager",
-        "report",
-        "event_callback",
-        "cancel_flag",
-        "turn_state",
-    ):
-        kw.pop(k, None)
-    return kw
-
-
-class _worktree:
-    """Context manager for a temporary git worktree from HEAD."""
+    Audit worktrees live under the command's own ``.swival/audit/<run-id>/``
+    state directory, so stale leftovers from crashed runs are reclaimed even
+    when git no longer registers them.
+    """
 
     def __init__(self, base_dir: str, work_dir: Path):
-        self.base_dir = base_dir
-        self.work_dir = work_dir
-
-    def _cleanup(self) -> None:
-        try:
-            _git(["worktree", "prune"], self.base_dir)
-        except RuntimeError:
-            pass
-        if self.work_dir.exists():
-            try:
-                _git(
-                    ["worktree", "remove", "--force", str(self.work_dir)],
-                    self.base_dir,
-                )
-            except RuntimeError:
-                pass
-            if self.work_dir.exists():
-                shutil.rmtree(self.work_dir, ignore_errors=True)
-
-    def __enter__(self) -> Path:
-        self.work_dir.parent.mkdir(parents=True, exist_ok=True)
-        self._cleanup()
-        _git(
-            ["worktree", "add", "--detach", str(self.work_dir), "HEAD"],
-            self.base_dir,
-        )
-        return self.work_dir
-
-    def __exit__(self, *exc):
-        self._cleanup()
-        return False
+        super().__init__(base_dir, work_dir, reclaim_root=Path(base_dir) / ".swival")
 
 
 # ---------------------------------------------------------------------------

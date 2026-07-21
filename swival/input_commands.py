@@ -172,7 +172,7 @@ INPUT_COMMANDS: dict[str, CommandInfo] = {
         kind="state_change",
     ),
     "/simplify": CommandInfo(
-        desc="Simplify codebase (optionally scoped to focus area)",
+        desc="Run four reviewers, then simplify and validate the code",
         arg="[focus]",
         kind="agent_turn",
     ),

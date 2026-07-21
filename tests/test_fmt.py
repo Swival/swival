@@ -140,6 +140,60 @@ class TestCommandSpinner:
             fmt._console = old
 
 
+class TestStepSpinner:
+    def test_no_output_when_not_terminal(self):
+        buf = StringIO()
+        old = fmt._console
+        fmt._console = Console(file=buf, no_color=True, width=80)
+        try:
+            with fmt.step_spinner("phase one") as update:
+                assert callable(update)
+                update("phase two")
+        finally:
+            fmt._console = old
+        assert buf.getvalue() == ""
+
+    def test_label_and_update_shown_on_terminal(self):
+        buf = StringIO()
+        old = fmt._console
+        fmt._console = _styled_console(buf)
+        try:
+            with fmt.step_spinner("phase one") as update:
+                update("phase two")
+        finally:
+            fmt._console = old
+        out = buf.getvalue()
+        assert "phase one" in out
+        assert "phase two" in out
+
+    def test_update_after_exit_is_ignored(self):
+        buf = StringIO()
+        old = fmt._console
+        fmt._console = _styled_console(buf)
+        try:
+            with fmt.step_spinner("phase one") as update:
+                pass
+            update("too late")
+        finally:
+            fmt._console = old
+        assert "too late" not in buf.getvalue()
+
+    def test_suspend_live_pauses_and_resumes(self):
+        buf = StringIO()
+        old = fmt._console
+        fmt._console = _styled_console(buf)
+        try:
+            with fmt.step_spinner("phase one") as update:
+                assert fmt._active_live_suspend is not None
+                with fmt.suspend_live():
+                    pass
+                update("after resume")
+            assert fmt._active_live_suspend is None
+        finally:
+            fmt._console = old
+        assert "after resume" in buf.getvalue()
+
+
 class TestInputMarquee:
     def test_short_prompt_fills_line_width(self):
         line = fmt._input_marquee_text("yo", offset=0, width=40)
