@@ -112,7 +112,7 @@ Inside that wrapped process, `Session(sandbox="nono")` detects the sandbox and p
 
 `full` is the default and today's behavior: no network restrictions beyond whatever sandbox you chose.
 
-`provider-only` is the practical restricted mode. Swival's own process keeps normal network access, so provider calls work unchanged — hosted APIs, LM Studio, llama.cpp, anything. What changes is the agent's reach: every subprocess the agent can start (`run_command`, `run_shell_command`, the python tool, stdio MCP servers, and anything those spawn) is launched through `nono run --block-net`, so the operating system denies its entire subtree any outbound connection, loopback included. In-process network capability is removed at the application layer: `fetch_url` disappears from the tool schema and is rejected by dispatch even if the model hallucinates it, and URL-backed MCP servers and A2A clients are refused at startup. The result is an agent that can talk to its model but cannot browse, download, or exfiltrate through commands.
+`provider-only` is the practical restricted mode. Swival's own process keeps normal network access, so provider calls work unchanged — hosted APIs, LM Studio, llama.cpp, anything. What changes is the agent's reach: every subprocess the agent can start (`run_command`, `run_shell_command`, the `run_python` tool, stdio MCP servers, and anything those spawn) is launched through `nono run --block-net`, so the operating system denies its entire subtree any outbound connection, loopback included. In-process network capability is removed at the application layer: `fetch_url` disappears from the tool schema and is rejected by dispatch even if the model hallucinates it, and URL-backed MCP servers and A2A clients are refused at startup. The result is an agent that can talk to its model but cannot browse, download, or exfiltrate through commands.
 
 ```sh
 swival --network provider-only --provider openrouter --model qwen/qwen3-coder "Review this repo"
@@ -174,7 +174,7 @@ At startup, each basename is resolved to an absolute path using `which`. If a co
 
 At runtime in whitelist mode, only `run_command` is available and commands must be passed as argument arrays. This removes shell interpolation and injection risk from ordinary command calls. `run_shell_command` is not exposed in whitelist mode since shell strings bypass the whitelist entirely.
 
-With `--commands all` or `--yolo`, both `run_command` and `run_shell_command` are available. The experimental `python` tool joins them when a Python interpreter is present and the context window is at least 100,000 tokens; it runs arbitrary Python in a `python -c` subprocess, the same trust level as shell access. In ask mode, only `run_command` is exposed — shell access requires `--commands all`.
+With `--commands all` or `--yolo`, both `run_command` and `run_shell_command` are available. The experimental `run_python` tool joins them when a Python interpreter is present and the context window is at least 100,000 tokens; it runs arbitrary Python in a `python -c` subprocess, the same trust level as shell access. In ask mode, only `run_command` is exposed — shell access requires `--commands all`.
 
 ### Ask Mode
 

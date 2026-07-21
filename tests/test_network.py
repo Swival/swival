@@ -540,7 +540,7 @@ class TestWrapPoints:
 
     def test_dispatch_threads_jail_to_python(self, tmp_path, captured_popen):
         tools.dispatch(
-            "python",
+            "run_python",
             {"code": "print(1)"},
             str(tmp_path),
             commands_unrestricted=True,

@@ -438,6 +438,8 @@ TOOLS = [
 _TOOL_ALIASES = {
     "execute_command": "run_command",
     "terminal": "run_command",
+    "python": "run_python",
+    "execute_python": "run_python",
     "execute_shell_command": "run_shell_command",
     "shell_command": "run_shell_command",
     "shell": "run_shell_command",
@@ -747,7 +749,7 @@ RUN_SHELL_COMMAND_TOOL = {
 PYTHON_TOOL = {
     "type": "function",
     "function": {
-        "name": "python",
+        "name": "run_python",
         "description": (
             "Run a Python snippet and return its captured output. The code is "
             "handed straight to a fresh `python -c` subprocess running in the "
@@ -3037,7 +3039,7 @@ def _run_shell_command(
 
 
 def _find_python_executable() -> str | None:
-    """Locate a Python interpreter for the python tool, or return None.
+    """Locate a Python interpreter for the run_python tool, or return None.
 
     Swival runs under Python, so its own interpreter is the natural choice.
     The exception is a frozen or standalone build, where ``sys.executable``
@@ -3051,7 +3053,7 @@ def _find_python_executable() -> str | None:
 
 
 def python_tool_available() -> bool:
-    """Whether a Python interpreter can be found for the python tool."""
+    """Whether a Python interpreter can be found for the run_python tool."""
     return _find_python_executable() is not None
 
 
@@ -3064,9 +3066,9 @@ def _run_python(
 ) -> str:
     """Execute *code* via a Python interpreter and return its captured output."""
     if not isinstance(code, str):
-        return "error: python tool requires 'code' as a string"
+        return "error: run_python tool requires 'code' as a string"
     if not code.strip():
-        return "error: python tool requires non-empty 'code'"
+        return "error: run_python tool requires non-empty 'code'"
 
     python = _find_python_executable()
     if python is None:
@@ -3848,11 +3850,11 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             background=bool(args.get("background", False)),
             net_jail=kwargs.get("net_jail"),
         )
-    elif name == "python":
+    elif name == "run_python":
         unrestricted = kwargs.get("commands_unrestricted", False)
         if not unrestricted:
             return (
-                "error: python tool is not available in this session. "
+                "error: run_python tool is not available in this session. "
                 "Enable --commands all (or --yolo) to allow arbitrary code execution."
             )
         code = args.get("code")

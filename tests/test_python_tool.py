@@ -13,8 +13,8 @@ def tmp_base(tmp_path):
 
 
 def test_schema_registered():
-    assert PYTHON_TOOL["function"]["name"] == "python"
-    schema = get_tool_schema("python")
+    assert PYTHON_TOOL["function"]["name"] == "run_python"
+    schema = get_tool_schema("run_python")
     assert schema is not None
     assert "code" in schema["properties"]
     assert schema["required"] == ["code"]
@@ -81,7 +81,7 @@ def test_non_string_rejected(tmp_base):
 
 def test_dispatch_requires_unrestricted(tmp_base):
     result = dispatch(
-        "python",
+        "run_python",
         {"code": "print(1)"},
         tmp_base,
         commands_unrestricted=False,
@@ -92,7 +92,7 @@ def test_dispatch_requires_unrestricted(tmp_base):
 
 def test_dispatch_runs_when_unrestricted(tmp_base):
     result = dispatch(
-        "python",
+        "run_python",
         {"code": "print('via dispatch')"},
         tmp_base,
         commands_unrestricted=True,
@@ -103,7 +103,7 @@ def test_dispatch_runs_when_unrestricted(tmp_base):
 
 def test_dispatch_passes_timeout(tmp_base):
     result = dispatch(
-        "python",
+        "run_python",
         {"code": "import time; time.sleep(5)", "timeout": 1},
         tmp_base,
         commands_unrestricted=True,
@@ -111,9 +111,18 @@ def test_dispatch_passes_timeout(tmp_base):
     assert "timed out" in result
 
 
+def test_dispatch_suggests_run_python_for_old_name(tmp_base):
+    """OpenAI reserves the function name 'python', so the tool was renamed.
+
+    Models trained on the old name should be pointed at run_python."""
+    for old_name in ("python", "execute_python"):
+        with pytest.raises(KeyError, match="run_python"):
+            dispatch(old_name, {"code": "print(1)"}, tmp_base)
+
+
 def test_dispatch_invalid_timeout(tmp_base):
     result = dispatch(
-        "python",
+        "run_python",
         {"code": "print(1)", "timeout": "abc"},
         tmp_base,
         commands_unrestricted=True,
@@ -145,7 +154,7 @@ def test_build_tools_exposes_python_when_enabled():
         python_tool=True,
     )
     names = [t["function"]["name"] for t in tools]
-    assert "python" in names
+    assert "run_python" in names
 
 
 def test_build_tools_hides_python_when_gate_closed():
@@ -160,7 +169,7 @@ def test_build_tools_hides_python_when_gate_closed():
         python_tool=False,
     )
     names = [t["function"]["name"] for t in tools]
-    assert "python" not in names
+    assert "run_python" not in names
 
 
 def test_build_tools_hides_python_when_restricted():
@@ -175,7 +184,7 @@ def test_build_tools_hides_python_when_restricted():
         python_tool=True,
     )
     names = [t["function"]["name"] for t in tools]
-    assert "python" not in names
+    assert "run_python" not in names
 
 
 def test_python_tool_available_detects_interpreter():

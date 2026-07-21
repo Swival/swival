@@ -8767,7 +8767,7 @@ def _run_main(args, report, _write_report, parser):
     args._resolved_skills = skills_catalog
 
     # 100k tokens is the floor for features that can emit a lot of output:
-    # subagents and the python tool.
+    # subagents and the run_python tool.
     _large_context = context_length is not None and context_length >= 100_000
 
     _sa_val = getattr(args, "subagents", None)
@@ -8780,7 +8780,7 @@ def _run_main(args, report, _write_report, parser):
             args.provider in ("google", "geap", "chatgpt", "bedrock") or _large_context
         )
 
-    # The python tool runs arbitrary code, so it also requires the
+    # The run_python tool runs arbitrary code, so it also requires the
     # unrestricted-commands grant and a real interpreter to run.
     _python_tool = commands_unrestricted and _large_context and python_tool_available()
     # Resolve metaskill names for tool exposure

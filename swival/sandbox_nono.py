@@ -448,7 +448,7 @@ def build_block_net_wrapper(
 
     Used by ``network = "provider-only"``: the Swival process keeps its
     normal network access for provider calls, while every agent-initiated
-    subprocess (commands, shell, python tool, stdio MCP servers) is launched
+    subprocess (commands, shell, run_python tool, stdio MCP servers) is launched
     through this prefix so its entire subtree runs under ``--block-net``.
 
     The returned argv ends with ``--``; callers append the payload command.
