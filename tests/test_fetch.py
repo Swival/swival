@@ -180,6 +180,52 @@ class TestUrlSafety:
         assert result is None
 
     @patch("swival.fetch.socket.getaddrinfo")
+    def test_allows_nat64_public(self, mock_dns):
+        """DNS64-synthesized address embedding a public IPv4 must pass."""
+        mock_dns.return_value = [
+            (10, 1, 0, "", ("64:ff9b::5db8:d822", 0, 0, 0)),
+        ]
+        result = _check_url_safety("http://example.com")
+        assert result is None
+
+    @patch("swival.fetch.socket.getaddrinfo")
+    def test_blocks_nat64_private(self, mock_dns):
+        """NAT64 routes to the embedded IPv4, so 64:ff9b::10.0.0.1 is an SSRF vector."""
+        mock_dns.return_value = [
+            (10, 1, 0, "", ("64:ff9b::a00:1", 0, 0, 0)),
+        ]
+        result = _check_url_safety("http://evil.com")
+        assert result is not None
+        assert "private/internal" in result
+        assert "64:ff9b::a00:1" in result
+
+    @patch("swival.fetch.socket.getaddrinfo")
+    def test_blocks_nat64_loopback(self, mock_dns):
+        mock_dns.return_value = [
+            (10, 1, 0, "", ("64:ff9b::7f00:1", 0, 0, 0)),
+        ]
+        result = _check_url_safety("http://evil.com")
+        assert result is not None
+        assert "private/internal" in result
+
+    @patch("swival.fetch.socket.getaddrinfo")
+    def test_allows_ipv4_mapped_public(self, mock_dns):
+        mock_dns.return_value = [
+            (10, 1, 0, "", ("::ffff:93.184.216.34", 0, 0, 0)),
+        ]
+        result = _check_url_safety("http://example.com")
+        assert result is None
+
+    @patch("swival.fetch.socket.getaddrinfo")
+    def test_blocks_ipv4_mapped_private(self, mock_dns):
+        mock_dns.return_value = [
+            (10, 1, 0, "", ("::ffff:192.168.1.1", 0, 0, 0)),
+        ]
+        result = _check_url_safety("http://evil.com")
+        assert result is not None
+        assert "private/internal" in result
+
+    @patch("swival.fetch.socket.getaddrinfo")
     def test_dns_resolution_failure(self, mock_dns):
         import socket
 

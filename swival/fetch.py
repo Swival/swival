@@ -139,6 +139,27 @@ def _html_to_text(body: str) -> str:
     return parser.get_text()
 
 
+# Well-known NAT64 prefix (RFC 6052). DNS64 resolvers synthesize AAAA
+# records under it for IPv4-only hosts, with the real IPv4 address in the
+# low 32 bits.
+_NAT64_NETWORK = ipaddress.ip_network("64:ff9b::/96")
+
+
+def _unwrap_nat64(
+    addr: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    """Extract the IPv4 address embedded in a NAT64 one, if any.
+
+    Python flags the whole ::/8 block as reserved, which swallows the NAT64
+    prefix and would make every IPv4-only site unreachable on DNS64/NAT64
+    networks. Since the traffic ultimately reaches the embedded IPv4
+    address, that address is the one the safety checks must judge.
+    """
+    if isinstance(addr, ipaddress.IPv6Address) and addr in _NAT64_NETWORK:
+        return ipaddress.IPv4Address(addr.packed[-4:])
+    return addr
+
+
 def _check_url_safety(url: str) -> str | None:
     """Return an error string if the URL has a bad scheme or targets a private address, else None."""
     parsed = urllib.parse.urlparse(url)
@@ -155,13 +176,12 @@ def _check_url_safety(url: str) -> str | None:
         return f"error: could not resolve hostname {hostname!r}: {e}"
     is_localhost = hostname in ("localhost", "127.0.0.1", "::1")
     for family, _, _, _, sockaddr in infos:
-        addr = ipaddress.ip_address(sockaddr[0])
-        if addr.is_loopback:
-            if is_localhost:
-                continue
-            return f"error: url resolves to private/internal address ({addr}), blocked for security"
+        resolved = ipaddress.ip_address(sockaddr[0])
+        addr = _unwrap_nat64(resolved)
+        if is_localhost and addr.is_loopback:
+            continue
         if addr.is_private or addr.is_link_local or addr.is_reserved:
-            return f"error: url resolves to private/internal address ({addr}), blocked for security"
+            return f"error: url resolves to private/internal address ({resolved}), blocked for security"
     return None
 
 
