@@ -628,6 +628,40 @@ class TestReplLoop:
         # Both questions were attempted
         assert call_count == 2
 
+    def test_ctrl_c_at_empty_prompt_without_history_exits(self, tmp_path):
+        """Ctrl-C quits when nothing was typed and no conversation started."""
+        mock_session = self._mock_session([KeyboardInterrupt])
+        mock_session.default_buffer.text = ""
+        with (
+            patch("prompt_toolkit.PromptSession", return_value=mock_session),
+            patch("swival.agent.run_agent_loop"),
+        ):
+            repl_loop([_sys("system")], [], **_loop_kwargs(tmp_path))
+        assert mock_session.prompt.call_count == 1
+
+    def test_ctrl_c_with_pending_text_keeps_repl(self, tmp_path):
+        """Ctrl-C aborting a half-typed line keeps the REPL open."""
+        mock_session = self._mock_session([KeyboardInterrupt, "/exit"])
+        mock_session.default_buffer.text = "half-typed line"
+        with (
+            patch("prompt_toolkit.PromptSession", return_value=mock_session),
+            patch("swival.agent.run_agent_loop"),
+        ):
+            repl_loop([_sys("system")], [], **_loop_kwargs(tmp_path))
+        assert mock_session.prompt.call_count == 2
+
+    def test_ctrl_c_with_conversation_keeps_repl(self, tmp_path):
+        """Ctrl-C on an empty line keeps the REPL open when context exists."""
+        mock_session = self._mock_session([KeyboardInterrupt, "/exit"])
+        mock_session.default_buffer.text = ""
+        messages = [_sys("system"), _user("earlier question")]
+        with (
+            patch("prompt_toolkit.PromptSession", return_value=mock_session),
+            patch("swival.agent.run_agent_loop"),
+        ):
+            repl_loop(messages, [], **_loop_kwargs(tmp_path))
+        assert mock_session.prompt.call_count == 2
+
     def test_answer_on_stdout_not_stderr(self, tmp_path, capsys):
         """The answer appears on stdout, not stderr."""
         messages = [_sys("system")]

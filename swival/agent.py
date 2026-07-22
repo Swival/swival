@@ -14051,11 +14051,19 @@ def repl_loop(
         while True:
             try:
                 _fire_due_loops(ctx)
-                print(file=sys.stderr)  # blank line before prompt
+            except KeyboardInterrupt:
+                print(file=sys.stderr)  # newline after ^C
+            print(file=sys.stderr)  # blank line before prompt
+            try:
                 line = session.prompt(prompt_text)
             except KeyboardInterrupt:
                 print(file=sys.stderr)  # newline after ^C
-                continue
+                if session.default_buffer.text:
+                    continue
+                if any(_msg_role(m) != "system" for m in messages):
+                    fmt.info("Press Ctrl-D to exit")
+                    continue
+                break
             except EOFError:
                 print(file=sys.stderr)  # newline after ^D
                 if continue_here and any(_msg_role(m) != "system" for m in messages):
