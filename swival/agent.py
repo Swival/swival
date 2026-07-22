@@ -14045,8 +14045,25 @@ def repl_loop(
 
     completer.model_candidates = lambda: _model_completion_candidates(ctx)
 
+    def _has_conversation():
+        return any(_msg_role(m) != "system" for m in messages)
+
+    def _write_continue_state():
+        if continue_here and _has_conversation():
+            from .continue_here import write_continue_file
+
+            write_continue_file(
+                base_dir,
+                messages,
+                todo_state=todo_state,
+                snapshot_state=snapshot_state,
+                thinking_state=thinking_state,
+                goal_state=goal_state,
+            )
+
     _exit_outcome = "error"
     _exit_code = 1
+    ctrl_c_armed = False
     try:
         while True:
             try:
@@ -14059,25 +14076,19 @@ def repl_loop(
             except KeyboardInterrupt:
                 print(file=sys.stderr)  # newline after ^C
                 if session.default_buffer.text:
+                    ctrl_c_armed = False
                     continue
-                if any(_msg_role(m) != "system" for m in messages):
-                    fmt.info("Press Ctrl-D to exit")
+                if not ctrl_c_armed and _has_conversation():
+                    ctrl_c_armed = True
+                    fmt.info("Press Ctrl-C again or Ctrl-D to exit")
                     continue
+                _write_continue_state()
                 break
             except EOFError:
                 print(file=sys.stderr)  # newline after ^D
-                if continue_here and any(_msg_role(m) != "system" for m in messages):
-                    from .continue_here import write_continue_file
-
-                    write_continue_file(
-                        base_dir,
-                        messages,
-                        todo_state=todo_state,
-                        snapshot_state=snapshot_state,
-                        thinking_state=thinking_state,
-                        goal_state=goal_state,
-                    )
+                _write_continue_state()
                 break
+            ctrl_c_armed = False
 
             parsed = parse_input_line(line)
             if not parsed.raw:

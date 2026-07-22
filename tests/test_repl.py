@@ -377,6 +377,19 @@ class TestReplLoop:
             return_value=mock_session,
         )
 
+    def _run_repl(self, tmp_path, inputs, *, buffer_text="", messages=None):
+        """Run repl_loop against a mock session and return that session."""
+        mock_session = self._mock_session(inputs)
+        mock_session.default_buffer.text = buffer_text
+        if messages is None:
+            messages = [_sys("system")]
+        with (
+            patch("prompt_toolkit.PromptSession", return_value=mock_session),
+            patch("swival.agent.run_agent_loop", return_value=("answer", False)),
+        ):
+            repl_loop(messages, [], **_loop_kwargs(tmp_path))
+        return mock_session
+
     def test_repl_prompt_session_receives_style(self, tmp_path):
         """Verify PromptSession is created with a style kwarg."""
         inputs = ["/exit"]
@@ -630,37 +643,68 @@ class TestReplLoop:
 
     def test_ctrl_c_at_empty_prompt_without_history_exits(self, tmp_path):
         """Ctrl-C quits when nothing was typed and no conversation started."""
-        mock_session = self._mock_session([KeyboardInterrupt])
-        mock_session.default_buffer.text = ""
-        with (
-            patch("prompt_toolkit.PromptSession", return_value=mock_session),
-            patch("swival.agent.run_agent_loop"),
-        ):
-            repl_loop([_sys("system")], [], **_loop_kwargs(tmp_path))
+        mock_session = self._run_repl(tmp_path, [KeyboardInterrupt])
         assert mock_session.prompt.call_count == 1
 
     def test_ctrl_c_with_pending_text_keeps_repl(self, tmp_path):
         """Ctrl-C aborting a half-typed line keeps the REPL open."""
-        mock_session = self._mock_session([KeyboardInterrupt, "/exit"])
-        mock_session.default_buffer.text = "half-typed line"
-        with (
-            patch("prompt_toolkit.PromptSession", return_value=mock_session),
-            patch("swival.agent.run_agent_loop"),
-        ):
-            repl_loop([_sys("system")], [], **_loop_kwargs(tmp_path))
+        mock_session = self._run_repl(
+            tmp_path, [KeyboardInterrupt, "/exit"], buffer_text="half-typed line"
+        )
         assert mock_session.prompt.call_count == 2
 
     def test_ctrl_c_with_conversation_keeps_repl(self, tmp_path):
         """Ctrl-C on an empty line keeps the REPL open when context exists."""
-        mock_session = self._mock_session([KeyboardInterrupt, "/exit"])
-        mock_session.default_buffer.text = ""
-        messages = [_sys("system"), _user("earlier question")]
-        with (
-            patch("prompt_toolkit.PromptSession", return_value=mock_session),
-            patch("swival.agent.run_agent_loop"),
-        ):
-            repl_loop(messages, [], **_loop_kwargs(tmp_path))
+        mock_session = self._run_repl(
+            tmp_path,
+            [KeyboardInterrupt, "/exit"],
+            messages=[_sys("system"), _user("earlier question")],
+        )
         assert mock_session.prompt.call_count == 2
+
+    def test_double_ctrl_c_with_conversation_exits(self, tmp_path):
+        """Two Ctrl-C in a row quit and preserve continuation state."""
+        mock_session = self._run_repl(
+            tmp_path,
+            [KeyboardInterrupt, KeyboardInterrupt],
+            messages=[_sys("system"), _user("earlier question")],
+        )
+        assert mock_session.prompt.call_count == 2
+        assert (tmp_path / ".swival" / "continue.md").exists()
+
+    def test_submitted_line_disarms_double_ctrl_c(self, tmp_path):
+        """A line entered between two Ctrl-C keeps the second from quitting."""
+        mock_session = self._run_repl(
+            tmp_path,
+            [KeyboardInterrupt, "hello", KeyboardInterrupt, "/exit"],
+            messages=[_sys("system"), _user("earlier question")],
+        )
+        assert mock_session.prompt.call_count == 4
+
+    def test_line_clear_disarms_double_ctrl_c(self, tmp_path):
+        """Ctrl-C that clears typed text does not count toward quitting."""
+        mock_session = MagicMock()
+        script = iter(
+            [
+                ("", KeyboardInterrupt),
+                ("half-typed line", KeyboardInterrupt),
+                ("", KeyboardInterrupt),
+                ("", "/exit"),
+            ]
+        )
+
+        def fake_prompt(*args, **kwargs):
+            text, outcome = next(script)
+            mock_session.default_buffer.text = text
+            if outcome is KeyboardInterrupt:
+                raise KeyboardInterrupt
+            return outcome
+
+        mock_session.prompt.side_effect = fake_prompt
+        messages = [_sys("system"), _user("earlier question")]
+        with patch("prompt_toolkit.PromptSession", return_value=mock_session):
+            repl_loop(messages, [], **_loop_kwargs(tmp_path))
+        assert mock_session.prompt.call_count == 4
 
     def test_answer_on_stdout_not_stderr(self, tmp_path, capsys):
         """The answer appears on stdout, not stderr."""
