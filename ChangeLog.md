@@ -2,6 +2,15 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.39
+
+- Added `--network` (also `network` in config) to control network access independently of filesystem sandboxing. `provider-only` keeps the model provider reachable while blocking the network for agent-run commands, `run_python`, and stdio MCP servers, and removes `fetch_url`; `none` runs the entire process tree air-gapped and supports the local `command` provider only. Both restricted modes require `nono`.
+- The experimental Python-execution tool is now named `run_python`, avoiding a collision with OpenAI's reserved `python` tool name. Existing `python` and `execute_python` tool calls remain accepted as aliases.
+- The REPL now stays open after the first empty-prompt Ctrl+C; press Ctrl+C again (or Ctrl+D) to exit. A single Ctrl+C exits immediately when there is no conversation yet.
+- Intermittent retryable ChatGPT OAuth endpoint errors are now retried automatically instead of failing the turn.
+- `fetch_url` now works on DNS64/NAT64 networks for public IPv4-only hosts while preserving its private-address safety checks.
+- The A2A server now rejects requests that refer to an unknown task or pair a task ID with the wrong context ID, rather than creating or continuing an unintended task.
+
 ## 1.0.38
 
 - Added an experimental `python` tool. It runs a Python snippet straight through a fresh `python -c` subprocess in the workspace, with no shell in between, so there is nothing to quote or escape. It only shows up with `--commands all` or `--yolo`, when a Python interpreter is available, and when the detected context window is at least 100,000 tokens, the same floor that auto-enables subagents.
