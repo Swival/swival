@@ -62,6 +62,7 @@ class InputContext:
     is_subagent: bool = False
     trace_dir: str | None = None
     loop_registry: "LoopRegistry | None" = None
+    agents_md_budget: int = 3000
 
 
 @dataclass

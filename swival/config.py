@@ -245,6 +245,7 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "metaskills": "local",
     "storm_breaker": True,
     "flatten_mcp_schemas": True,
+    "agents_md_budget": 3000,
 }
 
 
