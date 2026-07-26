@@ -277,43 +277,50 @@ INIT_ENRICH_PROMPT = (
 
 _INIT_AGENTS_MD_BUDGET = 3000
 
-INIT_WRITE_PROMPT = (
-    "Write findings to AGENTS.md. Use exactly this structure:\n"
-    "\n"
-    "## Workflow\n"
-    "\n"
-    "- install: `<command>`\n"
-    "- build: `<command>` (omit line if N/A)\n"
-    "- test all: `<command>`\n"
-    "- test file: `<command with placeholder>`\n"
-    "- test case: `<command with placeholder>`\n"
-    "- lint: `<command>`\n"
-    "- format: `<command>`\n"
-    "- typecheck: `<command>` (omit line if N/A)\n"
-    "- after every edit: `<command or sequence>`\n"
-    "- debug: `<notes>` (omit line if nothing discoverable)\n"
-    "\n"
-    "## Conventions\n"
-    "\n"
-    "- <terse convention bullets, 2 sentences max each>\n"
-    "\n"
-    "## Commit & Pull Request Guidelines\n"
-    "\n"
-    "One short paragraph on commit style derived from git log: tense, length, "
-    "scope conventions, with 2-3 real example subjects in backticks.\n"
-    "\n"
-    "One short paragraph on pull request expectations: what the description "
-    "should cover, whether to link issues, include examples, etc.\n"
-    "\n"
-    "Rules:\n"
-    f"- Total output must not exceed {_INIT_AGENTS_MD_BUDGET} characters. "
-    "Workflow section takes priority. Cut convention bullets before workflow "
-    "lines, and cut commit/PR guidelines before conventions.\n"
-    "- ## Workflow must be the first section.\n"
-    "- Every command must be exact and copy-pasteable. No descriptions of what "
-    "commands do.\n"
-    "- The file is injected into every future agent context, so brevity is essential."
-)
+
+def init_write_prompt(budget: int = _INIT_AGENTS_MD_BUDGET) -> str:
+    """Build the /init write prompt with a configurable character budget."""
+    return (
+        "Write findings to AGENTS.md. Use exactly this structure:\n"
+        "\n"
+        "## Workflow\n"
+        "\n"
+        "- install: `<command>`\n"
+        "- build: `<command>` (omit line if N/A)\n"
+        "- test all: `<command>`\n"
+        "- test file: `<command with placeholder>`\n"
+        "- test case: `<command with placeholder>`\n"
+        "- lint: `<command>`\n"
+        "- format: `<command>`\n"
+        "- typecheck: `<command>` (omit line if N/A)\n"
+        "- after every edit: `<command or sequence>`\n"
+        "- debug: `<notes>` (omit line if nothing discoverable)\n"
+        "\n"
+        "## Conventions\n"
+        "\n"
+        "- <terse convention bullets, 2 sentences max each>\n"
+        "\n"
+        "## Commit & Pull Request Guidelines\n"
+        "\n"
+        "One short paragraph on commit style derived from git log: tense, length, "
+        "scope conventions, with 2-3 real example subjects in backticks.\n"
+        "\n"
+        "One short paragraph on pull request expectations: what the description "
+        "should cover, whether to link issues, include examples, etc.\n"
+        "\n"
+        "Rules:\n"
+        f"- Total output must not exceed {budget} characters. "
+        "Workflow section takes priority. Cut convention bullets before workflow "
+        "lines, and cut commit/PR guidelines before conventions.\n"
+        "- ## Workflow must be the first section.\n"
+        "- Every command must be exact and copy-pasteable. No descriptions of what "
+        "commands do.\n"
+        "- The file is injected into every future agent context, so brevity is essential."
+    )
+
+
+# Backward-compatible constant for tests and imports.
+INIT_WRITE_PROMPT = init_write_prompt()
 
 INIT_RETRY_PROMPT = (
     "The previous write failed validation: {reason}. "
@@ -1700,7 +1707,9 @@ def _normalize_fact(text: str) -> str:
     return _NORMALIZE_WS_RE.sub(" ", text).lower()
 
 
-def remember_agents_fact(base_dir: str, text: str) -> tuple[str, bool, bool]:
+def remember_agents_fact(
+    base_dir: str, text: str, budget: int = _INIT_AGENTS_MD_BUDGET
+) -> tuple[str, bool, bool]:
     """Add a convention bullet to project AGENTS.md if not already present.
 
     Returns ``(message, changed, is_error)`` where *changed* is True only when
@@ -1728,8 +1737,8 @@ def remember_agents_fact(base_dir: str, text: str) -> tuple[str, bool, bool]:
         )
         agents_path.write_text(content, encoding="utf-8")
         msg = f"Created AGENTS.md with: {text}"
-        if len(content) > _INIT_AGENTS_MD_BUDGET:
-            msg += f"\nwarning: AGENTS.md now exceeds {_INIT_AGENTS_MD_BUDGET} character target"
+        if len(content) > budget:
+            msg += f"\nwarning: AGENTS.md now exceeds {budget} character target"
         return msg + "\ntip: run /init to populate the Workflow section", True, False
 
     if reason:
@@ -1758,8 +1767,8 @@ def remember_agents_fact(base_dir: str, text: str) -> tuple[str, bool, bool]:
     agents_path.write_text(new_content, encoding="utf-8")
 
     msg = f"Added to AGENTS.md: {text}"
-    if len(new_content) > _INIT_AGENTS_MD_BUDGET:
-        msg += f"\nwarning: AGENTS.md now exceeds {_INIT_AGENTS_MD_BUDGET} character target"
+    if len(new_content) > budget:
+        msg += f"\nwarning: AGENTS.md now exceeds {budget} character target"
     return msg, True, False
 
 
@@ -6636,6 +6645,13 @@ def build_parser():
         default=_UNSET,
         help="Periodically summarize conversation to preserve context across compaction events.",
     )
+    behavior_group.add_argument(
+        "--agents-md-budget",
+        type=int,
+        default=_UNSET,
+        metavar="CHARS",
+        help="Maximum character budget for AGENTS.md during /init and /remember (default: 3000).",
+    )
     output_group.add_argument(
         "--project",
         action="store_true",
@@ -9187,6 +9203,7 @@ def _run_main(args, report, _write_report, parser):
                     skill_read_roots=loop_kwargs.get("skill_read_roots", []),
                     skills_catalog=skills_catalog,
                     trace_dir=getattr(args, "trace_dir", None),
+                    agents_md_budget=args.agents_md_budget,
                 )
                 result = run_input_script(args.question, ctx, mode="oneshot")
                 answer = result.text
@@ -9435,6 +9452,7 @@ def _run_main(args, report, _write_report, parser):
             on_exit=_on_repl_exit if report else None,
             start_dir=start_dir,
             trace_dir=getattr(args, "trace_dir", None),
+            agents_md_budget=args.agents_md_budget,
         )
     finally:
         if _sa_holder[0] is not None:
@@ -12426,7 +12444,11 @@ def _patch_system_instructions(
 
 
 def _repl_remember(
-    text: str, base_dir: str, messages: list, start_dir: "Path | None" = None
+    text: str,
+    base_dir: str,
+    messages: list,
+    start_dir: "Path | None" = None,
+    budget: int = _INIT_AGENTS_MD_BUDGET,
 ) -> tuple[str, bool]:
     """Handle /remember command: add a convention to project AGENTS.md.
 
@@ -12435,7 +12457,7 @@ def _repl_remember(
     if not text.strip():
         return "/remember requires text. Usage: /remember <fact>", True
     try:
-        msg, changed, is_error = remember_agents_fact(base_dir, text)
+        msg, changed, is_error = remember_agents_fact(base_dir, text, budget)
     except ValueError as exc:
         return str(exc), True
     if changed:
@@ -12779,7 +12801,11 @@ def execute_input(
 
         if cmd == "/remember":
             msg, err = _repl_remember(
-                cmd_arg, ctx.base_dir, ctx.messages, start_dir=ctx.start_dir
+                cmd_arg,
+                ctx.base_dir,
+                ctx.messages,
+                start_dir=ctx.start_dir,
+                budget=ctx.agents_md_budget,
             )
             return StepResult(kind="state_change", text=msg, is_error=err)
 
@@ -12929,7 +12955,7 @@ def _execute_init(cmd_arg: str, ctx: InputContext) -> StepResult:
     last_answer = None
     any_exhausted = False
     for _pass, prompt in enumerate(
-        (_init_prompt(), INIT_ENRICH_PROMPT, INIT_WRITE_PROMPT), 1
+        (_init_prompt(), INIT_ENRICH_PROMPT, init_write_prompt(ctx.agents_md_budget)), 1
     ):
         ctx.messages.append({"role": "user", "content": prompt})
         result = _run_init_pass(f"/init pass {_pass}", "interrupted, /init aborted.")
@@ -12961,10 +12987,9 @@ def _execute_init(cmd_arg: str, ctx: InputContext) -> StepResult:
         if retry_reason is not None:
             fmt.warning(f"AGENTS.md still invalid after retry: {retry_reason}")
 
-    if content is not None and len(content) > _INIT_AGENTS_MD_BUDGET:
+    if content is not None and len(content) > ctx.agents_md_budget:
         fmt.warning(
-            f"AGENTS.md is {len(content)} chars, "
-            f"exceeds {_INIT_AGENTS_MD_BUDGET} target."
+            f"AGENTS.md is {len(content)} chars, exceeds {ctx.agents_md_budget} target."
         )
 
     return StepResult(kind="agent_turn", text=last_answer, exhausted=any_exhausted)
@@ -13487,6 +13512,7 @@ def _build_iteration_ctx(
         is_subagent=ctx.is_subagent,
         trace_dir=ctx.trace_dir,
         loop_registry=None,
+        agents_md_budget=ctx.agents_md_budget,
     )
     return iter_ctx, iter_subagent
 
@@ -13825,6 +13851,7 @@ def repl_loop(
     session: object | None = None,
     network_mode: str = "full",
     net_jail: list | None = None,
+    agents_md_budget: int = _INIT_AGENTS_MD_BUDGET,
 ):
     """Interactive read-eval-print loop."""
     from prompt_toolkit import PromptSession
@@ -14087,6 +14114,7 @@ def repl_loop(
         is_subagent=is_subagent,
         trace_dir=trace_dir,
         loop_registry=loop_registry,
+        agents_md_budget=agents_md_budget,
     )
 
     completer.model_candidates = lambda: _model_completion_candidates(ctx)

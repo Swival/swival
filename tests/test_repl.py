@@ -15,6 +15,7 @@ from swival.agent import (
     _init_prompt,
     INIT_ENRICH_PROMPT,
     INIT_WRITE_PROMPT,
+    init_write_prompt,
     _INIT_AGENTS_MD_BUDGET,
     validate_agents_md,
     LEARN_PROMPT,
@@ -2032,7 +2033,7 @@ class TestInitPromptContract:
         assert "## Commit & Pull Request Guidelines" in INIT_WRITE_PROMPT
 
     def test_budget_target_in_write_prompt(self):
-        assert str(_INIT_AGENTS_MD_BUDGET) in INIT_WRITE_PROMPT
+        assert str(_INIT_AGENTS_MD_BUDGET) in init_write_prompt()
 
     def test_section_ordering_in_write_prompt(self):
         wf_idx = INIT_WRITE_PROMPT.index("Workflow")
