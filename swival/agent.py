@@ -3192,6 +3192,10 @@ def _run_terminal_floor_ladder(
     The input ``messages`` is never mutated; the caller commits the surviving
     copy. Only :class:`ContextOverflowError` advances to the next budget; any
     other failure propagates, because a smaller prompt would not fix it.
+
+    The per-attempt warning says only what is being tried. Why we are down here
+    is the caller's to state — the reactive ladder has already reported the
+    overflow, and the Phase 4 backstop has no overflow to report.
     """
     base_kwargs = dict(llm_kwargs)
     base_kwargs.pop("on_stream_start", None)
@@ -3200,10 +3204,7 @@ def _run_terminal_floor_ladder(
         working = copy.deepcopy(messages)
         _emergency_truncate(working, budget)
         if verbose:
-            fmt.warning(
-                f"context window exceeded after compaction; trying a minimal "
-                f"{budget}-token prompt with no tools"
-            )
+            fmt.warning(f"trying a minimal {budget}-token prompt with no tools")
         llm_args = (
             api_base,
             model_id,
@@ -5221,6 +5222,49 @@ class _InlineThinkSplitter:
         return ("", pending) if self._in_think else (pending, "")
 
 
+def _restore_streamed_tool_call_extras(response, chunks) -> None:
+    """Put back the per-tool-call ``extra_content`` that reassembly drops.
+
+    ``stream_chunk_builder`` rebuilds every tool call from its deltas keeping
+    only id, type and function. Gemini hangs its thought signature off
+    ``extra_content`` there, and rejects the whole conversation on the next turn
+    as soon as a replayed call comes back without one. The builder already
+    carries ``provider_specific_fields`` across for the native Gemini adapter,
+    so this can go once it learns the OpenAI-compatible spelling too.
+
+    Deltas are staged by index, since a call's id and its extras need not arrive
+    in the same one, then matched to rebuilt calls by id — the only field
+    reassembly carries over unchanged.
+    """
+    rebuilt = [
+        tc
+        for choice in _msg_get(response, "choices") or ()
+        for tc in _msg_get(_msg_get(choice, "message"), "tool_calls") or ()
+    ]
+    if not rebuilt:
+        return
+
+    extras: dict[int, dict] = {}
+    ids: dict[int, str] = {}
+    for chunk in chunks:
+        for choice in _msg_get(chunk, "choices") or ():
+            delta = _msg_get(choice, "delta")
+            for tc in _msg_get(delta, "tool_calls") or ():
+                index = _msg_get(tc, "index")
+                tc_id = _tool_call_id(tc)
+                if tc_id:
+                    ids[index] = tc_id
+                extra = _msg_get(tc, "extra_content")
+                if isinstance(extra, dict):
+                    extras.setdefault(index, {}).update(extra)
+
+    by_id = {ids[index]: extra for index, extra in extras.items() if index in ids}
+    for tc in rebuilt:
+        extra = by_id.get(_tool_call_id(tc))
+        if extra:
+            tc.extra_content = extra
+
+
 def _completion_via_stream(
     completion_kwargs, on_stream_start=None, display=True, show_thinking=False
 ):
@@ -5328,9 +5372,11 @@ def _completion_via_stream(
             text = tails["reasoning"]
             fmt.thinking_summary(text.count("\n") + 1, _estimate_tokens(text))
 
-    return litellm.stream_chunk_builder(
+    response = litellm.stream_chunk_builder(
         chunks, messages=completion_kwargs.get("messages")
     )
+    _restore_streamed_tool_call_extras(response, chunks)
+    return response
 
 
 def _completion_with_retry(

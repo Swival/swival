@@ -1,13 +1,14 @@
 """Regression tests for Gemini thought_signature preservation (issue #13).
 
 Ensures that request-shaped extras (extra_content) on tool_calls survive
-canonicalization, history writeback, and filter serialization.
+stream reassembly, canonicalization, history writeback, and filter
+serialization.
 """
 
 import types
 
 from swival._msg import _canonicalize_tool_calls, _find_current_turn_boundary
-from swival.agent import _msg_to_dict
+from swival.agent import _msg_to_dict, _restore_streamed_tool_call_extras
 from swival.filter import _message_to_dict as _filter_message_to_dict
 
 
@@ -690,3 +691,138 @@ class TestFilterPreservesToolCallExtras:
         }
         d = _filter_message_to_dict(msg)
         assert "extra_content" not in d["tool_calls"][0]
+
+
+def _chunk(delta, finish_reason=None):
+    """One streamed chunk, shaped as litellm hands it to us."""
+    from litellm.types.utils import ModelResponseStream
+
+    return ModelResponseStream(
+        id="c1",
+        object="chat.completion.chunk",
+        created=1,
+        model="m",
+        choices=[{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+    )
+
+
+def _tool_delta(*tool_calls):
+    return _chunk({"role": "assistant", "tool_calls": list(tool_calls)})
+
+
+def _finish(reason="tool_calls"):
+    return _chunk({}, finish_reason=reason)
+
+
+def _rebuild(chunks):
+    import litellm
+
+    return litellm.stream_chunk_builder(chunks, messages=[])
+
+
+class TestStreamReassemblyPreservesToolCallExtras:
+    """litellm's stream_chunk_builder rebuilds tool calls from the deltas with
+    only id/type/function, dropping the signature Gemini needs replayed."""
+
+    def test_signature_survives_reassembly(self):
+        chunks = [
+            _tool_delta(
+                {
+                    "index": 0,
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "think", "arguments": "{}"},
+                    "extra_content": {"google": {"thought_signature": "sig1"}},
+                }
+            ),
+            _finish(),
+        ]
+        response = _rebuild(chunks)
+        _restore_streamed_tool_call_extras(response, chunks)
+        assert _msg_to_dict(response.choices[0].message)["tool_calls"] == [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "think", "arguments": "{}"},
+                "extra_content": {"google": {"thought_signature": "sig1"}},
+            }
+        ]
+
+    def test_parallel_calls_keep_their_own_signature(self):
+        chunks = [
+            _tool_delta(
+                {
+                    "index": 0,
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "think", "arguments": "{}"},
+                    "extra_content": {"google": {"thought_signature": "sig1"}},
+                },
+                {
+                    "index": 1,
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{}"},
+                    "extra_content": {"google": {"thought_signature": "sig2"}},
+                },
+            ),
+            _finish(),
+        ]
+        response = _rebuild(chunks)
+        _restore_streamed_tool_call_extras(response, chunks)
+        tcs = response.choices[0].message.tool_calls
+        assert [tc.extra_content for tc in tcs] == [
+            {"google": {"thought_signature": "sig1"}},
+            {"google": {"thought_signature": "sig2"}},
+        ]
+
+    def test_signature_split_across_argument_deltas(self):
+        """The id and the signature need not arrive in the same delta."""
+        chunks = [
+            _tool_delta(
+                {
+                    "index": 0,
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "think", "arguments": '{"thought"'},
+                }
+            ),
+            _tool_delta(
+                {
+                    "index": 0,
+                    "function": {"arguments": ': "hi"}'},
+                    "extra_content": {"google": {"thought_signature": "late_sig"}},
+                }
+            ),
+            _finish(),
+        ]
+        response = _rebuild(chunks)
+        _restore_streamed_tool_call_extras(response, chunks)
+        tc = response.choices[0].message.tool_calls[0]
+        assert tc.function.arguments == '{"thought": "hi"}'
+        assert tc.extra_content == {"google": {"thought_signature": "late_sig"}}
+
+    def test_no_extras_leaves_response_untouched(self):
+        chunks = [
+            _tool_delta(
+                {
+                    "index": 0,
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "think", "arguments": "{}"},
+                }
+            ),
+            _finish(),
+        ]
+        response = _rebuild(chunks)
+        _restore_streamed_tool_call_extras(response, chunks)
+        assert (
+            "extra_content"
+            not in _msg_to_dict(response.choices[0].message)["tool_calls"][0]
+        )
+
+    def test_text_only_response_is_a_noop(self):
+        chunks = [_chunk({"role": "assistant", "content": "done"}, "stop")]
+        response = _rebuild(chunks)
+        _restore_streamed_tool_call_extras(response, chunks)
+        assert response.choices[0].message.content == "done"
