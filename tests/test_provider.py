@@ -4436,3 +4436,328 @@ class TestGeapCLIParser:
             ]
         )
         assert args.provider == "vertexai"
+
+
+class TestResponseCostObservation:
+    """Pricing one completion response for the session cost subtotal."""
+
+    def _response(self, prompt=100, completion=10, hidden=None):
+        usage = types.SimpleNamespace(
+            prompt_tokens=prompt, completion_tokens=completion
+        )
+        resp = types.SimpleNamespace(usage=usage)
+        if hidden is not None:
+            resp._hidden_params = hidden
+        return resp
+
+    def test_hidden_response_cost_wins_over_recalculation(self):
+        resp = self._response(hidden={"response_cost": 0.005})
+        with patch("litellm.completion_cost") as cc:
+            obs = agent._response_cost_observation(resp, "openrouter/m", "openrouter")
+        assert obs.status == "known"
+        assert obs.usd == 0.005
+        cc.assert_not_called()
+
+    def test_dict_shaped_response(self):
+        resp = {
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2},
+            "_hidden_params": {"response_cost": 0.001},
+        }
+        obs = agent._response_cost_observation(resp, "openrouter/m", "openrouter")
+        assert obs.status == "known"
+        assert obs.usd == 0.001
+
+    def test_fallback_to_completion_cost_with_resolved_model(self):
+        resp = self._response()
+        with patch("litellm.completion_cost", return_value=0.002) as cc:
+            obs = agent._response_cost_observation(resp, "openrouter/m", "openrouter")
+        assert obs.status == "known"
+        assert obs.usd == 0.002
+        assert cc.call_args.kwargs["completion_response"] is resp
+        assert cc.call_args.kwargs["model"] == "openrouter/m"
+
+    def test_calculation_exception_is_unavailable(self):
+        resp = self._response()
+        with patch("litellm.completion_cost", side_effect=Exception("unmapped")):
+            obs = agent._response_cost_observation(resp, "openrouter/m", "openrouter")
+        assert obs.status == "unavailable"
+
+    def test_missing_usage_skips_calculated_zero(self):
+        resp = types.SimpleNamespace(usage=None)
+        with patch("litellm.completion_cost", return_value=0.0) as cc:
+            obs = agent._response_cost_observation(resp, "openrouter/m", "openrouter")
+        assert obs.status == "unavailable"
+        cc.assert_not_called()
+
+    def test_real_zero_with_usage_stays_known(self):
+        resp = self._response()
+        with patch("litellm.completion_cost", return_value=0.0):
+            obs = agent._response_cost_observation(resp, "openrouter/m", "openrouter")
+        assert obs.status == "known"
+        assert obs.usd == 0.0
+
+    def test_hidden_zero_without_usage_is_unavailable(self):
+        resp = types.SimpleNamespace(usage=None, _hidden_params={"response_cost": 0.0})
+        obs = agent._response_cost_observation(resp, "openrouter/m", "openrouter")
+        assert obs.status == "unavailable"
+
+    def test_invalid_values_rejected(self):
+        for bad in (-0.001, float("inf"), float("nan"), "0.005", True):
+            resp = self._response(hidden={"response_cost": bad})
+            obs = agent._response_cost_observation(resp, "openrouter/m", "openrouter")
+            assert obs.status == "unavailable", bad
+
+    def test_local_and_chatgpt_not_applicable(self):
+        resp = self._response(hidden={"response_cost": 0.005})
+        for provider in ("command", "lmstudio", "llamacpp", "applefm", "chatgpt"):
+            obs = agent._response_cost_observation(resp, "openai/m", provider)
+            assert obs.status == "not_applicable", provider
+
+    def test_generic_never_consults_litellm(self):
+        # A colliding hosted name yields a map-derived hidden cost; distrust it.
+        resp = self._response(hidden={"response_cost": 0.005})
+        with patch("litellm.completion_cost") as cc:
+            obs = agent._response_cost_observation(resp, "openai/gpt-4o", "generic")
+        assert obs.status == "unavailable"
+        cc.assert_not_called()
+
+    def _litellm_response(self, model, prompt=1000, completion=100):
+        from litellm.types.utils import ModelResponse, Usage
+
+        resp = ModelResponse(
+            model=model,
+            choices=[{"message": {"role": "assistant", "content": "hi"}}],
+        )
+        resp.usage = Usage(
+            prompt_tokens=prompt,
+            completion_tokens=completion,
+            total_tokens=prompt + completion,
+        )
+        resp._hidden_params = {"custom_llm_provider": "openai", "response_cost": 99.0}
+        return resp
+
+    def _expected_gemini_cost(self, prompt=1000, completion=100):
+        import litellm
+
+        info = litellm.model_cost["gemini/gemini-2.5-flash"]
+        return (
+            prompt * info["input_cost_per_token"]
+            + completion * info["output_cost_per_token"]
+        )
+
+    def test_google_prices_real_gemini_response(self):
+        # Unmocked regression: neither the "openai" provider stamp nor the
+        # routed hidden cost may override the explicit gemini pricing.
+        resp = self._litellm_response("gemini-2.5-flash")
+        obs = agent._response_cost_observation(
+            resp, "openai/gemini-2.5-flash", "generic", "google"
+        )
+        assert obs.status == "known"
+        assert obs.usd == pytest.approx(self._expected_gemini_cost())
+        assert resp._hidden_params == {
+            "custom_llm_provider": "openai",
+            "response_cost": 99.0,
+        }
+
+    def test_google_ignores_response_model_name(self):
+        # completion_cost() falls back to the response's own model name; a
+        # response claiming "gpt-4o" must still price as the gemini model.
+        resp = self._litellm_response("gpt-4o")
+        obs = agent._response_cost_observation(
+            resp, "openai/gemini-2.5-flash", "generic", "google"
+        )
+        assert obs.status == "known"
+        assert obs.usd == pytest.approx(self._expected_gemini_cost())
+
+    def test_google_colliding_model_name_is_unavailable(self):
+        # A google-provider model actually named gpt-4o maps to the unmapped
+        # gemini/gpt-4o; the openai map must never price it as a fallback.
+        resp = self._litellm_response("gpt-4o")
+        obs = agent._response_cost_observation(
+            resp, "openai/gpt-4o", "generic", "google"
+        )
+        assert obs.status == "unavailable"
+
+    def test_google_without_usage_is_unavailable(self):
+        resp = types.SimpleNamespace(usage=None)
+        with patch("litellm.completion_cost", return_value=0.001) as cc:
+            obs = agent._response_cost_observation(
+                resp, "openai/gemini-2.5-flash", "generic", "google"
+            )
+        assert obs.status == "unavailable"
+        cc.assert_not_called()
+
+
+class TestCallLlmCostRecording:
+    """Every live response reaches the cost observation exactly once."""
+
+    def _call(self, session_cost, **overrides):
+        kwargs = dict(provider="openrouter", api_key="k", session_cost=session_cost)
+        kwargs.update(overrides)
+        return call_llm(
+            None,
+            "my-model",
+            [{"role": "user", "content": "hi"}],
+            100,
+            0.5,
+            None,
+            None,
+            None,
+            False,
+            **kwargs,
+        )
+
+    def test_ordinary_success_records_once(self, monkeypatch):
+        from swival.cost import CostObservation, SessionCost
+
+        msg = types.SimpleNamespace(content="hello", tool_calls=None, role="assistant")
+        choice = types.SimpleNamespace(message=msg, finish_reason="stop")
+        resp = types.SimpleNamespace(choices=[choice])
+
+        calls = []
+
+        def spy(response, model_str, provider, pricing_provider=None):
+            calls.append((response, model_str, provider, pricing_provider))
+            return CostObservation("known", 0.003)
+
+        monkeypatch.setattr(agent, "_response_cost_observation", spy)
+        sc = SessionCost()
+        with patch("litellm.completion", return_value=resp):
+            self._call(sc)
+
+        assert len(calls) == 1
+        assert calls[0][0] is resp
+        assert calls[0][1] == "openrouter/my-model"
+        assert calls[0][2] == "openrouter"
+        snap = sc.snapshot()
+        assert snap.priced_calls == 1
+        assert snap.known_usd == 0.003
+
+    def test_pricing_provider_marker_forwarded(self, monkeypatch):
+        from swival.cost import CostObservation, SessionCost
+
+        msg = types.SimpleNamespace(content="hello", tool_calls=None, role="assistant")
+        choice = types.SimpleNamespace(message=msg, finish_reason="stop")
+        resp = types.SimpleNamespace(choices=[choice])
+
+        calls = []
+
+        def spy(response, model_str, provider, pricing_provider=None):
+            calls.append(pricing_provider)
+            return CostObservation("unavailable")
+
+        monkeypatch.setattr(agent, "_response_cost_observation", spy)
+        sc = SessionCost()
+        with patch("litellm.completion", return_value=resp):
+            self._call(sc, provider="generic", pricing_provider="google")
+
+        assert calls == ["google"]
+        assert sc.snapshot().unpriced_calls == 1
+
+    def test_cost_failure_never_breaks_the_call(self):
+        from swival.cost import SessionCost
+
+        msg = types.SimpleNamespace(content="hello", tool_calls=None, role="assistant")
+        choice = types.SimpleNamespace(message=msg, finish_reason="stop")
+        usage = types.SimpleNamespace(prompt_tokens=10, completion_tokens=2)
+        resp = types.SimpleNamespace(choices=[choice], usage=usage)
+
+        sc = SessionCost()
+        with (
+            patch("litellm.completion", return_value=resp),
+            patch("litellm.completion_cost", side_effect=Exception("unmapped model")),
+        ):
+            out_msg, finish, *_ = self._call(sc)
+        assert out_msg.content == "hello"
+        assert finish == "stop"
+        assert sc.snapshot().unpriced_calls == 1
+
+    def test_repair_path_records_each_live_response_once(self, monkeypatch):
+        """The empty-assistant repair retry produces exactly one live response
+        (the first attempt raised before a response existed), so exactly one
+        observation is recorded."""
+        import litellm
+
+        from swival.cost import CostObservation, SessionCost
+
+        bad_req = litellm.BadRequestError(
+            message="must have either content or tool_calls",
+            llm_provider="openai",
+            model="x",
+        )
+        msg = types.SimpleNamespace(content="hello", tool_calls=None, role="assistant")
+        choice = types.SimpleNamespace(message=msg, finish_reason="stop")
+        resp = types.SimpleNamespace(choices=[choice])
+
+        calls = []
+
+        def spy(response, model_str, provider, pricing_provider=None):
+            calls.append(response)
+            return CostObservation("known", 0.001)
+
+        monkeypatch.setattr(agent, "_response_cost_observation", spy)
+        sc = SessionCost()
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant"},
+            {"role": "user", "content": "continue"},
+        ]
+        with patch("litellm.completion", MagicMock(side_effect=[bad_req, resp])):
+            out_msg, *_ = call_llm(
+                None,
+                "my-model",
+                messages,
+                100,
+                0.5,
+                None,
+                None,
+                None,
+                False,
+                provider="openrouter",
+                api_key="k",
+                session_cost=sc,
+            )
+
+        assert out_msg.content == "hello"
+        assert calls == [resp]
+        assert sc.snapshot().priced_calls == 1
+
+    def test_no_session_cost_skips_observation(self, monkeypatch):
+        msg = types.SimpleNamespace(content="hello", tool_calls=None, role="assistant")
+        choice = types.SimpleNamespace(message=msg, finish_reason="stop")
+        resp = types.SimpleNamespace(choices=[choice])
+
+        calls = []
+        monkeypatch.setattr(
+            agent, "_response_cost_observation", lambda *a, **k: calls.append(a)
+        )
+        with patch("litellm.completion", return_value=resp):
+            self._call(None)
+        assert calls == []
+
+
+class TestGooglePricingMarker:
+    def test_resolve_provider_sets_marker_for_google(self, monkeypatch):
+        monkeypatch.setenv("GEMINI_API_KEY", "k")
+        monkeypatch.setattr(agent, "_litellm_context_length", lambda s: 1000000)
+        *_, llm_kwargs = resolve_provider(
+            provider="google",
+            model="gemini-2.5-flash",
+            api_key=None,
+            base_url=None,
+            max_context_tokens=None,
+            verbose=False,
+        )
+        assert llm_kwargs["provider"] == "generic"
+        assert llm_kwargs["pricing_provider"] == "google"
+
+    def test_other_providers_have_no_marker(self):
+        *_, llm_kwargs = resolve_provider(
+            provider="openrouter",
+            model="openai/gpt-4o",
+            api_key="k",
+            base_url=None,
+            max_context_tokens=None,
+            verbose=False,
+        )
+        assert "pricing_provider" not in llm_kwargs

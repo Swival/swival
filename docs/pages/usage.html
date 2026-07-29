@@ -297,6 +297,24 @@ swival --provider chatgpt --model gpt-5.5 \
 <p><code>--no-history</code> disables writes to <code>.swival/HISTORY.md</code>.</p>
 <p><code>--no-continue</code> disables continue-here files. When set, Swival will not write <code>.swival/continue.md</code> on interruption and will not load it on startup.</p>
 <p><code>--color</code> forces ANSI color on standard error, and <code>--no-color</code> disables ANSI color even on TTY output.</p>
+<h3 id="session-cost">Session Cost</h3>
+<p>After each successful turn, verbose mode prints a cumulative cost estimate on stderr, right under the timing line:</p>
+<pre><code class="language-text">  LLM responded in 1.4s  finish_reason=tool_calls
+  Session cost: ~$0.003812
+</code></pre>
+<p>The value comes from LiteLLM's pricing metadata and the provider's response usage, so it is an approximation, not an invoice.
+The subtotal covers the whole process session, including hidden work such as compaction summaries, audit calls, and subagents, and it survives <code>/clear</code>, <code>/new</code>, <code>/continue</code>, and model or profile switches.
+A new CLI process starts from zero.</p>
+<p>Swival only shows what it can support:</p>
+<ul>
+<li>Hosted providers with known pricing print the line after every visible turn, tool calls and final answers alike.</li>
+<li>When some successful calls could not be priced, the label switches to <code>Known session cost: ~$0.003812 (2 calls unpriced)</code>. The dollar amount only ever includes priced calls.</li>
+<li>When nothing could be priced, or the priced subtotal would display as zero, the line is omitted entirely rather than showing a value that cannot be trusted. A tiny subtotal shows up once it accumulates past display precision.</li>
+<li>Local servers (<code>lmstudio</code>, <code>llamacpp</code>, <code>applefm</code>), the <code>command</code> provider, SQLite cache hits, and the subscription-backed <code>chatgpt</code> provider have no per-token bill, so they neither add dollars nor mark the subtotal as partial.</li>
+<li><code>generic</code> endpoints are never priced, even when the served model name matches a hosted model: a custom server can call its model anything, and a name collision would produce a plausible but wrong price. The <code>google</code> provider is the exception and is priced as <code>gemini/{model}</code> even though it routes through Google's OpenAI-compatible endpoint.</li>
+</ul>
+<p>Work that finishes after the last turn line, such as the continue-file summary written when max turns run out or a subagent completing during shutdown, still counts: when it changed the subtotal, one final reconciliation line is printed on exit.</p>
+<p><code>--quiet</code> (and the Python API default of <code>verbose=False</code>) suppresses the display without disabling the accounting.</p>
 <h3 id="caching-flags">Caching Flags</h3>
 <p><code>--cache</code> enables LLM response caching. When an identical request is seen again, the cached response is returned without contacting the LLM. The cache is stored in a SQLite database at <code>.swival/cache.db</code> by default. Off by default.</p>
 <p><code>--cache-dir PATH</code> overrides the default cache database directory. Useful for sharing a cache across projects.</p>

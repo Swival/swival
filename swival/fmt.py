@@ -29,6 +29,8 @@ from rich.segment import Segment
 from rich.style import Style
 from rich.text import Text
 
+from .cost import CostSnapshot
+
 _console = Console(stderr=True)
 _stdout_console = Console(stderr=False)
 
@@ -185,6 +187,45 @@ def llm_timing(elapsed: float, finish_reason: str) -> None:
     text.append(f"  LLM responded in {elapsed:.1f}s", style=style)
     text.append(f"  finish_reason={escape(str(finish_reason))}", style=style)
     _console.print(text)
+
+
+def _format_usd(value: float) -> str:
+    if value < 0.01:
+        return f"${value:.6f}"
+    if value < 1.00:
+        return f"${value:.4f}"
+    return f"${value:.2f}"
+
+
+def session_cost_line(snapshot: CostSnapshot) -> str | None:
+    """Render the cumulative session cost line, or None when it is unknown.
+
+    A subtotal that would render as zero is indistinguishable from missing
+    pricing, so it yields nothing rather than a misleading ``~$0.000000``.
+    """
+    if snapshot.priced_calls == 0:
+        return None
+    formatted = _format_usd(snapshot.known_usd)
+    if formatted == "$0.000000":
+        return None
+    amount = f"~{formatted}"
+    if snapshot.unpriced_calls > 0:
+        n = snapshot.unpriced_calls
+        plural = "s" if n != 1 else ""
+        return f"  Known session cost: {amount} ({n} call{plural} unpriced)"
+    return f"  Session cost: {amount}"
+
+
+def session_cost_render(line: str) -> None:
+    """Print an already-formatted session cost line, so a caller that
+    fingerprints the line prints exactly the string it compared."""
+    _console.print(Text(line, style="dim"))
+
+
+def session_cost(snapshot: CostSnapshot) -> None:
+    line = session_cost_line(snapshot)
+    if line is not None:
+        session_cost_render(line)
 
 
 _SPINNER_PHASES: list[tuple[float, str, str, str]] = [

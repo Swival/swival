@@ -1,6 +1,7 @@
 """Shared test fixtures."""
 
 import shutil
+from contextlib import contextmanager
 from io import StringIO
 from pathlib import Path
 
@@ -42,6 +43,28 @@ def capture_styled(func, *args, **kwargs) -> str:
         fmt.reset_state()
         fmt._console = old
     return buf.getvalue()
+
+
+@contextmanager
+def plain_console(width=200):
+    """Swap fmt._console for a plain no-color console; yields the buffer."""
+    from swival import fmt
+
+    buf = StringIO()
+    old = fmt._console
+    fmt._console = Console(file=buf, no_color=True, width=width)
+    try:
+        yield buf
+    finally:
+        fmt._console = old
+
+
+def fake_tool_result(name="read_file", tc_id="tc1", content="ok"):
+    """Build the (tool message, stats) pair handle_tool_call returns."""
+    return (
+        {"role": "tool", "tool_call_id": tc_id, "content": content},
+        {"name": name, "arguments": {}, "elapsed": 0.0, "succeeded": True},
+    )
 
 
 def run_command(

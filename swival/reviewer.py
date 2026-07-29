@@ -5,6 +5,8 @@ import re
 import sys
 from pathlib import Path
 
+from . import fmt
+from .cost import SessionCost
 from .report import AgentError
 
 _VERDICT_RE = re.compile(r"^\s*VERDICT:\s*(ACCEPT|RETRY)\s*$", re.IGNORECASE)
@@ -84,7 +86,7 @@ def _build_prompt(
 
 def run_as_reviewer(args, base_dir: str) -> int:
     """Execute reviewer mode. Returns exit code (0, 1, or 2)."""
-    from .agent import call_llm, resolve_provider
+    from .agent import call_llm, resolve_provider, _provider_extra_kwargs
 
     # Read answer from stdin
     answer = sys.stdin.read()
@@ -161,6 +163,9 @@ def run_as_reviewer(args, base_dir: str) -> int:
             extra_patterns=getattr(args, "encrypt_secrets_patterns", None),
         )
 
+    # The reviewer is a separate process, so it keeps its own subtotal.
+    session_cost = SessionCost()
+
     try:
         extra_kwargs = {}
         if secret_shield is not None:
@@ -179,9 +184,8 @@ def run_as_reviewer(args, base_dir: str) -> int:
             api_key=api_key,
             user_agent=llm_kwargs.get("user_agent"),
             max_retries=getattr(args, "retries", 5),
-            aws_profile=llm_kwargs.get("aws_profile"),
-            vertex_project=llm_kwargs.get("vertex_project"),
-            vertex_location=llm_kwargs.get("vertex_location"),
+            session_cost=session_cost,
+            **_provider_extra_kwargs(llm_kwargs),
             **extra_kwargs,
         )
         msg = _llm_result[0]
@@ -190,6 +194,9 @@ def run_as_reviewer(args, base_dir: str) -> int:
         if secret_shield is not None:
             secret_shield.destroy()
         return 2
+
+    if args.verbose:
+        fmt.session_cost(session_cost.snapshot())
 
     response_text = msg.content or ""
 

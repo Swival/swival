@@ -1099,3 +1099,61 @@ class TestDecorativeAnimations:
             fmt.turn_header(2, 30, 200, 128000)
             fmt.turn_header(7, 30, 300, 128000)
         assert len(calls) == 1  # only the opening turn animates
+
+
+class TestSessionCostFmt:
+    def _snap(self, usd, priced=1, unpriced=0):
+        from swival.cost import CostSnapshot
+
+        return CostSnapshot(known_usd=usd, priced_calls=priced, unpriced_calls=unpriced)
+
+    def test_six_decimals_below_one_cent(self):
+        assert fmt._format_usd(0.003812) == "$0.003812"
+
+    def test_four_decimals_below_one_dollar(self):
+        assert fmt._format_usd(0.25) == "$0.2500"
+
+    def test_two_decimals_above_one_dollar(self):
+        assert fmt._format_usd(12.3456) == "$12.35"
+
+    def test_no_scientific_notation(self):
+        assert "e" not in fmt._format_usd(0.0000004).lower()
+
+    def test_complete_subtotal_renders_session_cost(self):
+        out = _capture(fmt.session_cost, self._snap(0.003812))
+        assert "Session cost: ~$0.003812" in out
+        assert "Known" not in out
+
+    def test_partial_subtotal_renders_known_label(self):
+        out = _capture(fmt.session_cost, self._snap(0.003812, unpriced=2))
+        assert "Known session cost: ~$0.003812 (2 calls unpriced)" in out
+
+    def test_single_unpriced_call_is_singular(self):
+        out = _capture(fmt.session_cost, self._snap(0.01, unpriced=1))
+        assert "(1 call unpriced)" in out
+
+    def test_no_output_before_a_priced_call(self):
+        out = _capture(fmt.session_cost, self._snap(0.0, priced=0, unpriced=3))
+        assert out == ""
+
+    def test_zero_only_subtotal_prints_nothing(self):
+        out = _capture(fmt.session_cost, self._snap(0.0, priced=2))
+        assert out == ""
+
+    def test_tiny_subtotal_rounding_to_zero_prints_nothing(self):
+        out = _capture(fmt.session_cost, self._snap(0.0000004, priced=2))
+        assert out == ""
+
+    def test_tiny_partial_subtotal_rounding_to_zero_prints_nothing(self):
+        out = _capture(fmt.session_cost, self._snap(0.0000004, priced=1, unpriced=2))
+        assert out == ""
+
+    def test_smallest_displayable_subtotal_is_not_zero(self):
+        out = _capture(fmt.session_cost, self._snap(0.000001, priced=1))
+        assert "Session cost: ~$0.000001" in out
+
+    def test_output_goes_to_stderr_console(self, capsys):
+        fmt.session_cost(self._snap(0.5))
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "Session cost" in captured.err

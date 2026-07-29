@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 from typing import Literal
+import math
 import os
 import platform
 import random
@@ -48,6 +49,7 @@ from ._msg import (
 )
 from .config import _UNSET
 from .config import find_project_root as _find_project_root
+from .cost import CostObservation, SessionCost
 from .report import (
     AgentError,
     ConfigError,
@@ -3257,13 +3259,19 @@ def _run_terminal_floor_ladder(
     return None
 
 
-def _provider_auth_kwargs(llm_kwargs):
-    """Extract provider auth extras (geap project/location, bedrock profile)
-    that secondary LLM calls (summaries, checkpoints, continue files) must
-    forward to ``call_llm`` or credential resolution fails."""
+def _provider_extra_kwargs(llm_kwargs):
+    """Extract provider extras that secondary LLM calls (summaries,
+    checkpoints, continue files) must forward to ``call_llm``: without the
+    auth keys credential resolution fails, and without the pricing marker
+    Gemini calls are counted as unpriced."""
     return {
         key: llm_kwargs[key]
-        for key in ("aws_profile", "vertex_project", "vertex_location")
+        for key in (
+            "aws_profile",
+            "vertex_project",
+            "vertex_location",
+            "pricing_provider",
+        )
         if llm_kwargs.get(key) is not None
     }
 
@@ -5446,6 +5454,123 @@ def _completion_with_retry(
             time.sleep(delay)
 
 
+# Providers with no per-token billing: local servers, external commands,
+# and the subscription-backed ChatGPT provider (priced at zero on purpose).
+_COST_NOT_APPLICABLE_PROVIDERS = frozenset(
+    {"command", "lmstudio", "llamacpp", "applefm", "chatgpt"}
+)
+
+
+def _has_meaningful_usage(response) -> bool:
+    usage = _msg_get(response, "usage")
+    if not usage:
+        return False
+    prompt = _msg_get(usage, "prompt_tokens") or 0
+    completion = _msg_get(usage, "completion_tokens") or 0
+    return bool(prompt or completion)
+
+
+def _response_cost_observation(
+    response, model_str, provider, pricing_provider=None
+) -> CostObservation:
+    """Price one completion response, never raising.
+
+    Prefers LiteLLM's ``_hidden_params["response_cost"]``; falls back to
+    ``litellm.completion_cost()`` when the response has real usage (streamed
+    responses rebuilt by ``stream_chunk_builder`` lose the hidden value).
+
+    ``generic`` is never priced: a custom endpoint can serve any model name,
+    and a name colliding with LiteLLM's hosted map yields a plausible but
+    wrong price. The ``google`` marker overrides that and prices with
+    ``gemini/{model_id}``, since Swival routes Gemini through the
+    OpenAI-compatible endpoint as ``generic`` internally.
+    """
+    if provider in _COST_NOT_APPLICABLE_PROVIDERS:
+        return CostObservation("not_applicable")
+    if provider == "generic" and pricing_provider != "google":
+        return CostObservation("unavailable")
+
+    try:
+        import litellm
+
+        if pricing_provider == "google":
+            if not _has_meaningful_usage(response):
+                return CostObservation("unavailable")
+            bare = model_str.split("/", 1)[1] if "/" in model_str else model_str
+            pricing_model = "gemini/" + bare.removeprefix("gemini/")
+            # Price a minimal payload: completion_cost() would let the
+            # response's "openai" provider stamp and model name override the
+            # explicit gemini model, and neither can be trusted here.
+            usage = _msg_get(response, "usage")
+            if hasattr(usage, "model_dump"):
+                usage = usage.model_dump()
+            cost = litellm.completion_cost(
+                completion_response={"model": pricing_model, "usage": usage},
+                model=pricing_model,
+            )
+        else:
+            hidden = _msg_get(response, "_hidden_params")
+            cost = hidden.get("response_cost") if isinstance(hidden, dict) else None
+            if cost is None:
+                if not _has_meaningful_usage(response):
+                    return CostObservation("unavailable")
+                cost = litellm.completion_cost(
+                    completion_response=response, model=model_str
+                )
+    except Exception:
+        return CostObservation("unavailable")
+
+    if isinstance(cost, bool) or not isinstance(cost, (int, float)):
+        return CostObservation("unavailable")
+    cost = float(cost)
+    if not math.isfinite(cost) or cost < 0:
+        return CostObservation("unavailable")
+    if cost == 0.0 and not _has_meaningful_usage(response):
+        return CostObservation("unavailable")
+    return CostObservation("known", cost)
+
+
+def _display_session_cost(session_cost, *, reconcile=False) -> None:
+    """Render the cumulative subtotal from the shared accumulator.
+
+    Turn lines print unconditionally. A reconcile render (loop exit,
+    post-shutdown) prints only when the line differs from the last one
+    rendered, so late silent work never duplicates the trailing line.
+
+    Never raises: it runs inside finally blocks where a display failure must
+    not mask the original outcome.
+    """
+    try:
+        line = fmt.session_cost_line(session_cost.snapshot())
+        if line is None:
+            return
+        if reconcile and line == session_cost.last_rendered:
+            return
+        fmt.session_cost_render(line)
+        # Kept behind on a render failure so a later reconcile retries.
+        session_cost.last_rendered = line
+    except Exception:
+        pass
+
+
+def _shutdown_and_reconcile(manager, session_cost, verbose) -> None:
+    """Join subagent workers, then reconcile the cost display.
+
+    An ordinary shutdown failure is swallowed so it never masks the primary
+    outcome; Ctrl-C during the join propagates, but only after the reconcile
+    ran. Callers with further obligations (manager replacement, cadence
+    updates) wrap this call in their own try/finally.
+    """
+    try:
+        if manager is not None and hasattr(manager, "shutdown"):
+            manager.shutdown()
+    except Exception:
+        pass
+    finally:
+        if session_cost is not None and verbose:
+            _display_session_cost(session_cost, reconcile=True)
+
+
 def _log_cache_stats(response, verbose) -> tuple[int, int]:
     """Log prompt cache stats to stderr if verbose. Returns (cached_tokens, cache_write_tokens)."""
     if not hasattr(response, "usage") or not response.usage:
@@ -5492,6 +5617,8 @@ def call_llm(
     vertex_project=None,
     vertex_location=None,
     unknown_context_window=False,
+    pricing_provider=None,
+    session_cost=None,
 ):
     """Call LiteLLM with the appropriate provider.
 
@@ -5774,6 +5901,28 @@ def call_llm(
                 tc.function.arguments = secret_shield.reverse_known(args_str)
         return msg
 
+    def _finalize_response(response):
+        """Record cost, log cache stats, and finalize the best choice.
+
+        Every live response from ``_completion_with_retry`` passes through
+        here exactly once. Cost is recorded before choice validation: the
+        provider already served (and may bill) a response even when Swival
+        repairs it and continues.
+        """
+        if session_cost is not None:
+            session_cost.record(
+                _response_cost_observation(
+                    response,
+                    completion_kwargs["model"],
+                    provider,
+                    pricing_provider,
+                )
+            )
+        cache_stats = _log_cache_stats(response, verbose)
+        choice = _pick_best_choice(response.choices)
+        msg, finish_reason = _finalize_choice(choice)
+        return msg, finish_reason, cache_stats
+
     _show_stream = (
         provider
         in ("generic", "llamacpp", "lmstudio", "huggingface", "openrouter", "applefm")
@@ -5848,9 +5997,7 @@ def call_llm(
             )
             ae._provider_retries = first_retries + _retries_from_exc(e2)
             _raise_with_retries(ae)
-        cache_stats = _log_cache_stats(response, verbose)
-        choice = _pick_best_choice(response.choices)
-        msg, finish_reason = _finalize_choice(choice)
+        msg, finish_reason, cache_stats = _finalize_response(response)
         return msg, finish_reason, [], first_retries + retries2, cache_stats
 
     try:
@@ -5895,6 +6042,9 @@ def call_llm(
                     api_key,
                 )
             )
+            if session_cost is not None:
+                # Remote call, but no LiteLLM completion response to price.
+                session_cost.record(CostObservation("unavailable"))
             _post_process_assistant_message(msg, sanitize_thinking)
             return msg, finish_reason, cmd_activity, retries, cache_stats
         if _EMPTY_ASSISTANT_RE.search(msg_text):
@@ -5939,9 +6089,7 @@ def call_llm(
                     ae._provider_retries = combined
                     _raise_with_retries(ae)
                 retries += first_retries
-                cache_stats = _log_cache_stats(response, verbose)
-                choice = _pick_best_choice(response.choices)
-                msg, finish_reason = _finalize_choice(choice)
+                msg, finish_reason, cache_stats = _finalize_response(response)
                 return msg, finish_reason, [], retries, cache_stats
         if _ORPHANED_TOOL_CALL_RE.search(msg_text):
             first_retries = _retries_from_exc(e)
@@ -5984,9 +6132,7 @@ def call_llm(
                     ae._provider_retries = combined
                     _raise_with_retries(ae)
                 retries += first_retries
-                cache_stats = _log_cache_stats(response, verbose)
-                choice = _pick_best_choice(response.choices)
-                msg, finish_reason = _finalize_choice(choice)
+                msg, finish_reason, cache_stats = _finalize_response(response)
                 return msg, finish_reason, [], retries, cache_stats
         if tools is not None and _TOOLS_NOT_SUPPORTED_RE.search(msg_text):
             tne = ToolsNotSupportedError(
@@ -6038,9 +6184,7 @@ def call_llm(
         ae._provider_retries = _retries_from_exc(e)
         _raise_with_retries(ae)
 
-    cache_stats = _log_cache_stats(response, verbose)
-    choice = _pick_best_choice(response.choices)
-    msg, finish_reason = _finalize_choice(choice)
+    msg, finish_reason, cache_stats = _finalize_response(response)
     return msg, finish_reason, [], retries, cache_stats
 
 
@@ -7999,6 +8143,10 @@ def resolve_provider(
         "provider": llm_provider,
         "api_key": resolved_key,
     }
+    if provider == _GOOGLE_PROVIDER:
+        # Google routes through the OpenAI-compatible endpoint as "generic",
+        # but pricing must keep the original identity (gemini/{model}).
+        llm_kwargs["pricing_provider"] = "google"
     if aws_profile:
         llm_kwargs["aws_profile"] = aws_profile
     if provider == "geap":
@@ -9068,6 +9216,7 @@ def _run_main(args, report, _write_report, parser):
         storm_breaker_enabled=getattr(args, "storm_breaker", True),
         network_mode=_network_mode,
         net_jail=net_jail,
+        session_cost=SessionCost(),
     )
 
     # Validate and thread llm_filter
@@ -9349,8 +9498,9 @@ def _run_main(args, report, _write_report, parser):
                 sys.exit(2)
             return
         finally:
-            if subagent_manager is not None:
-                subagent_manager.shutdown()
+            _shutdown_and_reconcile(
+                subagent_manager, loop_kwargs.get("session_cost"), args.verbose
+            )
             _write_trace(messages)
 
     # REPL path
@@ -9364,10 +9514,16 @@ def _run_main(args, report, _write_report, parser):
                 answer, exhausted = run_agent_loop(messages, tools, **loop_kwargs)
             except KeyboardInterrupt:
                 if subagent_manager is not None:
-                    subagent_manager.shutdown()
-                    subagent_manager = subagent_manager.fresh_copy()
-                    loop_kwargs["subagent_manager"] = subagent_manager
-                    _sa_holder[0] = subagent_manager
+                    try:
+                        _shutdown_and_reconcile(
+                            subagent_manager,
+                            loop_kwargs.get("session_cost"),
+                            args.verbose,
+                        )
+                    finally:
+                        subagent_manager = subagent_manager.fresh_copy()
+                        loop_kwargs["subagent_manager"] = subagent_manager
+                        _sa_holder[0] = subagent_manager
                 fmt.warning("interrupted during initial question.")
                 if _continue_here:
                     from .continue_here import write_continue_file
@@ -9437,14 +9593,31 @@ def _run_main(args, report, _write_report, parser):
             trace_dir=getattr(args, "trace_dir", None),
         )
     finally:
-        if _sa_holder[0] is not None:
-            _sa_holder[0].shutdown()
+        _shutdown_and_reconcile(
+            _sa_holder[0], loop_kwargs.get("session_cost"), args.verbose
+        )
         _write_trace(messages)
     _show_sandbox_review_hint(args)
 
 
 @keep_awake(reason="swival agent turn")
-def run_agent_loop(
+def run_agent_loop(messages: list, tools: list, **loop_kwargs):
+    """Run the agent loop, then reconcile the session-cost display on every
+    exit: checkpoints, continue-file summaries, and concurrent subagents can
+    all add cost after the last turn line."""
+    try:
+        return _run_agent_loop(messages, tools, **loop_kwargs)
+    finally:
+        session_cost = loop_kwargs.get("session_cost")
+        if (
+            session_cost is not None
+            and loop_kwargs.get("verbose")
+            and not loop_kwargs.get("is_subagent", False)
+        ):
+            _display_session_cost(session_cost, reconcile=True)
+
+
+def _run_agent_loop(
     messages: list,
     tools: list,
     *,
@@ -9496,6 +9669,7 @@ def run_agent_loop(
     session: object | None = None,
     network_mode: str = "full",
     net_jail: list | None = None,
+    session_cost: SessionCost | None = None,
 ) -> tuple[str | None, bool]:
     """Run the tool-calling loop until a final answer or max turns.
 
@@ -9516,12 +9690,15 @@ def run_agent_loop(
         llm_kwargs = {**llm_kwargs, "secret_shield": secret_shield}
     if cache is not None:
         llm_kwargs = {**llm_kwargs, "cache": cache}
+    if session_cost is not None:
+        llm_kwargs = {**llm_kwargs, "session_cost": session_cost}
 
     _need_secondary_wrapper = (
         cache is not None
         or secret_shield is not None
         or llm_filter is not None
         or _secondary_user_agent is not None
+        or session_cost is not None
     )
     if _need_secondary_wrapper:
 
@@ -9535,6 +9712,8 @@ def run_agent_loop(
                 kwargs.setdefault("cache", cache)
             if secret_shield is not None:
                 kwargs.setdefault("secret_shield", secret_shield)
+            if session_cost is not None:
+                kwargs.setdefault("session_cost", session_cost)
             return call_llm(*args, **kwargs)
 
     def _write_turns():
@@ -9583,6 +9762,7 @@ def run_agent_loop(
         "enabled_metaskills": enabled_metaskills or set(),
         "network_mode": network_mode,
         "net_jail": net_jail,
+        "session_cost": session_cost,
     }
 
     # Goal-loop bookkeeping. last_turn_was_goal_continuation tracks whether the
@@ -9626,6 +9806,13 @@ def run_agent_loop(
                 "budget_limited", rec.to_json() if rec is not None else None
             )
 
+    def _print_session_cost() -> None:
+        """Print the subtotal after a top-level turn. Only the parent loop
+        renders; auxiliary and subagent calls accumulate silently so worker
+        threads never interleave output."""
+        if session_cost is not None and verbose and not is_subagent:
+            _display_session_cost(session_cost)
+
     def _emit(kind: str, data: dict) -> None:
         if event_callback is not None:
             try:
@@ -9653,6 +9840,7 @@ def run_agent_loop(
                 "request were truncated to fit"
             )
             fmt.llm_timing(terminal.elapsed, terminal.finish_reason)
+            _print_session_cost()
         if report:
             report.record_llm_call(
                 turns + turn_offset,
@@ -9865,7 +10053,7 @@ def run_agent_loop(
         seed=seed,
         provider=llm_kwargs.get("provider"),
         compaction_state=compaction_state,
-        provider_kwargs=_provider_auth_kwargs(llm_kwargs),
+        provider_kwargs=_provider_extra_kwargs(llm_kwargs),
     )
 
     _is_tools_retry = False
@@ -10266,6 +10454,7 @@ def run_agent_loop(
                     elapsed = time.monotonic() - t0
                     if verbose:
                         fmt.llm_timing(elapsed, finish_reason)
+                        _print_session_cost()
                     if report:
                         report.record_llm_call(
                             turns + turn_offset,
@@ -10410,6 +10599,7 @@ def run_agent_loop(
             elapsed = time.monotonic() - t0
             if verbose:
                 fmt.llm_timing(elapsed, finish_reason)
+                _print_session_cost()
             if report:
                 report.record_llm_call(
                     turns + turn_offset,
@@ -10943,7 +11133,7 @@ def run_agent_loop(
                 top_p=top_p,
                 seed=seed,
                 provider=llm_kwargs.get("provider"),
-                provider_kwargs=_provider_auth_kwargs(llm_kwargs),
+                provider_kwargs=_provider_extra_kwargs(llm_kwargs),
             )
 
     # max_turns exhausted — extract last assistant text
@@ -10977,7 +11167,7 @@ def run_agent_loop(
             top_p=top_p,
             seed=seed,
             provider=llm_kwargs.get("provider"),
-            provider_kwargs=_provider_auth_kwargs(llm_kwargs),
+            provider_kwargs=_provider_extra_kwargs(llm_kwargs),
         )
 
     _write_turns()
@@ -11527,6 +11717,7 @@ def _repl_profile(
         "reasoning_effort",
         "sanitize_thinking",
         "show_thinking",
+        "pricing_provider",
     }
     old_llm_kwargs = repl_kwargs.get("llm_kwargs", {})
     for key, val in old_llm_kwargs.items():
@@ -12497,11 +12688,17 @@ def _invoke_agent_turn(
 
 def _reset_subagent(ctx: InputContext) -> None:
     if ctx.subagent_manager is not None:
-        ctx.subagent_manager.shutdown()
-        ctx.subagent_manager = ctx.subagent_manager.fresh_copy()
-        ctx.loop_kwargs["subagent_manager"] = ctx.subagent_manager
-        if ctx.subagent_holder is not None:
-            ctx.subagent_holder[0] = ctx.subagent_manager
+        try:
+            _shutdown_and_reconcile(
+                ctx.subagent_manager,
+                ctx.loop_kwargs.get("session_cost"),
+                ctx.loop_kwargs.get("verbose"),
+            )
+        finally:
+            ctx.subagent_manager = ctx.subagent_manager.fresh_copy()
+            ctx.loop_kwargs["subagent_manager"] = ctx.subagent_manager
+            if ctx.subagent_holder is not None:
+                ctx.subagent_holder[0] = ctx.subagent_manager
 
 
 def _finalize_agent_step(
@@ -12784,6 +12981,9 @@ def execute_input(
             return StepResult(kind="state_change", text=msg, is_error=err)
 
         if cmd == "/restore":
+            provider_kwargs = _provider_extra_kwargs(ctx.loop_kwargs["llm_kwargs"])
+            if ctx.loop_kwargs.get("session_cost") is not None:
+                provider_kwargs["session_cost"] = ctx.loop_kwargs["session_cost"]
             msg, err = _repl_snapshot_restore(
                 ctx.messages,
                 ctx.snapshot_state,
@@ -12794,7 +12994,7 @@ def execute_input(
                 top_p=ctx.loop_kwargs["top_p"],
                 seed=ctx.loop_kwargs["seed"],
                 provider=ctx.loop_kwargs["llm_kwargs"].get("provider"),
-                provider_kwargs=_provider_auth_kwargs(ctx.loop_kwargs["llm_kwargs"]),
+                provider_kwargs=provider_kwargs,
             )
             return StepResult(kind="state_change", text=msg, is_error=err)
 
@@ -13575,12 +13775,16 @@ def _run_loop_iteration_snapshot(reg: "LoopRegistration", ctx: InputContext) -> 
             if report is not None:
                 ctx.loop_kwargs["turn_offset"] = report.max_turn_seen
     finally:
-        if iter_subagent is not None and hasattr(iter_subagent, "shutdown"):
-            try:
-                iter_subagent.shutdown()
-            except Exception:
-                pass
-        reg.last_fire = _loops_mod.monotonic()
+        try:
+            # Reconciles even without a manager: a direct-LLM command can
+            # record cost without ever creating one.
+            _shutdown_and_reconcile(
+                iter_subagent,
+                ctx.loop_kwargs.get("session_cost"),
+                ctx.loop_kwargs.get("verbose"),
+            )
+        finally:
+            reg.last_fire = _loops_mod.monotonic()
 
     cancelled = False
     if failure:
@@ -13825,6 +14029,7 @@ def repl_loop(
     session: object | None = None,
     network_mode: str = "full",
     net_jail: list | None = None,
+    session_cost: SessionCost | None = None,
 ):
     """Interactive read-eval-print loop."""
     from prompt_toolkit import PromptSession
@@ -14054,6 +14259,7 @@ def repl_loop(
         session=session,
         network_mode=network_mode,
         net_jail=net_jail,
+        session_cost=session_cost,
     )
     _refresh_toolbar_state()
 

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 import pytest
+from conftest import fake_tool_result, plain_console
 
 from swival.agent import (
     build_parser,
@@ -295,19 +296,7 @@ class TestRunAgentLoop:
             patch("swival.agent.call_llm", side_effect=fake_call_llm),
             patch(
                 "swival.agent.handle_tool_call",
-                return_value=(
-                    {
-                        "role": "tool",
-                        "tool_call_id": "tc1",
-                        "content": "file contents",
-                    },
-                    {
-                        "name": "read_file",
-                        "arguments": {},
-                        "elapsed": 0.0,
-                        "succeeded": True,
-                    },
-                ),
+                return_value=fake_tool_result(content="file contents"),
             ),
         ):
             answer, exhausted = run_agent_loop(
@@ -330,15 +319,7 @@ class TestRunAgentLoop:
             ),
             patch(
                 "swival.agent.handle_tool_call",
-                return_value=(
-                    {"role": "tool", "tool_call_id": "tc1", "content": "ok"},
-                    {
-                        "name": "read_file",
-                        "arguments": {},
-                        "elapsed": 0.0,
-                        "succeeded": True,
-                    },
-                ),
+                return_value=fake_tool_result(),
             ),
         ):
             answer, exhausted = run_agent_loop(
@@ -2856,3 +2837,319 @@ def test_safe_file_history_recreates_directory(tmp_path):
     history.store_string("hello")
     assert history_dir.exists()
     assert history_path.exists()
+
+
+class TestSessionCostDisplay:
+    def _run(self, tmp_path, *, verbose=True, per_call_usd=0.001, **overrides):
+        """Run a 3-turn loop (two tool calls, one final) whose fake LLM records
+        a cost observation per call. Returns (answer, captured fmt output)."""
+
+        from swival.cost import CostObservation, SessionCost
+
+        messages = [_sys("system"), _user("hello")]
+        session_cost = SessionCost()
+        call_count = 0
+
+        def fake_call_llm(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            sc = kwargs.get("session_cost")
+            if sc is not None:
+                if per_call_usd is None:
+                    sc.record(CostObservation("unavailable"))
+                else:
+                    sc.record(CostObservation("known", per_call_usd))
+            if call_count < 3:
+                return _make_tool_response([("tc1", "read_file", '{"path": "x.txt"}')])
+            return _make_text_response("done")
+
+        with plain_console() as buf:
+            with (
+                patch("swival.agent.call_llm", side_effect=fake_call_llm),
+                patch(
+                    "swival.agent.handle_tool_call",
+                    return_value=fake_tool_result(),
+                ),
+            ):
+                answer, exhausted = run_agent_loop(
+                    messages,
+                    [],
+                    **_loop_kwargs(
+                        tmp_path,
+                        verbose=verbose,
+                        session_cost=session_cost,
+                        **overrides,
+                    ),
+                )
+        return answer, buf.getvalue()
+
+    def test_each_turn_prints_increasing_subtotal(self, tmp_path, capsys):
+        answer, out = self._run(tmp_path)
+        assert answer == "done"
+        lines = [ln for ln in out.splitlines() if "Session cost" in ln]
+        assert len(lines) == 3
+        assert "~$0.001000" in lines[0]
+        assert "~$0.002000" in lines[1]
+        assert "~$0.003000" in lines[2]
+        # stdout stays reserved for the final answer
+        assert capsys.readouterr().out == ""
+
+    def test_quiet_mode_prints_nothing(self, tmp_path):
+        _, out = self._run(tmp_path, verbose=False)
+        assert "Session cost" not in out
+
+    def test_subagent_never_prints(self, tmp_path):
+        _, out = self._run(tmp_path, is_subagent=True)
+        assert "Session cost" not in out
+
+    def test_only_unpriced_calls_print_nothing(self, tmp_path):
+        _, out = self._run(tmp_path, per_call_usd=None)
+        assert "Session cost" not in out
+        assert "session cost" not in out
+
+    def test_no_duplicate_line_across_loop_invocations(self, tmp_path):
+        # A second loop exiting without new cost must not reprint the
+        # unchanged subtotal.
+        import threading
+
+        from swival.cost import CostObservation, SessionCost
+
+        session_cost = SessionCost()
+
+        def fake_call_llm(*args, **kwargs):
+            kwargs["session_cost"].record(CostObservation("known", 0.001))
+            return _make_text_response("done")
+
+        with plain_console() as buf:
+            with patch("swival.agent.call_llm", side_effect=fake_call_llm):
+                run_agent_loop(
+                    [_sys("system"), _user("hello")],
+                    [],
+                    **_loop_kwargs(tmp_path, verbose=True, session_cost=session_cost),
+                )
+            cancelled = threading.Event()
+            cancelled.set()
+            run_agent_loop(
+                [_sys("system"), _user("again")],
+                [],
+                **_loop_kwargs(
+                    tmp_path,
+                    verbose=True,
+                    session_cost=session_cost,
+                    cancel_flag=cancelled,
+                ),
+            )
+        lines = [ln for ln in buf.getvalue().splitlines() if "Session cost" in ln]
+        assert len(lines) == 1
+        assert "~$0.001000" in lines[0]
+
+    def test_unexpected_exception_still_renders_cost(self, tmp_path):
+        # A raise escaping the loop body must still reconcile the display.
+        from swival.cost import CostObservation, SessionCost
+
+        session_cost = SessionCost()
+
+        def fake_call_llm(*args, **kwargs):
+            kwargs["session_cost"].record(CostObservation("known", 0.001))
+            raise RuntimeError("post-response validation failed")
+
+        with plain_console() as buf:
+            with patch("swival.agent.call_llm", side_effect=fake_call_llm):
+                with pytest.raises(RuntimeError):
+                    run_agent_loop(
+                        [_sys("system"), _user("hello")],
+                        [],
+                        **_loop_kwargs(
+                            tmp_path, verbose=True, session_cost=session_cost
+                        ),
+                    )
+        lines = [ln for ln in buf.getvalue().splitlines() if "Session cost" in ln]
+        assert len(lines) == 1
+        assert "~$0.001000" in lines[0]
+
+    def test_cancellation_after_tool_cost_prints_final_line(self, tmp_path):
+        # Cost recorded between the turn line and a mid-turn cancellation
+        # still reaches the display.
+        import threading
+
+        from swival.cost import CostObservation, SessionCost
+
+        messages = [_sys("system"), _user("hello")]
+        session_cost = SessionCost()
+        cancel_flag = threading.Event()
+
+        def fake_call_llm(*args, **kwargs):
+            kwargs["session_cost"].record(CostObservation("known", 0.001))
+            return _make_tool_response(
+                [
+                    ("tc1", "read_file", '{"path": "x.txt"}'),
+                    ("tc2", "read_file", '{"path": "y.txt"}'),
+                ]
+            )
+
+        def fake_handle_tool_call(*args, **kwargs):
+            session_cost.record(CostObservation("known", 0.005))
+            cancel_flag.set()
+            return fake_tool_result()
+
+        with plain_console() as buf:
+            with (
+                patch("swival.agent.call_llm", side_effect=fake_call_llm),
+                patch(
+                    "swival.agent.handle_tool_call",
+                    side_effect=fake_handle_tool_call,
+                ),
+            ):
+                answer, exhausted = run_agent_loop(
+                    messages,
+                    [],
+                    **_loop_kwargs(
+                        tmp_path,
+                        verbose=True,
+                        session_cost=session_cost,
+                        cancel_flag=cancel_flag,
+                    ),
+                )
+        assert exhausted is True
+        lines = [ln for ln in buf.getvalue().splitlines() if "Session cost" in ln]
+        assert len(lines) == 2
+        assert "~$0.001000" in lines[0]
+        assert "~$0.006000" in lines[1]
+
+    def test_exhaustion_enrichment_updates_final_line(self, tmp_path):
+        # The continue-file summary runs after the last turn line; its cost
+        # must still reach a final reconciliation line.
+        import re
+
+        _, out = self._run(tmp_path, max_turns=2, continue_here=True)
+        lines = [ln for ln in out.splitlines() if "Session cost" in ln]
+        amounts = [float(re.search(r"\$([0-9.]+)", ln).group(1)) for ln in lines]
+        assert amounts[:2] == [0.001, 0.002]
+        assert amounts[-1] > 0.002
+
+    def test_failed_render_retries_on_next_reconcile(self, monkeypatch):
+        # A transient output failure must not suppress the line forever.
+        from swival import agent
+        from swival.cost import CostObservation, SessionCost
+
+        session_cost = SessionCost()
+        session_cost.record(CostObservation("known", 0.001))
+        attempts = []
+
+        def flaky_output(line):
+            attempts.append(line)
+            if len(attempts) == 1:
+                raise RuntimeError("broken pipe")
+
+        monkeypatch.setattr(agent.fmt, "session_cost_render", flaky_output)
+
+        agent._display_session_cost(session_cost, reconcile=True)
+        assert session_cost.last_rendered is None
+
+        agent._display_session_cost(session_cost, reconcile=True)
+        assert len(attempts) == 2
+        assert session_cost.last_rendered == "  Session cost: ~$0.001000"
+
+    def test_reset_subagent_renders_post_shutdown_cost(self):
+        # Interrupted turns, /clear, /new and /init all join workers here;
+        # cost recorded during the join must render.
+        import types
+
+        from swival import agent
+        from swival.cost import CostObservation, SessionCost
+
+        session_cost = SessionCost()
+
+        class _Mgr:
+            def shutdown(self):
+                session_cost.record(CostObservation("known", 0.003))
+
+            def fresh_copy(self):
+                return _Mgr()
+
+        loop_kwargs = {"session_cost": session_cost, "verbose": True}
+        ctx = types.SimpleNamespace(
+            subagent_manager=_Mgr(),
+            loop_kwargs=loop_kwargs,
+            subagent_holder=[None],
+        )
+
+        with plain_console() as buf:
+            agent._reset_subagent(ctx)
+
+        lines = [ln for ln in buf.getvalue().splitlines() if "Session cost" in ln]
+        assert lines == ["  Session cost: ~$0.003000"]
+        assert loop_kwargs["subagent_manager"] is ctx.subagent_manager
+        assert ctx.subagent_holder[0] is ctx.subagent_manager
+
+    def test_reset_subagent_failed_shutdown_still_replaces(self):
+        # A raising join must neither propagate nor block the fresh manager;
+        # cost recorded before the failure still renders.
+        import types
+
+        from swival import agent
+        from swival.cost import CostObservation, SessionCost
+
+        session_cost = SessionCost()
+
+        class _Mgr:
+            def shutdown(self):
+                session_cost.record(CostObservation("known", 0.004))
+                raise RuntimeError("join failed")
+
+            def fresh_copy(self):
+                return _Mgr()
+
+        broken = _Mgr()
+        loop_kwargs = {"session_cost": session_cost, "verbose": True}
+        ctx = types.SimpleNamespace(
+            subagent_manager=broken,
+            loop_kwargs=loop_kwargs,
+            subagent_holder=[None],
+        )
+
+        with plain_console() as buf:
+            agent._reset_subagent(ctx)
+
+        lines = [ln for ln in buf.getvalue().splitlines() if "Session cost" in ln]
+        assert lines == ["  Session cost: ~$0.004000"]
+        assert ctx.subagent_manager is not broken
+        assert loop_kwargs["subagent_manager"] is ctx.subagent_manager
+        assert ctx.subagent_holder[0] is ctx.subagent_manager
+
+    def test_reset_subagent_interrupted_join_reconciles_then_raises(self):
+        # Ctrl-C landing in the blocking join must still propagate, but only
+        # after the reconcile and the manager replacement ran.
+        import types
+
+        import pytest
+        from swival import agent
+        from swival.cost import CostObservation, SessionCost
+
+        session_cost = SessionCost()
+
+        class _Mgr:
+            def shutdown(self):
+                session_cost.record(CostObservation("known", 0.004))
+                raise KeyboardInterrupt
+
+            def fresh_copy(self):
+                return _Mgr()
+
+        broken = _Mgr()
+        loop_kwargs = {"session_cost": session_cost, "verbose": True}
+        ctx = types.SimpleNamespace(
+            subagent_manager=broken,
+            loop_kwargs=loop_kwargs,
+            subagent_holder=[None],
+        )
+
+        with plain_console() as buf:
+            with pytest.raises(KeyboardInterrupt):
+                agent._reset_subagent(ctx)
+
+        lines = [ln for ln in buf.getvalue().splitlines() if "Session cost" in ln]
+        assert lines == ["  Session cost: ~$0.004000"]
+        assert ctx.subagent_manager is not broken
+        assert loop_kwargs["subagent_manager"] is ctx.subagent_manager
+        assert ctx.subagent_holder[0] is ctx.subagent_manager

@@ -7,6 +7,20 @@ from unittest.mock import MagicMock, patch
 from swival.cache import LLMCache, _reconstruct_message
 
 
+def _mock_llm_response(content):
+    """MagicMock completion response with one stop choice carrying *content*."""
+    msg = MagicMock()
+    msg.content = content
+    msg.tool_calls = None
+    msg.model_dump.return_value = {"role": "assistant", "content": content}
+    choice = MagicMock()
+    choice.message = msg
+    choice.finish_reason = "stop"
+    response = MagicMock()
+    response.choices = [choice]
+    return response
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -346,21 +360,7 @@ class TestCacheIntegration:
         cache = LLMCache(tmp_path / "cache.db")
         cache.open()
 
-        # Build a mock response
-        mock_msg = MagicMock()
-        mock_msg.content = "Sure, here's the file."
-        mock_msg.tool_calls = None
-        mock_msg.model_dump.return_value = {
-            "role": "assistant",
-            "content": "Sure, here's the file.",
-        }
-
-        mock_choice = MagicMock()
-        mock_choice.message = mock_msg
-        mock_choice.finish_reason = "stop"
-
-        mock_response = MagicMock()
-        mock_response.choices = [mock_choice]
+        mock_response = _mock_llm_response("Sure, here's the file.")
 
         with patch("litellm.completion", return_value=mock_response) as mock_comp:
             # First call — should hit litellm
@@ -529,4 +529,51 @@ class TestSecondaryCallWrapper:
         )
         assert received_cache["cache"] is cache
 
+        cache.close()
+
+
+class TestCacheHitCost:
+    def test_cache_hit_adds_no_cost(self, tmp_path, monkeypatch):
+        """A SQLite cache hit records nothing: no new spend, no pricing call,
+        and the subtotal is not marked incomplete."""
+        from swival import agent
+        from swival.agent import call_llm
+        from swival.cost import CostObservation, SessionCost
+
+        cache = LLMCache(tmp_path / "cache.db")
+        cache.open()
+
+        mock_response = _mock_llm_response("answer")
+
+        observations = []
+
+        def spy(response, model_str, provider, pricing_provider=None):
+            observations.append(response)
+            return CostObservation("known", 0.002)
+
+        monkeypatch.setattr(agent, "_response_cost_observation", spy)
+
+        sc = SessionCost()
+        args = (
+            "http://127.0.0.1:8080/v1",
+            "test-model",
+            [{"role": "user", "content": "hello"}],
+            4096,
+            0.7,
+            1.0,
+            42,
+            None,
+            False,
+        )
+        with patch("litellm.completion", return_value=mock_response) as mock_comp:
+            call_llm(*args, provider="generic", cache=cache, session_cost=sc)
+            assert mock_comp.call_count == 1
+            call_llm(*args, provider="generic", cache=cache, session_cost=sc)
+            assert mock_comp.call_count == 1  # served from cache
+
+        assert len(observations) == 1
+        snap = sc.snapshot()
+        assert snap.priced_calls == 1
+        assert snap.unpriced_calls == 0
+        assert snap.known_usd == 0.002
         cache.close()

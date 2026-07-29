@@ -890,3 +890,46 @@ class TestToolDefinitions:
         params = CHECK_SUBAGENTS_TOOL["function"]["parameters"]
         assert "action" in params["properties"]
         assert "poll" in params["properties"]["action"]["enum"]
+
+
+class TestSubagentSessionCost:
+    def test_template_keeps_session_cost(self):
+        from swival.subagent import SA_TEMPLATE_EXCLUDE
+
+        assert "session_cost" not in SA_TEMPLATE_EXCLUDE
+
+    def test_worker_shares_locked_accumulator_silently(self, monkeypatch):
+        from swival.cost import CostObservation, SessionCost
+
+        sc = SessionCost()
+        seen = {}
+
+        def fake_loop(messages, tools, **kwargs):
+            seen["session_cost"] = kwargs.get("session_cost")
+            seen["verbose"] = kwargs.get("verbose")
+            seen["is_subagent"] = kwargs.get("is_subagent")
+            kwargs["session_cost"].record(CostObservation("known", 0.004))
+            return "done", False
+
+        monkeypatch.setattr("swival.agent.run_agent_loop", fake_loop)
+
+        handle = SubagentHandle(id="sub_1", task="t")
+        slot = threading.Semaphore(1)
+        slot.acquire()
+        _subagent_thread_fn(
+            handle,
+            {"base_dir": "/tmp/test", "session_cost": sc, "verbose": True},
+            [],
+            "task",
+            5,
+            None,
+            None,
+            _CompositeCancelFlag(None, handle.cancel_flag),
+            slot,
+        )
+
+        assert handle.result == "done"
+        assert seen["session_cost"] is sc
+        assert seen["verbose"] is False
+        assert seen["is_subagent"] is True
+        assert sc.snapshot().known_usd == 0.004

@@ -690,3 +690,31 @@ class TestAutoCancelFooter:
         # There should be WARN_FAILURES+ footers prior to the cancellation,
         # but none on the cancellation iteration itself.
         assert len(final_done) == CANCEL_FAILURES - 1
+
+
+class TestSessionCostReconcile:
+    def test_no_subagent_iteration_renders_cost(self, monkeypatch):
+        # A direct-LLM scheduled command records cost without ever creating
+        # a subagent manager; the iteration finalizer must still reconcile.
+        from conftest import plain_console
+
+        from swival.cost import CostObservation, SessionCost
+
+        registry = LoopRegistry()
+        ctx = _make_ctx(loop_registry=registry)
+        session_cost = SessionCost()
+        ctx.loop_kwargs["session_cost"] = session_cost
+        ctx.loop_kwargs["verbose"] = True
+
+        def fake_execute_input(parsed, ctx_arg, *, mode="repl"):
+            ctx_arg.loop_kwargs["session_cost"].record(CostObservation("known", 0.002))
+            return _ok_step("done")
+
+        monkeypatch.setattr(agent, "execute_input", fake_execute_input)
+        monkeypatch.setattr(agent.fmt, "repl_answer", lambda t: None)
+
+        with plain_console() as buf:
+            agent._execute_loop("5m foo", ctx, mode="repl")
+
+        lines = [ln for ln in buf.getvalue().splitlines() if "Session cost" in ln]
+        assert lines == ["  Session cost: ~$0.002000"]

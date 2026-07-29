@@ -381,6 +381,31 @@ See [A2A](a2a.md) for full server documentation.
 
 `--color` forces ANSI color on standard error, and `--no-color` disables ANSI color even on TTY output.
 
+### Session Cost
+
+After each successful turn, verbose mode prints a cumulative cost estimate on stderr, right under the timing line:
+
+```text
+  LLM responded in 1.4s  finish_reason=tool_calls
+  Session cost: ~$0.003812
+```
+
+The value comes from LiteLLM's pricing metadata and the provider's response usage, so it is an approximation, not an invoice.
+The subtotal covers the whole process session, including hidden work such as compaction summaries, audit calls, and subagents, and it survives `/clear`, `/new`, `/continue`, and model or profile switches.
+A new CLI process starts from zero.
+
+Swival only shows what it can support:
+
+- Hosted providers with known pricing print the line after every visible turn, tool calls and final answers alike.
+- When some successful calls could not be priced, the label switches to `Known session cost: ~$0.003812 (2 calls unpriced)`. The dollar amount only ever includes priced calls.
+- When nothing could be priced, or the priced subtotal would display as zero, the line is omitted entirely rather than showing a value that cannot be trusted. A tiny subtotal shows up once it accumulates past display precision.
+- Local servers (`lmstudio`, `llamacpp`, `applefm`), the `command` provider, SQLite cache hits, and the subscription-backed `chatgpt` provider have no per-token bill, so they neither add dollars nor mark the subtotal as partial.
+- `generic` endpoints are never priced, even when the served model name matches a hosted model: a custom server can call its model anything, and a name collision would produce a plausible but wrong price. The `google` provider is the exception and is priced as `gemini/{model}` even though it routes through Google's OpenAI-compatible endpoint.
+
+Work that finishes after the last turn line, such as the continue-file summary written when max turns run out or a subagent completing during shutdown, still counts: when it changed the subtotal, one final reconciliation line is printed on exit.
+
+`--quiet` (and the Python API default of `verbose=False`) suppresses the display without disabling the accounting.
+
 ### Caching Flags
 
 `--cache` enables LLM response caching. When an identical request is seen again, the cached response is returned without contacting the LLM. The cache is stored in a SQLite database at `.swival/cache.db` by default. Off by default.

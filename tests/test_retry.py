@@ -1122,3 +1122,57 @@ class TestCompletionViaStream:
         reasoning, answer, activity = rec.updates[-1]
         assert "secret" in reasoning
         assert "secret" not in answer
+
+
+class TestStreamedResponseCost:
+    def test_cost_computed_from_rebuilt_stream_response(self, monkeypatch):
+        """Cost comes from the response stream_chunk_builder returns, which has
+        usage but no hidden response_cost, so completion_cost is the source."""
+        from conftest import plain_console
+
+        from swival import agent
+        from swival.cost import SessionCost
+
+        rebuilt = _make_response()
+        rebuilt.usage = types.SimpleNamespace(prompt_tokens=50, completion_tokens=5)
+
+        def fake_stream(
+            kwargs, on_stream_start=None, display=True, show_thinking=False
+        ):
+            return rebuilt
+
+        monkeypatch.setattr(agent, "_completion_via_stream", fake_stream)
+        monkeypatch.setattr("sys.stderr", types.SimpleNamespace(isatty=lambda: True))
+
+        seen = {}
+
+        def fake_cost(completion_response=None, model=None):
+            seen["response"] = completion_response
+            seen["model"] = model
+            return 0.007
+
+        monkeypatch.setattr("litellm.completion_cost", fake_cost)
+
+        sc = SessionCost()
+        with plain_console(width=80):
+            msg, finish, *_ = call_llm(
+                None,
+                "my-model",
+                [{"role": "user", "content": "hi"}],
+                100,
+                0.5,
+                None,
+                None,
+                None,
+                True,  # verbose: required for the streaming path
+                provider="openrouter",
+                api_key="k",
+                session_cost=sc,
+            )
+
+        assert msg.content == "hello"
+        assert seen["response"] is rebuilt
+        assert seen["model"] == "openrouter/my-model"
+        snap = sc.snapshot()
+        assert snap.priced_calls == 1
+        assert snap.known_usd == 0.007

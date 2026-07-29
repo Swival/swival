@@ -10,8 +10,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import tools
-from .agent import _InteractionPolicy, _apply_interaction_policy
+from .agent import (
+    _InteractionPolicy,
+    _apply_interaction_policy,
+    _shutdown_and_reconcile,
+)
 from .config import _UNSET, NETWORK_MODES, first_remote_integration
+from .cost import SessionCost
 from .goal import GoalState
 from .report import ConfigError, ReportCollector
 from .snapshot import SnapshotState
@@ -631,6 +636,7 @@ class Session:
             "skill_read_roots": list(self._allowed_dir_ro_paths),
             "messages": self._make_initial_messages(system_content),
             "compaction_state": CompactionState() if self.proactive_summaries else None,
+            "session_cost": SessionCost(),
             "resolved_system_content": system_content,
             # Shared turn budget so a /extend issued via parse_commands persists
             # across subsequent ask() calls, mirroring the REPL.
@@ -664,6 +670,7 @@ class Session:
             verbose=self.verbose,
             llm_kwargs=self._llm_kwargs,
             file_tracker=state["file_tracker"],
+            session_cost=state["session_cost"],
             continue_here=self.continue_here,
             cache=self._llm_cache,
             command_policy=self._command_policy,
@@ -745,8 +752,7 @@ class Session:
                     self.base_dir, question, answer, diagnostics=self.verbose
                 )
         finally:
-            if _subagent_mgr is not None:
-                _subagent_mgr.shutdown()
+            _shutdown_and_reconcile(_subagent_mgr, state["session_cost"], self.verbose)
             self._run_lifecycle_exit(outcome=outcome, exit_code=exit_code)
             if self.trace_dir and messages:
                 self._write_trace(messages, question)
@@ -872,8 +878,9 @@ class Session:
             try:
                 step = execute_input(parsed, ctx, mode="repl")
             finally:
-                if ctx.subagent_manager is not None:
-                    ctx.subagent_manager.shutdown()
+                _shutdown_and_reconcile(
+                    ctx.subagent_manager, state["session_cost"], self.verbose
+                )
 
         # Agent-turn commands stream their answer through event_callback while
         # the loop runs. Info and state-change commands produce text only here,
@@ -962,8 +969,9 @@ class Session:
             try:
                 answer, exhausted = run_agent_loop(messages, self._tools, **loop_kwargs)
             finally:
-                if _subagent_mgr is not None:
-                    _subagent_mgr.shutdown()
+                _shutdown_and_reconcile(
+                    _subagent_mgr, state["session_cost"], self.verbose
+                )
 
         if self.history and answer:
             append_history(self.base_dir, question, answer, diagnostics=self.verbose)

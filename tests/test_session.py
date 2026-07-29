@@ -673,3 +673,160 @@ class TestSessionSubagentNotifyUser:
         assert mgr._notify_user is not None
         mgr._notify_user("waiting for capacity")
         assert "waiting for capacity" in fmt_calls
+
+
+class TestSessionCostLifetime:
+    def _capturing_llm(self, seen):
+        def llm(*args, **kwargs):
+            seen.append(kwargs.get("session_cost"))
+            return _make_message(content="the answer"), "stop"
+
+        return llm
+
+    def test_each_run_starts_fresh(self, tmp_path, monkeypatch):
+        seen = []
+        monkeypatch.setattr(agent, "call_llm", self._capturing_llm(seen))
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+        s = Session(base_dir=str(tmp_path), history=False)
+        s.run("one")
+        s.run("two")
+
+        assert len(seen) == 2
+        assert all(sc is not None for sc in seen)
+        assert seen[0] is not seen[1]
+
+    def test_repeated_ask_shares_accumulator(self, tmp_path, monkeypatch):
+        from swival.cost import CostObservation
+
+        seen = []
+        monkeypatch.setattr(agent, "call_llm", self._capturing_llm(seen))
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+        s = Session(base_dir=str(tmp_path), history=False)
+        s.ask("one")
+        seen[0].record(CostObservation("known", 0.001))
+        s.ask("two")
+
+        assert seen[0] is seen[1]
+        assert seen[1].snapshot().known_usd == 0.001
+
+    def test_reset_starts_new_subtotal(self, tmp_path, monkeypatch):
+        from swival.cost import CostObservation
+
+        seen = []
+        monkeypatch.setattr(agent, "call_llm", self._capturing_llm(seen))
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+        s = Session(base_dir=str(tmp_path), history=False)
+        s.ask("one")
+        seen[0].record(CostObservation("known", 0.001))
+        s.reset()
+        s.ask("two")
+
+        assert seen[0] is not seen[1]
+        assert seen[1].snapshot().known_usd == 0.0
+
+    def test_ask_exception_keeps_incurred_cost(self, tmp_path, monkeypatch):
+        from swival.cost import CostObservation
+
+        seen = []
+        calls = {"n": 0}
+
+        def flaky_llm(*args, **kwargs):
+            calls["n"] += 1
+            sc = kwargs.get("session_cost")
+            seen.append(sc)
+            if calls["n"] == 2:
+                sc.record(CostObservation("known", 0.002))
+                raise AgentError("boom")
+            return _make_message(content="the answer"), "stop"
+
+        monkeypatch.setattr(agent, "call_llm", flaky_llm)
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+        s = Session(base_dir=str(tmp_path), history=False)
+        s.ask("one")
+        with pytest.raises(AgentError):
+            s.ask("two")
+
+        # The transcript rolled back, but the spend already happened.
+        assert seen[-1].snapshot().known_usd == 0.002
+        result = s.ask("three")
+        assert result.answer == "the answer"
+        assert seen[-1] is seen[0]
+
+
+class TestSessionCostReconcile:
+    """The session owner renders cost that the loop never displayed,
+    e.g. recorded by workers joined at subagent shutdown."""
+
+    def _fake_loop(self):
+        from swival.cost import CostObservation
+
+        def loop(messages, tools, **kwargs):
+            kwargs["session_cost"].record(CostObservation("known", 0.002))
+            return "done", False
+
+        return loop
+
+    def _capture(self, fn):
+        from conftest import plain_console
+
+        with plain_console() as buf:
+            fn()
+        return [ln for ln in buf.getvalue().splitlines() if "Session cost" in ln]
+
+    def test_ask_renders_undisplayed_cost(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(agent, "run_agent_loop", self._fake_loop())
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+        s = Session(base_dir=str(tmp_path), history=False, verbose=True)
+        # fmt.init() inside lazy setup would replace the captured console
+        s._setup()
+        lines = self._capture(lambda: s.ask("one"))
+        assert lines == ["  Session cost: ~$0.002000"]
+
+    def test_run_renders_undisplayed_cost(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(agent, "run_agent_loop", self._fake_loop())
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+        s = Session(base_dir=str(tmp_path), history=False, verbose=True)
+        s._setup()
+        lines = self._capture(lambda: s.run("one"))
+        assert lines == ["  Session cost: ~$0.002000"]
+
+    def test_command_shutdown_error_does_not_mask_primary(self, tmp_path, monkeypatch):
+        # execute_input's failure must reach the caller even when the
+        # subagent join also fails; the cost the join recorded still renders.
+        from swival.cost import CostObservation
+
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+        s = Session(base_dir=str(tmp_path), history=False, verbose=True)
+        s._setup()
+
+        orig_make_ctx = Session._make_input_context
+
+        def make_ctx_with_failing_mgr(self, state):
+            ctx = orig_make_ctx(self, state)
+            session_cost = state["session_cost"]
+
+            class _Mgr:
+                def shutdown(self):
+                    session_cost.record(CostObservation("known", 0.002))
+                    raise RuntimeError("join failed")
+
+            ctx.subagent_manager = _Mgr()
+            return ctx
+
+        monkeypatch.setattr(Session, "_make_input_context", make_ctx_with_failing_mgr)
+
+        def failing_execute_input(parsed, ctx, *, mode="repl"):
+            raise ValueError("primary failure")
+
+        monkeypatch.setattr(agent, "execute_input", failing_execute_input)
+
+        def call():
+            with pytest.raises(ValueError, match="primary failure"):
+                s.ask("/status", parse_commands=True)
+
+        lines = self._capture(call)
+        assert lines == ["  Session cost: ~$0.002000"]

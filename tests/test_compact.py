@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from conftest import fake_tool_result
 
 from swival.agent import (
     estimate_tokens,
@@ -3552,3 +3553,50 @@ class TestStreamingOverflow:
         with patch("swival.agent._completion_via_stream", side_effect=boom):
             with pytest.raises(RuntimeError):
                 self._retry(unknown_context_window=False)
+
+
+class TestSecondaryCallSessionCost:
+    def test_continue_enrichment_shares_accumulator(self, tmp_path):
+        """The secondary wrapper built by run_agent_loop threads session_cost
+        into auxiliary calls (here: continue-file enrichment on exhaustion)."""
+        from swival.agent import run_agent_loop
+        from swival.cost import SessionCost
+
+        sc = SessionCost()
+        seen_kwargs = []
+
+        def fake_call_llm(*args, **kwargs):
+            seen_kwargs.append(kwargs)
+            if len(seen_kwargs) == 1:
+                tc = SimpleNamespace(
+                    id="tc1",
+                    function=SimpleNamespace(
+                        name="read_file", arguments='{"path": "x.txt"}'
+                    ),
+                )
+                msg = SimpleNamespace(content=None, tool_calls=[tc], role="assistant")
+                return msg, "stop", [], 0, (0, 0)
+            msg = SimpleNamespace(content="summary", tool_calls=None, role="assistant")
+            return msg, "stop", [], 0, (0, 0)
+
+        messages = [_sys("system"), _user("question")]
+        with (
+            patch("swival.agent.call_llm", side_effect=fake_call_llm),
+            patch(
+                "swival.agent.handle_tool_call",
+                return_value=fake_tool_result(),
+            ),
+        ):
+            run_agent_loop(
+                messages,
+                [],
+                **_loop_kwargs(
+                    tmp_path,
+                    max_turns=1,
+                    continue_here=True,
+                    session_cost=sc,
+                ),
+            )
+
+        assert len(seen_kwargs) >= 2
+        assert all(k.get("session_cost") is sc for k in seen_kwargs)

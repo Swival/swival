@@ -8664,3 +8664,48 @@ class TestSymbolSpansIndexState:
 
         monkeypatch.setattr(audit_mod, "_load_file_contents", boom)
         _ensure_symbol_spans_index(state, str(tmp_path))
+
+
+class TestAuditSessionCost:
+    def test_audit_llm_call_shares_accumulator(self, monkeypatch, tmp_path):
+        """Direct audit LLM calls thread the session accumulator and the
+        Google pricing marker from the loop kwargs, without any UI output."""
+        from types import SimpleNamespace
+
+        from swival.audit import _call_audit_llm
+        from swival.cost import SessionCost
+
+        sc = SessionCost()
+        captured = {}
+
+        def fake_call_llm(*args, **kwargs):
+            captured.update(kwargs)
+            msg = SimpleNamespace(content="ok", tool_calls=None, role="assistant")
+            return msg, "stop", [], 0, (0, 0)
+
+        monkeypatch.setattr("swival.agent.call_llm", fake_call_llm)
+
+        ctx = SimpleNamespace(
+            base_dir=str(tmp_path),
+            loop_kwargs={
+                "api_base": "x",
+                "model_id": "m",
+                "max_output_tokens": 100,
+                "top_p": None,
+                "seed": None,
+                "session_cost": sc,
+                "llm_kwargs": {
+                    "provider": "generic",
+                    "pricing_provider": "google",
+                },
+            },
+        )
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "evidence"},
+        ]
+        result = _call_audit_llm(ctx, messages, temperature=0.0)
+
+        assert result == "ok"
+        assert captured["session_cost"] is sc
+        assert captured["pricing_provider"] == "google"

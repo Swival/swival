@@ -2039,7 +2039,7 @@ def _call_audit_llm(
     shrank, appends exactly one record:
     ``{"shrinks": n, "final_limit": limit, "original_len": len(original_text)}``.
     """
-    from .agent import call_llm, ContextOverflowError
+    from .agent import call_llm, ContextOverflowError, _provider_extra_kwargs
     from ._msg import _msg_content
 
     kw = ctx.loop_kwargs
@@ -2063,9 +2063,8 @@ def _call_audit_llm(
             api_key=llm_kwargs.get("api_key"),
             user_agent=llm_kwargs.get("user_agent"),
             prompt_cache=True,
-            aws_profile=llm_kwargs.get("aws_profile"),
-            vertex_project=llm_kwargs.get("vertex_project"),
-            vertex_location=llm_kwargs.get("vertex_location"),
+            session_cost=kw.get("session_cost"),
+            **_provider_extra_kwargs(llm_kwargs),
         )
         return _msg_content(msg) or ""
 
