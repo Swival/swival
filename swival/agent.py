@@ -6298,6 +6298,8 @@ def build_parser():
         '  swival --files all "Refactor the auth module"\n'
         '  swival --provider huggingface --model zai-org/GLM-5.2 "Write parser tests"\n'
         '  swival --yolo --self-review "Add input validation"\n'
+        '  swival -q --network provider-only --no-history --no-continue --no-mcp --no-a2a "Review <description of what has to be reviewed>"\n'
+        "  swival -q --network provider-only --no-history --no-continue --no-mcp --no-a2a < description_of_what_has_to_be_reviewed.txt\n"
         "  swival -q < task.md"
     )
     parser = argparse.ArgumentParser(

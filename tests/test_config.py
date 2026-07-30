@@ -1115,6 +1115,14 @@ class TestCLIIntegration:
         assert "--provider huggingface --model zai-org/GLM-5.2" in help_text
         assert "swival --yolo --self-review" in help_text
         assert "--self-review" in help_text
+        assert (
+            "swival -q --network provider-only --no-history --no-continue --no-mcp "
+            '--no-a2a "Review <description of what has to be reviewed>"'
+        ) in help_text
+        assert (
+            "swival -q --network provider-only --no-history --no-continue --no-mcp "
+            "--no-a2a < description_of_what_has_to_be_reviewed.txt"
+        ) in help_text
 
     def test_commands_list_flows_through(self, tmp_path, monkeypatch):
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
