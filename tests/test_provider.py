@@ -2734,6 +2734,95 @@ class TestCopilotRouting:
             )
             assert mock_comp.call_args[1]["model"] == "github_copilot/gpt-5.1"
 
+    def test_responses_only_model_reroutes_and_retries(self):
+        """A Copilot model rejected on /chat/completions gets re-registered as
+        a Responses model and the call is retried.  gpt-5.6-luna reproduces
+        the bug: absent from LiteLLM's bundled cost map, it defaulted to Chat
+        Completions and Copilot answered with a 400."""
+        import litellm
+
+        # Fictional id so the registry stays clean as LiteLLM gains real models.
+        model_str = "github_copilot/gpt-999.1-swival-test"
+        assert model_str not in litellm.model_cost
+
+        err = litellm.BadRequestError(
+            'model "gpt-999.1-swival-test" is not accessible via the '
+            "/chat/completions endpoint",
+            model="gpt-999.1-swival-test",
+            llm_provider="github_copilot",
+        )
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.side_effect = [err, self._mock_response()]
+            msg, finish_reason, _, retries, _ = call_llm(
+                None,
+                "gpt-999.1-swival-test",
+                [],
+                100,
+                0.5,
+                1.0,
+                None,
+                None,
+                False,
+                provider="github_copilot",
+                api_key=None,
+            )
+            assert mock_comp.call_count == 2
+        assert msg.content == "ok"
+        info = litellm.model_cost[model_str]
+        assert info["mode"] == "responses"
+        assert info["litellm_provider"] == "github_copilot"
+        assert info["max_input_tokens"] > 0
+
+    def test_register_responses_model_seeds_from_template(self):
+        """Registration must work even for models with no bare-key registry
+        entry, seeding the context window from a known Copilot Codex model."""
+        import litellm
+
+        from swival.agent import _register_copilot_responses_model
+
+        model_str = "github_copilot/gpt-999.2-swival-test"
+        assert model_str not in litellm.model_cost
+
+        _register_copilot_responses_model(litellm, model_str)
+
+        info = litellm.model_cost[model_str]
+        assert info["mode"] == "responses"
+        assert info["litellm_provider"] == "github_copilot"
+        assert info["max_input_tokens"] > 0
+
+    def test_chat_model_errors_do_not_reroute(self):
+        """An unrelated Copilot 400 must not register the model as
+        Responses-only or trigger a second attempt."""
+        import litellm
+
+        from swival.agent import AgentError
+
+        err = litellm.BadRequestError(
+            "invalid request: bad parameter",
+            model="gpt-5.1",
+            llm_provider="github_copilot",
+        )
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.side_effect = err
+            with pytest.raises(AgentError):
+                call_llm(
+                    None,
+                    "gpt-5.1",
+                    [],
+                    100,
+                    0.5,
+                    1.0,
+                    None,
+                    None,
+                    False,
+                    provider="github_copilot",
+                    api_key=None,
+                )
+            assert mock_comp.call_count == 1
+        assert litellm.model_cost.get("github_copilot/gpt-5.1", {}).get("mode") != (
+            "responses"
+        )
+
     def test_cost_not_applicable_and_never_priced(self):
         from swival.agent import (
             _COST_NOT_APPLICABLE_PROVIDERS,
