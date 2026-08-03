@@ -276,8 +276,8 @@ class TestCallLlmEncryption:
         )
 
         # The empty assistant message should have been sanitized in the
-        # canonical list (content set to "")
-        assert messages[1]["content"] == ""
+        # canonical list (content set to the non-empty placeholder)
+        assert messages[1]["content"] == agent._EMPTY_ASSISTANT_PLACEHOLDER
 
 
 # ---------------------------------------------------------------------------

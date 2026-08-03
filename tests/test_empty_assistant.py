@@ -70,7 +70,7 @@ def _base_args(tmp_path, **overrides):
 
 
 def test_sanitize_fixes_empty_dict_messages():
-    from swival.agent import _sanitize_assistant_messages
+    from swival.agent import _EMPTY_ASSISTANT_PLACEHOLDER, _sanitize_assistant_messages
 
     messages = [
         {"role": "system", "content": "hello"},
@@ -78,16 +78,16 @@ def test_sanitize_fixes_empty_dict_messages():
         {"role": "user", "content": "world"},
     ]
     assert _sanitize_assistant_messages(messages) is True
-    assert messages[1]["content"] == ""
+    assert messages[1]["content"] == _EMPTY_ASSISTANT_PLACEHOLDER
 
 
 def test_sanitize_fixes_empty_namespace_messages():
-    from swival.agent import _sanitize_assistant_messages
+    from swival.agent import _EMPTY_ASSISTANT_PLACEHOLDER, _sanitize_assistant_messages
 
     msg = _make_message(content=None, tool_calls=None)
     messages = [msg]
     assert _sanitize_assistant_messages(messages) is True
-    assert msg.content == ""
+    assert msg.content == _EMPTY_ASSISTANT_PLACEHOLDER
 
 
 def test_sanitize_leaves_valid_messages_alone():
@@ -104,11 +104,25 @@ def test_sanitize_leaves_valid_messages_alone():
 
 def test_sanitize_handles_empty_tool_calls_list():
     """An assistant message with content=None and tool_calls=[] is invalid."""
-    from swival.agent import _sanitize_assistant_messages
+    from swival.agent import _EMPTY_ASSISTANT_PLACEHOLDER, _sanitize_assistant_messages
 
     messages = [{"role": "assistant", "content": None, "tool_calls": []}]
     assert _sanitize_assistant_messages(messages) is True
-    assert messages[0]["content"] == ""
+    assert messages[0]["content"] == _EMPTY_ASSISTANT_PLACEHOLDER
+
+
+def test_empty_assistant_regex_matches_moonshot_phrasing():
+    """Moonshot/Kimi via OpenRouter uses a different wording than Mistral."""
+    from swival.agent import _EMPTY_ASSISTANT_RE
+
+    assert _EMPTY_ASSISTANT_RE.search(
+        "Invalid request: the message at position 161 with role 'assistant' "
+        "must not be empty"
+    )
+    assert _EMPTY_ASSISTANT_RE.search(
+        "Assistant message must have either content or tool_calls, but not none."
+    )
+    assert not _EMPTY_ASSISTANT_RE.search("some unrelated provider error")
 
 
 # -- Empty response recovery in agent loop --
@@ -145,7 +159,7 @@ def test_empty_response_triggers_continuation(tmp_path, monkeypatch):
 
 
 def test_empty_response_message_has_content_in_history(tmp_path, monkeypatch):
-    """The empty assistant message should be fixed to have content='' in history."""
+    """The empty assistant message should get placeholder content in history."""
     from swival import agent
     from swival import fmt
 
@@ -258,4 +272,4 @@ def test_call_llm_retries_after_sanitizing_empty_assistant(monkeypatch):
     assert call_count == 2
     assert msg.content == "ok"
     # The empty assistant message should have been fixed in place
-    assert messages[1]["content"] == ""
+    assert messages[1]["content"] == agent._EMPTY_ASSISTANT_PLACEHOLDER

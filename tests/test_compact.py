@@ -41,6 +41,7 @@ from swival.agent import (
     ContextOverflowError,
     call_llm,
     _fix_orphaned_tool_calls,
+    _EMPTY_ASSISTANT_PLACEHOLDER,
     _run_terminal_floor_ladder,
     TerminalAttemptResult,
     _TERMINAL_FLOOR_BUDGETS,
@@ -2443,7 +2444,7 @@ class TestFixOrphanedToolCalls:
         msgs = [_user("q"), tc, _assistant("done")]
         assert _fix_orphaned_tool_calls(msgs) is True
         assert tc.tool_calls is None
-        assert tc.content == ""
+        assert tc.content == _EMPTY_ASSISTANT_PLACEHOLDER
 
     def test_noop_when_all_results_present(self):
         tc = _assistant_tc([("tc1", "read_file", "{}")])
@@ -2460,7 +2461,7 @@ class TestFixOrphanedToolCalls:
         msgs = [_user("q"), tc, _assistant("done")]
         assert _fix_orphaned_tool_calls(msgs) is True
         assert "tool_calls" not in tc
-        assert tc["content"] == ""
+        assert tc["content"] == _EMPTY_ASSISTANT_PLACEHOLDER
 
     def test_preserves_content_when_tool_calls_removed(self):
         tc = SimpleNamespace(

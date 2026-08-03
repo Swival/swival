@@ -456,9 +456,15 @@ _CONTEXT_EXHAUSTED_FALLBACK = (
 _EMPTY_ASSISTANT_RE = re.compile(
     r"must have either content or tool_calls"
     r"|must have either 'content' or 'tool_calls'"
-    r"|must have non-null content or tool_calls",
+    r"|must have non-null content or tool_calls"
+    r"|role \W{0,2}assistant\W{0,2} must not be empty",
     re.IGNORECASE,
 )
+
+# Text substituted for assistant messages that ended up with no content and no
+# tool_calls.  It must be non-empty: Moonshot (Kimi) rejects assistant history
+# entries whose content is the empty string, not just missing content.
+_EMPTY_ASSISTANT_PLACEHOLDER = "(empty response)"
 
 _ORPHANED_TOOL_CALL_RE = re.compile(
     r"[Nn]o tool output found for function call"
@@ -1311,9 +1317,9 @@ def _raise_if_truncated_tool_call(
 def _sanitize_assistant_messages(messages: list) -> bool:
     """Fix assistant messages that have neither content nor tool_calls.
 
-    Some providers (e.g. Mistral via OpenRouter) reject conversations containing
-    assistant messages with both content and tool_calls absent.  Setting content
-    to an empty string satisfies validation.
+    Some providers reject conversations containing assistant messages with both
+    content and tool_calls absent (Mistral via OpenRouter), or with an empty
+    content string (Moonshot/Kimi).  A non-empty placeholder satisfies both.
 
     Returns True if any messages were fixed.
     """
@@ -1324,7 +1330,7 @@ def _sanitize_assistant_messages(messages: list) -> bool:
         has_content = bool(_msg_content(msg))
         has_tools = bool(_msg_tool_calls(msg))
         if not has_content and not has_tools:
-            _set_msg_content(msg, "")
+            _set_msg_content(msg, _EMPTY_ASSISTANT_PLACEHOLDER)
             fixed = True
     return fixed
 
@@ -1336,7 +1342,7 @@ def _fix_orphaned_tool_calls(messages: list) -> bool:
     tool_calls but the corresponding tool-role result message is missing (e.g.
     after context compaction drops it).  This function strips the orphaned
     tool_calls entries and, if the assistant message ends up with neither
-    content nor tool_calls, sets content to an empty string.
+    content nor tool_calls, sets content to the non-empty placeholder.
 
     Returns True if any messages were fixed.
     """
@@ -1364,7 +1370,7 @@ def _fix_orphaned_tool_calls(messages: list) -> bool:
                 msg.pop("tool_calls", None)
                 msg.pop("reasoning_content", None)
                 if not _msg_content(msg):
-                    msg["content"] = ""
+                    _set_msg_content(msg, _EMPTY_ASSISTANT_PLACEHOLDER)
         else:
             if kept:
                 msg.tool_calls = kept
@@ -1373,7 +1379,7 @@ def _fix_orphaned_tool_calls(messages: list) -> bool:
                 if hasattr(msg, "reasoning_content"):
                     msg.reasoning_content = None
                 if not _msg_content(msg):
-                    msg.content = ""
+                    _set_msg_content(msg, _EMPTY_ASSISTANT_PLACEHOLDER)
     return fixed
 
 
@@ -10528,8 +10534,8 @@ def _run_agent_loop(
         if not getattr(msg, "content", None) and not getattr(msg, "tool_calls", None):
             if verbose:
                 fmt.warning("LLM returned empty response, requesting continuation...")
-            # Give the message minimal content so it's valid in history
-            msg.content = ""
+            # Give the message placeholder content so it's valid in history
+            _set_msg_content(msg, _EMPTY_ASSISTANT_PLACEHOLDER)
             messages.append(_msg_to_dict(msg))
             messages.append(
                 {

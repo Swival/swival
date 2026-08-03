@@ -17,6 +17,7 @@ from swival.agent import (
     discover_llamacpp_context_length,
     resolve_provider,
     _fix_orphaned_tool_calls,
+    _EMPTY_ASSISTANT_PLACEHOLDER,
     _msg_to_dict,
     _pick_best_choice,
     _promote_reasoning_content,
@@ -4015,7 +4016,7 @@ class TestOrphanedToolCallsStripsReasoning:
         asst = messages[1]
         assert "tool_calls" not in asst
         assert "reasoning_content" not in asst
-        assert asst["content"] == ""
+        assert asst["content"] == _EMPTY_ASSISTANT_PLACEHOLDER
 
     def test_orphan_cleanup_keeps_reasoning_when_tool_calls_partially_kept(self):
         messages = [
