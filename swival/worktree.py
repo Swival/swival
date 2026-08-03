@@ -426,6 +426,8 @@ def call_llm_text(
         aws_profile=llm_kwargs.get("aws_profile"),
         vertex_project=llm_kwargs.get("vertex_project"),
         vertex_location=llm_kwargs.get("vertex_location"),
+        pricing_provider=llm_kwargs.get("pricing_provider"),
+        session_cost=loop_kwargs.get("session_cost"),
     )
     return _msg_content(msg) or "", cache_stats
 
