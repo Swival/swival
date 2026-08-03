@@ -2228,9 +2228,11 @@ class TestChatGPTRouting:
         import litellm
         from swival.agent import _ensure_chatgpt_responses_model_registered
 
-        model_str = "chatgpt/gpt-5.6-terra"
+        # Use a deliberately fictional ID to remain absent as LiteLLM's
+        # bundled model registry gains new real models.
+        model_str = "chatgpt/gpt-999.0-swival-test"
         assert model_str not in litellm.model_cost
-        assert "gpt-5.6-terra" not in litellm.model_cost
+        assert "gpt-999.0-swival-test" not in litellm.model_cost
 
         _ensure_chatgpt_responses_model_registered(litellm, model_str)
 
