@@ -128,6 +128,7 @@ class Session:
         aws_profile: str | None = None,
         project: str | None = None,
         location: str | None = None,
+        copilot_interactive_auth: bool = False,
         approved_buckets: set[str] | None = None,
         metaskills: str = "local",
         storm_breaker: bool = True,
@@ -221,6 +222,10 @@ class Session:
         self.aws_profile = aws_profile
         self.project = project
         self.location = location
+        # Off by default: an unauthenticated github_copilot Session must fail
+        # fast instead of starting a GitHub device flow inside an embedding
+        # application, even one that happens to have a TTY.
+        self.copilot_interactive_auth = copilot_interactive_auth
         self.approved_buckets = approved_buckets
         self.metaskills = metaskills
         self.storm_breaker = storm_breaker
@@ -372,6 +377,7 @@ class Session:
             aws_profile=self.aws_profile,
             project=self.project,
             location=self.location,
+            copilot_interactive_auth=self.copilot_interactive_auth,
         )
         if self.user_agent is not None:
             self._llm_kwargs["user_agent"] = self.user_agent

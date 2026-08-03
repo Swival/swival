@@ -59,6 +59,7 @@ The first time you run `swival` on an interactive terminal with no config, a sho
 | `google`      | `--api-key`, `GEMINI_API_KEY`, or `OPENAI_API_KEY`   | `--provider google --model MODEL`                                  |
 | `geap`        | Google Cloud ADC or `GOOGLE_APPLICATION_CREDENTIALS` | `--provider geap --gcp-project ID --location REGION --model MODEL` |
 | `chatgpt`     | browser auth on first run or `CHATGPT_API_KEY`       | `--provider chatgpt --model MODEL`                                 |
+| `github_copilot` | GitHub device login on first run (interactive)    | `--provider github_copilot --model MODEL`                          |
 | `generic`     | optional `OPENAI_API_KEY`                            | `--provider generic --base-url URL --model MODEL`                  |
 | `bedrock`     | AWS credential chain (`AWS_PROFILE`, env vars, IAM)  | `--provider bedrock --model MODEL`                                 |
 | `command`     | none                                                 | `--provider command --model "COMMAND"`                             |
@@ -216,6 +217,20 @@ On the first run, Swival will print a URL and a code. Open the URL in your brows
 `--model` is required -- there is no default. Supported model names can change over time, so check [Providers](providers.md) if you need the current naming.
 
 For a deeper look at ChatGPT Plus/Pro-specific options, see [Providers](providers.md).
+
+## Running with GitHub Copilot
+
+If you have a GitHub Copilot subscription, the `github_copilot` provider (alias: `copilot`) gives you the Copilot-hosted models without a separate API key.
+
+```sh
+swival "Hello world" --provider github_copilot --model gpt-5.1
+```
+
+On the first run, Swival walks you through a GitHub device login: it prints a URL and a code, you enter the code in your browser, and the tokens are cached locally. This first login has to happen in an interactive terminal — a piped, scripted, or server run that is not yet authenticated fails immediately with instructions instead of waiting on a login that can never complete. Once authenticated, non-interactive runs work fine.
+
+`--model` is required and `--api-key` is not accepted. Which models are available depends on your Copilot plan; use `/model` in the REPL to browse the known ones.
+
+For a deeper look at Copilot-specific options, see [Providers](providers.md).
 
 ## Running with AWS Bedrock
 

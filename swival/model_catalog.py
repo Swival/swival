@@ -66,11 +66,13 @@ _cache: dict[tuple[str, str | None], tuple[float, Catalog]] = {}
 
 
 def normalize_provider(provider: str) -> str:
-    """Collapse provider aliases (vertexai, mlx) onto their real providers."""
+    """Collapse provider aliases (vertexai, mlx, copilot) onto their real providers."""
     if provider == "vertexai":
         return "geap"
     if provider == "mlx":
         return "generic"
+    if provider == "copilot":
+        return "github_copilot"
     return provider
 
 
@@ -619,6 +621,22 @@ def _fetch_google(base_url: str | None, api_key: str | None, timeout: float):
 _EXTRA_CHATGPT_MODELS = ("gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol")
 
 
+def _litellm_registry() -> dict:
+    """Return litellm's local model-cost registry.
+
+    Uses litellm's bundled cost map rather than fetching it remotely,
+    matching agent._import_litellm. Raises CatalogUnavailable when litellm
+    cannot be loaded.
+    """
+    try:
+        os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        import litellm
+
+        return litellm.model_cost
+    except Exception as e:
+        raise CatalogUnavailable(f"could not load the litellm model registry: {e}")
+
+
 def _fetch_chatgpt(base_url: str | None, api_key: str | None, timeout: float):
     """List ChatGPT-backend models from litellm's local cost registry.
 
@@ -626,15 +644,7 @@ def _fetch_chatgpt(base_url: str | None, api_key: str | None, timeout: float):
     litellm ships a registry of the models it can route, which tracks the
     supported set better than a hardcoded list here would.
     """
-    try:
-        # Use litellm's bundled cost map rather than fetching it remotely,
-        # matching agent._import_litellm.
-        os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-        import litellm
-
-        registry = litellm.model_cost
-    except Exception as e:
-        raise CatalogUnavailable(f"could not load the litellm model registry: {e}")
+    registry = _litellm_registry()
 
     entries = []
     for key, info in registry.items():
@@ -671,6 +681,39 @@ def _fetch_chatgpt(base_url: str | None, api_key: str | None, timeout: float):
     return Catalog(entries, source="known ChatGPT models")
 
 
+def _fetch_github_copilot(base_url: str | None, api_key: str | None, timeout: float):
+    """List Copilot models from litellm's local cost registry.
+
+    Listing must never start GitHub device authentication, so instead of an
+    authenticated endpoint this reads the registry of models litellm can
+    route. Only chat and Responses entries are usable by the agent loop;
+    embedding and completion-only entries are filtered out. Actual
+    availability still depends on the user's Copilot subscription.
+    """
+    registry = _litellm_registry()
+
+    entries = []
+    for key, info in registry.items():
+        if not key.startswith("github_copilot/"):
+            continue
+        if info.get("mode") not in ("chat", "responses"):
+            continue
+        entries.append(
+            ModelEntry(
+                id=key.removeprefix("github_copilot/"),
+                context_length=info.get("max_input_tokens"),
+                supports_tools=info.get("supports_function_calling"),
+            )
+        )
+    entries.sort(key=lambda e: e.id)
+    if not entries:
+        raise CatalogUnavailable(
+            "no GitHub Copilot models found in the litellm registry",
+            hint="pass a model id directly: /model <id>",
+        )
+    return Catalog(entries, source="known GitHub Copilot models")
+
+
 _FETCHERS = {
     "lmstudio": _fetch_lmstudio,
     "llamacpp": _fetch_llamacpp,
@@ -680,4 +723,5 @@ _FETCHERS = {
     "openrouter": _fetch_openrouter,
     "google": _fetch_google,
     "chatgpt": _fetch_chatgpt,
+    "github_copilot": _fetch_github_copilot,
 }

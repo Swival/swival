@@ -6,6 +6,7 @@ import urllib.error
 
 import pytest
 
+from conftest import forbid_copilot_authenticator
 from swival import model_catalog as mc
 
 
@@ -285,6 +286,76 @@ def test_chatgpt_catalog_includes_new_codex_models():
     # No duplicates, and entries stay sorted by id.
     assert len(ids) == len(set(ids))
     assert ids == sorted(ids)
+
+
+_FAKE_COPILOT_REGISTRY = {
+    "github_copilot/gpt-5.1": {
+        "mode": "chat",
+        "max_input_tokens": 128000,
+        "supports_function_calling": True,
+    },
+    "github_copilot/gpt-5.3-codex": {
+        "mode": "responses",
+        "max_input_tokens": 128000,
+        "supports_function_calling": True,
+    },
+    "github_copilot/claude-opus-41": {
+        "mode": "chat",
+        "max_input_tokens": 80000,
+    },
+    "github_copilot/text-embedding-3-small": {
+        "mode": "embedding",
+        "max_input_tokens": 8191,
+    },
+    "github_copilot/gpt-41-copilot": {
+        "mode": "completion",
+    },
+    "chatgpt/gpt-5.5": {
+        "mode": "responses",
+        "max_input_tokens": 400000,
+    },
+}
+
+
+def test_github_copilot_catalog_filters_unusable_modes(monkeypatch):
+    import litellm
+
+    monkeypatch.setattr(litellm, "model_cost", _FAKE_COPILOT_REGISTRY)
+    catalog = mc.list_models("github_copilot")
+    ids = [e.id for e in catalog.entries]
+
+    assert ids == ["claude-opus-41", "gpt-5.1", "gpt-5.3-codex"]
+    by_id = {e.id: e for e in catalog.entries}
+    assert by_id["gpt-5.1"].context_length == 128000
+    assert by_id["gpt-5.1"].supports_tools is True
+    assert by_id["claude-opus-41"].supports_tools is None
+
+
+def test_github_copilot_catalog_accepts_copilot_alias(monkeypatch):
+    import litellm
+
+    monkeypatch.setattr(litellm, "model_cost", _FAKE_COPILOT_REGISTRY)
+    catalog = mc.list_models("copilot")
+    assert [e.id for e in catalog.entries] == [
+        "claude-opus-41",
+        "gpt-5.1",
+        "gpt-5.3-codex",
+    ]
+
+
+def test_github_copilot_catalog_never_authenticates(monkeypatch):
+    forbid_copilot_authenticator(monkeypatch)
+    catalog = mc.list_models("github_copilot")
+    assert catalog.entries
+
+
+def test_github_copilot_catalog_empty_registry(monkeypatch):
+    import litellm
+
+    monkeypatch.setattr(litellm, "model_cost", {"chatgpt/gpt-5.5": {"mode": "chat"}})
+    with pytest.raises(mc.CatalogUnavailable) as excinfo:
+        mc.list_models("github_copilot")
+    assert "pass a model id directly" in (excinfo.value.hint or "")
 
 
 def test_openrouter_catalog(monkeypatch):

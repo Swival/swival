@@ -170,13 +170,13 @@ swival --profile gpt5 "review this patch"
 
 `--list-profiles` prints available profiles and exits. The active profile is marked with an arrow and shows which layer selected it (CLI flag, project config, or global config).
 
-`--provider` chooses the backend provider and defaults to `lmstudio`. Valid values are `lmstudio`, `llamacpp`, `huggingface`, `openrouter`, `generic`, `applefm` (experimental Apple Foundation Models local server; defaults to `--model pcc`), `google`, `geap` (Gemini Enterprise / Vertex AI; `vertexai` is an accepted alias), `chatgpt` (for ChatGPT Plus/Pro subscriptions), `bedrock` (AWS Bedrock), and `command` (shells out to an external program).
+`--provider` chooses the backend provider and defaults to `lmstudio`. Valid values are `lmstudio`, `llamacpp`, `huggingface`, `openrouter`, `generic`, `applefm` (experimental Apple Foundation Models local server; defaults to `--model pcc`), `google`, `geap` (Gemini Enterprise / Vertex AI; `vertexai` is an accepted alias), `chatgpt` (for ChatGPT Plus/Pro subscriptions), `github_copilot` (for GitHub Copilot subscriptions; `copilot` is an accepted alias), `bedrock` (AWS Bedrock), and `command` (shells out to an external program).
 
 `--model` overrides auto-discovery with a fixed model identifier.
 
 `--base-url` sets a custom API base URL. For LM Studio, the default is `http://127.0.0.1:1234`; for llamacpp, the default is `http://127.0.0.1:8080`.
 
-`--api-key` provides a key directly on the command line and takes precedence over provider environment variables (`HF_TOKEN` for huggingface, `OPENROUTER_API_KEY` for openrouter, `OPENAI_API_KEY` for generic, `GEMINI_API_KEY` for google, `CHATGPT_API_KEY` for chatgpt). Bedrock uses the AWS credential chain instead (`AWS_PROFILE`, env vars, or IAM roles). Local providers (`lmstudio`, `llamacpp`) need no key.
+`--api-key` provides a key directly on the command line and takes precedence over provider environment variables (`HF_TOKEN` for huggingface, `OPENROUTER_API_KEY` for openrouter, `OPENAI_API_KEY` for generic, `GEMINI_API_KEY` for google, `CHATGPT_API_KEY` for chatgpt). Bedrock uses the AWS credential chain instead (`AWS_PROFILE`, env vars, or IAM roles), and GitHub Copilot rejects `--api-key` entirely since it authenticates through the GitHub device flow. Local providers (`lmstudio`, `llamacpp`) need no key.
 
 `--user-agent` sets the `User-Agent` header sent with LLM API requests. Defaults to `Swival/<version>`. Useful when a provider requires a specific agent string (e.g. `--user-agent 'KimiCLI/Swival'` for Kimi's API).
 
@@ -399,7 +399,7 @@ Swival only shows what it can support:
 - Hosted providers with known pricing print the line after every visible turn, tool calls and final answers alike.
 - When some successful calls could not be priced, the label switches to `Known session cost: ~$0.003812 (2 calls unpriced)`. The dollar amount only ever includes priced calls.
 - When nothing could be priced, or the priced subtotal would display as zero, the line is omitted entirely rather than showing a value that cannot be trusted. A tiny subtotal shows up once it accumulates past display precision.
-- Local servers (`lmstudio`, `llamacpp`, `applefm`), the `command` provider, SQLite cache hits, and the subscription-backed `chatgpt` provider have no per-token bill, so they neither add dollars nor mark the subtotal as partial.
+- Local servers (`lmstudio`, `llamacpp`, `applefm`), the `command` provider, SQLite cache hits, and the subscription-backed `chatgpt` and `github_copilot` providers have no per-token bill, so they neither add dollars nor mark the subtotal as partial.
 - `generic` endpoints are never priced, even when the served model name matches a hosted model: a custom server can call its model anything, and a name collision would produce a plausible but wrong price. The `google` provider is the exception and is priced as `gemini/{model}` even though it routes through Google's OpenAI-compatible endpoint.
 
 Work that finishes after the last turn line, such as the continue-file summary written when max turns run out or a subagent completing during shutdown, still counts: when it changed the subtotal, one final reconciliation line is printed on exit.
@@ -420,7 +420,7 @@ Work that finishes after the last turn line, such as the continue-file summary w
 
 `--init-config --project` generates a project-local config file at `swival.toml` in the current base directory instead.
 
-`--logout` deletes locally cached ChatGPT OAuth credentials and exits. The next `--provider chatgpt` run starts the device-code login flow again.
+`--logout` deletes locally cached ChatGPT OAuth credentials and GitHub Copilot tokens and exits. The next `--provider chatgpt` or `--provider github_copilot` run starts the respective login flow again. Only Swival's own credential caches are touched; gh CLI, git, and editor credentials are left alone.
 
 These setup flags do not require a question argument. Config generation never overwrites an existing config file: if one exists, the template is written to a `.new` file next to it, with your current settings preserved, so you can review it before moving it into place.
 

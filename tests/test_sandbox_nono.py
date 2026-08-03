@@ -575,12 +575,31 @@ class TestProviderStateDirs:
         dirs = provider_state_dirs("chatgpt")
         assert dirs == [str(token_dir.parent)]
 
+    def test_github_copilot_grants_litellm_config_root(self, monkeypatch):
+        monkeypatch.delenv("GITHUB_COPILOT_TOKEN_DIR", raising=False)
+        dirs = provider_state_dirs("github_copilot")
+        assert len(dirs) == 1
+        assert dirs[0].endswith("/.config/litellm")
+
+    def test_copilot_alias_gets_same_grant_before_normalization(self, monkeypatch):
+        # nono re-execs before startup normalizes provider aliases, so the
+        # raw CLI value must be recognized as-is.
+        monkeypatch.delenv("GITHUB_COPILOT_TOKEN_DIR", raising=False)
+        assert provider_state_dirs("copilot") == provider_state_dirs("github_copilot")
+
+    def test_github_copilot_respects_token_dir_env(self, monkeypatch, tmp_path):
+        token_dir = tmp_path / "custom" / "github_copilot"
+        monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(token_dir))
+        assert provider_state_dirs("github_copilot") == [str(token_dir.parent)]
+        assert provider_state_dirs("copilot") == [str(token_dir.parent)]
+
 
 class TestProviderCredentialReadDirs:
     def test_plain_provider_has_none(self, monkeypatch):
         monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
         assert provider_credential_read_dirs("lmstudio") == []
         assert provider_credential_read_dirs("chatgpt") == []
+        assert provider_credential_read_dirs("github_copilot") == []
         assert provider_credential_read_dirs(None) == []
 
     def test_geap_grants_gcloud_config(self, monkeypatch):

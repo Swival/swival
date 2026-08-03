@@ -177,6 +177,11 @@ brew uninstall swival     # if installed with Homebrew
 <td><code>--provider chatgpt --model MODEL</code></td>
 </tr>
 <tr>
+<td><code>github_copilot</code></td>
+<td>GitHub device login on first run (interactive)</td>
+<td><code>--provider github_copilot --model MODEL</code></td>
+</tr>
+<tr>
 <td><code>generic</code></td>
 <td>optional <code>OPENAI_API_KEY</code></td>
 <td><code>--provider generic --base-url URL --model MODEL</code></td>
@@ -279,6 +284,13 @@ swival &quot;Hello world&quot; \
 <p>On the first run, Swival will print a URL and a code. Open the URL in your browser, enter the code, and authorize. After that, tokens are cached locally and you won't be prompted again.</p>
 <p><code>--model</code> is required -- there is no default. Supported model names can change over time, so check <a href="providers.html">Providers</a> if you need the current naming.</p>
 <p>For a deeper look at ChatGPT Plus/Pro-specific options, see <a href="providers.html">Providers</a>.</p>
+<h2 id="running-with-github-copilot">Running with GitHub Copilot</h2>
+<p>If you have a GitHub Copilot subscription, the <code>github_copilot</code> provider (alias: <code>copilot</code>) gives you the Copilot-hosted models without a separate API key.</p>
+<pre><code class="language-sh">swival &quot;Hello world&quot; --provider github_copilot --model gpt-5.1
+</code></pre>
+<p>On the first run, Swival walks you through a GitHub device login: it prints a URL and a code, you enter the code in your browser, and the tokens are cached locally. This first login has to happen in an interactive terminal — a piped, scripted, or server run that is not yet authenticated fails immediately with instructions instead of waiting on a login that can never complete. Once authenticated, non-interactive runs work fine.</p>
+<p><code>--model</code> is required and <code>--api-key</code> is not accepted. Which models are available depends on your Copilot plan; use <code>/model</code> in the REPL to browse the known ones.</p>
+<p>For a deeper look at Copilot-specific options, see <a href="providers.html">Providers</a>.</p>
 <h2 id="running-with-aws-bedrock">Running with AWS Bedrock</h2>
 <p>If you use AWS, the <code>bedrock</code> provider connects to models hosted on Bedrock using your existing AWS credentials. No API key is needed — Swival picks up credentials from environment variables, <code>~/.aws/credentials</code>, IAM roles, and SSO.</p>
 <pre><code class="language-sh">export AWS_REGION_NAME=us-east-2

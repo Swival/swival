@@ -97,6 +97,7 @@ Session(
     aws_profile: str | None = None,
     project: str | None = None,
     location: str | None = None,
+    copilot_interactive_auth: bool = False,
     approved_buckets: set[str] | None = None,
     metaskills: str = "local",  # "local", "all", or "off"
     storm_breaker: bool = True,
@@ -109,9 +110,10 @@ All parameters are keyword-only. The important ones:
 | Parameter               | Description                                                                                                                                                                                                                                                                            |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `base_dir`              | Project root. Tools resolve paths relative to this.                                                                                                                                                                                                                                    |
-| `provider`              | LLM provider: `"lmstudio"`, `"llamacpp"`, `"huggingface"`, `"openrouter"`, `"chatgpt"`, `"google"`, `"geap"` (`"vertexai"` is an alias), `"bedrock"`, `"generic"`, `"applefm"`, or `"command"` (the command to run goes in `model`).                                                   |
+| `provider`              | LLM provider: `"lmstudio"`, `"llamacpp"`, `"huggingface"`, `"openrouter"`, `"chatgpt"`, `"github_copilot"` (`"copilot"` is an alias), `"google"`, `"geap"` (`"vertexai"` is an alias), `"bedrock"`, `"generic"`, `"applefm"`, or `"command"` (the command to run goes in `model`).                                                   |
 | `model`                 | Model identifier. Required for most providers; LM Studio and llama.cpp auto-discover.                                                                                                                                                                                                  |
-| `api_key`               | API key. Can also be set via provider-specific env vars.                                                                                                                                                                                                                               |
+| `api_key`               | API key. Can also be set via provider-specific env vars. Rejected by the `github_copilot` provider, which authenticates through the GitHub device flow.                                                                                                                                |
+| `copilot_interactive_auth` | Off by default: an unauthenticated `github_copilot` session raises `ConfigError` immediately instead of starting a GitHub device flow inside your application. Set `True` (with a real terminal attached) to allow the one-time foreground device login; the easier path is to authenticate once through the CLI first. |
 | `user_agent`            | `User-Agent` header for LLM API requests. Defaults to `Swival/<version>`.                                                                                                                                                                                                              |
 | `base_url`              | Override the provider's default endpoint.                                                                                                                                                                                                                                              |
 | `max_turns`             | Maximum agent loop iterations before returning `exhausted=True`.                                                                                                                                                                                                                       |

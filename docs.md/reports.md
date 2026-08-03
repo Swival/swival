@@ -72,7 +72,7 @@ The JSON below is from a verified local run using `--model dummy-model --max-tur
 
 `version` is the schema version and is currently `1`. `mode` is `"oneshot"` for single-task runs or `"repl"` for interactive sessions. `timestamp` is the run completion time in UTC ISO 8601 format.
 
-`task` is the original question string passed on the command line, or `"repl session (<N> turns)"` for REPL sessions. `model` is the resolved model identifier that was actually used. `provider` is one of `lmstudio`, `llamacpp`, `huggingface`, `openrouter`, `generic`, `applefm`, `chatgpt`, `google`, `geap` (`vertexai` is an accepted alias), `bedrock`, or `command`.
+`task` is the original question string passed on the command line, or `"repl session (<N> turns)"` for REPL sessions. `model` is the resolved model identifier that was actually used. `provider` is one of `lmstudio`, `llamacpp`, `huggingface`, `openrouter`, `generic`, `applefm`, `chatgpt`, `github_copilot` (`copilot` is an accepted alias), `google`, `geap` (`vertexai` is an accepted alias), `bedrock`, or `command`.
 
 `settings` captures run configuration. `sandbox` captures the sandbox backend in use. `result` captures outcome and exit semantics. `stats` captures aggregate counters. `timeline` captures ordered event records.
 

@@ -17,6 +17,7 @@ It connects to [LM Studio](https://lmstudio.ai/),
 [Google Gemini](https://ai.google.dev/),
 [Gemini Enterprise Agent Platform](https://cloud.google.com/vertex-ai) (formerly Vertex AI),
 [ChatGPT Plus/Pro](https://chatgpt.com/),
+[GitHub Copilot](https://github.com/features/copilot),
 [AWS Bedrock](https://aws.amazon.com/bedrock/), Apple Foundation Models
 (experimental), any OpenAI-compatible server (ollama,
 mlx_lm.server, vLLM, etc.), or any external command
@@ -37,6 +38,7 @@ Pick the provider that matches how you want to run models:
 | Google Gemini    | `GEMINI_API_KEY`, `OPENAI_API_KEY`, or `--api-key`   | `--provider google --model MODEL`                                  | `swival --provider google --model gemini-2.5-flash "task"`                                          |
 | GEAP (Vertex AI) | Google Cloud ADC or `GOOGLE_APPLICATION_CREDENTIALS` | `--provider geap --gcp-project ID --location REGION --model MODEL` | `swival --provider geap --gcp-project my-proj --location us-central1 --model gemini-3.1-pro "task"` |
 | ChatGPT Plus/Pro | browser auth on first run or `CHATGPT_API_KEY`       | `--provider chatgpt --model MODEL`                                 | `swival --provider chatgpt --model gpt-5.5 "task"`                                                  |
+| GitHub Copilot   | GitHub device login on first run (interactive)       | `--provider github_copilot --model MODEL`                          | `swival --provider github_copilot --model gpt-5.1 "task"`                                           |
 | Generic          | optional `OPENAI_API_KEY`                            | `--provider generic --base-url URL --model MODEL`                  | `swival --provider generic --base-url http://127.0.0.1:8080 --model my-model "task"`                |
 | Apple FM (exp.)  | none (local server)                                  | `--provider applefm`                                               | `swival --provider applefm "task"`                                                                  |
 | AWS Bedrock      | AWS credential chain (`AWS_PROFILE`, env vars, IAM)  | `--provider bedrock --model MODEL`                                 | `swival --provider bedrock --model global.anthropic.claude-opus-4-6-v1 "task"`                      |

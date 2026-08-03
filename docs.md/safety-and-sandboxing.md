@@ -94,7 +94,7 @@ The full set of nono knobs:
 
 All of these are accepted only with `--sandbox nono`; using one without it is an error. They can also be set in the config file (`nono_profile`, `nono_rollback`, `nono_block_net`, `nono_allow_domain`, `nono_network_profile`, `nono_credential`, `nono_audit_integrity`).
 
-Some providers need access to credentials stored on disk. Using `--provider chatgpt` under nono grants the sandbox read/write access to LiteLLM's local OAuth state directory (`~/.config/litellm`) so the provider can authenticate. For stronger credential isolation, prefer nono credential proxy support via `--nono-credential` once it is available for your provider flow.
+Some providers need access to credentials stored on disk. Using `--provider chatgpt` or `--provider github_copilot` under nono grants the sandbox read/write access to LiteLLM's local OAuth state directory (`~/.config/litellm`) so the provider can authenticate. For stronger credential isolation, prefer nono credential proxy support via `--nono-credential` once it is available for your provider flow.
 
 This requires the `nono` binary on PATH. If it is not found, Swival exits with an actionable error. See [Using Swival With nono](nono.md) for practical workflows.
 

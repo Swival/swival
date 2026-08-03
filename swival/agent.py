@@ -503,7 +503,12 @@ def _list_server_models(litellm_provider, api_base, api_key):
 
     Returns [] when the endpoint is unreachable or the provider has no
     model-listing support (get_valid_models is non-blocking by design).
+    Copilot is never probed: get_valid_models builds authenticated requests
+    through the Copilot adapter, which can start a GitHub device flow.
     """
+    if litellm_provider == "github_copilot":
+        return []
+
     from litellm import get_valid_models
 
     try:
@@ -583,6 +588,32 @@ def _geap_auth_hint(provider: str, error_text: str) -> str:
     lower = error_text.lower()
     if any(kw in lower for kw in _GEAP_AUTH_KEYWORDS):
         return _GEAP_AUTH_HINT
+    return ""
+
+
+_COPILOT_AUTH_KEYWORDS = (
+    "authentication",
+    "unauthorized",
+    "access token",
+    "api key",
+    "401",
+)
+
+_COPILOT_AUTH_HINT = (
+    "\n\nGitHub Copilot authentication may be missing or expired.\n"
+    "Run swival from an interactive terminal to complete the GitHub device "
+    "login, or run `swival --logout` first to clear the cached credentials "
+    "and authenticate again."
+)
+
+
+def _copilot_auth_hint(provider: str, error_text: str) -> str:
+    """Return Copilot re-authentication guidance if the error looks auth-related."""
+    if provider != "github_copilot":
+        return ""
+    lower = error_text.lower()
+    if any(kw in lower for kw in _COPILOT_AUTH_KEYWORDS):
+        return _COPILOT_AUTH_HINT
     return ""
 
 
@@ -4394,6 +4425,9 @@ def _resolve_model_str(provider: str, model_id: str) -> str:
     elif provider == "chatgpt":
         bare = model_id.removeprefix("chatgpt/").removeprefix("chatgpt/")
         return f"chatgpt/{bare}"
+    elif provider == "github_copilot":
+        bare = model_id.removeprefix("github_copilot/").removeprefix("github_copilot/")
+        return f"github_copilot/{bare}"
     elif provider == "bedrock":
         return f"bedrock/{model_id.removeprefix('bedrock/')}"
     elif provider == "geap":
@@ -4973,7 +5007,13 @@ def _model_supports_vision(model_str: str) -> bool | None:
     Returns True, False, or None (unknown / not in registry).
     litellm.supports_vision() returns False for models not in its registry,
     so we first check if the model is known at all via get_model_info().
+    Copilot models are answered from the local registry instead: the generic
+    helpers route through get_llm_provider(), which for Copilot can start a
+    GitHub device flow.
     """
+    copilot_info = _copilot_registry_info(model_str)
+    if copilot_info is not None:
+        return bool(copilot_info.get("supports_vision")) if copilot_info else None
     try:
         import litellm
 
@@ -4984,6 +5024,24 @@ def _model_supports_vision(model_str: str) -> bool | None:
         return litellm.supports_vision(model=model_str)
     except Exception:
         return None
+
+
+def _model_supports_prompt_caching(model_str: str) -> bool:
+    """Check if the resolved model supports explicit cache_control.
+
+    Copilot models are answered from the local registry: litellm's
+    supports_prompt_caching() routes through get_llm_provider(), which for
+    Copilot constructs the authenticator and can start a GitHub device flow.
+    """
+    copilot_info = _copilot_registry_info(model_str)
+    if copilot_info is not None:
+        return bool(copilot_info.get("supports_prompt_caching"))
+    try:
+        from litellm.utils import supports_prompt_caching
+
+        return supports_prompt_caching(model=model_str)
+    except Exception:
+        return False  # old LiteLLM version or unsupported model
 
 
 def _is_vision_rejection(error: "AgentError") -> bool:
@@ -5358,9 +5416,12 @@ def _completion_with_retry(
 
 
 # Providers with no per-token billing: local servers, external commands,
-# and the subscription-backed ChatGPT provider (priced at zero on purpose).
+# and the subscription-backed ChatGPT and GitHub Copilot providers (priced
+# at zero on purpose). Copilot must stay in this set for more than display:
+# litellm.completion_cost() re-enters get_llm_provider(), and for Copilot
+# that path can kick off a token refresh or even device authentication.
 _COST_NOT_APPLICABLE_PROVIDERS = frozenset(
-    {"command", "lmstudio", "llamacpp", "applefm", "chatgpt"}
+    {"command", "lmstudio", "llamacpp", "applefm", "chatgpt", "github_copilot"}
 )
 
 
@@ -5606,6 +5667,11 @@ def call_llm(
     _patch_chatgpt_responses_empty_output()
     if provider == "chatgpt":
         _patch_chatgpt_identity_hooks()
+    if provider == "github_copilot":
+        # LiteLLM's Copilot chat adapter re-roles system messages as
+        # assistant turns by default; Swival's operating contract must keep
+        # its role "system".
+        litellm.disable_copilot_system_to_assistant = True
 
     # Resolve sanitize_thinking: opt-in only.
     if sanitize_thinking is None:
@@ -5655,6 +5721,21 @@ def call_llm(
         _skip_tool_choice = True
         if api_key:
             kwargs["api_key"] = api_key
+        if base_url:
+            kwargs["api_base"] = base_url
+    elif provider == "github_copilot":
+        # No api_key: the adapter exchanges its cached GitHub token for a
+        # short-lived Copilot key on every call and ignores a caller key.
+        # Refuse to proceed without a cached login — litellm.completion()
+        # would otherwise start a lazy device flow that prints its code to
+        # stdout and polls for minutes. resolve_provider() normally
+        # guarantees the cache exists; this protects direct callers and
+        # sessions whose cache was cleared mid-run.
+        if not _copilot_has_cached_auth():
+            raise AgentError(
+                "GitHub Copilot is not authenticated." + _COPILOT_AUTH_HINT
+            )
+        kwargs = {}
         if base_url:
             kwargs["api_base"] = base_url
     elif provider == "bedrock":
@@ -5728,15 +5809,10 @@ def call_llm(
     # geap (Vertex AI) rejects cached content when tools or system
     # instructions are present in the same request.
     if prompt_cache and provider not in ("lmstudio", "geap"):
-        try:
-            from litellm.utils import supports_prompt_caching
-
-            if supports_prompt_caching(model=model_str):
-                completion_kwargs["cache_control_injection_points"] = [
-                    {"location": "message", "role": "system"},
-                ]
-        except Exception:
-            pass  # old LiteLLM version or unsupported model — skip silently
+        if _model_supports_prompt_caching(model_str):
+            completion_kwargs["cache_control_injection_points"] = [
+                {"location": "message", "role": "system"},
+            ]
 
     # --- Cache lookup ---
     # Skip cache for vision requests — base64 payloads would bloat the DB
@@ -6083,6 +6159,7 @@ def call_llm(
             )
         else:
             msg += _geap_auth_hint(provider, msg_text)
+            msg += _copilot_auth_hint(provider, msg_text)
         ae = AgentError(msg)
         ae._provider_retries = _retries_from_exc(e)
         _raise_with_retries(ae)
@@ -6426,7 +6503,7 @@ def build_parser():
         "--logout",
         action="store_true",
         default=False,
-        help="Delete stored ChatGPT OAuth credentials and exit.",
+        help="Delete stored ChatGPT and GitHub Copilot credentials and exit.",
     )
     provider_group.add_argument(
         "--max-context-tokens",
@@ -6717,11 +6794,13 @@ def build_parser():
             "geap",
             "vertexai",
             "chatgpt",
+            "github_copilot",
+            "copilot",
             "bedrock",
             "command",
         ],
         default=_UNSET,
-        help="LLM provider: lmstudio (local), llamacpp (llama.cpp server, auto-discovers model), huggingface (HF API), openrouter (multi-provider API), generic (any OpenAI-compatible server), applefm (experimental: Apple Foundation Models local server, defaults to --model pcc / Private Cloud Compute; on-device 'system' has a tiny context window; server at http://127.0.0.1:1976/v1), google (Gemini via OpenAI-compatible endpoint), geap (Gemini Enterprise Agent Platform / Vertex AI, auth via Google Cloud credentials), chatgpt (ChatGPT Plus/Pro subscription via OAuth), bedrock (AWS Bedrock, auth via AWS credential chain), command (external command as LLM, --model is the command to run). 'vertexai' is an alias for 'geap'.",
+        help="LLM provider: lmstudio (local), llamacpp (llama.cpp server, auto-discovers model), huggingface (HF API), openrouter (multi-provider API), generic (any OpenAI-compatible server), applefm (experimental: Apple Foundation Models local server, defaults to --model pcc / Private Cloud Compute; on-device 'system' has a tiny context window; server at http://127.0.0.1:1976/v1), google (Gemini via OpenAI-compatible endpoint), geap (Gemini Enterprise Agent Platform / Vertex AI, auth via Google Cloud credentials), chatgpt (ChatGPT Plus/Pro subscription via OAuth), github_copilot (GitHub Copilot subscription via GitHub device login), bedrock (AWS Bedrock, auth via AWS credential chain), command (external command as LLM, --model is the command to run). 'vertexai' is an alias for 'geap'; 'copilot' is an alias for 'github_copilot'.",
     )
     output_group.add_argument(
         "-q",
@@ -6947,19 +7026,38 @@ def _should_try_onboarding(args, base_dir: Path) -> bool:
     return True
 
 
-def _handle_logout() -> None:
-    """Delete locally cached ChatGPT OAuth tokens if present."""
+def _chatgpt_auth_file() -> Path:
+    """Path of the ChatGPT OAuth tokens cached by LiteLLM."""
     token_dir = os.getenv(
         "CHATGPT_TOKEN_DIR",
         os.path.expanduser("~/.config/litellm/chatgpt"),
     )
-    auth_file = os.path.join(token_dir, os.getenv("CHATGPT_AUTH_FILE", "auth.json"))
-    auth_path = Path(auth_file)
-    if auth_path.is_file():
-        auth_path.unlink()
-        print(f"Deleted ChatGPT OAuth tokens: {auth_path}", file=sys.stderr)
-    else:
-        print("No stored ChatGPT credentials found.", file=sys.stderr)
+    return Path(token_dir) / os.getenv("CHATGPT_AUTH_FILE", "auth.json")
+
+
+def _handle_logout() -> None:
+    """Delete locally cached ChatGPT and GitHub Copilot credentials if present.
+
+    Only the credential files themselves are removed — never their cache
+    directories, and never external GitHub state (gh CLI, git credential
+    helpers, editors, keychains).
+    """
+    targets = [
+        ("ChatGPT OAuth tokens", _chatgpt_auth_file()),
+        ("GitHub Copilot access token", _copilot_access_token_file()),
+        ("GitHub Copilot API key", _copilot_api_key_file()),
+    ]
+    deleted = False
+    for label, path in targets:
+        if path.is_file():
+            path.unlink()
+            print(f"Deleted {label}: {path}", file=sys.stderr)
+            deleted = True
+    if not deleted:
+        print(
+            "No stored ChatGPT or GitHub Copilot credentials found.",
+            file=sys.stderr,
+        )
 
 
 def _handle_init_config(args):
@@ -7753,8 +7851,28 @@ def _import_litellm():
     return litellm
 
 
+def _copilot_registry_info(model_str: str) -> dict | None:
+    """Read a github_copilot/* entry straight from litellm's local registry.
+
+    Returns None for non-Copilot model strings, and a (possibly empty) info
+    dict for Copilot ones. litellm's generic metadata helpers —
+    get_model_info(), supports_vision(), supports_prompt_caching() — route
+    through get_llm_provider(), which for Copilot constructs the adapter's
+    authenticator and can start a GitHub device flow. The registry dict
+    answers the same questions without touching authentication.
+    """
+    if not model_str.startswith("github_copilot/"):
+        return None
+    import litellm
+
+    return litellm.model_cost.get(model_str) or {}
+
+
 def _litellm_context_length(model_str: str) -> int | None:
     """Query litellm for max_input_tokens, returning None on any failure."""
+    copilot_info = _copilot_registry_info(model_str)
+    if copilot_info is not None:
+        return copilot_info.get("max_input_tokens")
     try:
         import litellm
 
@@ -7782,6 +7900,90 @@ def _normalize_openai_base(url: str) -> str:
     return f"{stripped}/v1"
 
 
+def _copilot_token_dir() -> str:
+    """Return the GitHub Copilot token cache directory LiteLLM uses."""
+    return os.getenv(
+        "GITHUB_COPILOT_TOKEN_DIR",
+        os.path.expanduser("~/.config/litellm/github_copilot"),
+    )
+
+
+def _copilot_access_token_file() -> Path:
+    """Path of the long-lived GitHub access token cached by LiteLLM."""
+    return Path(_copilot_token_dir()) / os.getenv(
+        "GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token"
+    )
+
+
+def _copilot_api_key_file() -> Path:
+    """Path of the short-lived Copilot API key cached by LiteLLM."""
+    return Path(_copilot_token_dir()) / os.getenv(
+        "GITHUB_COPILOT_API_KEY_FILE", "api-key.json"
+    )
+
+
+def _copilot_has_cached_auth() -> bool:
+    """True when a cached GitHub access token exists, without any network call.
+
+    A non-empty access-token file is all LiteLLM needs to refresh the
+    short-lived Copilot API key on its own; only a missing token forces the
+    interactive device flow.
+    """
+    try:
+        return bool(_copilot_access_token_file().read_text().strip())
+    except OSError:
+        return False
+
+
+_COPILOT_AUTH_LOCK = threading.Lock()
+
+
+def _ensure_copilot_auth(*, allow_interactive: bool) -> None:
+    """Guard every Copilot run against LiteLLM's lazy device-flow login.
+
+    LiteLLM would otherwise start a GitHub device flow inside the first
+    completion call: it prints the device code to stdout and can poll three
+    separate codes for a minute each, which breaks the stdout contract and
+    hangs non-interactive runs. So authentication happens here, once,
+    deliberately — and only for a caller that opted into a foreground login
+    on a real terminal. Everything else fails fast with guidance.
+    """
+    if _copilot_has_cached_auth():
+        return
+    if not allow_interactive:
+        raise ConfigError(
+            "GitHub Copilot is not authenticated. Complete the one-time GitHub "
+            "device login by running swival interactively first, e.g. "
+            '`swival --provider github_copilot --model MODEL "hi"` in a '
+            "terminal. Library callers can opt in explicitly with "
+            "Session(copilot_interactive_auth=True)."
+        )
+    if not (sys.stdin.isatty() and sys.stderr.isatty()):
+        raise ConfigError(
+            "GitHub Copilot needs a one-time interactive GitHub device login, "
+            "but this run is not attached to a terminal. Run swival from an "
+            "interactive terminal once to authenticate; the credentials are "
+            "then cached for non-interactive runs."
+        )
+    with _COPILOT_AUTH_LOCK:
+        if _copilot_has_cached_auth():
+            return
+        fmt.info(
+            "GitHub Copilot: one-time GitHub device login required. "
+            "Follow the instructions below."
+        )
+        try:
+            from litellm.llms.github_copilot.authenticator import Authenticator
+
+            # The adapter prints its device-code instructions with a bare
+            # print(); stdout must stay reserved for the final answer.
+            with contextlib.redirect_stdout(sys.stderr):
+                Authenticator().get_api_key()
+        except Exception as e:
+            raise ConfigError(f"GitHub Copilot authentication failed: {e}") from e
+        fmt.info("GitHub Copilot: authentication complete.")
+
+
 def resolve_provider(
     provider: str,
     model: str | None,
@@ -7792,6 +7994,7 @@ def resolve_provider(
     aws_profile: str | None = None,
     project: str | None = None,
     location: str | None = None,
+    copilot_interactive_auth: bool = False,
 ) -> tuple[str, str | None, str | None, int | None, dict]:
     """Validate provider args, discover model (LM Studio), return resolved config.
 
@@ -7800,6 +8003,8 @@ def resolve_provider(
     """
     if provider == "vertexai":
         provider = "geap"
+    elif provider == "copilot":
+        provider = "github_copilot"
     provider_name = provider
     llm_provider = provider
     _import_litellm()
@@ -7965,6 +8170,30 @@ def resolve_provider(
         if context_length is None:
             _bare = model_id.removeprefix("chatgpt/").removeprefix("chatgpt/")
             context_length = _litellm_context_length(f"chatgpt/{_bare}")
+
+    elif provider == "github_copilot":
+        if not model:
+            raise ConfigError(
+                "--model is required when --provider is github_copilot "
+                "(e.g. gpt-5.1 or claude-sonnet-4.5). Use /model in the REPL "
+                "to browse the known Copilot models."
+            )
+        if api_key:
+            raise ConfigError(
+                "--api-key is not supported for github_copilot. "
+                "GitHub Copilot authenticates through the GitHub device flow "
+                "and exchanges the cached login for short-lived API tokens; "
+                "a provided key would be discarded."
+            )
+        api_base = base_url
+        model_id = model
+        resolved_key = None
+        context_length = max_context_tokens
+        if context_length is None:
+            context_length = _litellm_context_length(
+                _resolve_model_str("github_copilot", model_id)
+            )
+        _ensure_copilot_auth(allow_interactive=copilot_interactive_auth)
 
     elif provider == "geap":
         if not model:
@@ -8715,6 +8944,8 @@ def _validate_external_command(cmd_string: str, label: str) -> None:
 def _run_main(args, report, _write_report, parser):
     if args.provider == "vertexai":
         args.provider = "geap"
+    elif args.provider == "copilot":
+        args.provider = "github_copilot"
     args._raw_llm_baseline = {
         "provider": args.provider,
         "model": args.model,
@@ -8747,6 +8978,9 @@ def _run_main(args, report, _write_report, parser):
             aws_profile=args.aws_profile,
             project=args.gcp_project,
             location=args.location,
+            # A foreground CLI run may complete the one-time Copilot device
+            # login; the preflight still verifies a real terminal is attached.
+            copilot_interactive_auth=True,
         )
     except ConfigError as e:
         parser.error(str(e))
@@ -11603,6 +11837,7 @@ def _repl_profile(
             aws_profile=merged.get("aws_profile"),
             project=merged.get("project"),
             location=merged.get("location"),
+            copilot_interactive_auth=True,
         )
     except (ConfigError, AgentError) as exc:
         return current_profile, f"profile switch failed: {exc}", True
@@ -11820,6 +12055,7 @@ def _model_switch(
             aws_profile=settings.get("aws_profile"),
             project=settings.get("project"),
             location=settings.get("location"),
+            copilot_interactive_auth=True,
         )
     except (ConfigError, AgentError) as exc:
         msg = f"model switch failed: {exc}"

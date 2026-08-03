@@ -90,6 +90,13 @@ provider = "chatgpt"
 model = "gpt-5.5"
 ```
 
+The same goes for the `github_copilot` provider (GitHub Copilot subscriptions), which authenticates through a one-time GitHub device login:
+
+```toml
+provider = "github_copilot"
+model = "gpt-5.1"
+```
+
 Relative paths in `allowed_dirs`, `allowed_dirs_ro`, `skills_dir`, `cache_dir`, `objective`, and `verify` resolve against the config file's parent directory, not the working directory. Tilde paths like `~/projects` expand to the home directory.
 
 The `reviewer`, `llm_filter`, `lifecycle_command`, and `command_middleware` values are shell-split; only path-like first tokens (anything starting with `/`, `~`, or containing a `/`, e.g. `./`, `../`, `.rtk/`, `scripts/`) are resolved against the config directory, while bare command names like `swival` are left for PATH lookup at runtime. The same resolution applies to `model` when `provider = "command"`.

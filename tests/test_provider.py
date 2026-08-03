@@ -4,11 +4,14 @@ import contextlib
 import json
 import os
 import sys
+import time
 import types
 import urllib.error
 
 import pytest
 from unittest.mock import patch, MagicMock
+
+from conftest import forbid_copilot_authenticator
 
 from swival import agent
 from swival.agent import (
@@ -29,6 +32,38 @@ from swival.agent import (
 from swival.config import ConfigError
 from swival.report import AgentError
 from swival.tools import sanitize_tools_for_applefm
+
+
+@pytest.fixture(autouse=True)
+def _isolate_credential_caches(tmp_path_factory, monkeypatch):
+    """Point the ChatGPT and Copilot token caches at a throwaway directory.
+
+    --logout deletes credential files, and both subscription providers read
+    cached tokens through litellm's get_llm_provider(); without isolation
+    these tests would depend on (or destroy) the developer's real
+    credentials under ~/.config/litellm.
+
+    The ChatGPT cache gets a fake unexpired token: litellm's chatgpt
+    adapter starts a device-code login whenever no cached token exists,
+    so an empty cache would turn every chatgpt resolution test into a
+    15-minute network poll. The Copilot cache stays empty on purpose —
+    Swival's preflight must fail fast there, and tests that need a login
+    write the token file explicitly.
+    """
+    base = tmp_path_factory.mktemp("credential-caches")
+    chatgpt_dir = base / "chatgpt"
+    chatgpt_dir.mkdir()
+    (chatgpt_dir / "auth.json").write_text(
+        json.dumps(
+            {"access_token": "fake-cached-token", "expires_at": time.time() + 86400}
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(chatgpt_dir))
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(base / "github_copilot"))
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+    monkeypatch.delenv("GITHUB_COPILOT_ACCESS_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("GITHUB_COPILOT_API_KEY_FILE", raising=False)
 
 
 def _patch_urlopen_json(monkeypatch, payload):
@@ -2401,7 +2436,10 @@ class TestChatGPTLogoutCLI:
             agent.main()
 
         assert exc_info.value.code == 0
-        assert "No stored ChatGPT credentials found." in capsys.readouterr().err
+        assert (
+            "No stored ChatGPT or GitHub Copilot credentials found."
+            in capsys.readouterr().err
+        )
 
     def test_logout_uses_custom_auth_file_env(self, monkeypatch, tmp_path):
         from swival import agent
@@ -2532,6 +2570,592 @@ class TestResolveProviderChatGPT:
             "chatgpt", "gpt-5.5", None, None, None, False
         )
         assert llm_kwargs["provider"] == "chatgpt"
+
+
+# ---------------------------------------------------------------------------
+# GitHub Copilot provider
+# ---------------------------------------------------------------------------
+
+
+def _copilot_write_cached_token(contents="gho_test"):
+    """Simulate a completed device login in the isolated token cache."""
+    from swival.agent import _copilot_access_token_file
+
+    path = _copilot_access_token_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(contents, encoding="utf-8")
+    return path
+
+
+def _patch_copilot_authenticator(monkeypatch, *, fail=None):
+    """Replace LiteLLM's Copilot Authenticator with a device-flow fake.
+
+    The fake prints its instructions to stdout like the real adapter and
+    writes the access-token cache on success. Returns a call counter.
+    """
+    calls = {"n": 0}
+
+    class FakeAuthenticator:
+        def get_api_key(self):
+            calls["n"] += 1
+            if fail is not None:
+                raise fail
+            print(
+                "Please visit https://github.com/login/device and enter code "
+                "ABCD-1234 to authenticate.",
+                flush=True,
+            )
+            _copilot_write_cached_token()
+            return "copilot-api-key"
+
+    import litellm.llms.github_copilot.authenticator as auth_mod
+
+    monkeypatch.setattr(auth_mod, "Authenticator", FakeAuthenticator)
+    return calls
+
+
+def _force_tty(monkeypatch, value=True):
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: value, raising=False)
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: value, raising=False)
+
+
+class TestCopilotModelString:
+    def test_bare_model(self):
+        assert (
+            _resolve_model_str("github_copilot", "gpt-5.1") == "github_copilot/gpt-5.1"
+        )
+
+    def test_single_prefix_kept(self):
+        assert (
+            _resolve_model_str("github_copilot", "github_copilot/gpt-5.1")
+            == "github_copilot/gpt-5.1"
+        )
+
+    def test_double_prefix_collapses(self):
+        assert (
+            _resolve_model_str(
+                "github_copilot", "github_copilot/github_copilot/gpt-5.1"
+            )
+            == "github_copilot/gpt-5.1"
+        )
+
+
+class TestCopilotRouting:
+    """call_llm request shape for the github_copilot provider."""
+
+    @pytest.fixture(autouse=True)
+    def _no_lazy_auth(self, monkeypatch):
+        forbid_copilot_authenticator(monkeypatch)
+        # call_llm refuses to run without a cached login; simulate one.
+        _copilot_write_cached_token()
+
+    def _mock_response(self):
+        choice = MagicMock()
+        choice.message = MagicMock(content="ok", tool_calls=None)
+        choice.finish_reason = "stop"
+        resp = MagicMock()
+        resp.choices = [choice]
+        return resp
+
+    def test_routing_tools_and_system_role_preserved(self):
+        import litellm
+
+        litellm.disable_copilot_system_to_assistant = False
+        messages = [
+            {"role": "system", "content": "operating contract"},
+            {"role": "user", "content": "hi"},
+        ]
+        tools = [{"type": "function", "function": {"name": "test"}}]
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                None,
+                "gpt-5.1",
+                messages,
+                100,
+                0.7,
+                0.9,
+                42,
+                tools,
+                False,
+                provider="github_copilot",
+                api_key=None,
+            )
+            mock_comp.assert_called_once()
+            kwargs = mock_comp.call_args[1]
+            assert kwargs["model"] == "github_copilot/gpt-5.1"
+            assert "api_key" not in kwargs
+            assert "api_base" not in kwargs
+            assert kwargs["tools"] == tools
+            assert kwargs["tool_choice"] == "auto"
+            assert kwargs["temperature"] == 0.7
+            assert kwargs["top_p"] == 0.9
+            assert kwargs["seed"] == 42
+            sent = kwargs["messages"]
+            assert sent[0]["role"] == "system"
+            assert sent[0]["content"] == "operating contract"
+        assert litellm.disable_copilot_system_to_assistant is True
+
+    def test_base_url_forwarded(self):
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                "https://proxy.example.com",
+                "gpt-5.1",
+                [],
+                100,
+                0.5,
+                1.0,
+                None,
+                None,
+                False,
+                provider="github_copilot",
+                api_key=None,
+            )
+            assert mock_comp.call_args[1]["api_base"] == "https://proxy.example.com"
+
+    def test_double_prefix_model_id_collapses(self):
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                None,
+                "github_copilot/github_copilot/gpt-5.1",
+                [],
+                100,
+                0.5,
+                1.0,
+                None,
+                None,
+                False,
+                provider="github_copilot",
+                api_key=None,
+            )
+            assert mock_comp.call_args[1]["model"] == "github_copilot/gpt-5.1"
+
+    def test_cost_not_applicable_and_never_priced(self):
+        from swival.agent import (
+            _COST_NOT_APPLICABLE_PROVIDERS,
+            _response_cost_observation,
+        )
+
+        assert "github_copilot" in _COST_NOT_APPLICABLE_PROVIDERS
+        # completion_cost() re-enters LiteLLM provider routing, which for
+        # Copilot can start a token refresh; it must never be reached.
+        with patch(
+            "litellm.completion_cost",
+            side_effect=AssertionError("pricing must not run for copilot"),
+        ):
+            obs = _response_cost_observation(
+                {}, "github_copilot/gpt-5.1", "github_copilot"
+            )
+        assert obs.status == "not_applicable"
+
+    def test_no_provider_key_env_entry(self):
+        from swival.agent import _PROVIDER_KEY_ENV
+
+        assert "github_copilot" not in _PROVIDER_KEY_ENV
+        assert "copilot" not in _PROVIDER_KEY_ENV
+
+    def test_unauthenticated_call_fails_before_completion(self, monkeypatch):
+        from swival.agent import _copilot_access_token_file
+
+        _copilot_access_token_file().unlink()
+        with patch("litellm.completion") as mock_comp:
+            with pytest.raises(AgentError, match="not authenticated"):
+                call_llm(
+                    None,
+                    "gpt-5.1",
+                    [],
+                    100,
+                    0.5,
+                    1.0,
+                    None,
+                    None,
+                    False,
+                    provider="github_copilot",
+                    api_key=None,
+                )
+            mock_comp.assert_not_called()
+
+    def test_model_not_found_recovery_never_probes_copilot(self, monkeypatch):
+        import litellm
+
+        from swival.agent import _list_server_models
+
+        def boom(*args, **kwargs):
+            raise AssertionError("get_valid_models must not run for copilot")
+
+        monkeypatch.setattr(litellm, "get_valid_models", boom)
+        assert _list_server_models("github_copilot", None, None) == []
+
+
+class TestResolveProviderCopilot:
+    """Direct unit tests for resolve_provider() with provider='github_copilot'."""
+
+    @pytest.fixture(autouse=True)
+    def _no_lazy_auth(self, monkeypatch):
+        forbid_copilot_authenticator(monkeypatch)
+
+    def test_happy_path_with_cached_auth(self):
+        _copilot_write_cached_token()
+        model_id, api_base, key, ctx, llm_kwargs = resolve_provider(
+            "github_copilot", "gpt-5.1", None, None, None, False
+        )
+        assert model_id == "gpt-5.1"
+        assert api_base is None
+        assert key is None
+        assert llm_kwargs["provider"] == "github_copilot"
+        assert ctx == 128000
+
+    def test_alias_normalizes_to_github_copilot(self):
+        _copilot_write_cached_token()
+        _, _, _, _, llm_kwargs = resolve_provider(
+            "copilot", "gpt-5.1", None, None, None, False
+        )
+        assert llm_kwargs["provider"] == "github_copilot"
+
+    def test_missing_model_raises(self):
+        with pytest.raises(
+            ConfigError, match="--model is required when --provider is github_copilot"
+        ):
+            resolve_provider("github_copilot", None, None, None, None, False)
+
+    def test_api_key_rejected(self):
+        with pytest.raises(
+            ConfigError, match="--api-key is not supported for github_copilot"
+        ):
+            resolve_provider("github_copilot", "gpt-5.1", "sk-x", None, None, False)
+
+    def test_api_key_rejected_for_alias(self):
+        with pytest.raises(
+            ConfigError, match="--api-key is not supported for github_copilot"
+        ):
+            resolve_provider("copilot", "gpt-5.1", "sk-x", None, None, False)
+
+    def test_base_url_retained(self):
+        _copilot_write_cached_token()
+        _, api_base, _, _, _ = resolve_provider(
+            "github_copilot", "gpt-5.1", None, "https://proxy.example.com", None, False
+        )
+        assert api_base == "https://proxy.example.com"
+
+    def test_explicit_context_override(self):
+        _copilot_write_cached_token()
+        _, _, _, ctx, _ = resolve_provider(
+            "github_copilot", "gpt-5.1", None, None, 55555, False
+        )
+        assert ctx == 55555
+
+    def test_prefixed_model_context_lookup(self):
+        _copilot_write_cached_token()
+        _, _, _, ctx, _ = resolve_provider(
+            "github_copilot",
+            "github_copilot/github_copilot/gpt-5.1",
+            None,
+            None,
+            None,
+            False,
+        )
+        assert ctx == 128000
+
+    def test_unknown_model_context_is_none(self):
+        _copilot_write_cached_token()
+        _, _, _, ctx, _ = resolve_provider(
+            "github_copilot", "not-a-real-model", None, None, None, False
+        )
+        assert ctx is None
+
+
+class TestCopilotAuthPreflight:
+    def test_non_interactive_fails_fast_without_polling(self, monkeypatch):
+        calls = _patch_copilot_authenticator(monkeypatch)
+        with pytest.raises(ConfigError, match="not authenticated") as excinfo:
+            agent._ensure_copilot_auth(allow_interactive=False)
+        assert "copilot_interactive_auth=True" in str(excinfo.value)
+        assert calls["n"] == 0
+
+    def test_interactive_without_tty_fails_fast(self, monkeypatch):
+        calls = _patch_copilot_authenticator(monkeypatch)
+        _force_tty(monkeypatch, False)
+        with pytest.raises(ConfigError, match="interactive terminal"):
+            agent._ensure_copilot_auth(allow_interactive=True)
+        assert calls["n"] == 0
+
+    def test_interactive_preflight_keeps_stdout_clean(self, monkeypatch, capsys):
+        calls = _patch_copilot_authenticator(monkeypatch)
+        _force_tty(monkeypatch)
+        agent._ensure_copilot_auth(allow_interactive=True)
+        out, err = capsys.readouterr()
+        assert calls["n"] == 1
+        assert out == ""
+        assert "ABCD-1234" in err
+
+    def test_cached_auth_bypasses_authenticator_everywhere(self, monkeypatch):
+        calls = _patch_copilot_authenticator(monkeypatch)
+        _copilot_write_cached_token()
+        agent._ensure_copilot_auth(allow_interactive=False)
+        agent._ensure_copilot_auth(allow_interactive=True)
+        assert calls["n"] == 0
+
+    def test_empty_token_file_counts_as_unauthenticated(self, monkeypatch):
+        _patch_copilot_authenticator(monkeypatch)
+        _copilot_write_cached_token(contents="  \n")
+        with pytest.raises(ConfigError, match="not authenticated"):
+            agent._ensure_copilot_auth(allow_interactive=False)
+
+    def test_concurrent_calls_run_single_flow(self, monkeypatch):
+        import threading
+
+        calls = _patch_copilot_authenticator(monkeypatch)
+        _force_tty(monkeypatch)
+        errors = []
+
+        def run():
+            try:
+                agent._ensure_copilot_auth(allow_interactive=True)
+            except Exception as e:  # pragma: no cover - failure detail
+                errors.append(e)
+
+        threads = [threading.Thread(target=run) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert not errors
+        assert calls["n"] == 1
+
+    def test_auth_failure_becomes_config_error(self, monkeypatch):
+        _patch_copilot_authenticator(
+            monkeypatch, fail=RuntimeError("device flow failed")
+        )
+        _force_tty(monkeypatch)
+        with pytest.raises(ConfigError, match="GitHub Copilot authentication failed"):
+            agent._ensure_copilot_auth(allow_interactive=True)
+
+
+class TestCopilotSession:
+    def test_default_session_fails_fast(self, tmp_path, monkeypatch):
+        from swival.session import Session
+
+        calls = _patch_copilot_authenticator(monkeypatch)
+        _force_tty(monkeypatch)
+        session = Session(
+            base_dir=str(tmp_path),
+            provider="github_copilot",
+            model="gpt-5.1",
+            history=False,
+        )
+        with pytest.raises(ConfigError, match="copilot_interactive_auth=True"):
+            session._setup()
+        assert calls["n"] == 0
+
+    def test_opted_in_session_runs_preflight(self, tmp_path, monkeypatch):
+        from swival.session import Session
+
+        calls = _patch_copilot_authenticator(monkeypatch)
+        _force_tty(monkeypatch)
+        session = Session(
+            base_dir=str(tmp_path),
+            provider="github_copilot",
+            model="gpt-5.1",
+            history=False,
+            copilot_interactive_auth=True,
+        )
+        session._setup()
+        assert calls["n"] == 1
+
+    def test_cached_auth_default_session_ok(self, tmp_path, monkeypatch):
+        from swival.session import Session
+
+        calls = _patch_copilot_authenticator(monkeypatch)
+        _copilot_write_cached_token()
+        session = Session(
+            base_dir=str(tmp_path),
+            provider="github_copilot",
+            model="gpt-5.1",
+            history=False,
+        )
+        session._setup()
+        assert calls["n"] == 0
+
+
+class TestCopilotCLIValidation:
+    def test_requires_model(self, monkeypatch):
+        from swival import agent, config
+
+        monkeypatch.setattr(config, "load_config", lambda *a, **kw: {})
+        monkeypatch.setattr(
+            sys, "argv", ["agent", "hello", "--provider", "github_copilot"]
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            agent.main()
+        assert exc_info.value.code == 2
+
+    def test_api_key_rejected_cli(self, monkeypatch, tmp_path, capsys):
+        from swival import agent, config
+
+        monkeypatch.setattr(config, "load_config", lambda *a, **kw: {})
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "agent",
+                "hello",
+                "--provider",
+                "github_copilot",
+                "--model",
+                "gpt-5.1",
+                "--api-key",
+                "sk-x",
+                "--base-dir",
+                str(tmp_path),
+            ],
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            agent.main()
+        assert exc_info.value.code == 2
+        assert "GitHub device flow" in capsys.readouterr().err
+
+    def test_alias_runs_as_github_copilot(self, monkeypatch, tmp_path):
+        from swival import agent, config
+
+        _copilot_write_cached_token()
+        monkeypatch.setattr(config, "load_config", lambda *a, **kw: {})
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "agent",
+                "hello",
+                "--provider",
+                "copilot",
+                "--model",
+                "gpt-5.1",
+                "--no-system-prompt",
+                "--base-dir",
+                str(tmp_path),
+            ],
+        )
+
+        captured = {}
+
+        def fake_call_llm(*args, **kwargs):
+            captured["provider"] = kwargs.get("provider")
+            captured["api_key"] = kwargs.get("api_key")
+            msg = types.SimpleNamespace(
+                content="done", tool_calls=None, role="assistant"
+            )
+            msg.get = lambda key, default=None: getattr(msg, key, default)
+            return msg, "stop"
+
+        monkeypatch.setattr(agent, "call_llm", fake_call_llm)
+        agent.main()
+        assert captured["provider"] == "github_copilot"
+        assert captured["api_key"] is None
+
+    def test_unauthenticated_cli_without_tty_fails_fast(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        from swival import agent, config
+
+        calls = _patch_copilot_authenticator(monkeypatch)
+        _force_tty(monkeypatch, False)
+        monkeypatch.setattr(config, "load_config", lambda *a, **kw: {})
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "agent",
+                "hello",
+                "--provider",
+                "github_copilot",
+                "--model",
+                "gpt-5.1",
+                "--base-dir",
+                str(tmp_path),
+            ],
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            agent.main()
+        assert exc_info.value.code == 2
+        assert calls["n"] == 0
+        assert "device login" in capsys.readouterr().err
+
+
+class TestCopilotLogoutCLI:
+    def test_logout_deletes_only_copilot_credential_files(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        from swival import agent
+
+        token_dir = tmp_path / "copilot-tokens"
+        token_dir.mkdir()
+        access = token_dir / "access-token"
+        access.write_text("gho_x", encoding="utf-8")
+        api_key = token_dir / "api-key.json"
+        api_key.write_text("{}", encoding="utf-8")
+        unrelated = token_dir / "hosts.yml"
+        unrelated.write_text("external github state", encoding="utf-8")
+        monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(token_dir))
+        monkeypatch.setattr(sys, "argv", ["agent", "--logout"])
+
+        with pytest.raises(SystemExit) as exc_info:
+            agent.main()
+
+        assert exc_info.value.code == 0
+        assert not access.exists()
+        assert not api_key.exists()
+        assert unrelated.exists()
+        assert token_dir.is_dir()
+        err = capsys.readouterr().err
+        assert f"Deleted GitHub Copilot access token: {access}" in err
+        assert f"Deleted GitHub Copilot API key: {api_key}" in err
+
+    def test_logout_respects_file_env_overrides(self, monkeypatch, tmp_path):
+        from swival import agent
+
+        token_dir = tmp_path / "tokens"
+        token_dir.mkdir()
+        custom_access = token_dir / "custom-access"
+        custom_access.write_text("gho_x", encoding="utf-8")
+        custom_api = token_dir / "custom-api.json"
+        custom_api.write_text("{}", encoding="utf-8")
+        default_access = token_dir / "access-token"
+        default_access.write_text("keep", encoding="utf-8")
+        monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(token_dir))
+        monkeypatch.setenv("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "custom-access")
+        monkeypatch.setenv("GITHUB_COPILOT_API_KEY_FILE", "custom-api.json")
+        monkeypatch.setattr(sys, "argv", ["agent", "--logout"])
+
+        with pytest.raises(SystemExit) as exc_info:
+            agent.main()
+
+        assert exc_info.value.code == 0
+        assert not custom_access.exists()
+        assert not custom_api.exists()
+        assert default_access.exists()
+
+    def test_logout_clears_chatgpt_and_copilot_together(self, monkeypatch, tmp_path):
+        from swival import agent
+
+        chatgpt_dir = tmp_path / "chatgpt"
+        chatgpt_dir.mkdir()
+        chatgpt_auth = chatgpt_dir / "auth.json"
+        chatgpt_auth.write_text("{}", encoding="utf-8")
+        copilot_dir = tmp_path / "copilot"
+        copilot_dir.mkdir()
+        access = copilot_dir / "access-token"
+        access.write_text("gho_x", encoding="utf-8")
+        monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(chatgpt_dir))
+        monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(copilot_dir))
+        monkeypatch.setattr(sys, "argv", ["agent", "--logout"])
+
+        with pytest.raises(SystemExit) as exc_info:
+            agent.main()
+
+        assert exc_info.value.code == 0
+        assert not chatgpt_auth.exists()
+        assert not access.exists()
 
 
 # ---------------------------------------------------------------------------

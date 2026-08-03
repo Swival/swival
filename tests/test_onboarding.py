@@ -384,7 +384,7 @@ class TestRunOnboarding:
             monkeypatch,
             [
                 "2",  # Quick setup
-                "5",  # OpenRouter
+                "6",  # OpenRouter
                 "2",  # Type a model id
                 "openai/gpt-5.5",  # model
                 "1",  # I'll set OPENROUTER_API_KEY myself
@@ -398,6 +398,25 @@ class TestRunOnboarding:
         assert profile["provider"] == "openrouter"
         assert profile["model"] == "openai/gpt-5.5"
         assert "api_key" not in profile
+
+    def test_successful_github_copilot(self, tmp_path, monkeypatch):
+        cfg_dir = tmp_path / "cfg"
+        monkeypatch.setattr("swival.onboarding.global_config_dir", lambda: cfg_dir)
+        monkeypatch.setattr("swival.onboarding._browse_models", lambda *a, **k: None)
+        _patch_prompt_sequence(
+            monkeypatch,
+            [
+                "2",  # Quick setup
+                "5",  # GitHub Copilot
+                "gpt-5.1",  # model (typed, browse mocked away)
+                "1",  # Yes, write config
+            ],
+        )
+        result = run_onboarding()
+        assert result is not None
+        profile = _parse_default_profile(result.read_text())
+        assert profile["provider"] == "github_copilot"
+        assert profile["model"] == "gpt-5.1"
 
     def test_successful_llamacpp_with_optional_model(self, tmp_path, monkeypatch):
         cfg_dir = tmp_path / "cfg"
@@ -427,7 +446,7 @@ class TestRunOnboarding:
             monkeypatch,
             [
                 "2",  # Quick setup
-                "7",  # Generic OpenAI-compatible
+                "8",  # Generic OpenAI-compatible
                 "http://localhost:11434",  # base URL
                 "qwen3:32b",  # model
                 "2",  # Enter API key now

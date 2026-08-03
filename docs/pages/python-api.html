@@ -187,6 +187,7 @@ print(answer)
     aws_profile: str | None = None,
     project: str | None = None,
     location: str | None = None,
+    copilot_interactive_auth: bool = False,
     approved_buckets: set[str] | None = None,
     metaskills: str = &quot;local&quot;,  # &quot;local&quot;, &quot;all&quot;, or &quot;off&quot;
     storm_breaker: bool = True,
@@ -208,7 +209,7 @@ print(answer)
 </tr>
 <tr>
 <td><code>provider</code></td>
-<td>LLM provider: <code>"lmstudio"</code>, <code>"llamacpp"</code>, <code>"huggingface"</code>, <code>"openrouter"</code>, <code>"chatgpt"</code>, <code>"google"</code>, <code>"geap"</code> (<code>"vertexai"</code> is an alias), <code>"bedrock"</code>, <code>"generic"</code>, <code>"applefm"</code>, or <code>"command"</code> (the command to run goes in <code>model</code>).</td>
+<td>LLM provider: <code>"lmstudio"</code>, <code>"llamacpp"</code>, <code>"huggingface"</code>, <code>"openrouter"</code>, <code>"chatgpt"</code>, <code>"github_copilot"</code> (<code>"copilot"</code> is an alias), <code>"google"</code>, <code>"geap"</code> (<code>"vertexai"</code> is an alias), <code>"bedrock"</code>, <code>"generic"</code>, <code>"applefm"</code>, or <code>"command"</code> (the command to run goes in <code>model</code>).</td>
 </tr>
 <tr>
 <td><code>model</code></td>
@@ -216,7 +217,11 @@ print(answer)
 </tr>
 <tr>
 <td><code>api_key</code></td>
-<td>API key. Can also be set via provider-specific env vars.</td>
+<td>API key. Can also be set via provider-specific env vars. Rejected by the <code>github_copilot</code> provider, which authenticates through the GitHub device flow.</td>
+</tr>
+<tr>
+<td><code>copilot_interactive_auth</code></td>
+<td>Off by default: an unauthenticated <code>github_copilot</code> session raises <code>ConfigError</code> immediately instead of starting a GitHub device flow inside your application. Set <code>True</code> (with a real terminal attached) to allow the one-time foreground device login; the easier path is to authenticate once through the CLI first.</td>
 </tr>
 <tr>
 <td><code>user_agent</code></td>

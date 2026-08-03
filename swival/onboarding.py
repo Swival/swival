@@ -49,6 +49,12 @@ _PROVIDERS = [
         "getting started fast with an existing subscription",
     ),
     (
+        "github_copilot",
+        "GitHub Copilot",
+        "Use your GitHub Copilot subscription",
+        "Copilot subscribers who want the models they already pay for",
+    ),
+    (
         "openrouter",
         "OpenRouter",
         "Hosted models with one API key",
@@ -345,6 +351,8 @@ def _collect_settings() -> dict | None:
         _ask_mlx(settings)
     elif provider_name == "chatgpt":
         _ask_chatgpt(settings)
+    elif provider_name == "github_copilot":
+        _ask_github_copilot(settings)
     elif provider_name == "openrouter":
         _ask_openrouter(settings)
     elif provider_name == "google":
@@ -605,6 +613,21 @@ def _ask_chatgpt(s: dict) -> None:
     )
     if effort:
         s["reasoning_effort"] = effort
+
+
+def _ask_github_copilot(s: dict) -> None:
+    _console.print(
+        Text(
+            "Requires an active GitHub Copilot subscription. On first use Swival\n"
+            "walks you through a quick GitHub device login (a code to enter in\n"
+            "your browser). After that it remembers you automatically.",
+            style="dim",
+        )
+    )
+    _console.print()
+
+    model = _browse_models("github_copilot", quiet=True)
+    s["model"] = model or _prompt_text_required("Model name (e.g. gpt-5.1)")
 
 
 def _ask_max_context(s: dict, provider: str, base_url: str | None = None) -> None:

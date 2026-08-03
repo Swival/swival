@@ -11,6 +11,7 @@ Swival supports local, hosted, and API-based model providers:
 - [Google Gemini API](#google-gemini-api) — Google's models via API key
 - [Gemini Enterprise Agent Platform](#gemini-enterprise-agent-platform) — Gemini through Google Cloud (formerly Vertex AI)
 - [ChatGPT Plus/Pro](#chatgpt-pluspro) — OpenAI models via your existing subscription
+- [GitHub Copilot](#github-copilot) — Copilot-hosted models via your existing subscription
 - [AWS Bedrock](#aws-bedrock) — models hosted on AWS
 - [Command (External Program)](#command-external-program) — shell out to an external program
 
@@ -358,6 +359,37 @@ swival --provider chatgpt --model gpt-5.5 --reasoning-effort high "task"
 You can also combine reasoning effort with **priority processing** (`service_tier: "priority"`) for faster responses without sacrificing quality. See the [Service Tiers](usage.md#service-tiers) section.
 
 No other configuration is needed.
+
+## GitHub Copilot
+
+The `github_copilot` provider lets you use the models included in an active GitHub Copilot subscription — no separate API key. `copilot` is accepted as an alias.
+
+`--model` is required, and `--api-key` is rejected: authentication always goes through GitHub, and Swival exchanges the cached login for short-lived Copilot API tokens automatically.
+
+```sh
+swival --provider github_copilot --model gpt-5.1 "task"
+```
+
+The first run needs a one-time GitHub device login, and it must happen in a foreground terminal: Swival prints a verification URL and a code to stderr, you enter the code in your browser, and the resulting tokens are cached locally. Subsequent runs reuse and refresh the cache without any prompt, including piped and scripted runs. A run that would need the device login but has no terminal attached (piped input, `--serve`, reviewer mode, a `Session` without the explicit opt-in) fails immediately with instructions instead of hanging on a login poll.
+
+The login instructions never touch stdout, so `swival ... | cat` stays clean even during a fresh login.
+
+Model availability depends on your subscription plan and the policies enabled for your account or organization. The `/model` picker lists the models LiteLLM knows how to route (from its local registry, no network or login involved); GitHub may serve more or fewer. When `--max-context-tokens` is not set, Swival looks the window up in that same registry — set the flag explicitly if your model is not listed there.
+
+Tokens are cached under `~/.config/litellm/github_copilot/` in two files: `access-token` (the GitHub login) and `api-key.json` (the short-lived Copilot API token). `GITHUB_COPILOT_TOKEN_DIR` relocates the directory, and `GITHUB_COPILOT_ACCESS_TOKEN_FILE` / `GITHUB_COPILOT_API_KEY_FILE` rename the files. `swival --logout` deletes exactly those two files — never the directory, and never your gh CLI, git, or editor credentials — which forces the device login again on the next run.
+
+```sh
+swival --logout
+swival --provider github_copilot --model claude-sonnet-4.5 "task"
+```
+
+Use `--base-url` to override the API endpoint (default `https://api.githubcopilot.com`). The provider talks to `github.com` and `api.github.com` for authentication and `api.githubcopilot.com` for completions; keep that in mind under restricted network setups. Under the nono sandbox, Swival grants read/write access to the token cache directory so authentication keeps working.
+
+Swival sends its operating contract as a real `system` message. LiteLLM would by default rewrite system messages into assistant turns for this provider; Swival disables that.
+
+Copilot usage is subscription-backed, so responses carry no per-token price and the session cost subtotal treats these calls as not applicable.
+
+Known limitation: brand-new Codex models that route through the Responses API may predate the bundled LiteLLM registry. A model the registry does not know falls back to Chat Completions routing, which may not work for Responses-only models; prefer models the `/model` picker lists.
 
 ## AWS Bedrock
 

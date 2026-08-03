@@ -153,6 +153,7 @@
 <p>The built-in <code>swival</code> profile deliberately denies credential and keychain locations, but Swival grants back exactly what your provider needs so authentication still works inside the sandbox:</p>
 <ul>
 <li><strong>chatgpt</strong> — read+write to <code>~/.config/litellm</code>, the directory that holds its OAuth token cache, since it refreshes tokens on disk.</li>
+<li><strong>github_copilot / copilot</strong> — read+write to the parent of its token cache (<code>~/.config/litellm</code> by default, following <code>$GITHUB_COPILOT_TOKEN_DIR</code>), since it refreshes the short-lived Copilot API key on disk.</li>
 <li><strong>geap / vertexai</strong> — read-only to the Google Cloud credentials directory (<code>~/.config/gcloud</code>, or <code>$CLOUDSDK_CONFIG</code>), plus the directory holding <code>$GOOGLE_APPLICATION_CREDENTIALS</code> when set.</li>
 <li><strong>bedrock</strong> — read-only to <code>~/.aws</code>, plus the directories of <code>$AWS_SHARED_CREDENTIALS_FILE</code> and <code>$AWS_CONFIG_FILE</code> when set.</li>
 </ul>

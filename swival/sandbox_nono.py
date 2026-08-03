@@ -232,26 +232,32 @@ def writable_temp_dirs() -> list[str]:
     return paths
 
 
+# Provider → (env var overriding the token directory, default location).
+# The re-exec happens before startup normalizes provider aliases, so raw
+# alias values ("copilot") must be listed alongside their canonical names.
+_PROVIDER_TOKEN_DIRS = {
+    "chatgpt": ("CHATGPT_TOKEN_DIR", "~/.config/litellm/chatgpt"),
+    "github_copilot": ("GITHUB_COPILOT_TOKEN_DIR", "~/.config/litellm/github_copilot"),
+    "copilot": ("GITHUB_COPILOT_TOKEN_DIR", "~/.config/litellm/github_copilot"),
+}
+
+
 def provider_state_dirs(provider: str | None) -> list[str]:
     """Return writable directories a provider needs for its credentials/state.
 
     The built-in nono ``swival`` profile deliberately denies credential and
     keychain locations.  A provider that stores its own auth tokens on disk
-    therefore needs an explicit grant, or it fails when it tries to read or
-    create its token directory inside the sandbox.
-
-    Currently only the ``chatgpt`` provider needs this: it caches OAuth tokens
-    under ``~/.config/litellm/chatgpt`` (overridable via ``CHATGPT_TOKEN_DIR``).
-    We grant the litellm config root so token creation and reads both work.
+    (``chatgpt``, ``github_copilot``) therefore needs an explicit grant, or
+    it fails when it tries to read or create its token directory inside the
+    sandbox.  We grant the parent of the token directory so first-run
+    directory creation succeeds too, and nothing broader.
     """
-    if provider == "chatgpt":
-        token_dir = os.environ.get(
-            "CHATGPT_TOKEN_DIR",
-            os.path.expanduser("~/.config/litellm/chatgpt"),
-        )
-        # Grant the parent so first-run directory creation succeeds too.
-        return [str(Path(token_dir).expanduser().parent)]
-    return []
+    entry = _PROVIDER_TOKEN_DIRS.get(provider)
+    if entry is None:
+        return []
+    env, default = entry
+    token_dir = os.environ.get(env, os.path.expanduser(default))
+    return [str(Path(token_dir).expanduser().parent)]
 
 
 def provider_credential_read_dirs(provider: str | None) -> list[str]:

@@ -177,6 +177,10 @@ auth_token = &quot;sk-...&quot;
 <pre><code class="language-toml">provider = &quot;chatgpt&quot;
 model = &quot;gpt-5.5&quot;
 </code></pre>
+<p>The same goes for the <code>github_copilot</code> provider (GitHub Copilot subscriptions), which authenticates through a one-time GitHub device login:</p>
+<pre><code class="language-toml">provider = &quot;github_copilot&quot;
+model = &quot;gpt-5.1&quot;
+</code></pre>
 <p>Relative paths in <code>allowed_dirs</code>, <code>allowed_dirs_ro</code>, <code>skills_dir</code>, <code>cache_dir</code>, <code>objective</code>, and <code>verify</code> resolve against the config file's parent directory, not the working directory. Tilde paths like <code>~/projects</code> expand to the home directory.</p>
 <p>The <code>reviewer</code>, <code>llm_filter</code>, <code>lifecycle_command</code>, and <code>command_middleware</code> values are shell-split; only path-like first tokens (anything starting with <code>/</code>, <code>~</code>, or containing a <code>/</code>, e.g. <code>./</code>, <code>../</code>, <code>.rtk/</code>, <code>scripts/</code>) are resolved against the config directory, while bare command names like <code>swival</code> are left for PATH lookup at runtime. The same resolution applies to <code>model</code> when <code>provider = "command"</code>.</p>
 <p>If a project config inside a git repository contains <code>api_key</code>, at the top level or inside a profile, Swival prints a warning because the key could be committed accidentally. Prefer environment variables for credentials.</p>

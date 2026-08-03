@@ -87,6 +87,28 @@ def run_command(
     )
 
 
+def forbid_copilot_authenticator(monkeypatch):
+    """Fail loudly if anything constructs LiteLLM's Copilot authenticator.
+
+    litellm's generic metadata helpers (get_llm_provider, supports_*) build
+    the adapter config, whose constructor builds the authenticator and can
+    start a real GitHub device flow. Normal request handling, model listing,
+    and metadata lookups must never reach it; only the explicit preflight may.
+    """
+
+    class BoomAuthenticator:
+        def __init__(self):
+            raise AssertionError(
+                "LiteLLM's Copilot authenticator must not be constructed here"
+            )
+
+    import litellm.llms.github_copilot.authenticator as auth_mod
+    import litellm.llms.github_copilot.chat.transformation as chat_mod
+
+    monkeypatch.setattr(auth_mod, "Authenticator", BoomAuthenticator)
+    monkeypatch.setattr(chat_mod, "Authenticator", BoomAuthenticator)
+
+
 def which_or_skip(name: str) -> str:
     """Resolve a command name to its absolute path, skip test if not found."""
     path = shutil.which(name)
