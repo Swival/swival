@@ -637,21 +637,17 @@ def _litellm_registry() -> dict:
         raise CatalogUnavailable(f"could not load the litellm model registry: {e}")
 
 
-def _fetch_chatgpt(base_url: str | None, api_key: str | None, timeout: float):
-    """List ChatGPT-backend models from litellm's local cost registry.
+def _registry_entries(prefix: str, keep) -> list[ModelEntry]:
+    """Turn the litellm entries under ``prefix`` into ModelEntry objects.
 
-    There is no public listing endpoint for the ChatGPT OAuth backend, but
-    litellm ships a registry of the models it can route, which tracks the
-    supported set better than a hardcoded list here would.
+    ``keep(bare_id, info)`` decides which of them the agent loop can use.
     """
-    registry = _litellm_registry()
-
     entries = []
-    for key, info in registry.items():
-        if not key.startswith("chatgpt/"):
+    for key, info in _litellm_registry().items():
+        if not key.startswith(prefix):
             continue
-        bare = key.removeprefix("chatgpt/")
-        if bare.startswith("responses/"):
+        bare = key.removeprefix(prefix)
+        if not keep(bare, info):
             continue
         entries.append(
             ModelEntry(
@@ -660,6 +656,19 @@ def _fetch_chatgpt(base_url: str | None, api_key: str | None, timeout: float):
                 supports_tools=info.get("supports_function_calling"),
             )
         )
+    return entries
+
+
+def _fetch_chatgpt(base_url: str | None, api_key: str | None, timeout: float):
+    """List ChatGPT-backend models from litellm's local cost registry.
+
+    There is no public listing endpoint for the ChatGPT OAuth backend, but
+    litellm ships a registry of the models it can route, which tracks the
+    supported set better than a hardcoded list here would.
+    """
+    entries = _registry_entries(
+        "chatgpt/", lambda bare, info: not bare.startswith("responses/")
+    )
     # Codex-backend models newer than litellm's bundled registry. The ChatGPT
     # OAuth backend has no listing endpoint, so we surface these by name until a
     # litellm release ships them. They all route through the Responses API.
@@ -690,21 +699,9 @@ def _fetch_github_copilot(base_url: str | None, api_key: str | None, timeout: fl
     embedding and completion-only entries are filtered out. Actual
     availability still depends on the user's Copilot subscription.
     """
-    registry = _litellm_registry()
-
-    entries = []
-    for key, info in registry.items():
-        if not key.startswith("github_copilot/"):
-            continue
-        if info.get("mode") not in ("chat", "responses"):
-            continue
-        entries.append(
-            ModelEntry(
-                id=key.removeprefix("github_copilot/"),
-                context_length=info.get("max_input_tokens"),
-                supports_tools=info.get("supports_function_calling"),
-            )
-        )
+    entries = _registry_entries(
+        "github_copilot/", lambda bare, info: info.get("mode") in ("chat", "responses")
+    )
     entries.sort(key=lambda e: e.id)
     if not entries:
         raise CatalogUnavailable(

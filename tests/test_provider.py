@@ -2778,12 +2778,12 @@ class TestCopilotRouting:
         entry, seeding the context window from a known Copilot Codex model."""
         import litellm
 
-        from swival.agent import _register_copilot_responses_model
+        from swival.agent import _register_responses_model
 
         model_str = "github_copilot/gpt-999.2-swival-test"
         assert model_str not in litellm.model_cost
 
-        _register_copilot_responses_model(litellm, model_str)
+        _register_responses_model(litellm, model_str, "github_copilot")
 
         info = litellm.model_cost[model_str]
         assert info["mode"] == "responses"

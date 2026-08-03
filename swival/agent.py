@@ -589,16 +589,6 @@ _GEAP_AUTH_HINT = (
 )
 
 
-def _geap_auth_hint(provider: str, error_text: str) -> str:
-    """Return actionable GEAP credential guidance if the error looks auth-related."""
-    if provider != "geap":
-        return ""
-    lower = error_text.lower()
-    if any(kw in lower for kw in _GEAP_AUTH_KEYWORDS):
-        return _GEAP_AUTH_HINT
-    return ""
-
-
 _COPILOT_AUTH_KEYWORDS = (
     "authentication",
     "unauthorized",
@@ -614,15 +604,18 @@ _COPILOT_AUTH_HINT = (
     "and authenticate again."
 )
 
+# Provider -> (error keywords that suggest an auth problem, guidance to append).
+_AUTH_HINTS = {
+    "geap": (_GEAP_AUTH_KEYWORDS, _GEAP_AUTH_HINT),
+    "github_copilot": (_COPILOT_AUTH_KEYWORDS, _COPILOT_AUTH_HINT),
+}
 
-def _copilot_auth_hint(provider: str, error_text: str) -> str:
-    """Return Copilot re-authentication guidance if the error looks auth-related."""
-    if provider != "github_copilot":
-        return ""
+
+def _auth_hint(provider: str, error_text: str) -> str:
+    """Return actionable credential guidance if the error looks auth-related."""
+    keywords, hint = _AUTH_HINTS.get(provider, ((), ""))
     lower = error_text.lower()
-    if any(kw in lower for kw in _COPILOT_AUTH_KEYWORDS):
-        return _COPILOT_AUTH_HINT
-    return ""
+    return hint if any(kw in lower for kw in keywords) else ""
 
 
 def _is_transient(exc):
@@ -4430,12 +4423,11 @@ def _resolve_model_str(provider: str, model_id: str) -> str:
         return f"openrouter/{bare}"
     elif provider in ("generic", "llamacpp", "applefm"):
         return f"openai/{model_id}"
-    elif provider == "chatgpt":
-        bare = model_id.removeprefix("chatgpt/").removeprefix("chatgpt/")
-        return f"chatgpt/{bare}"
-    elif provider == "github_copilot":
-        bare = model_id.removeprefix("github_copilot/").removeprefix("github_copilot/")
-        return f"github_copilot/{bare}"
+    elif provider in ("chatgpt", "github_copilot"):
+        # Both accept an already-prefixed id, and tolerate a user who pasted
+        # the prefix twice.
+        prefix = f"{provider}/"
+        return f"{prefix}{model_id.removeprefix(prefix).removeprefix(prefix)}"
     elif provider == "bedrock":
         return f"bedrock/{model_id.removeprefix('bedrock/')}"
     elif provider == "geap":
@@ -4444,20 +4436,21 @@ def _resolve_model_str(provider: str, model_id: str) -> str:
         return model_id
 
 
-def _chatgpt_responses_template(model_cost: dict) -> dict:
-    """Pick an existing ChatGPT Responses model to seed a synthetic entry.
+def _responses_template(model_cost: dict, provider: str) -> dict:
+    """Pick an existing Responses-API model to seed a synthetic entry.
 
-    Prefer the highest-versioned base model so a freshly-released gpt-5.x id
-    inherits a realistic context window and capability flags.
-    Every ChatGPT-backend model routes through the Responses API, so any of
-    them is a safe template.
+    Prefer the highest-versioned base model under ``provider`` so a
+    freshly-released gpt-5.x id inherits a realistic context window and
+    capability flags.
     """
+    prefix = f"{provider}/"
+    version_re = re.compile(rf"{re.escape(prefix)}gpt-(\d+(?:\.\d+)?)")
     best_info = None
     best_rank = None
     for key, info in model_cost.items():
-        if not key.startswith("chatgpt/") or info.get("mode") != "responses":
+        if not key.startswith(prefix) or info.get("mode") != "responses":
             continue
-        m = re.match(r"chatgpt/gpt-(\d+(?:\.\d+)?)", key)
+        m = version_re.match(key)
         if not m:
             continue
         # Rank by version, then prefer the shortest id (the plain base model
@@ -4469,14 +4462,53 @@ def _chatgpt_responses_template(model_cost: dict) -> dict:
     return dict(best_info) if best_info else {}
 
 
+def _register_responses_model(
+    litellm_module,
+    model_str: str,
+    provider: str,
+    *,
+    source_key: str | None = None,
+    default_max_input: int = 400000,
+) -> None:
+    """Register a model as served by the Responses API.
+
+    LiteLLM only routes a model through /responses when its registry entry
+    carries ``mode: responses``. The synthetic entry is seeded from the
+    closest thing the registry already knows — the model itself under
+    ``source_key``, else the newest sibling — so the context window and
+    capability flags stay believable.
+    """
+    model_cost = getattr(litellm_module, "model_cost", {}) or {}
+
+    source_info = dict(model_cost.get(source_key or model_str) or {})
+    if not source_info:
+        source_info = _responses_template(model_cost, provider)
+    if not source_info:
+        source_info = {
+            "max_input_tokens": default_max_input,
+            "supports_function_calling": True,
+        }
+
+    source_info.pop("key", None)
+    source_info.update(
+        {
+            "litellm_provider": provider,
+            "mode": "responses",
+            "input_cost_per_token": 0,
+            "output_cost_per_token": 0,
+        }
+    )
+    litellm_module.register_model({model_str: source_info})
+
+
 def _ensure_chatgpt_responses_model_registered(litellm_module, model_str: str) -> None:
     """Teach older LiteLLM releases about new ChatGPT Responses models.
 
-    LiteLLM only routes a chatgpt model through the Responses API when its
-    registry entry carries ``mode: responses``.
     Newly shipped Codex models (gpt-5.6-terra, -luna, -sol, ...) predate the
     bundled cost map, so without this they fall through to Chat Completions
-    and hit a Cloudflare challenge instead of the Codex backend.
+    and hit a Cloudflare challenge instead of the Codex backend. Every
+    ChatGPT-backend model routes through /responses, so unlike Copilot this
+    can be decided from the model name alone.
     """
     if not model_str.startswith("chatgpt/"):
         return
@@ -4486,76 +4518,10 @@ def _ensure_chatgpt_responses_model_registered(litellm_module, model_str: str) -
         return
 
     model_cost = getattr(litellm_module, "model_cost", {}) or {}
-    info = model_cost.get(model_str) or {}
-    if info.get("mode") == "responses":
+    if (model_cost.get(model_str) or {}).get("mode") == "responses":
         return
 
-    source_info = dict(model_cost.get(bare) or {})
-    if not source_info:
-        source_info = _chatgpt_responses_template(model_cost)
-    if not source_info:
-        source_info = {"max_input_tokens": 400000, "supports_function_calling": True}
-
-    source_info.pop("key", None)
-    source_info.update(
-        {
-            "litellm_provider": "chatgpt",
-            "mode": "responses",
-            "input_cost_per_token": 0,
-            "output_cost_per_token": 0,
-        }
-    )
-    litellm_module.register_model({model_str: source_info})
-
-
-def _copilot_responses_template(model_cost: dict) -> dict:
-    """Pick an existing Copilot Responses model to seed a synthetic entry.
-
-    Prefer the highest-versioned entry so a freshly-released Codex model
-    inherits a realistic context window and capability flags.
-    """
-    best_info = None
-    best_rank = None
-    for key, info in model_cost.items():
-        if not key.startswith("github_copilot/") or info.get("mode") != "responses":
-            continue
-        m = re.match(r"github_copilot/gpt-(\d+(?:\.\d+)?)", key)
-        if not m:
-            continue
-        rank = (float(m.group(1)), -len(key))
-        if best_rank is None or rank > best_rank:
-            best_rank = rank
-            best_info = info
-    return dict(best_info) if best_info else {}
-
-
-def _register_copilot_responses_model(litellm_module, model_str: str) -> None:
-    """Re-register a Copilot model as served by the Responses API only.
-
-    LiteLLM routes a Copilot model through /responses only when its registry
-    entry carries ``mode: responses``; an unknown model defaults to Chat
-    Completions.  Unlike ChatGPT, Copilot serves most models over chat, so
-    this is never guessed from the model name — it only runs after the server
-    itself rejected the model on /chat/completions.
-    """
-    model_cost = getattr(litellm_module, "model_cost", {}) or {}
-
-    source_info = dict(model_cost.get(model_str) or {})
-    if not source_info:
-        source_info = _copilot_responses_template(model_cost)
-    if not source_info:
-        source_info = {"max_input_tokens": 400000, "supports_function_calling": True}
-
-    source_info.pop("key", None)
-    source_info.update(
-        {
-            "litellm_provider": "github_copilot",
-            "mode": "responses",
-            "input_cost_per_token": 0,
-            "output_cost_per_token": 0,
-        }
-    )
-    litellm_module.register_model({model_str: source_info})
+    _register_responses_model(litellm_module, model_str, "chatgpt", source_key=bare)
 
 
 def _render_transcript(messages):
@@ -5065,9 +5031,7 @@ def _model_supports_vision(model_str: str) -> bool | None:
     Returns True, False, or None (unknown / not in registry).
     litellm.supports_vision() returns False for models not in its registry,
     so we first check if the model is known at all via get_model_info().
-    Copilot models are answered from the local registry instead: the generic
-    helpers route through get_llm_provider(), which for Copilot can start a
-    GitHub device flow.
+    Copilot is answered from the local registry — see _copilot_registry_info.
     """
     copilot_info = _copilot_registry_info(model_str)
     if copilot_info is not None:
@@ -5087,9 +5051,7 @@ def _model_supports_vision(model_str: str) -> bool | None:
 def _model_supports_prompt_caching(model_str: str) -> bool:
     """Check if the resolved model supports explicit cache_control.
 
-    Copilot models are answered from the local registry: litellm's
-    supports_prompt_caching() routes through get_llm_provider(), which for
-    Copilot constructs the authenticator and can start a GitHub device flow.
+    Copilot is answered from the local registry — see _copilot_registry_info.
     """
     copilot_info = _copilot_registry_info(model_str)
     if copilot_info is not None:
@@ -5475,9 +5437,9 @@ def _completion_with_retry(
 
 # Providers with no per-token billing: local servers, external commands,
 # and the subscription-backed ChatGPT and GitHub Copilot providers (priced
-# at zero on purpose). Copilot must stay in this set for more than display:
-# litellm.completion_cost() re-enters get_llm_provider(), and for Copilot
-# that path can kick off a token refresh or even device authentication.
+# at zero on purpose). Copilot must stay in this set for more than display —
+# pricing it would route through litellm's provider lookup, which is exactly
+# what _copilot_registry_info exists to avoid.
 _COST_NOT_APPLICABLE_PROVIDERS = frozenset(
     {"command", "lmstudio", "llamacpp", "applefm", "chatgpt", "github_copilot"}
 )
@@ -5983,6 +5945,49 @@ def call_llm(
             else nullcontext()
         )
 
+    def _retry_after_fixup(first_retries, label, failure_desc):
+        """Resend the request once a recoverable rejection has been repaired.
+
+        The retry gets the same error classification as the original call, so
+        a context overflow or an unsupported-tools answer still surfaces as
+        its own exception type rather than a generic failure. Retry counts
+        from both attempts are summed so the report stays accurate.
+        """
+        try:
+            with _identity_context():
+                response, retries2 = _completion_with_retry(
+                    completion_kwargs,
+                    max_retries=max_retries,
+                    verbose=verbose,
+                    unknown_context_window=unknown_context_window,
+                )
+        except ContextOverflowError as coe2:
+            coe2._provider_retries = first_retries + getattr(
+                coe2, "_provider_retries", 0
+            )
+            raise
+        except Exception as e2:
+            combined = first_retries + _retries_from_exc(e2)
+            if _looks_like_context_overflow(
+                e2, unknown_context_window=unknown_context_window
+            ):
+                coe = ContextOverflowError(
+                    f"context window exceeded (inferred, {label}): {e2}"
+                )
+                coe._provider_retries = combined
+                raise coe
+            if tools is not None and _TOOLS_NOT_SUPPORTED_RE.search(str(e2)):
+                tne = ToolsNotSupportedError(
+                    f"model does not support function calling: {e2}"
+                )
+                tne._provider_retries = combined
+                raise tne
+            ae = AgentError(f"LLM call failed after {failure_desc}: {e2}")
+            ae._provider_retries = combined
+            _raise_with_retries(ae)
+        msg, finish_reason, cache_stats = _finalize_response(response)
+        return msg, finish_reason, [], first_retries + retries2, cache_stats
+
     def _handle_model_not_found(e):
         """Recover from a server-side unknown-model error.
 
@@ -6092,135 +6097,36 @@ def call_llm(
             if _sanitize_assistant_messages(messages):
                 if verbose:
                     fmt.warning("Fixed empty assistant message in history, retrying...")
-                try:
-                    with _identity_context():
-                        response, retries = _completion_with_retry(
-                            completion_kwargs,
-                            max_retries=max_retries,
-                            verbose=verbose,
-                            unknown_context_window=unknown_context_window,
-                        )
-                except ContextOverflowError as coe2:
-                    coe2._provider_retries = first_retries + getattr(
-                        coe2, "_provider_retries", 0
-                    )
-                    raise
-                except Exception as e2:
-                    combined = first_retries + _retries_from_exc(e2)
-                    msg2 = str(e2)
-                    if _looks_like_context_overflow(
-                        e2, unknown_context_window=unknown_context_window
-                    ):
-                        coe = ContextOverflowError(
-                            f"context window exceeded (inferred, post-sanitization): {e2}"
-                        )
-                        coe._provider_retries = combined
-                        raise coe
-                    if tools is not None and _TOOLS_NOT_SUPPORTED_RE.search(msg2):
-                        tne = ToolsNotSupportedError(
-                            f"model does not support function calling: {e2}"
-                        )
-                        tne._provider_retries = combined
-                        raise tne
-                    ae = AgentError(f"LLM call failed after message sanitization: {e2}")
-                    ae._provider_retries = combined
-                    _raise_with_retries(ae)
-                retries += first_retries
-                msg, finish_reason, cache_stats = _finalize_response(response)
-                return msg, finish_reason, [], retries, cache_stats
+                return _retry_after_fixup(
+                    first_retries, "post-sanitization", "message sanitization"
+                )
         if _ORPHANED_TOOL_CALL_RE.search(msg_text):
             first_retries = _retries_from_exc(e)
             if _fix_orphaned_tool_calls(messages):
                 if verbose:
                     fmt.warning("Fixed orphaned tool calls in history, retrying...")
-                try:
-                    with _identity_context():
-                        response, retries = _completion_with_retry(
-                            completion_kwargs,
-                            max_retries=max_retries,
-                            verbose=verbose,
-                            unknown_context_window=unknown_context_window,
-                        )
-                except ContextOverflowError as coe2:
-                    coe2._provider_retries = first_retries + getattr(
-                        coe2, "_provider_retries", 0
-                    )
-                    raise
-                except Exception as e2:
-                    combined = first_retries + _retries_from_exc(e2)
-                    msg2 = str(e2)
-                    if _looks_like_context_overflow(
-                        e2, unknown_context_window=unknown_context_window
-                    ):
-                        coe = ContextOverflowError(
-                            f"context window exceeded (inferred, post-orphan-fix): {e2}"
-                        )
-                        coe._provider_retries = combined
-                        raise coe
-                    if tools is not None and _TOOLS_NOT_SUPPORTED_RE.search(msg2):
-                        tne = ToolsNotSupportedError(
-                            f"model does not support function calling: {e2}"
-                        )
-                        tne._provider_retries = combined
-                        raise tne
-                    ae = AgentError(
-                        f"LLM call failed after orphaned-tool-call fix: {e2}"
-                    )
-                    ae._provider_retries = combined
-                    _raise_with_retries(ae)
-                retries += first_retries
-                msg, finish_reason, cache_stats = _finalize_response(response)
-                return msg, finish_reason, [], retries, cache_stats
+                return _retry_after_fixup(
+                    first_retries, "post-orphan-fix", "orphaned-tool-call fix"
+                )
         if provider == "github_copilot" and _COPILOT_RESPONSES_ONLY_RE.search(msg_text):
             # The model exists but only answers on /responses.  Registering it
             # as a Responses model makes LiteLLM's bridge pick the right
             # endpoint; the registration is process-wide, so later calls skip
             # the failed round-trip.
             first_retries = _retries_from_exc(e)
-            _register_copilot_responses_model(litellm, model_str)
+            _register_responses_model(
+                litellm, model_str, "github_copilot", default_max_input=128000
+            )
             if verbose:
                 fmt.warning(
                     f"Copilot serves {model_id!r} only through the Responses "
                     "API, retrying there..."
                 )
-            try:
-                with _identity_context():
-                    response, retries = _completion_with_retry(
-                        completion_kwargs,
-                        max_retries=max_retries,
-                        verbose=verbose,
-                        unknown_context_window=unknown_context_window,
-                    )
-            except ContextOverflowError as coe2:
-                coe2._provider_retries = first_retries + getattr(
-                    coe2, "_provider_retries", 0
-                )
-                raise
-            except Exception as e2:
-                combined = first_retries + _retries_from_exc(e2)
-                if _looks_like_context_overflow(
-                    e2, unknown_context_window=unknown_context_window
-                ):
-                    coe = ContextOverflowError(
-                        f"context window exceeded (inferred, post-reroute): {e2}"
-                    )
-                    coe._provider_retries = combined
-                    raise coe
-                if tools is not None and _TOOLS_NOT_SUPPORTED_RE.search(str(e2)):
-                    tne = ToolsNotSupportedError(
-                        f"model does not support function calling: {e2}"
-                    )
-                    tne._provider_retries = combined
-                    raise tne
-                ae = AgentError(
-                    f"LLM call failed after rerouting {model_id!r} to the "
-                    f"Responses API: {e2}"
-                )
-                ae._provider_retries = combined
-                _raise_with_retries(ae)
-            retries += first_retries
-            msg, finish_reason, cache_stats = _finalize_response(response)
-            return msg, finish_reason, [], retries, cache_stats
+            return _retry_after_fixup(
+                first_retries,
+                "post-reroute",
+                f"rerouting {model_id!r} to the Responses API",
+            )
         if tools is not None and _TOOLS_NOT_SUPPORTED_RE.search(msg_text):
             tne = ToolsNotSupportedError(
                 f"model does not support function calling: {e}"
@@ -6228,7 +6134,7 @@ def call_llm(
             tne._provider_retries = _retries_from_exc(e)
             raise tne
         msg = f"LLM call failed: {e}"
-        msg += _geap_auth_hint(provider, msg_text)
+        msg += _auth_hint(provider, msg_text)
         ae = AgentError(msg)
         ae._provider_retries = _retries_from_exc(e)
         # A 400 we could not categorize. At an unknown window this may be an
@@ -6266,8 +6172,7 @@ def call_llm(
                 '    --aws-profile bedrock "task"'
             )
         else:
-            msg += _geap_auth_hint(provider, msg_text)
-            msg += _copilot_auth_hint(provider, msg_text)
+            msg += _auth_hint(provider, msg_text)
         ae = AgentError(msg)
         ae._provider_retries = _retries_from_exc(e)
         _raise_with_retries(ae)
@@ -7971,9 +7876,7 @@ def _copilot_registry_info(model_str: str) -> dict | None:
     """
     if not model_str.startswith("github_copilot/"):
         return None
-    import litellm
-
-    return litellm.model_cost.get(model_str) or {}
+    return _import_litellm().model_cost.get(model_str) or {}
 
 
 def _litellm_context_length(model_str: str) -> int | None:
@@ -8109,10 +8012,9 @@ def resolve_provider(
     Returns (model_id, api_base, api_key, context_length, llm_kwargs).
     Raises ConfigError for invalid configuration.
     """
-    if provider == "vertexai":
-        provider = "geap"
-    elif provider == "copilot":
-        provider = "github_copilot"
+    from .model_catalog import normalize_provider
+
+    provider = normalize_provider(provider)
     provider_name = provider
     llm_provider = provider
     _import_litellm()
@@ -9050,10 +8952,9 @@ def _validate_external_command(cmd_string: str, label: str) -> None:
 
 
 def _run_main(args, report, _write_report, parser):
-    if args.provider == "vertexai":
-        args.provider = "geap"
-    elif args.provider == "copilot":
-        args.provider = "github_copilot"
+    from .model_catalog import normalize_provider
+
+    args.provider = normalize_provider(args.provider)
     args._raw_llm_baseline = {
         "provider": args.provider,
         "model": args.model,

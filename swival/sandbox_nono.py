@@ -21,6 +21,7 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 
+from .model_catalog import normalize_provider
 from .report import ConfigError
 from .sandbox_agentfs import _absolutize_argv
 
@@ -233,12 +234,9 @@ def writable_temp_dirs() -> list[str]:
 
 
 # Provider → (env var overriding the token directory, default location).
-# The re-exec happens before startup normalizes provider aliases, so raw
-# alias values ("copilot") must be listed alongside their canonical names.
 _PROVIDER_TOKEN_DIRS = {
     "chatgpt": ("CHATGPT_TOKEN_DIR", "~/.config/litellm/chatgpt"),
     "github_copilot": ("GITHUB_COPILOT_TOKEN_DIR", "~/.config/litellm/github_copilot"),
-    "copilot": ("GITHUB_COPILOT_TOKEN_DIR", "~/.config/litellm/github_copilot"),
 }
 
 
@@ -252,7 +250,7 @@ def provider_state_dirs(provider: str | None) -> list[str]:
     sandbox.  We grant the parent of the token directory so first-run
     directory creation succeeds too, and nothing broader.
     """
-    entry = _PROVIDER_TOKEN_DIRS.get(provider)
+    entry = _PROVIDER_TOKEN_DIRS.get(normalize_provider(provider or ""))
     if entry is None:
         return []
     env, default = entry
@@ -279,8 +277,9 @@ def provider_credential_read_dirs(provider: str | None) -> list[str]:
     """
     dirs: list[str] = []
     seen: set[str] = set()
+    provider = normalize_provider(provider or "")
 
-    if provider in ("geap", "vertexai"):
+    if provider == "geap":
         _append_resolved_unique(
             dirs,
             seen,
