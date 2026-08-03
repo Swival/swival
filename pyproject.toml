@@ -22,12 +22,12 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "litellm>=1.91.3,<1.92",
+    "litellm>=1.95.0",
     "tiktoken>=0.13.0",
     "html-to-markdown>=3.8.2,<4",
     "rich>=15.0.0",
     "prompt-toolkit>=3.0.52",
-    "mcp>=1.28.1,<2",
+    "mcp>=2.0.0",
     "rank-bm25>=0.2.2",
     "httpx>=0.28.1",
     "starlette>=1.3.1",
@@ -75,6 +75,12 @@ package = true
 constraint-dependencies = ["requests>=2.34.2", "cryptography>=49.0.0"]
 override-dependencies = ["aiohttp>=3.14.1", "python-dotenv>=1.2.2"]
 
+[tool.ruff.lint]
+# Ruff 0.16 defaults to every rule when no selection is configured. Retain
+# Ruff's historical default rule set; adding new rules requires a deliberate
+# project-wide cleanup rather than a dependency refresh.
+select = ["E4", "E7", "E9", "F"]
+
 [tool.pytest.ini_options]
 markers = [
     "stress: long-running or wall-clock-sensitive tests excluded from make test; run locally with `pytest -m stress` for real timeouts",
@@ -83,7 +89,7 @@ markers = [
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
-    "ruff>=0.15.20,<0.16",
+    "ruff>=0.16.1",
     "httpx2>=2.5.0",
 ]
 website = [
