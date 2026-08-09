@@ -10,6 +10,7 @@ import copy
 import json
 import re
 import threading
+from contextlib import asynccontextmanager
 from typing import Any
 
 from ._env import child_env
@@ -19,9 +20,103 @@ _SERVER_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 _SANITIZE_RE = re.compile(r"[^a-zA-Z0-9_-]")
 _DOUBLE_UNDER_RE = re.compile(r"__+")
 
+_HTTP_TRANSPORT_ALIASES = {
+    "http": "streamable-http",
+    "streamable-http": "streamable-http",
+    "streamable_http": "streamable-http",
+    "sse": "sse",
+}
+_KNOWN_TRANSPORTS = _HTTP_TRANSPORT_ALIASES.keys() | {"stdio"}
+
+_HTTP_CONNECT_TIMEOUT = 10
+_HTTP_READ_TIMEOUT = 300
+
+# Two handshakes have to fit in the startup budget of _start_server_task, and a
+# transport that stalls must not spend it all before the other one is tried.
+_HANDSHAKE_TIMEOUT = 10
+
 
 class McpShutdownError(Exception):
     """Raised when call_tool() is invoked during or after shutdown."""
+
+
+def _http_transport_order(config: dict) -> list[str]:
+    """Transports to try for a URL-backed server, in preference order.
+
+    A declared ``type`` or ``transport`` pins the choice.
+    With neither, try Streamable HTTP and fall back to the HTTP+SSE transport
+    it deprecated, as the spec's compatibility guidance asks clients to do.
+    """
+    declared = config.get("type") or config.get("transport")
+    if isinstance(declared, str):
+        pinned = _HTTP_TRANSPORT_ALIASES.get(declared.strip().lower())
+        if pinned:
+            return [pinned]
+    return ["streamable-http", "sse"]
+
+
+@asynccontextmanager
+async def _http_streams(transport: str, url: str, headers: dict | None):
+    """Open the read and write streams of one HTTP transport.
+
+    Both clients yield those two first, and Streamable HTTP adds a session-id
+    getter that we have no use for.
+    """
+    if transport == "sse":
+        from mcp.client.sse import sse_client
+
+        async with sse_client(
+            url=url,
+            headers=headers,
+            timeout=_HTTP_CONNECT_TIMEOUT,
+            sse_read_timeout=_HTTP_READ_TIMEOUT,
+        ) as (read, write, *_):
+            yield read, write
+        return
+
+    import httpx
+    from mcp.client.streamable_http import (
+        create_mcp_http_client,
+        streamable_http_client,
+    )
+
+    async with create_mcp_http_client(
+        headers=headers,
+        timeout=httpx.Timeout(_HTTP_CONNECT_TIMEOUT, read=_HTTP_READ_TIMEOUT),
+    ) as client:
+        async with streamable_http_client(url, http_client=client) as (
+            read,
+            write,
+            *_,
+        ):
+            yield read, write
+
+
+def is_known_transport(value: str) -> bool:
+    """Whether a declared ``type``/``transport`` names a transport we speak."""
+    return value.strip().lower() in _KNOWN_TRANSPORTS
+
+
+def _describe_exception(exc: BaseException) -> str:
+    """Render an exception for a user-facing notice.
+
+    The MCP SDK's transports bury real failures in an ExceptionGroup that
+    stringifies as "unhandled errors in a TaskGroup", so report the leaves.
+    """
+    if isinstance(exc, BaseExceptionGroup):
+        leaves = [_describe_exception(sub) for sub in exc.exceptions]
+        return "; ".join(dict.fromkeys(leaves)) or str(exc)
+    text = str(exc).strip()
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+
+
+async def _close_quietly(stack) -> BaseException | None:
+    """Unwind an exit stack, returning whatever it raised instead of propagating."""
+    try:
+        await stack.aclose()
+    except BaseException as exc:
+        return exc
+    return None
 
 
 def _jail_stdio_command(
@@ -62,6 +157,7 @@ class McpManager:
                 "env": {"BRAVE_API_KEY": "your-key-here"},
                 # OR for HTTP:
                 "url": "http://localhost:8080/mcp",
+                "type": "http",  # or "sse"; probed when absent
                 "headers": {"Authorization": "Bearer ..."},
             }
         }
@@ -153,7 +249,7 @@ class McpManager:
             try:
                 self._start_server_task(name, config, timeout=30)
             except Exception as e:
-                self._server_error_notice(name, str(e))
+                self._server_error_notice(name, _describe_exception(e))
 
         # Build routing table with collision detection
         self._build_tool_map()
@@ -221,7 +317,10 @@ class McpManager:
         except Exception as e:
             # Mark server as degraded
             self._degraded.add(server_name)
-            return (f"error: MCP server {server_name!r} failed: {e}", True)
+            return (
+                f"error: MCP server {server_name!r} failed: {_describe_exception(e)}",
+                True,
+            )
 
     def close(self) -> None:
         """Idempotent shutdown."""
@@ -334,19 +433,8 @@ class McpManager:
 
         try:
             if "url" in config:
-                # HTTP/SSE transport
-                from mcp.client.sse import sse_client
-
-                read_stream, write_stream = await stack.enter_async_context(
-                    sse_client(
-                        url=config["url"],
-                        headers=config.get("headers"),
-                        timeout=10,
-                        sse_read_timeout=300,
-                    )
-                )
+                session = await self._open_http_session(config, stack)
             else:
-                # Stdio transport
                 env = child_env(config.get("env"))
                 command, cmd_args = _jail_stdio_command(
                     config["command"], config.get("args", []), self._net_jail
@@ -359,13 +447,11 @@ class McpManager:
                 read_stream, write_stream = await stack.enter_async_context(
                     mcp.stdio_client(params)
                 )
+                session = await stack.enter_async_context(
+                    mcp.ClientSession(read_stream, write_stream)
+                )
+                await session.initialize()
 
-            session = await stack.enter_async_context(
-                mcp.ClientSession(read_stream, write_stream)
-            )
-            await session.initialize()
-
-            # List tools
             tools_result = await session.list_tools()
 
             self._sessions[name] = session
@@ -399,8 +485,71 @@ class McpManager:
                     "(SDK handles SIGTERM→SIGKILL internally)"
                 )
             except Exception as e:
-                self._warning_notice(f"Error closing MCP server {name!r}: {e}")
+                self._warning_notice(
+                    f"Error closing MCP server {name!r}: {_describe_exception(e)}"
+                )
             self._sessions.pop(name, None)
+
+    async def _open_http_session(self, config: dict, stack):
+        """Connect to a URL-backed server and return an initialized session.
+
+        A client aimed at the wrong transport fails deep inside the SDK, so the
+        only reliable probe is to run the handshake and retry with the other one.
+        Each attempt owns a private exit stack and only the winner is handed to
+        the caller's, so a failed attempt leaves nothing open behind it.
+        """
+        from contextlib import AsyncExitStack
+        import mcp
+
+        url = config["url"]
+        headers = config.get("headers")
+        order = _http_transport_order(config)
+        errors: list[BaseException] = []
+
+        for transport in order:
+            attempt = AsyncExitStack()
+            await attempt.__aenter__()
+            try:
+                async with asyncio.timeout(_HANDSHAKE_TIMEOUT):
+                    streams = await attempt.enter_async_context(
+                        _http_streams(transport, url, headers)
+                    )
+                    session = await attempt.enter_async_context(
+                        mcp.ClientSession(streams[0], streams[1])
+                    )
+                    await session.initialize()
+            except BaseException as exc:
+                close_error = await _close_quietly(attempt)
+                raised = [e for e in (exc, close_error) if e is not None]
+                task = asyncio.current_task()
+                if task is not None and task.cancelling():
+                    # anyio withdraws its own cancellation request as its scope
+                    # unwinds, so one still pending here is a real shutdown.
+                    raise next(
+                        (e for e in raised if isinstance(e, asyncio.CancelledError)),
+                        exc,
+                    )
+                for other in raised:
+                    if not isinstance(other, (Exception, asyncio.CancelledError)):
+                        raise other  # an interrupt says nothing about the transport
+                # A failing transport cancels us to announce its collapse and
+                # only names the cause as its scope unwinds.
+                errors.append(
+                    next(
+                        (e for e in raised if isinstance(e, Exception)),
+                        ConnectionError("transport closed during handshake"),
+                    )
+                )
+                continue
+            stack.push_async_exit(attempt)
+            return session
+
+        if len(errors) == 1:
+            raise errors[0]
+        detail = "; ".join(
+            f"{t}: {_describe_exception(e)}" for t, e in zip(order, errors)
+        )
+        raise ConnectionError(f"no usable HTTP transport ({detail})")
 
     async def _close_all_sessions(self) -> None:
         """Signal all server lifecycle tasks to shut down and wait.
@@ -418,7 +567,10 @@ class McpManager:
                 if isinstance(r, Exception) and not isinstance(
                     r, asyncio.CancelledError
                 ):
-                    self._warning_notice(f"MCP server task error during shutdown: {r}")
+                    self._warning_notice(
+                        "MCP server task error during shutdown: "
+                        f"{_describe_exception(r)}"
+                    )
 
         self._server_tasks.clear()
         self._shutdown_events.clear()

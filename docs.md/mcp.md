@@ -4,7 +4,7 @@ Swival can connect to external tool servers via the [Model Context Protocol](htt
 
 Each MCP tool is namespaced as `mcp__<server_name>__<tool_name>` to avoid collisions with built-in tools and across servers. The model calls them like any other tool. Swival routes the call to the correct server and returns the result as a string following the same conventions as built-in tools.
 
-MCP servers can use stdio transport (local subprocess) or SSE transport (remote HTTP). Both are configured through `swival.toml` or `.swival/mcp.json`.
+MCP servers can use stdio transport (local subprocess) or HTTP transport (remote server). Both are configured through `swival.toml` or `.swival/mcp.json`.
 
 If an MCP server fails to connect at startup, Swival logs a warning and continues without that server's tools. If a server crashes mid-session, its tools are marked as degraded and return an error message instead of blocking the agent loop.
 
@@ -14,7 +14,7 @@ When MCP tool schemas consume more than 30% of the context window, Swival warns.
 
 ## TOML Configuration
 
-Add `[mcp_servers.<name>]` tables to `swival.toml`. Each server needs either `command` (for stdio transport) or `url` (for SSE transport), but not both.
+Add `[mcp_servers.<name>]` tables to `swival.toml`. Each server needs either `command` (for stdio transport) or `url` (for HTTP transport), but not both.
 
 ```toml
 [mcp_servers.brave-search]
@@ -42,7 +42,19 @@ Stdio servers inherit a sanitized environment. Swival removes its own bundled ve
 
 For example, you can connect Swival to a browser automation server. See [Web Browsing](web-browsing.md) for Chrome DevTools MCP, agent-browser, and Lightpanda setup guides.
 
-For SSE servers, `url` is the endpoint and `headers` is an optional dictionary of HTTP headers.
+For remote servers, `url` is the endpoint and `headers` is an optional dictionary of HTTP headers.
+
+Two HTTP transports exist: Streamable HTTP, which the current spec defines, and the older HTTP+SSE transport it deprecated. Swival picks one by running the handshake: Streamable HTTP first, then SSE if that fails. Set `type` to skip the guess when you already know what the server speaks.
+
+```toml
+[mcp_servers.ai-memory]
+type = "http"                      # or "sse"
+url = "http://127.0.0.1:49374/mcp"
+```
+
+`transport` is accepted as a synonym for `type`. Pinning the transport also gives you a better error when the connection fails, since Swival reports the failure from the transport you asked for instead of the last one it tried.
+
+The accepted values are `http` (`streamable-http` and `streamable_http` mean the same thing), `sse`, and `stdio`, which is there so configs copied from other MCP clients load unchanged. Case and surrounding spaces are ignored. Anything else is a config error rather than a silent guess.
 
 ## JSON Configuration
 
@@ -60,7 +72,18 @@ Swival also reads `.swival/mcp.json`. This uses the same format as other MCP-com
 }
 ```
 
-The JSON format supports the same fields as TOML: `command`, `args`, `env` for stdio, and `url`, `headers` for SSE.
+The JSON format supports the same fields as TOML: `command`, `args`, `env` for stdio, and `url`, `type`, `headers` for HTTP.
+
+```json
+{
+  "mcpServers": {
+    "ai-memory": {
+      "type": "http",
+      "url": "http://127.0.0.1:49374/mcp"
+    }
+  }
+}
+```
 
 ## Config Precedence
 

@@ -1,13 +1,17 @@
 """Tests for MCP (Model Context Protocol) server support."""
 
+import asyncio
 import json
 import textwrap
 from unittest.mock import MagicMock
 
 import pytest
 
+from swival import mcp_client
 from swival.mcp_client import (
     McpManager,
+    _describe_exception,
+    _http_transport_order,
     McpShutdownError,
     _convert_schema,
     _normalize_result,
@@ -487,6 +491,41 @@ class TestMcpConfig:
         mcp_file = tmp_path / "mcp.json"
         mcp_file.write_text(json.dumps({"mcpServers": {"s": {"url": 123}}}))
         with pytest.raises(ConfigError, match="expected str, got int"):
+            load_mcp_json(mcp_file)
+
+    @pytest.mark.parametrize(
+        "server",
+        [
+            {"type": "http", "url": "http://x/mcp"},
+            # Configs copied from other MCP clients often carry type = "stdio".
+            {"type": "stdio", "command": "cmd"},
+        ],
+    )
+    def test_mcp_server_type_is_preserved(self, tmp_path, server):
+        from swival.config import load_mcp_json
+
+        mcp_file = tmp_path / "mcp.json"
+        mcp_file.write_text(json.dumps({"mcpServers": {"s": server}}))
+        assert load_mcp_json(mcp_file)["s"]["type"] == server["type"]
+
+    def test_mcp_server_type_wrong_type(self, tmp_path):
+        from swival.config import load_mcp_json
+
+        mcp_file = tmp_path / "mcp.json"
+        mcp_file.write_text(
+            json.dumps({"mcpServers": {"s": {"url": "http://x", "type": 3}}})
+        )
+        with pytest.raises(ConfigError, match="type: expected str, got int"):
+            load_mcp_json(mcp_file)
+
+    def test_mcp_server_unknown_transport_rejected(self, tmp_path):
+        from swival.config import load_mcp_json
+
+        mcp_file = tmp_path / "mcp.json"
+        mcp_file.write_text(
+            json.dumps({"mcpServers": {"s": {"url": "http://x", "type": "grpc"}}})
+        )
+        with pytest.raises(ConfigError, match="unknown transport 'grpc'"):
             load_mcp_json(mcp_file)
 
     def test_config_to_session_kwargs_passes_mcp_servers(self):
@@ -1056,3 +1095,247 @@ class TestManagerLifecycle:
         m.start()
         m.close()
         m.close()  # must not raise even though the loop is already closed
+
+
+class TestHttpTransportOrder:
+    # An unknown type is a config error, but Session() takes server dicts
+    # straight from the caller, so probing stays the fallback there.
+    @pytest.mark.parametrize("config", [{"url": "http://x/mcp"}, {"type": "grpc"}])
+    def test_probes_streamable_then_sse(self, config):
+        assert _http_transport_order(config) == ["streamable-http", "sse"]
+
+    @pytest.mark.parametrize(
+        "config,expected",
+        [
+            ({"type": "http"}, ["streamable-http"]),
+            ({"type": "HTTP"}, ["streamable-http"]),
+            ({"type": " streamable_http "}, ["streamable-http"]),
+            ({"type": "sse"}, ["sse"]),
+            ({"transport": "sse"}, ["sse"]),
+        ],
+    )
+    def test_declared_transport_pins_the_choice(self, config, expected):
+        assert _http_transport_order(config) == expected
+
+
+class TestDescribeException:
+    @pytest.mark.parametrize(
+        "exc,expected",
+        [
+            (
+                ExceptionGroup("unhandled errors in a TaskGroup", [OSError("refused")]),
+                "OSError: refused",
+            ),
+            (
+                ExceptionGroup("boom", [OSError("refused"), OSError("refused")]),
+                "OSError: refused",
+            ),
+            (ValueError("bad url"), "ValueError: bad url"),
+        ],
+        ids=["taskgroup", "duplicate-leaves", "plain"],
+    )
+    def test_reports_the_leaf_cause(self, exc, expected):
+        assert _describe_exception(exc) == expected
+
+
+class TestOpenHttpSession:
+    """The transport is chosen by running the handshake, so these cover the
+    fallback, the ownership transfer of the winning stack, and the cleanup of
+    the losing attempts."""
+
+    @staticmethod
+    def _patch(monkeypatch, streamable="ok", sse="ok", on_exit=None):
+        """Install fake transports.
+
+        A mode says how an attempt fails: "connect" before the streams open,
+        "initialize" during the handshake, "interrupt" with a KeyboardInterrupt,
+        "hang" never at all.
+        On the way out a transport raises ``on_exit``, or blocks when it is
+        the string "hang".
+        """
+        from contextlib import asynccontextmanager
+        import mcp
+
+        events = []
+
+        async def _unwind(label):
+            events.append(f"exit:{label}")
+            if on_exit == "hang":
+                await asyncio.sleep(3600)
+            elif on_exit is not None:
+                raise on_exit
+
+        def _transport(label, mode, arity):
+            @asynccontextmanager
+            async def _cm(*args, **kwargs):
+                events.append(f"enter:{label}")
+                if mode == "connect":
+                    raise ConnectionError(f"{label} refused")
+                try:
+                    yield tuple(f"{label}-stream" for _ in range(arity))
+                finally:
+                    await _unwind(label)
+
+            return _cm
+
+        modes = {"streamable-stream": streamable, "sse-stream": sse}
+
+        class _FakeSession:
+            def __init__(self, read, write):
+                self.streams = (read, write)
+                self.mode = modes[read]
+                self.initialized = False
+
+            async def __aenter__(self):
+                events.append("enter:session")
+                return self
+
+            async def __aexit__(self, *exc_info):
+                events.append("exit:session")
+                return False
+
+            async def initialize(self):
+                if self.mode == "initialize":
+                    raise ConnectionError(f"{self.streams[0]} handshake failed")
+                if self.mode == "interrupt":
+                    raise KeyboardInterrupt
+                if self.mode == "hang":
+                    events.append("hanging")
+                    await asyncio.sleep(3600)
+                self.initialized = True
+
+        monkeypatch.setattr(
+            "mcp.client.streamable_http.streamable_http_client",
+            _transport("streamable", streamable, 3),
+        )
+        monkeypatch.setattr(
+            "mcp.client.streamable_http.create_mcp_http_client",
+            lambda **kwargs: _NullClient(),
+        )
+        monkeypatch.setattr("mcp.client.sse.sse_client", _transport("sse", sse, 2))
+        monkeypatch.setattr(mcp, "ClientSession", _FakeSession)
+        return events
+
+    @staticmethod
+    async def _open(config):
+        from contextlib import AsyncExitStack
+
+        stack = AsyncExitStack()
+        await stack.__aenter__()
+        try:
+            return await McpManager({})._open_http_session(config, stack)
+        finally:
+            await stack.aclose()
+
+    @classmethod
+    def _connect(cls, config):
+        return asyncio.run(cls._open(config))
+
+    @classmethod
+    def _cancel_when(cls, events, marker):
+        """Cancel the connection from outside once `marker` has been recorded."""
+
+        async def _run():
+            task = asyncio.ensure_future(cls._open({"url": "http://x/mcp"}))
+            while marker not in events:
+                await asyncio.sleep(0)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        asyncio.run(_run())
+
+    def test_prefers_streamable_http(self, monkeypatch):
+        events = self._patch(monkeypatch)
+        session = self._connect({"url": "http://x/mcp"})
+        assert session.streams == ("streamable-stream", "streamable-stream")
+        assert session.initialized
+        assert "enter:sse" not in events
+        # The winning stack moved to the caller's, which closed it exactly once.
+        assert events.count("exit:session") == 1
+        assert events.count("exit:streamable") == 1
+
+    @pytest.mark.parametrize(
+        "failure,before_fallback",
+        [
+            ("connect", ["enter:streamable"]),
+            (
+                "initialize",
+                [
+                    "enter:streamable",
+                    "enter:session",
+                    "exit:session",
+                    "exit:streamable",
+                ],
+            ),
+        ],
+    )
+    def test_falls_back_to_sse(self, monkeypatch, failure, before_fallback):
+        events = self._patch(monkeypatch, streamable=failure)
+        session = self._connect({"url": "http://x/sse"})
+        assert session.streams == ("sse-stream", "sse-stream")
+        assert events[: events.index("enter:sse")] == before_fallback
+
+    def test_declared_type_skips_probing(self, monkeypatch):
+        # A pinned transport never touches the other one, and reports its own
+        # failure rather than the other one's.
+        events = self._patch(monkeypatch, sse="connect")
+        with pytest.raises(ConnectionError, match="sse refused"):
+            self._connect({"url": "http://x/sse", "type": "sse"})
+        assert "enter:streamable" not in events
+
+    def test_reports_both_failures(self, monkeypatch):
+        self._patch(monkeypatch, streamable="connect", sse="connect")
+        with pytest.raises(ConnectionError) as excinfo:
+            self._connect({"url": "http://x/mcp"})
+        message = str(excinfo.value)
+        assert "streamable-http: ConnectionError: streamable refused" in message
+        assert "sse: ConnectionError: sse refused" in message
+
+    @pytest.mark.parametrize(
+        "marker,patched",
+        [
+            ("hanging", {"streamable": "hang", "on_exit": RuntimeError("cleanup")}),
+            ("exit:streamable", {"streamable": "initialize", "on_exit": "hang"}),
+        ],
+        ids=["handshake", "cleanup"],
+    )
+    def test_shutdown_is_not_mistaken_for_a_probe_failure(
+        self, monkeypatch, marker, patched
+    ):
+        # A failing transport also reaches us as a cancellation, so telling the
+        # two apart is the whole job of the retry branch.
+        events = self._patch(monkeypatch, **patched)
+        self._cancel_when(events, marker)
+        assert "enter:sse" not in events
+
+    @pytest.mark.parametrize(
+        "patched",
+        [
+            {"streamable": "interrupt"},
+            {"streamable": "initialize", "on_exit": KeyboardInterrupt()},
+        ],
+        ids=["handshake", "cleanup"],
+    )
+    def test_interrupt_is_never_a_transport_verdict(self, monkeypatch, patched):
+        events = self._patch(monkeypatch, **patched)
+        with pytest.raises(KeyboardInterrupt):
+            self._connect({"url": "http://x/mcp"})
+        assert "enter:sse" not in events
+
+    def test_stalled_transport_does_not_eat_the_fallback(self, monkeypatch):
+        events = self._patch(monkeypatch, streamable="hang")
+        monkeypatch.setattr(mcp_client, "_HANDSHAKE_TIMEOUT", 0.05)
+        session = self._connect({"url": "http://x/mcp"})
+        assert session.streams == ("sse-stream", "sse-stream")
+        assert "exit:streamable" in events
+
+
+class _NullClient:
+    """Stand-in for the httpx client the Streamable HTTP transport is given."""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False

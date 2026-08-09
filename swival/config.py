@@ -639,6 +639,8 @@ def _load_single(path: Path, label: str) -> dict:
 _MCP_SERVER_FIELD_TYPES: dict[str, type | tuple[type, ...]] = {
     "command": str,
     "url": str,
+    "type": str,
+    "transport": str,
     "args": list,
     "env": dict,
     "headers": dict,
@@ -647,7 +649,7 @@ _MCP_SERVER_FIELD_TYPES: dict[str, type | tuple[type, ...]] = {
 
 def _validate_mcp_server_configs(servers: dict, source: str) -> None:
     """Validate structure and field types of MCP server configurations."""
-    from .mcp_client import validate_server_name
+    from .mcp_client import is_known_transport, validate_server_name
 
     for name, cfg in servers.items():
         validate_server_name(name)
@@ -673,6 +675,13 @@ def _validate_mcp_server_configs(servers: dict, source: str) -> None:
                         f"{prefix}.{field}: expected {_type_name(expected)}, "
                         f"got {type(cfg[field]).__name__}"
                     )
+
+        for field in ("type", "transport"):
+            if field in cfg and not is_known_transport(cfg[field]):
+                raise ConfigError(
+                    f"{prefix}.{field}: unknown transport {cfg[field]!r}, "
+                    f"expected 'http', 'sse' or 'stdio'"
+                )
 
         # Validate list element types
         if "args" in cfg:
