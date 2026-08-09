@@ -146,9 +146,9 @@ class _MockBlock:
 
 
 class _MockResult:
-    def __init__(self, content, isError=False):
+    def __init__(self, content, is_error=False):
         self.content = content
-        self.isError = isError
+        self.is_error = is_error
 
 
 class TestNormalizeResult:
@@ -168,7 +168,7 @@ class TestNormalizeResult:
     def test_image_block(self):
         result = _MockResult(
             [
-                _MockBlock(type="image", mimeType="image/png", data="abc123"),
+                _MockBlock(type="image", mime_type="image/png", data="abc123"),
             ]
         )
         assert _normalize_result(result) == ("[image: image/png, 6 bytes]", False)
@@ -176,7 +176,7 @@ class TestNormalizeResult:
     def test_audio_block(self):
         result = _MockResult(
             [
-                _MockBlock(type="audio", mimeType="audio/mp3", data="xyz"),
+                _MockBlock(type="audio", mime_type="audio/mp3", data="xyz"),
             ]
         )
         assert _normalize_result(result) == ("[audio: audio/mp3, 3 bytes]", False)
@@ -194,12 +194,12 @@ class TestNormalizeResult:
     def test_is_error(self):
         result = _MockResult(
             [_MockBlock(type="text", text="something went wrong")],
-            isError=True,
+            is_error=True,
         )
         assert _normalize_result(result) == ("error: something went wrong", True)
 
     def test_is_error_empty(self):
-        result = _MockResult([], isError=True)
+        result = _MockResult([], is_error=True)
         assert _normalize_result(result) == ("error: MCP tool returned an error", True)
 
     def test_empty_result(self):
@@ -214,7 +214,7 @@ class TestNormalizeResult:
         result = _MockResult(
             [
                 _MockBlock(type="text", text="Result:"),
-                _MockBlock(type="image", mimeType="image/jpeg", data="data" * 100),
+                _MockBlock(type="image", mime_type="image/jpeg", data="data" * 100),
             ]
         )
         text, is_err = _normalize_result(result)
@@ -283,7 +283,7 @@ class TestMcpToolToOpenai:
         tool = _MockBlock(
             name="read_file",
             description="Read a file",
-            inputSchema={"type": "object", "properties": {"path": {"type": "string"}}},
+            input_schema={"type": "object", "properties": {"path": {"type": "string"}}},
         )
         result, original_name = _mcp_tool_to_openai("filesystem", tool)
         assert result["type"] == "function"
@@ -295,13 +295,13 @@ class TestMcpToolToOpenai:
         assert original_name == "read_file"
 
     def test_no_description(self):
-        tool = _MockBlock(name="ping", description=None, inputSchema={})
+        tool = _MockBlock(name="ping", description=None, input_schema={})
         result, original_name = _mcp_tool_to_openai("server1", tool)
         assert "MCP tool from server1" in result["function"]["description"]
         assert original_name == "ping"
 
     def test_no_input_schema(self):
-        tool = _MockBlock(name="ping", description="Ping", inputSchema=None)
+        tool = _MockBlock(name="ping", description="Ping", input_schema=None)
         result, original_name = _mcp_tool_to_openai("server1", tool)
         assert result["function"]["parameters"]["type"] == "object"
         assert result["function"]["parameters"]["properties"] == {}
@@ -311,12 +311,62 @@ class TestMcpToolToOpenai:
         tool = _MockBlock(
             name="get.data",
             description="Get data",
-            inputSchema={},
+            input_schema={},
         )
         result, original_name = _mcp_tool_to_openai("srv", tool)
         assert result["function"]["name"] == "mcp__srv__get_data"
         assert original_name == "get.data"
         assert "_mcp_original_name" not in result["function"]
+
+
+class TestRealSdkObjects:
+    """Guard against SDK field renames that hand-rolled mocks cannot catch.
+
+    The MCP 2.0 upgrade renamed every model field to snake_case, keeping the
+    camelCase spellings as serialization aliases only.  Every mock above kept
+    passing while the real client returned zero tools, so these cases build
+    genuine SDK objects instead.
+    """
+
+    def test_tool_conversion_uses_sdk_field_names(self):
+        import mcp.types
+
+        tool = mcp.types.Tool(
+            name="read_file",
+            description="Read a file",
+            inputSchema={
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+            },
+        )
+        result, original_name = _mcp_tool_to_openai("filesystem", tool)
+        assert original_name == "read_file"
+        assert result["function"]["parameters"]["properties"]["path"] == {
+            "type": "string"
+        }
+
+    def test_normalize_result_uses_sdk_field_names(self):
+        import mcp.types
+
+        ok = mcp.types.CallToolResult(
+            content=[mcp.types.TextContent(type="text", text="hello")]
+        )
+        assert _normalize_result(ok) == ("hello", False)
+
+        failed = mcp.types.CallToolResult(
+            content=[mcp.types.TextContent(type="text", text="boom")],
+            isError=True,
+        )
+        assert _normalize_result(failed) == ("error: boom", True)
+
+        image = mcp.types.CallToolResult(
+            content=[
+                mcp.types.ImageContent(type="image", data="abcd", mimeType="image/png")
+            ]
+        )
+        text, is_error = _normalize_result(image)
+        assert not is_error
+        assert "image/png" in text
 
 
 # ---------------------------------------------------------------------------
@@ -785,7 +835,7 @@ class TestMcpManagerLifecycle:
         # Mock a session whose call_tool returns a coroutine
         mock_result = _MockResult(
             [_MockBlock(type="text", text="success output")],
-            isError=False,
+            is_error=False,
         )
 
         async def _fake_call_tool(name, args):

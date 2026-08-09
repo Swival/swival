@@ -22,19 +22,19 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "litellm>=1.91.3,<1.92",
+    "litellm>=1.95.0,<1.96",
     "tiktoken>=0.13.0",
-    "html-to-markdown>=3.8.2,<4",
+    "html-to-markdown>=3.10.6,<4",
     "rich>=15.0.0",
-    "prompt-toolkit>=3.0.52",
-    "mcp>=1.28.1,<2",
+    "prompt-toolkit>=3.0.53",
+    "mcp>=2.0.0,<3",
     "rank-bm25>=0.2.2",
     "httpx>=0.28.1",
-    "starlette>=1.3.1",
-    "uvicorn>=0.50.0",
+    "starlette>=1.5.0",
+    "uvicorn>=0.52.1",
     "fast-cipher>=0.2.2",
-    "boto3>=1.43.40",
-    "google-cloud-aiplatform>=1.159.0",
+    "boto3>=1.43.67",
+    "google-cloud-aiplatform>=1.163.0",
 ]
 
 [project.optional-dependencies]
@@ -72,8 +72,14 @@ packages = ["swival"]
 
 [tool.uv]
 package = true
-constraint-dependencies = ["requests>=2.34.2", "cryptography>=49.0.0"]
-override-dependencies = ["aiohttp>=3.14.1", "python-dotenv>=1.2.2"]
+constraint-dependencies = ["requests>=2.34.2", "cryptography>=50.0.0"]
+override-dependencies = ["aiohttp>=3.14.3", "python-dotenv>=1.2.2"]
+
+[tool.ruff.lint]
+# Ruff 0.16 grew its default selection from 59 rules to 413. Keep the older,
+# narrower set we have always linted against; the wider one is a separate
+# cleanup, not something a dependency bump should drag in.
+select = ["E4", "E7", "E9", "F"]
 
 [tool.pytest.ini_options]
 markers = [
@@ -83,10 +89,10 @@ markers = [
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
-    "ruff>=0.15.20,<0.16",
-    "httpx2>=2.5.0",
+    "ruff>=0.16.2,<0.17",
+    "httpx2>=2.9.1",
 ]
 website = [
-    "markdown>=3.10.2",
+    "markdown>=3.10.3",
     "pillow>=12.3.0",
 ]

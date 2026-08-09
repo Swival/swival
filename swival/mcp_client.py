@@ -678,8 +678,7 @@ def _mcp_tool_to_openai(server_name: str, tool) -> tuple[dict, str]:
     sanitized_name = _sanitize_tool_name(original_name)
     namespaced = f"mcp__{server_name}__{sanitized_name}"
 
-    # Convert inputSchema
-    schema = _convert_schema(tool.inputSchema if tool.inputSchema else {})
+    schema = _convert_schema(tool.input_schema if tool.input_schema else {})
 
     result = {
         "type": "function",
@@ -693,7 +692,7 @@ def _mcp_tool_to_openai(server_name: str, tool) -> tuple[dict, str]:
 
 
 def _convert_schema(input_schema: dict) -> dict:
-    """Convert MCP inputSchema to OpenAI-compatible parameters.
+    """Convert an MCP input schema to OpenAI-compatible parameters.
 
     Whitelist-of-removals approach: keep everything, only strip
     keys known to cause provider rejections.
@@ -716,7 +715,7 @@ def _convert_schema(input_schema: dict) -> dict:
 def _normalize_result(result) -> tuple[str, bool]:
     """Convert MCP CallToolResult to ``(text, is_error)``.
 
-    The boolean flag surfaces ``result.isError`` and envelope ``ok: false``
+    The boolean flag surfaces ``result.is_error`` and envelope ``ok: false``
     structurally so callers don't need to parse the ``"error:"`` prefix.
     """
     # Fast-path for envelope-style tool responses, while preserving existing
@@ -756,11 +755,11 @@ def _normalize_result(result) -> tuple[str, bool]:
         if block_type == "text":
             parts.append(block.text)
         elif block_type == "image":
-            mime = getattr(block, "mimeType", "unknown")
+            mime = getattr(block, "mime_type", "unknown")
             data = getattr(block, "data", "")
             parts.append(f"[image: {mime}, {len(data)} bytes]")
         elif block_type == "audio":
-            mime = getattr(block, "mimeType", "unknown")
+            mime = getattr(block, "mime_type", "unknown")
             data = getattr(block, "data", "")
             parts.append(f"[audio: {mime}, {len(data)} bytes]")
         elif block_type == "resource":
@@ -776,7 +775,7 @@ def _normalize_result(result) -> tuple[str, bool]:
 
     text = "\n".join(parts)
 
-    if result.isError:
+    if result.is_error:
         err = f"error: {text}" if text else "error: MCP tool returned an error"
         return (err, True)
     return (text if text else "(empty result)", False)

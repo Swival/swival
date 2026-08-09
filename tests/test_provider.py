@@ -2187,15 +2187,18 @@ class TestChatGPTRouting:
     def test_chatgpt_registers_gpt5_absent_from_cost_map(self):
         """A brand-new Codex model missing from the bundled cost map must still
         register as a Responses model, or litellm routes it to Chat Completions
-        and it hits a Cloudflare challenge.  gpt-5.6-terra reproduces the bug:
-        its bare openai key is not in the registry, so the old hardcoded
-        chatgpt/gpt-5.5 fallback (also absent) made registration bail out."""
+        and it hits a Cloudflare challenge.  gpt-5.6-terra was the original
+        repro: its bare openai key was not in the registry, so the old
+        hardcoded chatgpt/gpt-5.5 fallback (also absent) made registration bail
+        out.  The id below is fictitious on purpose, so a litellm release that
+        catches up with the real Codex names cannot invalidate the premise."""
         import litellm
         from swival.agent import _ensure_chatgpt_responses_model_registered
 
-        model_str = "chatgpt/gpt-5.6-terra"
+        bare = "gpt-5.6-nowhere"
+        model_str = f"chatgpt/{bare}"
         assert model_str not in litellm.model_cost
-        assert "gpt-5.6-terra" not in litellm.model_cost
+        assert bare not in litellm.model_cost
 
         _ensure_chatgpt_responses_model_registered(litellm, model_str)
 
