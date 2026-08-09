@@ -2072,6 +2072,7 @@ dependencies = [
     { name = "google-cloud-aiplatform" },
     { name = "html-to-markdown" },
     { name = "httpx" },
+    { name = "httpx2" },
     { name = "litellm" },
     { name = "mcp" },
     { name = "prompt-toolkit" },
@@ -2089,7 +2090,6 @@ metaskills = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx2" },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -2105,6 +2105,7 @@ requires-dist = [
     { name = "google-cloud-aiplatform", specifier = ">=1.163.0" },
     { name = "html-to-markdown", specifier = ">=3.10.6,<4" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "httpx2", specifier = ">=2.9.1" },
     { name = "litellm", specifier = ">=1.95.0,<1.96" },
     { name = "mcp", specifier = ">=2.0.0,<3" },
     { name = "prompt-toolkit", specifier = ">=3.0.53" },
@@ -2119,7 +2120,6 @@ provides-extras = ["metaskills"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx2", specifier = ">=2.9.1" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "ruff", specifier = ">=0.16.2,<0.17" },
 ]

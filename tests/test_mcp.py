@@ -1168,6 +1168,53 @@ class TestHttpTransportOrder:
         assert _http_transport_order(config) == expected
 
 
+class TestStreamableHttpClientSetup:
+    def test_timeout_uses_the_sdk_http_library(self, monkeypatch):
+        """The SDK builds its client with httpx2, not httpx.
+
+        An httpx.Timeout survives client construction and only blows up mid
+        request, inside the transport, as ``float + Timeout``. Nothing short of
+        a live handshake catches it, so pin the type here instead.
+        """
+        from contextlib import asynccontextmanager
+
+        import httpx2
+
+        captured = {}
+
+        class _NullClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc_info):
+                return False
+
+        @asynccontextmanager
+        async def _fake_streamable_http_client(url, **kwargs):
+            yield ("read", "write", None)
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return _NullClient()
+
+        monkeypatch.setattr(
+            "mcp.client.streamable_http.create_mcp_http_client", _capture
+        )
+        monkeypatch.setattr(
+            "mcp.client.streamable_http.streamable_http_client",
+            _fake_streamable_http_client,
+        )
+
+        async def _open():
+            async with mcp_client._http_streams(
+                "streamable-http", "http://x/mcp", None
+            ) as streams:
+                return streams
+
+        assert asyncio.run(_open()) == ("read", "write")
+        assert isinstance(captured["timeout"], httpx2.Timeout)
+
+
 class TestDescribeException:
     @pytest.mark.parametrize(
         "exc,expected",

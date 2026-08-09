@@ -74,7 +74,11 @@ async def _http_streams(transport: str, url: str, headers: dict | None):
             yield read, write
         return
 
-    import httpx
+    # The MCP SDK moved to httpx2 in 2.0 and builds its own client around it,
+    # so the timeout has to be httpx2's type, not the httpx one swival uses
+    # elsewhere. Mixing them fails deep inside the transport with an arithmetic
+    # TypeError rather than anything that names the mismatch.
+    import httpx2
     from mcp.client.streamable_http import (
         create_mcp_http_client,
         streamable_http_client,
@@ -82,7 +86,7 @@ async def _http_streams(transport: str, url: str, headers: dict | None):
 
     async with create_mcp_http_client(
         headers=headers,
-        timeout=httpx.Timeout(_HTTP_CONNECT_TIMEOUT, read=_HTTP_READ_TIMEOUT),
+        timeout=httpx2.Timeout(_HTTP_CONNECT_TIMEOUT, read=_HTTP_READ_TIMEOUT),
     ) as client:
         async with streamable_http_client(url, http_client=client) as (
             read,

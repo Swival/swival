@@ -30,6 +30,7 @@ dependencies = [
     "mcp>=2.0.0,<3",
     "rank-bm25>=0.2.2",
     "httpx>=0.28.1",
+    "httpx2>=2.9.1",
     "starlette>=1.5.0",
     "uvicorn>=0.52.1",
     "fast-cipher>=0.2.2",
@@ -90,7 +91,6 @@ markers = [
 dev = [
     "pytest>=9.1.1",
     "ruff>=0.16.2,<0.17",
-    "httpx2>=2.9.1",
 ]
 website = [
     "markdown>=3.10.3",
