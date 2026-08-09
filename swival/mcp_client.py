@@ -6,6 +6,7 @@ in OpenAI function-calling format alongside swival's built-in tools.
 
 import asyncio
 import atexit
+import concurrent.futures
 import copy
 import json
 import re
@@ -35,9 +36,22 @@ _HTTP_READ_TIMEOUT = 300
 # transport that stalls must not spend it all before the other one is tried.
 _HANDSHAKE_TIMEOUT = 10
 
+# How long one tool call may run before we give up on it. Shorter than
+# _HTTP_READ_TIMEOUT, so this is what bounds a call over any transport.
+_CALL_TIMEOUT = 120
+
 
 class McpShutdownError(Exception):
     """Raised when call_tool() is invoked during or after shutdown."""
+
+
+class McpWaitTimeout(TimeoutError):
+    """Our deadline on a background-loop call expired before the call returned.
+
+    A bare ``TimeoutError`` out of the coroutine means something else: the SDK
+    dispatcher re-raises one when a transport's bounded send fails, which is a
+    broken connection rather than a slow peer.
+    """
 
 
 def _http_transport_order(config: dict) -> list[str]:
@@ -74,10 +88,9 @@ async def _http_streams(transport: str, url: str, headers: dict | None):
             yield read, write
         return
 
-    # The MCP SDK moved to httpx2 in 2.0 and builds its own client around it,
-    # so the timeout has to be httpx2's type, not the httpx one swival uses
-    # elsewhere. Mixing them fails deep inside the transport with an arithmetic
-    # TypeError rather than anything that names the mismatch.
+    # The timeout has to be httpx2's own type. Handing this an httpx.Timeout
+    # instead survives client construction and only fails deep inside the
+    # transport, as an arithmetic TypeError that names neither library.
     import httpx2
     from mcp.client.streamable_http import (
         create_mcp_http_client,
@@ -313,11 +326,18 @@ class McpManager:
         try:
             result = self._run_sync(
                 session.call_tool(original_name, arguments),
-                timeout=120,
+                timeout=_CALL_TIMEOUT,
             )
             return _normalize_result(result)
         except McpShutdownError:
             raise
+        except McpWaitTimeout:
+            # A slow tool is not a dead server, and degrading would make every
+            # other tool on it report "unavailable" for the rest of the session.
+            return (
+                f"error: MCP tool {namespaced_name!r} timed out after {_CALL_TIMEOUT}s",
+                True,
+            )
         except Exception as e:
             # Mark server as degraded
             self._degraded.add(server_name)
@@ -372,13 +392,16 @@ class McpManager:
         if self._loop is None or not self._loop.is_running():
             raise McpShutdownError("event loop is not running")
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        # wait() reports our deadline expiring as a return value, so a
+        # TimeoutError out of result() can only be the coroutine's own.
+        done, _ = concurrent.futures.wait([future], timeout=timeout)
+        if not done:
+            future.cancel()
+            raise McpWaitTimeout(f"call did not finish within {timeout}s")
         try:
-            return future.result(timeout=timeout)
+            return future.result()
         except asyncio.CancelledError:
             raise McpShutdownError("operation cancelled during shutdown")
-        except TimeoutError:
-            future.cancel()
-            raise
 
     def _start_server_task(self, name: str, config: dict, timeout: float = 30) -> None:
         """Launch a long-lived task for one server; block until connected.

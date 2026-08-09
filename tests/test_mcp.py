@@ -3,6 +3,7 @@
 import asyncio
 import json
 import textwrap
+import threading
 from unittest.mock import MagicMock
 
 import pytest
@@ -149,6 +150,21 @@ class _MockResult:
     def __init__(self, content, is_error=False):
         self.content = content
         self.is_error = is_error
+
+
+def _manager_with_session(session):
+    """A manager wired to one fake session, with its background loop up."""
+    mgr = McpManager({}, verbose=False)
+    mgr._tool_map = {"mcp__s__t": ("s", "t"), "mcp__s__other": ("s", "other")}
+    mgr._sessions = {"s": session}
+
+    mgr._loop = asyncio.new_event_loop()
+    loop_ready = threading.Event()
+    mgr._loop.call_soon(loop_ready.set)
+    mgr._thread = threading.Thread(target=mgr._loop.run_forever, daemon=True)
+    mgr._thread.start()
+    loop_ready.wait(timeout=5)
+    return mgr
 
 
 class TestNormalizeResult:
@@ -826,37 +842,97 @@ class TestMcpManagerLifecycle:
 
     def test_call_tool_success_returns_tuple(self):
         """Successful call_tool() returns (text, False) through _normalize_result."""
-        import asyncio
-        import threading
-
-        mgr = McpManager({}, verbose=False)
-        mgr._tool_map = {"mcp__s__t": ("s", "t")}
-
-        # Mock a session whose call_tool returns a coroutine
-        mock_result = _MockResult(
-            [_MockBlock(type="text", text="success output")],
-            is_error=False,
-        )
 
         async def _fake_call_tool(name, args):
-            return mock_result
+            return _MockResult([_MockBlock(type="text", text="success output")])
 
-        mock_session = MagicMock()
-        mock_session.call_tool = _fake_call_tool
-        mgr._sessions = {"s": mock_session}
-
-        # Need a running loop for _run_sync
-        mgr._loop = asyncio.new_event_loop()
-        loop_ready = threading.Event()
-        mgr._loop.call_soon(lambda: loop_ready.set())
-        mgr._thread = threading.Thread(target=mgr._loop.run_forever, daemon=True)
-        mgr._thread.start()
-        loop_ready.wait(timeout=5)
+        session = MagicMock()
+        session.call_tool = _fake_call_tool
+        mgr = _manager_with_session(session)
 
         try:
             result, is_err = mgr.call_tool("mcp__s__t", {"key": "val"})
             assert not is_err
             assert result == "success output"
+        finally:
+            mgr.close()
+
+    def test_slow_tool_times_out_without_degrading(self, monkeypatch):
+        """A tool that overruns its budget must not disable the whole server.
+
+        `_run_sync` raises the builtin TimeoutError, which is an Exception, so
+        before this it hit the degrade branch and every other tool on that
+        server then answered "unavailable (crashed or disconnected)" even
+        though the server was healthy.
+        """
+        import asyncio
+
+        monkeypatch.setattr(mcp_client, "_CALL_TIMEOUT", 0.05)
+
+        async def _hang_only_t(name, args):
+            if name == "t":
+                await asyncio.sleep(30)
+            return _MockResult([_MockBlock(type="text", text="sibling output")])
+
+        session = MagicMock()
+        session.call_tool = _hang_only_t
+        mgr = _manager_with_session(session)
+
+        try:
+            result, is_err = mgr.call_tool("mcp__s__t", {})
+            assert is_err
+            assert "timed out after 0.05s" in result
+            assert not mgr._degraded
+
+            # The healthy sibling still works, rather than being short-circuited
+            # by a degrade flag the slow tool should never have set.
+            other, other_err = mgr.call_tool("mcp__s__other", {})
+            assert not other_err
+            assert other == "sibling output"
+        finally:
+            mgr.close()
+
+    def test_sdk_timeout_still_degrades(self):
+        """A bare TimeoutError out of the SDK means a dead transport.
+
+        The dispatcher re-raises one when a transport's bounded send fails
+        before its own request deadline is armed, so it has to keep reaching
+        the degrade branch even though we now tolerate our own wait timing out.
+        """
+
+        async def _transport_timeout(name, args):
+            raise TimeoutError
+
+        session = MagicMock()
+        session.call_tool = _transport_timeout
+        mgr = _manager_with_session(session)
+
+        try:
+            result, is_err = mgr.call_tool("mcp__s__t", {})
+            assert is_err
+            assert "failed" in result
+            assert mgr._degraded == {"s"}
+        finally:
+            mgr.close()
+
+    def test_failed_tool_still_degrades(self):
+        """A real transport failure keeps the existing degrade behaviour."""
+
+        async def _boom(name, args):
+            raise ConnectionError("Connection closed")
+
+        session = MagicMock()
+        session.call_tool = _boom
+        mgr = _manager_with_session(session)
+
+        try:
+            result, is_err = mgr.call_tool("mcp__s__t", {})
+            assert is_err
+            assert "failed" in result
+            assert mgr._degraded == {"s"}
+
+            other, _ = mgr.call_tool("mcp__s__other", {})
+            assert "unavailable" in other
         finally:
             mgr.close()
 
@@ -1172,22 +1248,17 @@ class TestStreamableHttpClientSetup:
     def test_timeout_uses_the_sdk_http_library(self, monkeypatch):
         """The SDK builds its client with httpx2, not httpx.
 
-        An httpx.Timeout survives client construction and only blows up mid
-        request, inside the transport, as ``float + Timeout``. Nothing short of
-        a live handshake catches it, so pin the type here instead.
+        Swival no longer depends on httpx, but litellm and openai still pull it
+        in, so the wrong import stays one autocomplete away. An httpx.Timeout
+        survives client construction and only blows up mid request, inside the
+        transport, as ``float + Timeout``. Nothing short of a live handshake
+        catches it, so pin the type here instead.
         """
         from contextlib import asynccontextmanager
 
         import httpx2
 
         captured = {}
-
-        class _NullClient:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *exc_info):
-                return False
 
         @asynccontextmanager
         async def _fake_streamable_http_client(url, **kwargs):
@@ -1429,7 +1500,7 @@ class TestOpenHttpSession:
 
 
 class _NullClient:
-    """Stand-in for the httpx client the Streamable HTTP transport is given."""
+    """Stand-in for the httpx2 client the Streamable HTTP transport is given."""
 
     async def __aenter__(self):
         return self

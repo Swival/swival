@@ -2,10 +2,58 @@
 
 import pytest
 
-from swival.a2a_client import A2aManager, A2aShutdownError, _skill_to_tool
+from swival.a2a_client import (
+    A2aManager,
+    A2aShutdownError,
+    _DEFAULT_TIMEOUT,
+    _skill_to_tool,
+)
 
 
 # --- Helpers ---
+
+
+def _make_manager_with_card(
+    monkeypatch, card, name="test-agent", timeout=_DEFAULT_TIMEOUT
+):
+    """Create an A2aManager with a pre-fetched card."""
+    import httpx2
+
+    class FakeCardResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return card
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def get(self, url):
+            return FakeCardResponse()
+
+    monkeypatch.setattr(httpx2, "Client", FakeClient)
+
+    import swival.fmt
+
+    monkeypatch.setattr(swival.fmt, "a2a_server_start", lambda *a: None)
+    monkeypatch.setattr(swival.fmt, "a2a_server_error", lambda *a: None)
+
+    manager = A2aManager(
+        {name: {"url": "https://example.com", "timeout": timeout}},
+        verbose=False,
+    )
+    manager.start()
+    return manager
 
 
 def _agent_card(skills=None, name="test-agent"):
@@ -115,7 +163,7 @@ class TestA2aManagerStartup:
 
     def test_start_fetches_card(self, monkeypatch):
         """A2aManager.start() fetches Agent Card and builds tools."""
-        import httpx
+        import httpx2
 
         card = _agent_card(
             skills=[
@@ -145,7 +193,7 @@ class TestA2aManagerStartup:
             def get(self, url):
                 return FakeResponse()
 
-        monkeypatch.setattr(httpx, "Client", FakeClient)
+        monkeypatch.setattr(httpx2, "Client", FakeClient)
 
         # Suppress fmt output
         import swival.fmt
@@ -170,7 +218,7 @@ class TestA2aManagerStartup:
 
     def test_start_no_skills_creates_ask_tool(self, monkeypatch):
         """When no skills are declared, a single 'ask' tool is created."""
-        import httpx
+        import httpx2
 
         card = _agent_card(skills=[])
 
@@ -196,7 +244,7 @@ class TestA2aManagerStartup:
             def get(self, url):
                 return FakeResponse()
 
-        monkeypatch.setattr(httpx, "Client", FakeClient)
+        monkeypatch.setattr(httpx2, "Client", FakeClient)
 
         import swival.fmt
 
@@ -216,7 +264,7 @@ class TestA2aManagerStartup:
 
     def test_start_card_fetch_failure(self, monkeypatch):
         """Card fetch failure is shown in verbose mode and skips the agent."""
-        import httpx
+        import httpx2
 
         class FakeClient:
             def __init__(self, **kwargs):
@@ -229,9 +277,9 @@ class TestA2aManagerStartup:
                 pass
 
             def get(self, url):
-                raise httpx.ConnectError("fail")
+                raise httpx2.ConnectError("fail")
 
-        monkeypatch.setattr(httpx, "Client", FakeClient)
+        monkeypatch.setattr(httpx2, "Client", FakeClient)
 
         import swival.fmt
 
@@ -253,7 +301,7 @@ class TestA2aManagerStartup:
 
     def test_start_card_fetch_failure_quiet_suppresses_output(self, monkeypatch):
         """Card fetch failure stays quiet when verbose mode is off."""
-        import httpx
+        import httpx2
 
         class FakeClient:
             def __init__(self, **kwargs):
@@ -266,9 +314,9 @@ class TestA2aManagerStartup:
                 pass
 
             def get(self, url):
-                raise httpx.ConnectError("fail")
+                raise httpx2.ConnectError("fail")
 
-        monkeypatch.setattr(httpx, "Client", FakeClient)
+        monkeypatch.setattr(httpx2, "Client", FakeClient)
 
         import swival.fmt
 
@@ -292,56 +340,16 @@ class TestA2aManagerStartup:
 class TestA2aManagerCallTool:
     """Tests for call_tool() with mock HTTP."""
 
-    def _make_manager_with_card(self, monkeypatch, card, name="test-agent"):
-        """Create an A2aManager with a pre-fetched card."""
-        import httpx
-
-        class FakeCardResponse:
-            status_code = 200
-
-            def raise_for_status(self):
-                pass
-
-            def json(self):
-                return card
-
-        class FakeClient:
-            def __init__(self, **kwargs):
-                pass
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                pass
-
-            def get(self, url):
-                return FakeCardResponse()
-
-        monkeypatch.setattr(httpx, "Client", FakeClient)
-
-        import swival.fmt
-
-        monkeypatch.setattr(swival.fmt, "a2a_server_start", lambda *a: None)
-        monkeypatch.setattr(swival.fmt, "a2a_server_error", lambda *a: None)
-
-        manager = A2aManager(
-            {name: {"url": "https://example.com"}},
-            verbose=False,
-        )
-        manager.start()
-        return manager
-
     def test_happy_path_completed(self, monkeypatch):
         """Blocking SendMessage returns completed task in one round-trip."""
-        import httpx
+        import httpx2
 
         card = _agent_card(
             skills=[
                 {"id": "search", "name": "Search", "description": "Search"},
             ]
         )
-        manager = self._make_manager_with_card(monkeypatch, card)
+        manager = _make_manager_with_card(monkeypatch, card)
 
         response_data = _jsonrpc_response(_completed_task())
 
@@ -367,7 +375,7 @@ class TestA2aManagerCallTool:
             async def post(self, url, **kwargs):
                 return FakeAsyncResponse()
 
-        monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+        monkeypatch.setattr(httpx2, "AsyncClient", FakeAsyncClient)
 
         result, is_error = manager.call_tool(
             "a2a__test-agent__search",
@@ -382,14 +390,14 @@ class TestA2aManagerCallTool:
 
     def test_input_required(self, monkeypatch):
         """Input-required response includes contextId and taskId."""
-        import httpx
+        import httpx2
 
         card = _agent_card(
             skills=[
                 {"id": "search", "name": "Search", "description": "Search"},
             ]
         )
-        manager = self._make_manager_with_card(monkeypatch, card)
+        manager = _make_manager_with_card(monkeypatch, card)
 
         response_data = _jsonrpc_response(_input_required_task())
 
@@ -415,7 +423,7 @@ class TestA2aManagerCallTool:
             async def post(self, url, **kwargs):
                 return FakeAsyncResponse()
 
-        monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+        monkeypatch.setattr(httpx2, "AsyncClient", FakeAsyncClient)
 
         result, is_error = manager.call_tool(
             "a2a__test-agent__search",
@@ -431,14 +439,14 @@ class TestA2aManagerCallTool:
 
     def test_failed_task(self, monkeypatch):
         """Failed task returns error."""
-        import httpx
+        import httpx2
 
         card = _agent_card(
             skills=[
                 {"id": "ask", "name": "Ask", "description": "Ask"},
             ]
         )
-        manager = self._make_manager_with_card(monkeypatch, card)
+        manager = _make_manager_with_card(monkeypatch, card)
 
         response_data = _jsonrpc_response(_failed_task())
 
@@ -464,7 +472,7 @@ class TestA2aManagerCallTool:
             async def post(self, url, **kwargs):
                 return FakeAsyncResponse()
 
-        monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+        monkeypatch.setattr(httpx2, "AsyncClient", FakeAsyncClient)
 
         result, is_error = manager.call_tool(
             "a2a__test-agent__ask",
@@ -478,7 +486,7 @@ class TestA2aManagerCallTool:
 
     def test_polling_fallback(self, monkeypatch):
         """Non-compliant server returns working state, verify polling fallback."""
-        import httpx
+        import httpx2
 
         call_count = {"n": 0}
 
@@ -513,8 +521,8 @@ class TestA2aManagerCallTool:
                 return FakeAsyncResponse()
 
         card = _agent_card(skills=[{"id": "ask", "name": "Ask", "description": "Ask"}])
-        manager = self._make_manager_with_card(monkeypatch, card)
-        monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+        manager = _make_manager_with_card(monkeypatch, card)
+        monkeypatch.setattr(httpx2, "AsyncClient", FakeAsyncClient)
 
         # Reduce poll delay so test runs fast
         import swival.a2a_client
@@ -535,10 +543,10 @@ class TestA2aManagerCallTool:
 
     def test_degradation_on_failure(self, monkeypatch):
         """Repeated failures mark agent as degraded."""
-        import httpx
+        import httpx2
 
         card = _agent_card(skills=[{"id": "ask", "name": "Ask", "description": "Ask"}])
-        manager = self._make_manager_with_card(monkeypatch, card)
+        manager = _make_manager_with_card(monkeypatch, card)
 
         class FakeAsyncClient:
             def __init__(self, **kwargs):
@@ -551,9 +559,9 @@ class TestA2aManagerCallTool:
                 pass
 
             async def post(self, url, **kwargs):
-                raise httpx.ConnectError("connection refused")
+                raise httpx2.ConnectError("connection refused")
 
-        monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+        monkeypatch.setattr(httpx2, "AsyncClient", FakeAsyncClient)
 
         # First call fails and marks agent as degraded
         result1, is_error1 = manager.call_tool(
@@ -573,10 +581,57 @@ class TestA2aManagerCallTool:
 
         manager.close()
 
+    @pytest.mark.parametrize(
+        "exc", ["ReadTimeout", "ConnectTimeout", "PoolTimeout", "WriteTimeout"]
+    )
+    def test_transport_timeout_does_not_degrade(self, monkeypatch, exc):
+        """A stalled request must not disable the agent for the session.
+
+        httpx timeouts are not builtin TimeoutErrors, so before this they fell
+        through to the degrade branch and one slow reply made every later call
+        return "unavailable" without even trying.
+        """
+        import httpx2
+
+        card = _agent_card(skills=[{"id": "ask", "name": "Ask", "description": "Ask"}])
+        manager = _make_manager_with_card(monkeypatch, card)
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                pass
+
+            async def post(self, url, **kwargs):
+                raise getattr(httpx2, exc)("")
+
+        monkeypatch.setattr(httpx2, "AsyncClient", FakeAsyncClient)
+
+        result, is_error = manager.call_tool(
+            "a2a__test-agent__ask", {"message": "test"}
+        )
+        assert is_error
+        assert "timed out" in result
+        assert exc in result
+        assert "test-agent" not in manager._degraded
+
+        # The next call still reaches the transport instead of short-circuiting.
+        result2, is_error2 = manager.call_tool(
+            "a2a__test-agent__ask", {"message": "again"}
+        )
+        assert is_error2
+        assert "unavailable" not in result2
+
+        manager.close()
+
     def test_unknown_tool(self, monkeypatch):
         """Unknown tool name returns error."""
         card = _agent_card(skills=[{"id": "ask", "name": "Ask", "description": "Ask"}])
-        manager = self._make_manager_with_card(monkeypatch, card)
+        manager = _make_manager_with_card(monkeypatch, card)
 
         result, is_error = manager.call_tool(
             "a2a__nonexistent__tool",
@@ -590,7 +645,7 @@ class TestA2aManagerCallTool:
     def test_shutdown_error(self, monkeypatch):
         """call_tool after close raises A2aShutdownError."""
         card = _agent_card(skills=[{"id": "ask", "name": "Ask", "description": "Ask"}])
-        manager = self._make_manager_with_card(monkeypatch, card)
+        manager = _make_manager_with_card(monkeypatch, card)
         manager.close()
 
         with pytest.raises(A2aShutdownError):
@@ -775,51 +830,12 @@ class TestA2aConfig:
 class TestMessageResponse:
     """Test handling of direct Message responses (not Task-shaped)."""
 
-    def _make_manager_with_card(self, monkeypatch, card, name="test-agent"):
-        import httpx
-
-        class FakeCardResponse:
-            status_code = 200
-
-            def raise_for_status(self):
-                pass
-
-            def json(self):
-                return card
-
-        class FakeClient:
-            def __init__(self, **kwargs):
-                pass
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                pass
-
-            def get(self, url):
-                return FakeCardResponse()
-
-        monkeypatch.setattr(httpx, "Client", FakeClient)
-
-        import swival.fmt
-
-        monkeypatch.setattr(swival.fmt, "a2a_server_start", lambda *a: None)
-        monkeypatch.setattr(swival.fmt, "a2a_server_error", lambda *a: None)
-
-        manager = A2aManager(
-            {name: {"url": "https://example.com"}},
-            verbose=False,
-        )
-        manager.start()
-        return manager
-
     def test_message_response_handled(self, monkeypatch):
         """Server returns a direct Message instead of a Task."""
-        import httpx
+        import httpx2
 
         card = _agent_card(skills=[{"id": "ask", "name": "Ask", "description": "Ask"}])
-        manager = self._make_manager_with_card(monkeypatch, card)
+        manager = _make_manager_with_card(monkeypatch, card)
 
         # A direct message response (no "id", no "status", has "role" and "parts")
         message_result = {
@@ -851,7 +867,7 @@ class TestMessageResponse:
             async def post(self, url, **kwargs):
                 return FakeAsyncResponse()
 
-        monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+        monkeypatch.setattr(httpx2, "AsyncClient", FakeAsyncClient)
 
         result, is_error = manager.call_tool(
             "a2a__test-agent__ask",
@@ -866,10 +882,10 @@ class TestMessageResponse:
 
     def test_message_response_no_context(self, monkeypatch):
         """Message response without contextId still works."""
-        import httpx
+        import httpx2
 
         card = _agent_card(skills=[{"id": "ask", "name": "Ask", "description": "Ask"}])
-        manager = self._make_manager_with_card(monkeypatch, card)
+        manager = _make_manager_with_card(monkeypatch, card)
 
         message_result = {
             "role": "agent",
@@ -899,7 +915,7 @@ class TestMessageResponse:
             async def post(self, url, **kwargs):
                 return FakeAsyncResponse()
 
-        monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+        monkeypatch.setattr(httpx2, "AsyncClient", FakeAsyncClient)
 
         result, is_error = manager.call_tool(
             "a2a__test-agent__ask",
@@ -913,10 +929,10 @@ class TestMessageResponse:
 
     def test_nonterminal_task_with_no_id_is_error(self, monkeypatch):
         """Non-terminal task with empty ID surfaces a protocol error."""
-        import httpx
+        import httpx2
 
         card = _agent_card(skills=[{"id": "ask", "name": "Ask", "description": "Ask"}])
-        manager = self._make_manager_with_card(monkeypatch, card)
+        manager = _make_manager_with_card(monkeypatch, card)
 
         # A task-shaped response with empty id and working status --
         # this is a protocol error since we can't poll without an ID
@@ -949,7 +965,7 @@ class TestMessageResponse:
             async def post(self, url, **kwargs):
                 return FakeAsyncResponse()
 
-        monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+        monkeypatch.setattr(httpx2, "AsyncClient", FakeAsyncClient)
 
         result, is_error = manager.call_tool(
             "a2a__test-agent__ask",
@@ -964,10 +980,10 @@ class TestMessageResponse:
 
     def test_terminal_task_with_no_id_succeeds(self, monkeypatch):
         """Terminal task with empty ID still returns result (no polling needed)."""
-        import httpx
+        import httpx2
 
         card = _agent_card(skills=[{"id": "ask", "name": "Ask", "description": "Ask"}])
-        manager = self._make_manager_with_card(monkeypatch, card)
+        manager = _make_manager_with_card(monkeypatch, card)
 
         task_result = {
             "id": "",
@@ -999,7 +1015,7 @@ class TestMessageResponse:
             async def post(self, url, **kwargs):
                 return FakeAsyncResponse()
 
-        monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+        monkeypatch.setattr(httpx2, "AsyncClient", FakeAsyncClient)
 
         result, is_error = manager.call_tool(
             "a2a__test-agent__ask",
@@ -1122,7 +1138,7 @@ class TestToolCollision:
 
     def test_intra_agent_skill_collision(self, monkeypatch):
         """Skills within one agent that sanitize to the same name."""
-        import httpx
+        import httpx2
 
         card = _agent_card(
             skills=[
@@ -1153,7 +1169,7 @@ class TestToolCollision:
             def get(self, url):
                 return FakeCardResponse()
 
-        monkeypatch.setattr(httpx, "Client", FakeClient)
+        monkeypatch.setattr(httpx2, "Client", FakeClient)
 
         import swival.fmt
 

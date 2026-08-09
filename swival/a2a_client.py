@@ -32,6 +32,7 @@ from .report import ConfigError
 _POLL_INITIAL_DELAY = 0.5
 _POLL_MAX_DELAY = 5.0
 _POLL_BACKOFF_FACTOR = 1.5
+_POLL_REQUEST_TIMEOUT = 30.0
 _DEFAULT_TIMEOUT = 300
 
 
@@ -145,6 +146,8 @@ class A2aManager:
 
     def call_tool(self, namespaced_name: str, arguments: dict) -> tuple[str, bool]:
         """Dispatch to the correct agent and return (result_text, is_error)."""
+        import httpx2
+
         if self._closing or self._closed:
             raise A2aShutdownError("manager is shutting down")
 
@@ -172,6 +175,14 @@ class A2aManager:
         except TimeoutError:
             return (
                 f"error: A2A agent {agent_name!r} timed out after {timeout}s",
+                True,
+            )
+        except httpx2.TimeoutException as e:
+            # httpx2 timeouts are not builtin TimeoutErrors, so without this
+            # they hit the degrade branch and one slow reply disables the
+            # agent for good.
+            return (
+                f"error: A2A agent {agent_name!r} timed out ({type(e).__name__})",
                 True,
             )
         except Exception as e:
@@ -205,7 +216,14 @@ class A2aManager:
     # --- Internal helpers ---
 
     def _run_sync(self, coro, timeout: float = 30):
-        """Submit a coroutine to the background loop and wait."""
+        """Submit a coroutine to the background loop and wait.
+
+        McpManager's twin distinguishes our deadline expiring from a
+        TimeoutError the coroutine raised, because those need opposite
+        treatment there. Here nothing below raises a builtin TimeoutError
+        (httpx2's timeouts derive from HTTPError), and both would be reported
+        the same way anyway, so a bare re-raise is enough.
+        """
         if self._loop is None or not self._loop.is_running():
             raise A2aShutdownError("event loop is not running")
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
@@ -219,14 +237,14 @@ class A2aManager:
 
     def _fetch_agent_card(self, name: str, config: dict) -> None:
         """Fetch and parse an agent's Agent Card."""
-        import httpx
+        import httpx2
 
         base_url = config["url"].rstrip("/")
         card_url = config.get("card_url") or (base_url + AGENT_CARD_PATH)
         headers = self._auth_headers(config)
 
         try:
-            with httpx.Client(timeout=15, headers=headers) as client:
+            with httpx2.Client(timeout=15, headers=headers) as client:
                 resp = client.get(card_url)
                 resp.raise_for_status()
                 data = resp.json()
@@ -261,7 +279,7 @@ class A2aManager:
         self, agent_name: str, arguments: dict, config: dict
     ) -> tuple[str, bool]:
         """Send a message to a remote A2A agent and return (text, is_error)."""
-        import httpx
+        import httpx2
 
         card = self._agent_cards.get(agent_name)
         if card is None:
@@ -292,7 +310,7 @@ class A2aManager:
         headers["Content-Type"] = "application/json"
         timeout = config.get("timeout", _DEFAULT_TIMEOUT)
 
-        async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
+        async with httpx2.AsyncClient(timeout=timeout, headers=headers) as client:
             resp = await client.post(endpoint, json=request)
             resp.raise_for_status()
             data = resp.json()
@@ -332,7 +350,7 @@ class A2aManager:
         timeout: float,
     ) -> tuple[str, bool]:
         """Poll GetTask until the task reaches a terminal or interrupted state."""
-        import httpx
+        import httpx2
 
         card = self._agent_cards[agent_name]
         endpoint = card.url.rstrip("/")
@@ -342,7 +360,9 @@ class A2aManager:
         delay = _POLL_INITIAL_DELAY
         deadline = time.monotonic() + timeout
 
-        async with httpx.AsyncClient(timeout=30, headers=headers) as client:
+        async with httpx2.AsyncClient(
+            timeout=_POLL_REQUEST_TIMEOUT, headers=headers
+        ) as client:
             while time.monotonic() < deadline:
                 await asyncio.sleep(delay)
 
