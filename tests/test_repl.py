@@ -1010,7 +1010,7 @@ class TestAddDirCommand:
     def test_add_dir_missing_arg(self):
         """/add-dir with no argument returns a warning."""
         extra = []
-        msg, is_error = _repl_add_dir("", extra)
+        msg, is_error, _ = _repl_add_dir("", extra)
         assert extra == []
         assert "requires a path" in msg
         assert is_error is True
@@ -1018,7 +1018,7 @@ class TestAddDirCommand:
     def test_add_dir_nonexistent(self):
         """/add-dir with nonexistent path returns a warning."""
         extra = []
-        msg, is_error = _repl_add_dir("/nonexistent_path_abc123", extra)
+        msg, is_error, _ = _repl_add_dir("/nonexistent_path_abc123", extra)
         assert extra == []
         assert "not a directory" in msg
         assert is_error is True
@@ -1026,14 +1026,14 @@ class TestAddDirCommand:
     def test_add_dir_duplicate(self, tmp_path):
         """Adding same dir twice doesn't duplicate it."""
         extra = [tmp_path.resolve()]
-        msg, is_error = _repl_add_dir(str(tmp_path), extra)
+        msg, is_error, _ = _repl_add_dir(str(tmp_path), extra)
         assert len(extra) == 1
         assert "already in whitelist" in msg
 
     def test_add_dir_root_rejected(self):
         """/add-dir / is rejected."""
         extra = []
-        msg, is_error = _repl_add_dir("/", extra)
+        msg, is_error, _ = _repl_add_dir("/", extra)
         assert extra == []
         assert "filesystem root" in msg
         assert is_error is True
@@ -1095,7 +1095,7 @@ class TestAddDirRoCommand:
     def test_add_dir_ro_missing_arg(self):
         """/add-dir-ro with no argument returns a warning."""
         roots = []
-        msg, is_error = _repl_add_dir_ro("", roots)
+        msg, is_error, _ = _repl_add_dir_ro("", roots)
         assert roots == []
         assert "requires a path" in msg
         assert is_error is True
@@ -1103,7 +1103,7 @@ class TestAddDirRoCommand:
     def test_add_dir_ro_nonexistent(self):
         """/add-dir-ro with nonexistent path returns a warning."""
         roots = []
-        msg, is_error = _repl_add_dir_ro("/nonexistent_path_abc123", roots)
+        msg, is_error, _ = _repl_add_dir_ro("/nonexistent_path_abc123", roots)
         assert roots == []
         assert "not a directory" in msg
         assert is_error is True
@@ -1111,14 +1111,14 @@ class TestAddDirRoCommand:
     def test_add_dir_ro_duplicate(self, tmp_path):
         """Adding same dir twice doesn't duplicate it."""
         roots = [tmp_path.resolve()]
-        msg, is_error = _repl_add_dir_ro(str(tmp_path), roots)
+        msg, is_error, _ = _repl_add_dir_ro(str(tmp_path), roots)
         assert len(roots) == 1
         assert "already in read-only whitelist" in msg
 
     def test_add_dir_ro_root_rejected(self):
         """/add-dir-ro / is rejected."""
         roots = []
-        msg, is_error = _repl_add_dir_ro("/", roots)
+        msg, is_error, _ = _repl_add_dir_ro("/", roots)
         assert roots == []
         assert "filesystem root" in msg
         assert is_error is True

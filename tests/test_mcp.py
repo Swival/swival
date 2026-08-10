@@ -2,8 +2,10 @@
 
 import asyncio
 import json
+import sys
 import textwrap
 import threading
+import types
 from unittest.mock import MagicMock
 
 import pytest
@@ -1349,7 +1351,7 @@ class TestOpenHttpSession:
         modes = {"streamable-stream": streamable, "sse-stream": sse}
 
         class _FakeSession:
-            def __init__(self, read, write):
+            def __init__(self, read, write, list_roots_callback=None):
                 self.streams = (read, write)
                 self.mode = modes[read]
                 self.initialized = False
@@ -1507,3 +1509,201 @@ class _NullClient:
 
     async def __aexit__(self, *exc_info):
         return False
+
+
+_ROOTS_PROBE_SERVER = '''
+"""Bare JSON-RPC MCP server reporting what the client said about roots."""
+
+import json
+import sys
+
+state = {"capabilities": None, "changed": 0, "pending": None}
+
+
+def send(payload):
+    sys.stdout.write(json.dumps(payload) + "\\n")
+    sys.stdout.flush()
+
+
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    msg = json.loads(line)
+    method = msg.get("method")
+
+    if method == "initialize":
+        state["capabilities"] = msg["params"].get("capabilities")
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "roots-probe", "version": "0"},
+        }})
+    elif method == "tools/list":
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {"tools": [{
+            "name": "report",
+            "description": "Report the roots the client advertised",
+            "inputSchema": {"type": "object", "properties": {}},
+        }]}})
+    elif method == "tools/call":
+        state["pending"] = msg["id"]
+        send({"jsonrpc": "2.0", "id": "roots-1", "method": "roots/list"})
+    elif method == "notifications/roots/list_changed":
+        state["changed"] += 1
+    elif method is None and msg.get("id") == "roots-1":
+        report = {
+            "capabilities": state["capabilities"],
+            "roots": msg.get("result", {}).get("roots"),
+            "error": msg.get("error"),
+            "changed": state["changed"],
+        }
+        send({"jsonrpc": "2.0", "id": state["pending"], "result": {
+            "content": [{"type": "text", "text": json.dumps(report)}],
+        }})
+'''
+
+
+class TestRoots:
+    """Roots decide where servers put the files they write.
+
+    The negotiation cases drive a real subprocess over stdio: the capability is
+    settled inside the SDK's handshake, so a mock would not notice a client that
+    stops sending it.
+    """
+
+    @staticmethod
+    def _report(tmp_path, roots, before_start=None, before_call=None):
+        script = tmp_path / "roots_probe.py"
+        script.write_text(_ROOTS_PROBE_SERVER)
+        manager = McpManager(
+            {"probe": {"command": sys.executable, "args": [str(script)]}},
+            roots=roots,
+        )
+        if before_start is not None:
+            before_start(manager)
+        manager.start()
+        try:
+            if before_call is not None:
+                before_call(manager)
+            text, is_error = manager.call_tool("mcp__probe__report", {})
+        finally:
+            manager.close()
+        assert not is_error, text
+        return json.loads(text)
+
+    def test_normalizes_directories_to_file_uris(self, tmp_path):
+        (tmp_path / "work").mkdir()
+        pairs = mcp_client._normalize_roots([tmp_path / "work"])
+        assert pairs == [((tmp_path / "work").resolve().as_uri(), "work")]
+
+    def test_drops_files_and_missing_paths(self, tmp_path):
+        regular = tmp_path / "file.txt"
+        regular.write_text("x")
+        assert mcp_client._normalize_roots([regular, tmp_path / "absent"]) == []
+
+    def test_deduplicates_after_resolution(self, tmp_path):
+        (tmp_path / "work").mkdir()
+        pairs = mcp_client._normalize_roots(
+            [tmp_path / "work", tmp_path / "work" / ".." / "work"]
+        )
+        assert len(pairs) == 1
+
+    @pytest.mark.parametrize("files_mode", ["some", "all"])
+    def test_workspace_and_grants_are_offered(self, files_mode):
+        # "all" is not "anywhere": a root list cannot say that.
+        assert mcp_client.workspace_roots(files_mode, "/work", ["/extra"]) == [
+            "/work",
+            "/extra",
+        ]
+
+    def test_no_roots_when_the_filesystem_is_off(self):
+        assert mcp_client.workspace_roots("none", "/work", ["/extra"]) == []
+
+    def test_server_is_told_the_configured_directories(self, tmp_path):
+        (tmp_path / "work").mkdir()
+        report = self._report(tmp_path, [tmp_path / "work"])
+        assert report["capabilities"].get("roots") is not None
+        assert report["roots"] == [
+            {"uri": (tmp_path / "work").resolve().as_uri(), "name": "work"}
+        ]
+
+    def test_server_is_told_nothing_without_roots(self, tmp_path):
+        report = self._report(tmp_path, [])
+        assert report["capabilities"].get("roots") is None
+        assert report["roots"] is None
+        assert report["error"]["message"] == "List roots not supported"
+
+    def test_add_root_notifies_and_extends_the_list(self, tmp_path):
+        (tmp_path / "work").mkdir()
+        (tmp_path / "extra").mkdir()
+        report = self._report(
+            tmp_path,
+            [tmp_path / "work"],
+            before_call=lambda manager: manager.add_root(tmp_path / "extra"),
+        )
+        assert report["changed"] == 1
+        assert [root["name"] for root in report["roots"]] == ["work", "extra"]
+
+    def test_add_root_ignores_a_directory_already_advertised(self, tmp_path):
+        (tmp_path / "work").mkdir()
+        report = self._report(
+            tmp_path,
+            [tmp_path / "work"],
+            before_call=lambda manager: manager.add_root(tmp_path / "work"),
+        )
+        assert report["changed"] == 0
+        assert len(report["roots"]) == 1
+
+    def test_add_root_stays_quiet_when_roots_were_never_advertised(self, tmp_path):
+        # The handshake already told this server we do not speak roots.
+        (tmp_path / "extra").mkdir()
+        report = self._report(
+            tmp_path,
+            [],
+            before_call=lambda manager: manager.add_root(tmp_path / "extra"),
+        )
+        assert report["changed"] == 0
+        assert report["roots"] is None
+
+    def test_add_root_before_start_can_turn_roots_on(self, tmp_path):
+        # start() has not settled the capability yet, so it can still flip.
+        (tmp_path / "extra").mkdir()
+        report = self._report(
+            tmp_path,
+            [],
+            before_start=lambda manager: manager.add_root(tmp_path / "extra"),
+        )
+        assert report["capabilities"].get("roots") is not None
+        assert [root["name"] for root in report["roots"]] == ["extra"]
+
+    def test_repl_add_dir_reaches_the_manager(self, tmp_path):
+        from swival.agent import execute_input
+        from swival.input_dispatch import InputContext, parse_input_line
+        from swival.thinking import ThinkingState
+        from swival.todo import TodoState
+
+        granted = []
+        (tmp_path / "extra").mkdir()
+        ctx = InputContext(
+            messages=[],
+            tools=[],
+            base_dir=str(tmp_path),
+            turn_state={},
+            thinking_state=ThinkingState(),
+            todo_state=TodoState(),
+            snapshot_state=None,
+            file_tracker=None,
+            no_history=True,
+            continue_here=False,
+            verbose=False,
+            loop_kwargs={},
+            mcp_manager=types.SimpleNamespace(add_root=granted.append),
+        )
+
+        execute_input(parse_input_line(f"/add-dir {tmp_path / 'extra'}"), ctx)
+        assert granted == [(tmp_path / "extra").resolve()]
+
+        # A rejected path and a repeat grant both stay off the wire.
+        execute_input(parse_input_line("/add-dir /nowhere/at/all"), ctx)
+        execute_input(parse_input_line(f"/add-dir {tmp_path / 'extra'}"), ctx)
+        assert len(granted) == 1

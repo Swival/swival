@@ -12,6 +12,7 @@ import json
 import re
 import threading
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from ._env import child_env
@@ -136,6 +137,39 @@ async def _close_quietly(stack) -> BaseException | None:
     return None
 
 
+def _normalize_roots(roots) -> list[tuple[str, str]]:
+    """Turn workspace directories into the ``(uri, name)`` pairs roots/list returns.
+
+    Anything that is not a readable directory is dropped: servers pick where to
+    write from this list, so a root aimed at a missing path is worse than none.
+    """
+    pairs: dict[str, str] = {}
+    for entry in roots or ():
+        try:
+            path = Path(entry).expanduser().resolve()
+            if not path.is_dir():
+                continue
+            # Path("/").name is empty, and --add-dir / reaches here.
+            pairs.setdefault(path.as_uri(), path.name or str(path))
+        except (OSError, ValueError):
+            continue
+    return list(pairs.items())
+
+
+def workspace_roots(files_mode: str, base_dir, add_dirs) -> list:
+    """The directories to hand MCP servers under a given file-access mode.
+
+    ``--files none`` gets nothing, matching a mode that grants no workspace
+    access.  ``--files all`` still gets only the workspace and the ``--add-dir``
+    grants: a root list cannot say "anywhere", and the filesystem root is a poor
+    thing to hand a server.  Read-only grants stay out throughout, since a root
+    carries no read-only marker and a server would take one as writable.
+    """
+    if files_mode == "none":
+        return []
+    return [base_dir, *add_dirs]
+
+
 def _jail_stdio_command(
     command: str, args: list[str], net_jail: list[str] | None
 ) -> tuple[str, list[str]]:
@@ -165,6 +199,7 @@ class McpManager:
         verbose: bool = False,
         flatten_schemas: bool = True,
         net_jail: list[str] | None = None,
+        roots: list | None = None,
     ):
         """
         server_configs: {
@@ -182,12 +217,22 @@ class McpManager:
         net_jail: optional ``nono run ... --block-net --`` prefix; when set,
         stdio server processes are launched through it so their whole
         subtree is denied network access (network = "provider-only").
+
+        roots: directories to advertise through the MCP roots capability. A
+        cooperating server confines its file-writing tools to them; nothing
+        enforces that, and the paths are absolute, so a remote server learns
+        where the workspace lives. An empty list keeps the client silent about
+        roots entirely.
         """
         self._server_configs = server_configs
         self._verbose = verbose
         self._net_jail = list(net_jail) if net_jail else None
         self._flatten_schemas = flatten_schemas
         self._flatten_meta: dict[str, object] = {}
+        self._roots = _normalize_roots(roots)
+        # Settled by start(), since capabilities are never renegotiated. Once
+        # it is False, add_root() has nobody to announce to.
+        self._advertise_roots = False
 
         # Background event loop
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -261,6 +306,8 @@ class McpManager:
         if not loop_ready.wait(timeout=10):
             raise McpShutdownError("MCP event loop failed to start")
 
+        self._advertise_roots = bool(self._roots)
+
         # Connect to each server via a long-lived lifecycle task
         for name, config in self._server_configs.items():
             try:
@@ -292,6 +339,26 @@ class McpManager:
                     break
             info.setdefault(server, []).append((namespaced, desc))
         return info
+
+    def add_root(self, path) -> None:
+        """Grant one more directory to the servers, as ``/add-dir`` does to us.
+
+        The handshake claims support for roots/list_changed, so a server is
+        entitled to read the list once and wait to be told otherwise.
+        """
+        if self._closing or self._closed:
+            return
+        current = self._roots
+        added = [pair for pair in _normalize_roots([path]) if pair not in current]
+        if not added:
+            return
+        # Rebound, not extended: the event loop thread reads this list and must
+        # never iterate one growing underneath it.
+        self._roots = [*current, *added]
+        if self._advertise_roots and self._loop is not None and self._loop.is_running():
+            # Fire and forget: a notification has no reply, and an unreachable
+            # server must not stall the REPL.
+            asyncio.run_coroutine_threadsafe(self._notify_roots_changed(), self._loop)
 
     def call_tool(self, namespaced_name: str, arguments: dict) -> tuple[str, bool]:
         """Dispatch to the correct server and return (result_text, is_error).
@@ -387,6 +454,47 @@ class McpManager:
 
     # --- Internal helpers ---
 
+    async def _list_roots(self, context):
+        """Answer a server's roots/list request with our workspace directories."""
+        import mcp.types as types
+
+        return types.ListRootsResult(
+            roots=[types.Root(uri=uri, name=name) for uri, name in self._roots]
+        )
+
+    async def _notify_roots_changed(self) -> None:
+        """Tell every live server the roots list has moved under it.
+
+        Not through send_roots_list_changed: that wrapper is deprecated with the
+        rest of roots in 2026-07-28 and warns on every call, while the servers
+        that want roots are the ones speaking the older revisions.
+        """
+        import mcp.types as types
+
+        for name, session in list(self._sessions.items()):
+            try:
+                await session.send_notification(types.RootsListChangedNotification())
+            except Exception as e:
+                self._warning_notice(
+                    f"MCP server {name!r}: roots update not delivered: "
+                    f"{_describe_exception(e)}"
+                )
+
+    def _client_session(self, read_stream, write_stream):
+        """Build a ClientSession over an already-open pair of transport streams.
+
+        The SDK advertises the roots capability only when a callback is
+        supplied, and servers read that ad literally: chrome-devtools-mcp
+        confines file writes to the OS temp directory when the client is silent.
+        """
+        import mcp
+
+        return mcp.ClientSession(
+            read_stream,
+            write_stream,
+            list_roots_callback=self._list_roots if self._advertise_roots else None,
+        )
+
     def _run_sync(self, coro, timeout: float = 30):
         """Submit a coroutine to the background loop and wait for result."""
         if self._loop is None or not self._loop.is_running():
@@ -475,7 +583,7 @@ class McpManager:
                     mcp.stdio_client(params)
                 )
                 session = await stack.enter_async_context(
-                    mcp.ClientSession(read_stream, write_stream)
+                    self._client_session(read_stream, write_stream)
                 )
                 await session.initialize()
 
@@ -526,7 +634,6 @@ class McpManager:
         the caller's, so a failed attempt leaves nothing open behind it.
         """
         from contextlib import AsyncExitStack
-        import mcp
 
         url = config["url"]
         headers = config.get("headers")
@@ -542,7 +649,7 @@ class McpManager:
                         _http_streams(transport, url, headers)
                     )
                     session = await attempt.enter_async_context(
-                        mcp.ClientSession(streams[0], streams[1])
+                        self._client_session(streams[0], streams[1])
                     )
                     await session.initialize()
             except BaseException as exc:

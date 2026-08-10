@@ -8926,7 +8926,7 @@ def _run_main(args, report, _write_report, parser):
     mcp_manager = None
     mcp_tool_info = {}
     if not getattr(args, "no_mcp", False):
-        from .mcp_client import McpManager
+        from .mcp_client import McpManager, workspace_roots
 
         mcp_servers = _resolve_mcp_servers(args, base_dir)
         if mcp_servers:
@@ -8935,6 +8935,7 @@ def _run_main(args, report, _write_report, parser):
                 verbose=args.verbose,
                 flatten_schemas=getattr(args, "flatten_mcp_schemas", True),
                 net_jail=net_jail,
+                roots=workspace_roots(files_mode, base_dir, allowed_dirs),
             )
             # start() connects to servers; individual connection failures
             # are logged and skipped (non-fatal), but ConfigError from
@@ -12296,33 +12297,39 @@ def _repl_clear(
 
 def _repl_add_dir_impl(
     path_str: str, target_list: list, command: str, label: str
-) -> tuple[str, bool]:
+) -> tuple[str, bool, Path | None]:
     """Shared logic for adding a directory to a whitelist.
 
-    Returns ``(message, is_error)``.
+    Returns ``(message, is_error, granted)``. ``granted`` is the resolved
+    directory when this call is what added it, so callers can propagate the
+    grant without parsing the argument again.
     """
     path_str = path_str.strip()
     if not path_str:
-        return f"{command} requires a path argument", True
+        return f"{command} requires a path argument", True, None
 
     p = Path(path_str).expanduser().resolve()
     if not p.is_dir():
-        return f"not a directory: {path_str}", True
+        return f"not a directory: {path_str}", True, None
     if p == Path(p.anchor):
-        return "cannot add filesystem root", True
+        return "cannot add filesystem root", True, None
     if p in target_list:
-        return f"already in {label}: {p}", False
+        return f"already in {label}: {p}", False, None
 
     target_list.append(p)
-    return f"added to {label}: {p}", False
+    return f"added to {label}: {p}", False, p
 
 
-def _repl_add_dir(path_str: str, extra_write_roots: list) -> tuple[str, bool]:
+def _repl_add_dir(
+    path_str: str, extra_write_roots: list
+) -> tuple[str, bool, Path | None]:
     """Add a directory to the write-access whitelist."""
     return _repl_add_dir_impl(path_str, extra_write_roots, "/add-dir", "whitelist")
 
 
-def _repl_add_dir_ro(path_str: str, skill_read_roots: list) -> tuple[str, bool]:
+def _repl_add_dir_ro(
+    path_str: str, skill_read_roots: list
+) -> tuple[str, bool, Path | None]:
     """Add a directory to the read-only whitelist."""
     return _repl_add_dir_impl(
         path_str, skill_read_roots, "/add-dir-ro", "read-only whitelist"
@@ -12767,11 +12774,13 @@ def execute_input(
 
         # State-change commands.
         if cmd == "/add-dir":
-            msg, err = _repl_add_dir(cmd_arg, ctx.extra_write_roots)
+            msg, err, granted = _repl_add_dir(cmd_arg, ctx.extra_write_roots)
+            if granted is not None and ctx.mcp_manager is not None:
+                ctx.mcp_manager.add_root(granted)
             return StepResult(kind="state_change", text=msg, is_error=err)
 
         if cmd == "/add-dir-ro":
-            msg, err = _repl_add_dir_ro(cmd_arg, ctx.skill_read_roots)
+            msg, err, _ = _repl_add_dir_ro(cmd_arg, ctx.skill_read_roots)
             return StepResult(kind="state_change", text=msg, is_error=err)
 
         if cmd in ("/clear", "/new"):

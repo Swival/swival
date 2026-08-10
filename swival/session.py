@@ -473,13 +473,16 @@ class Session:
 
         # Initialize MCP servers
         if self.mcp_servers:
-            from .mcp_client import McpManager
+            from .mcp_client import McpManager, workspace_roots
 
             self._mcp_manager = McpManager(
                 self.mcp_servers,
                 verbose=self.verbose,
                 flatten_schemas=self.flatten_mcp_schemas,
                 net_jail=self._net_jail,
+                roots=workspace_roots(
+                    self.files, self.base_dir, self._allowed_dir_paths
+                ),
             )
             self._mcp_manager.start()
             mcp_tools = self._mcp_manager.list_tools()
