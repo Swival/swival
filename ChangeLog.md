@@ -2,6 +2,17 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.40
+
+- `/simplify` has been redesigned.
+- Sessions now show a cumulative estimated LLM cost after each successful turn when pricing metadata is available.
+- MCP HTTP connections now support the current Streamable HTTP transport, automatically falling back to the legacy HTTP+SSE transport if necessary. Set `type` (or `transport`) to `http`, `sse`, or `stdio` to use a transport explicitly.
+- Swival now negotiates the MCP roots capability and advertises the workspace plus write-authorized `--add-dir` and `/add-dir` paths, including grants added during a session, so cooperating MCP servers can place files in the intended workspace.
+- A slow MCP or A2A tool call now times out only that invocation instead of marking the entire server or remote agent unavailable for the rest of the session.
+- Streamed Gemini tool calls now retain the Google thought signatures needed when replaying the conversation, avoiding next-turn rejections from Google's OpenAI-compatible endpoints.
+- Empty assistant messages are now repaired with non-empty placeholder content, allowing Moonshot/Kimi endpoints to recover instead of rejecting the conversation history repeatedly.
+- Canceled A2A work and saturated subagent spawns are now reported as failures rather than successes.
+
 ## 1.0.39
 
 - Added `--network` (also `network` in config) to control network access independently of filesystem sandboxing. `provider-only` keeps the model provider reachable while blocking the network for agent-run commands, `run_python`, and stdio MCP servers, and removes `fetch_url`; `none` runs the entire process tree air-gapped and supports the local `command` provider only. Both restricted modes require `nono`.
