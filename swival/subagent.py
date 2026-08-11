@@ -220,6 +220,7 @@ class SubagentManager:
             # Cancellation-aware polling — mirrors _CompositeCancelFlag.wait().
             deadline = time.monotonic() + _WAIT_TIMEOUT
             acquired = False
+            wait_cancelled = False
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -228,15 +229,18 @@ class SubagentManager:
                     self._parent_cancel_flag is not None
                     and self._parent_cancel_flag.is_set()
                 ):
+                    wait_cancelled = True
                     break
                 if self._slots.acquire(
                     blocking=True, timeout=min(_WAIT_POLL_INTERVAL, remaining)
                 ):
                     acquired = True
                     break
+            if wait_cancelled:
+                return "error: subagent spawn cancelled while waiting for capacity"
             if not acquired:
                 return (
-                    f"All {_MAX_CONCURRENT} background agents are still running after "
+                    f"error: all {_MAX_CONCURRENT} background agents are still running after "
                     f"waiting {_WAIT_TIMEOUT}s. Try spawning another subagent later."
                 )
 
@@ -258,7 +262,7 @@ class SubagentManager:
                 self._template,
                 self._tools,
                 task,
-                max_turns or 30,
+                30 if max_turns is None else max_turns,
                 system_hint,
                 self._system_content,
                 composite_cancel,

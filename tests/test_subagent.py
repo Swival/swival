@@ -169,6 +169,22 @@ class TestSubagentManager:
         result = mgr.collect("sub_1", timeout=5)
         assert result == "the answer"
 
+    def test_spawn_preserves_explicit_zero_max_turns(self, monkeypatch):
+        mgr = self._make_manager()
+        captured = []
+
+        def mock_thread_fn(handle, *args):
+            captured.append(args[3])
+            handle.done.set()
+            args[-2].release()
+
+        monkeypatch.setattr("swival.subagent._subagent_thread_fn", mock_thread_fn)
+
+        mgr.spawn(task="bounded task", max_turns=0)
+        mgr._handles["sub_1"].thread.join(timeout=5)
+
+        assert captured == [0]
+
     def test_spawn_and_cancel(self, monkeypatch):
         mgr = self._make_manager()
         barrier = threading.Event()
@@ -208,9 +224,31 @@ class TestSubagentManager:
         # Set cancel flag so the wait aborts immediately instead of waiting 60s.
         parent_flag.set()
         result = mgr.spawn(task="one too many")
-        assert not result.startswith("error:")
-        assert "background agents" in result.lower()
-        assert "try" in result.lower()
+        assert result.startswith("error:")
+        assert "cancelled" in result.lower()
+        assert "waiting 60s" not in result.lower()
+        barrier.set()
+        mgr.shutdown(timeout=5)
+
+    def test_max_concurrent_reports_timeout(self, monkeypatch):
+        mgr = self._make_manager()
+        barrier = threading.Event()
+
+        def mock_thread_fn(handle, *args):
+            barrier.wait(timeout=10)
+            handle.done.set()
+            args[-2].release()
+
+        monkeypatch.setattr("swival.subagent._subagent_thread_fn", mock_thread_fn)
+        monkeypatch.setattr("swival.subagent._WAIT_TIMEOUT", 0)
+
+        for i in range(4):
+            mgr.spawn(task=f"task {i}")
+
+        result = mgr.spawn(task="one too many")
+
+        assert result.startswith("error:")
+        assert "still running after waiting 0s" in result.lower()
         barrier.set()
         mgr.shutdown(timeout=5)
 

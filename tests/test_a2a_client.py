@@ -484,6 +484,24 @@ class TestA2aManagerCallTool:
 
         manager.close()
 
+    @pytest.mark.parametrize("state", ["failed", "canceled", "rejected"])
+    def test_unsuccessful_terminal_task_names_state(self, state):
+        from swival.a2a_types import Task
+
+        manager = A2aManager({})
+        task = Task.from_wire(
+            {
+                "id": "t5",
+                "contextId": "c5",
+                "status": {"state": state},
+            }
+        )
+
+        result, is_error = manager._format_task_result(task)
+
+        assert is_error
+        assert result == f"error: [{state}] (empty response)"
+
     def test_polling_fallback(self, monkeypatch):
         """Non-compliant server returns working state, verify polling fallback."""
         import httpx2

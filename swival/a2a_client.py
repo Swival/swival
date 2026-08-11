@@ -405,8 +405,8 @@ class A2aManager:
         text = extract_task_text(task)
         state = task.state
 
-        if state in ("failed", "rejected"):
-            return (f"error: {text}", True)
+        if state in ("failed", "canceled", "rejected"):
+            return (f"error: [{state}] {text}", True)
 
         if state == "input-required":
             header = f"[input-required] contextId={task.context_id} taskId={task.id}"
@@ -415,7 +415,7 @@ class A2aManager:
         if state == "auth-required":
             return (f"error: [auth-required] {text}", True)
 
-        # completed, canceled, or other terminal
+        # Completed tasks are the only successful terminal outcome.
         if task.context_id:
             return (f"[contextId={task.context_id}]\n{text}", False)
         return (text, False)
