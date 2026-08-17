@@ -2,6 +2,11 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.41
+
+- Nono sandbox workflows now use the signed `jedisct1/swival` profile pack. This restores `--sandbox nono` after Nono 0.71 removed its built-in profile. `--nono-profile` also accepts registry-pack references, and `--network provider-only` explains how to install its required pack when it is missing.
+- Updated LiteLLM to 1.97, which provides prebuilt ABI3 wheels for Python 3.14 on supported platforms. Installing Swival on Python 3.14 no longer requires a local Rust build.
+
 ## 1.0.40
 
 - `/simplify` has been redesigned.
