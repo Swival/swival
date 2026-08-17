@@ -6614,7 +6614,7 @@ def build_parser():
         "--nono-profile",
         type=str,
         default=_UNSET,
-        help="Named nono profile to apply (only with --sandbox nono).",
+        help="nono profile to apply: a name or a namespace/pack reference (only with --sandbox nono).",
     )
     access_group.add_argument(
         "--nono-rollback",

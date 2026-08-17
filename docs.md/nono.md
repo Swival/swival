@@ -39,19 +39,19 @@ You also need a working model provider for Swival itself, such as LM Studio, lla
 When you pass `--sandbox nono`, Swival locates the `nono` binary and re-executes itself as:
 
 ```sh
-nono run --allow <workspace> --allow <tmp> --read <interpreter> --profile swival -- swival ...
+nono run --allow <workspace> --allow <tmp> --read <interpreter> --profile jedisct1/swival -- swival ...
 ```
 
 The parent process stays outside the sandbox and supervises the child: it provides the audit trail, the network proxy, and rollback services. The child Swival process runs under the enforced capabilities, so every tool it invokes — every `run_command`, every file write — inherits the same boundaries.
 
-By default the integration uses nono's built-in `swival` profile, which grants the Python runtime and Swival's own config and state directories. You do not need to configure anything for a basic run.
+By default the integration uses the `swival` profile, which grants the Python runtime and Swival's own config and state directories. You do not need to configure anything for a basic run: nono ships that profile as the signed registry pack `jedisct1/swival` and pulls it the first time it is needed. Install it ahead of time with `nono pull jedisct1/swival` if you would rather not have the first run reach the registry.
 
 ## Filesystem Boundaries
 
 Inside the sandbox, writes outside the granted directories fail. You can see this directly with nono before involving Swival:
 
 ```sh
-nono run --profile swival -- sh -c 'echo nope > /etc/swival-test'
+nono run --profile jedisct1/swival -- sh -c 'echo nope > /etc/swival-test'
 ```
 
 That write is denied by the kernel. The same boundary applies to the agent: a task that tries to modify a file outside the workspace cannot succeed, regardless of the `--files` level.
@@ -97,7 +97,7 @@ This pairs well with high-autonomy runs: let the agent work freely, inspect the 
 
 ## Provider Credentials
 
-The built-in `swival` profile deliberately denies credential and keychain locations, but Swival grants back exactly what your provider needs so authentication still works inside the sandbox:
+The `swival` profile deliberately denies credential and keychain locations, but Swival grants back exactly what your provider needs so authentication still works inside the sandbox:
 
 - **chatgpt** — read+write to `~/.config/litellm`, the directory that holds its OAuth token cache, since it refreshes tokens on disk.
 - **geap / vertexai** — read-only to the Google Cloud credentials directory (`~/.config/gcloud`, or `$CLOUDSDK_CONFIG`), plus the directory holding `$GOOGLE_APPLICATION_CREDENTIALS` when set.
@@ -126,10 +126,10 @@ swival --sandbox nono --nono-audit-integrity "Apply the lint fixes" --yolo
 
 ## Profiles
 
-To use a profile other than the built-in `swival` one, pass `--nono-profile`:
+To use a profile other than the `swival` one, pass `--nono-profile`. It takes anything nono accepts: a built-in name, one of your own profiles under `~/.config/nono/profiles`, or a `namespace/name` registry pack.
 
 ```sh
-swival --sandbox nono --nono-profile claude-code "Run the migration"
+swival --sandbox nono --nono-profile nolabs-ai/claude "Run the migration"
 ```
 
 You can inspect and compare available profiles with `nono profile`.
@@ -141,7 +141,7 @@ The integrated mode is the recommended path, but you can also wrap Swival with `
 ```sh
 cd ~/my-project
 
-nono run --allow "$PWD" --profile swival -- \
+nono run --allow "$PWD" --profile jedisct1/swival -- \
     swival "Add a config module that reads from env vars" --yolo --max-turns 20
 ```
 

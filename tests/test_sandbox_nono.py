@@ -10,12 +10,15 @@ import pytest
 from swival.report import ConfigError
 from swival.sandbox_nono import (
     DEFAULT_PROFILE,
+    WRAPPER_PROFILE,
     _ENV_MARKER,
     _NONO_ENV,
     _VERSION_ENV,
     _find_nono,
+    build_block_net_wrapper,
     build_nono_argv,
     check_sandbox_available,
+    check_wrapper_available,
     cost_map_host_reachable,
     effective_profile,
     get_nono_version,
@@ -23,6 +26,7 @@ from swival.sandbox_nono import (
     is_sandboxed,
     maybe_reexec,
     probe_nono,
+    profile_pack_installed,
     provider_credential_read_dirs,
     provider_state_dirs,
     rollback_hint,
@@ -35,13 +39,26 @@ from swival.sandbox_nono import (
 # ---------------------------------------------------------------------------
 
 
-def _mock_nono_script(tmp_path, *, version_output="nono 0.59.0"):
-    """Write a dummy nono script that prints its args or version."""
+def _mock_nono_script(
+    tmp_path, *, version_output="nono 0.59.0", list_output=None, list_exit=0
+):
+    """Write a dummy nono script that prints its args, version, or pack listing.
+
+    Shell builtins only: callers narrow PATH to *tmp_path*, so anything the
+    stub shelled out to would silently print nothing.
+    """
+    lines = [
+        "#!/bin/sh",
+        f'if [ "$1" = "--version" ]; then echo "{version_output}"; exit 0; fi',
+    ]
+    if list_output is not None:
+        assert "'" not in list_output, "listing is embedded in a single-quoted echo"
+        lines.append(
+            f"""if [ "$1" = "list" ]; then echo '{list_output}'; exit {list_exit}; fi"""
+        )
+    lines.append("echo $@")
     script = tmp_path / "nono"
-    script.write_text(
-        f'#!/bin/sh\nif [ "$1" = "--version" ]; then echo "{version_output}"; exit 0; fi\necho $@\n',
-        encoding="utf-8",
-    )
+    script.write_text("\n".join(lines) + "\n", encoding="utf-8")
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
     return str(script)
 
@@ -61,6 +78,10 @@ def _set_external_nono(monkeypatch):
 def _clear_sandboxed(monkeypatch):
     monkeypatch.delenv(_ENV_MARKER, raising=False)
     monkeypatch.delenv(_NONO_ENV, raising=False)
+
+
+_PACK_PRESENT = '{"packages": {"jedisct1/swival": {"version": "0.1.2"}}}'
+_PACK_ABSENT = '{"packages": {"nolabs-ai/claude": {"version": "1.0.0"}}}'
 
 
 # ===========================================================================
@@ -206,7 +227,7 @@ class TestBuildArgv:
         idx = argv.index("--profile")
         assert argv[idx + 1] == "claude-code"
 
-    def test_default_profile_is_swival(self, tmp_path):
+    def test_default_profile_is_the_swival_pack(self, tmp_path):
         argv = build_nono_argv(
             nono_bin="nono",
             base_dir=str(tmp_path),
@@ -214,7 +235,7 @@ class TestBuildArgv:
             swival_argv=["swival"],
         )
         idx = argv.index("--profile")
-        assert argv[idx + 1] == DEFAULT_PROFILE == "swival"
+        assert argv[idx + 1] == DEFAULT_PROFILE == "jedisct1/swival"
 
     def test_read_dirs_become_read(self, tmp_path):
         d = tmp_path / "runtime"
@@ -525,8 +546,8 @@ class TestMisc:
         assert rollback_hint() == "nono rollback"
 
     def test_effective_profile_default(self):
-        assert effective_profile(None) == "swival"
-        assert effective_profile("") == "swival"
+        assert effective_profile(None) == DEFAULT_PROFILE
+        assert effective_profile("") == DEFAULT_PROFILE
 
     def test_effective_profile_explicit(self):
         assert effective_profile("python-dev") == "python-dev"
@@ -697,3 +718,81 @@ class TestNetworkNoneReexec:
         )
         assert captured["args"].count("--block-net") == 1
         assert captured["env"]["LITELLM_LOCAL_MODEL_COST_MAP"] == "True"
+
+
+# ===========================================================================
+# profile_pack_installed() / check_wrapper_available() — the profile pack
+# ===========================================================================
+
+
+class TestProfilePackInstalled:
+    def test_true_when_pack_listed(self, tmp_path):
+        nono = _mock_nono_script(tmp_path, list_output=_PACK_PRESENT)
+        assert profile_pack_installed(nono, DEFAULT_PROFILE) is True
+
+    def test_false_when_other_packs_listed(self, tmp_path):
+        nono = _mock_nono_script(tmp_path, list_output=_PACK_ABSENT)
+        assert profile_pack_installed(nono, DEFAULT_PROFILE) is False
+
+    def test_false_for_empty_store(self, tmp_path):
+        nono = _mock_nono_script(tmp_path, list_output='{"packages": {}}')
+        assert profile_pack_installed(nono, DEFAULT_PROFILE) is False
+
+    def test_fails_open_on_nonzero_exit(self, tmp_path):
+        """An older nono without `list --installed` must not block the run."""
+        nono = _mock_nono_script(tmp_path, list_output=_PACK_ABSENT, list_exit=2)
+        assert profile_pack_installed(nono, DEFAULT_PROFILE) is True
+
+    def test_fails_open_on_unparsable_output(self, tmp_path):
+        nono = _mock_nono_script(tmp_path, list_output="not json at all")
+        assert profile_pack_installed(nono, DEFAULT_PROFILE) is True
+
+    def test_fails_open_when_packages_key_is_missing(self, tmp_path):
+        nono = _mock_nono_script(tmp_path, list_output='{"lockfile_version": 4}')
+        assert profile_pack_installed(nono, DEFAULT_PROFILE) is True
+
+    def test_fails_open_when_binary_cannot_run(self, tmp_path):
+        assert profile_pack_installed(str(tmp_path / "nope"), DEFAULT_PROFILE) is True
+
+    def test_fails_open_for_a_bare_profile_name(self, tmp_path):
+        """The pack store cannot answer for a built-in or a user profile."""
+        nono = _mock_nono_script(tmp_path, list_output=_PACK_ABSENT)
+        assert profile_pack_installed(nono, "python-dev") is True
+
+
+class TestCheckWrapperAvailable:
+    def test_passes_when_pack_installed(self, tmp_path, monkeypatch):
+        _clear_sandboxed(monkeypatch)
+        _mock_nono_script(tmp_path, list_output=_PACK_PRESENT)
+        monkeypatch.setenv("PATH", str(tmp_path))
+        check_wrapper_available()
+
+    def test_raises_when_pack_missing(self, tmp_path, monkeypatch):
+        _clear_sandboxed(monkeypatch)
+        _mock_nono_script(tmp_path, list_output=_PACK_ABSENT)
+        monkeypatch.setenv("PATH", str(tmp_path))
+        with pytest.raises(ConfigError) as exc:
+            check_wrapper_available()
+        assert f"nono pull {DEFAULT_PROFILE}" in str(exc.value)
+
+    def test_inside_nono_still_wins(self, tmp_path, monkeypatch):
+        """The nesting refusal must not be masked by the pack check."""
+        _set_external_nono(monkeypatch)
+        _mock_nono_script(tmp_path, list_output=_PACK_ABSENT)
+        monkeypatch.setenv("PATH", str(tmp_path))
+        with pytest.raises(ConfigError) as exc:
+            check_wrapper_available()
+        assert "existing nono" in str(exc.value)
+        assert "nono pull" not in str(exc.value)
+
+
+class TestWrapperProfile:
+    def test_wrapper_argv_uses_the_profile_the_preflight_checks(
+        self, tmp_path, monkeypatch
+    ):
+        """The jail argv and its preflight must never name different profiles."""
+        _clear_sandboxed(monkeypatch)
+        _mock_nono_script(tmp_path, list_output=_PACK_PRESENT)
+        monkeypatch.setenv("PATH", str(tmp_path))
+        argv = build_block_net_wrapper(base_dir=str(tmp_path))
+        assert argv[argv.index("--profile") + 1] == WRAPPER_PROFILE

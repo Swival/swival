@@ -153,7 +153,7 @@ swival --sandbox nono --nono-allow-domain api.openai.com --nono-allow-domain git
 <tbody>
 <tr>
 <td><code>--nono-profile &lt;name&gt;</code></td>
-<td>Apply a named nono profile</td>
+<td>Apply a nono profile, by name or <code>namespace/pack</code> reference</td>
 </tr>
 <tr>
 <td><code>--nono-rollback</code></td>
@@ -195,6 +195,7 @@ swival --sandbox nono --nono-allow-domain api.openai.com --nono-allow-domain git
 <pre><code class="language-sh">swival --network provider-only --provider openrouter --model qwen/qwen3-coder &quot;Review this repo&quot;
 </code></pre>
 <p><code>provider-only</code> composes with <code>--sandbox builtin</code> (the default) and <code>--sandbox agentfs</code>, which keep owning filesystem policy. It cannot be combined with <code>--sandbox nono</code> (the wrapper would have to nest nono inside nono) and cannot run inside an external <code>nono run</code> wrapper for the same reason. Wrapped commands get the same filesystem grants a full nono run would give them — the base directory, <code>--add-dir</code> paths, temp directories, and nono's standard runtime allowances — which also means nono's built-in credential protections (<code>~/.ssh</code> and friends) apply inside them.</p>
+<p>This mode needs the <code>jedisct1/swival</code> nono profile pack installed before it starts. The wrapper runs once per agent command, so Swival checks for the pack up front rather than letting nono pull it mid-run: an unreachable registry would otherwise cost every single command a failed download. Startup tells you to run <code>nono pull jedisct1/swival</code> when it is missing.</p>
 <p><code>none</code> is the air-gapped expert mode. The entire Swival process tree is re-executed under <code>nono --block-net</code>: no DNS, no public hosts, no loopback, enforced by the OS for Swival itself and every child. Because that includes the provider call, only the <code>command</code> provider — a local model process speaking over stdin/stdout — is compatible. <code>--serve</code>, remote MCP/A2A, and the nono proxy flags (<code>--nono-allow-domain</code>, <code>--nono-network-profile</code>, <code>--nono-credential</code>) are rejected up front. The air gap is verified, not assumed: if you wrap Swival in <code>nono run</code> yourself instead of letting it re-exec, startup checks nono's capability file and fails unless the surrounding sandbox really was started with <code>--block-net</code>.</p>
 <pre><code class="language-sh">swival --network none --provider command --model &quot;llama-cli -m /models/model.gguf --simple-io&quot; &quot;Summarize this codebase&quot;
 </code></pre>

@@ -60,15 +60,20 @@ def cost_map_host_reachable(block_net: bool, allow_domain: list[str] | None) -> 
     return True
 
 
-# nono ships a built-in "swival" profile that grants the Python runtime,
-# user tools, and Swival's own config/state directories.  Without it the
-# re-exec'd interpreter is not reachable inside the sandbox and exec fails
-# with code 127.  Used as the default when no profile is requested.
-DEFAULT_PROFILE = "swival"
+# Grants the sandboxed interpreter its runtime and Swival's own config and
+# state directories.  Without it the re-exec'd process cannot even start.
+#
+# Keep the namespace.  A bare name lets any installed pack answer for it, so
+# an unrelated pack could end up supplying the sandbox policy.
+DEFAULT_PROFILE = "jedisct1/swival"
+
+# The block-net wrapper jails agent subprocesses only, so it never honours the
+# user's --nono-profile.  Its preflight must check whatever it launches.
+WRAPPER_PROFILE = DEFAULT_PROFILE
 
 
 def effective_profile(profile: str | None) -> str:
-    """Return the nono profile to use, defaulting to the built-in swival profile."""
+    """Return the nono profile to use, defaulting to the swival pack profile."""
     return profile or DEFAULT_PROFILE
 
 
@@ -193,7 +198,7 @@ def probe_nono(nono_bin: str) -> dict:
 def _runtime_read_paths() -> list[str]:
     """Return directories that must be readable for the re-exec'd Swival to import.
 
-    The built-in nono ``swival`` profile grants common Python runtime locations,
+    The nono ``swival`` profile grants common Python runtime locations,
     but not every install layout is covered: a ``uv tool`` venv, a virtualenv, or
     an editable checkout can live anywhere.  We add read-only grants for the
     Swival import root and the interpreter prefixes so ``import swival`` and the
@@ -215,7 +220,7 @@ def writable_temp_dirs() -> list[str]:
 
     Tools routinely scratch in the system temp directory: compilers, package
     managers, and Swival's own large-output spool all expect it to be writable.
-    The built-in nono ``swival`` profile does not cover it, so without an
+    The nono ``swival`` profile does not cover it, so without an
     explicit grant those tools fail the moment they touch ``/tmp``.
 
     ``tempfile.gettempdir()`` honours ``$TMPDIR`` and is the canonical answer
@@ -235,7 +240,7 @@ def writable_temp_dirs() -> list[str]:
 def provider_state_dirs(provider: str | None) -> list[str]:
     """Return writable directories a provider needs for its credentials/state.
 
-    The built-in nono ``swival`` profile deliberately denies credential and
+    The nono ``swival`` profile deliberately denies credential and
     keychain locations.  A provider that stores its own auth tokens on disk
     therefore needs an explicit grant, or it fails when it tries to read or
     create its token directory inside the sandbox.
@@ -257,7 +262,7 @@ def provider_state_dirs(provider: str | None) -> list[str]:
 def provider_credential_read_dirs(provider: str | None) -> list[str]:
     """Return read-only directories holding a provider's login credentials.
 
-    Some providers authenticate against credential files that the built-in nono
+    Some providers authenticate against credential files that the nono
     ``swival`` profile denies.  Unlike ``provider_state_dirs``, these are granted
     read-only: the provider reads a long-lived credential from disk and exchanges
     it for a short-lived access token over the network, so it never writes the
@@ -330,7 +335,7 @@ def build_nono_argv(
     recursive).  Extra ``--add-dir`` entries map to additional ``--allow``
     grants.  The platform temporary directory is always granted so tools that
     scratch in ``/tmp`` keep working.  When no profile is requested, the
-    built-in ``swival`` profile is applied so the Python runtime and Swival's
+    ``swival`` profile is applied so the Python runtime and Swival's
     config/state directories are reachable inside the sandbox.
     """
     argv = [nono_bin, "run"]
@@ -453,7 +458,7 @@ def build_block_net_wrapper(
 
     The returned argv ends with ``--``; callers append the payload command.
     Filesystem grants mirror the full nono re-exec (base dir, extra dirs,
-    temp dirs, Python runtime, and the built-in ``swival`` profile) because
+    temp dirs, Python runtime, and the ``swival`` profile) because
     this layer is only meant to restrict the network. ``--silent`` keeps
     nono's banner and summary out of captured tool output, and denials fail
     closed because wrapped children never have a TTY to prompt on.
@@ -462,11 +467,39 @@ def build_block_net_wrapper(
         nono_bin=_find_nono(_WRAPPER_MISSING_NONO),
         base_dir=base_dir,
         add_dirs=list(add_dirs or []),
+        profile=WRAPPER_PROFILE,
         block_net=True,
         read_dirs=_runtime_read_paths() + list(read_dirs or []),
         silent=True,
         swival_argv=[],
     )
+
+
+def profile_pack_installed(nono_bin: str, pack: str) -> bool:
+    """Return True unless nono can prove *pack* is absent from its local store.
+
+    Fails open: anything we cannot answer counts as installed, so a preflight
+    never blocks a run nono would have handled.
+    """
+    if "/" not in pack:
+        return True
+    try:
+        proc = subprocess.run(
+            [nono_bin, "list", "--installed", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return True
+    if proc.returncode != 0:
+        return True
+    try:
+        listing = json.loads(proc.stdout)
+    except ValueError:
+        return True
+    packages = listing.get("packages") if isinstance(listing, dict) else None
+    return not isinstance(packages, dict) or pack in packages
 
 
 def check_wrapper_available() -> None:
@@ -475,6 +508,10 @@ def check_wrapper_available() -> None:
     ``network = "provider-only"`` needs a nono binary to jail agent
     subprocesses, and it cannot run inside an existing nono sandbox because
     the wrapper would have to nest nono inside nono.
+
+    It also needs the profile pack already installed.  nono would pull it,
+    which suits the one-shot ``maybe_reexec``, but this wrapper runs once per
+    agent subprocess: a failed pull would cost every command, not just the run.
     """
     if is_inside_nono():
         raise ConfigError(
@@ -482,7 +519,13 @@ def check_wrapper_available() -> None:
             "sandbox; the outer sandbox already owns network policy. "
             'Use --network none for an air-gapped run, or drop the outer "nono run".'
         )
-    _find_nono(_WRAPPER_MISSING_NONO)
+    nono_bin = _find_nono(_WRAPPER_MISSING_NONO)
+    if not profile_pack_installed(nono_bin, WRAPPER_PROFILE):
+        raise ConfigError(
+            'network = "provider-only" jails agent commands with the '
+            f"{WRAPPER_PROFILE} nono profile, which is not installed. "
+            f"Run `nono pull {WRAPPER_PROFILE}` once, or use --network full."
+        )
 
 
 def check_sandbox_available() -> None:

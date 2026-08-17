@@ -84,7 +84,7 @@ The full set of nono knobs:
 
 | Flag                            | Effect                                                         |
 | ------------------------------- | -------------------------------------------------------------- |
-| `--nono-profile <name>`         | Apply a named nono profile                                     |
+| `--nono-profile <name>`         | Apply a nono profile, by name or `namespace/pack` reference    |
 | `--nono-rollback`               | Take atomic rollback snapshots for the session                 |
 | `--nono-block-net`              | Deny all outbound network                                      |
 | `--nono-allow-domain <host>`    | Add a domain to the proxy allowlist (repeatable)               |
@@ -119,6 +119,8 @@ swival --network provider-only --provider openrouter --model qwen/qwen3-coder "R
 ```
 
 `provider-only` composes with `--sandbox builtin` (the default) and `--sandbox agentfs`, which keep owning filesystem policy. It cannot be combined with `--sandbox nono` (the wrapper would have to nest nono inside nono) and cannot run inside an external `nono run` wrapper for the same reason. Wrapped commands get the same filesystem grants a full nono run would give them — the base directory, `--add-dir` paths, temp directories, and nono's standard runtime allowances — which also means nono's built-in credential protections (`~/.ssh` and friends) apply inside them.
+
+This mode needs the `jedisct1/swival` nono profile pack installed before it starts. The wrapper runs once per agent command, so Swival checks for the pack up front rather than letting nono pull it mid-run: an unreachable registry would otherwise cost every single command a failed download. Startup tells you to run `nono pull jedisct1/swival` when it is missing.
 
 `none` is the air-gapped expert mode. The entire Swival process tree is re-executed under `nono --block-net`: no DNS, no public hosts, no loopback, enforced by the OS for Swival itself and every child. Because that includes the provider call, only the `command` provider — a local model process speaking over stdin/stdout — is compatible. `--serve`, remote MCP/A2A, and the nono proxy flags (`--nono-allow-domain`, `--nono-network-profile`, `--nono-credential`) are rejected up front. The air gap is verified, not assumed: if you wrap Swival in `nono run` yourself instead of letting it re-exec, startup checks nono's capability file and fails unless the surrounding sandbox really was started with `--block-net`.
 
