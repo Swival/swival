@@ -1116,32 +1116,6 @@ class TestDecorativeAnimations:
             fmt.repl_splash(model="m", provider="p", workspace="/w")
         assert buf.getvalue() == ""
 
-    def test_repl_splash_static_when_animations_off(self, monkeypatch):
-        monkeypatch.setenv("SWIVAL_ANIMATIONS", "0")
-        buf = _TTYBuf()
-        with _SwapConsole(monkeypatch, _interactive_console(buf)):
-            fmt.repl_splash(model="qwen3", provider="lmstudio", workspace="/tmp/ws")
-        out = buf.getvalue()
-        assert "qwen3" in out and "lmstudio" in out
-
-    def test_repl_splash_rule_is_static_even_when_animations_on(self, monkeypatch):
-        from rich.text import Text
-
-        monkeypatch.delenv("SWIVAL_ANIMATIONS", raising=False)
-        phases = []
-        monkeypatch.setattr(fmt, "_animate_logo", lambda: None)
-
-        def rule_text(phase=0.0):
-            phases.append(phase)
-            return Text(f"rule phase={phase}")
-
-        monkeypatch.setattr(fmt, "_gradient_rule_text", rule_text)
-        buf = _TTYBuf()
-        with _SwapConsole(monkeypatch, _interactive_console(buf)):
-            fmt.repl_splash(model="qwen3")
-        assert phases == [0.0]
-        assert "rule phase=0.0" in buf.getvalue()
-
     def test_turn_header_animates_first_turn_only(self, monkeypatch):
         monkeypatch.delenv("SWIVAL_ANIMATIONS", raising=False)
         calls = []

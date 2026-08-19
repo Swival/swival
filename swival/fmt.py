@@ -4,7 +4,6 @@ import contextlib
 import difflib
 import math
 import os
-import random
 import threading
 import time
 
@@ -1413,8 +1412,6 @@ _GRADIENT_STOPS = [
     (255, 204, 92),  # sunlit amber
 ]
 
-_DECODE_GLYPHS = "01<>/\\|=+*#%&▚▞░▒▓█"
-
 
 def _lerp_color(stops: list[tuple[int, int, int]], t: float) -> tuple[int, int, int]:
     """Interpolate between color stops at position t in [0, 1]."""
@@ -1447,71 +1444,14 @@ def _logo_cell_color(row_idx: int, col_idx: int) -> tuple[int, int, int]:
     return _lerp_color(_GRADIENT_STOPS, (col_t * 0.82) + (row_t * 0.18))
 
 
-def _logo_text(
-    highlight_center: float | None = None, highlight_width: float = 7.0
-) -> Text:
-    """Build the gradient logo as a Text.
-
-    When *highlight_center* is given, columns near that x position are blended
-    toward white so a bright band can be swept across the glyphs for the
-    startup shimmer.
-    """
+def _logo_text() -> Text:
+    """Build the static gradient logo as a Text."""
     text = Text()
     for row_idx, row in enumerate(_LOGO_LINES):
         padded = row.ljust(_LOGO_MAX_LEN)
         for col_idx, ch in enumerate(padded):
             r, g, b = _logo_cell_color(row_idx, col_idx)
-            if highlight_center is not None:
-                w = max(0.0, 1.0 - abs(col_idx - highlight_center) / highlight_width)
-                if w > 0.0:
-                    r, g, b = _blend_white(r, g, b, w * w)
             text.append(ch, style=Style(color=f"rgb({r},{g},{b})", bold=True))
-        text.append("\n")
-    return text
-
-
-def _logo_lock_times() -> list[list[float]]:
-    """Per-cell reveal thresholds for the decode animation.
-
-    Each glyph gets a threshold in [0, 1] biased by its column so the art
-    resolves as a left-to-right wipe with enough jitter to look like the
-    characters are locking into place out of noise.
-    """
-    locks: list[list[float]] = []
-    for _ in _LOGO_LINES:
-        row_locks = []
-        for col_idx in range(_LOGO_MAX_LEN):
-            base = col_idx / max(_LOGO_MAX_LEN - 1, 1)
-            row_locks.append(min(1.0, base * 0.55 + random.random() * 0.5))
-        locks.append(row_locks)
-    return locks
-
-
-def _logo_text_decoded(reveal: float, locks: list[list[float]], frame: int) -> Text:
-    """Render the logo mid-decode.
-
-    Cells whose lock threshold has been passed show their true gradient glyph;
-    the rest flicker through random glyphs in a cold dim hue, so the wordmark
-    appears to condense out of static.
-    """
-    text = Text()
-    for row_idx, row in enumerate(_LOGO_LINES):
-        padded = row.ljust(_LOGO_MAX_LEN)
-        for col_idx, ch in enumerate(padded):
-            if ch == " ":
-                text.append(" ")
-                continue
-            if reveal >= locks[row_idx][col_idx]:
-                r, g, b = _logo_cell_color(row_idx, col_idx)
-                text.append(ch, style=Style(color=f"rgb({r},{g},{b})", bold=True))
-            else:
-                noise = _DECODE_GLYPHS[
-                    (frame * 7 + row_idx * 13 + col_idx * 5) % len(_DECODE_GLYPHS)
-                ]
-                shade = 70 + (col_idx * 9 + row_idx * 17) % 60
-                text.append(
-                    noise, style=Style(color=f"rgb(30,{shade},{shade + 30})", dim=True)
-                )
         text.append("\n")
     return text
 
@@ -1555,29 +1495,6 @@ def animations_enabled() -> bool:
     )
 
 
-def _animate_logo() -> None:
-    """Materialize the logo out of static, then sweep a shimmer band and settle.
-
-    Two acts share one live region so there is no flicker between them: first a
-    Matrix-style decode where glyphs lock in from left to right, then a bright
-    highlight band sweeping across the finished gradient wordmark.
-    """
-    locks = _logo_lock_times()
-    decode_frames = 16
-    shimmer_frames = 16
-    span = _LOGO_MAX_LEN + 16
-    with Live(console=_console, transient=False, auto_refresh=False) as live:
-        for f in range(decode_frames):
-            reveal = f / (decode_frames - 1)
-            live.update(_logo_text_decoded(reveal, locks, f), refresh=True)
-            time.sleep(0.03)
-        for i in range(shimmer_frames):
-            center = -8 + span * (i / (shimmer_frames - 1))
-            live.update(_logo_text(center), refresh=True)
-            time.sleep(0.03)
-        live.update(_logo_text(), refresh=True)
-
-
 def repl_splash(
     model: str = "",
     provider: str = "",
@@ -1588,10 +1505,7 @@ def repl_splash(
         return
 
     _console.print()
-    if animations_enabled():
-        _animate_logo()
-    else:
-        _console.print(_logo_text(), end="")
+    _console.print(_logo_text(), end="")
     try:
         from importlib import metadata
 
