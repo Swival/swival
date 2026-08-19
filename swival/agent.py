@@ -7502,6 +7502,10 @@ def main():
         )
         sys.exit(acp_server.serve())
 
+    if args.repl:
+        fmt.reset_state()
+        fmt.repl_splash(provider=args.provider, workspace=args.base_dir)
+
     report = ReportCollector() if args.report else None
 
     # Helper to build the settings dict for the report
@@ -14154,12 +14158,6 @@ def repl_loop(
         ) = _border_saved
     prompt_text = FormattedText([("class:prompt", "swival> ")])
 
-    fmt.reset_state()
-    fmt.repl_splash(
-        model=model_id or "",
-        provider=llm_kwargs.get("provider", "") if llm_kwargs else "",
-        workspace=base_dir or "",
-    )
     if verbose:
         fmt.repl_banner()
 

@@ -201,6 +201,44 @@ class TestArgumentParsing:
         mock_parser.error.assert_not_called()
         assert mock_args.repl is True
 
+    @pytest.mark.parametrize(
+        ("argv", "expected_splash"),
+        [
+            (["swival", "--repl"], True),
+            (["swival", "a task"], False),
+        ],
+    )
+    def test_splash_precedes_run_main_for_repl_only(
+        self, monkeypatch, argv, expected_splash
+    ):
+        """The REPL logo gives immediate feedback before slow startup work."""
+        events = []
+        monkeypatch.setattr("sys.argv", argv)
+        with (
+            patch("swival.agent.fmt.init"),
+            patch(
+                "swival.agent.fmt.reset_state",
+                side_effect=lambda: events.append("reset"),
+            ),
+            patch(
+                "swival.agent.fmt.repl_splash",
+                side_effect=lambda **_kwargs: events.append("splash"),
+            ),
+            patch(
+                "swival.agent._run_main",
+                side_effect=lambda *_args: events.append("run_main"),
+            ),
+            patch("swival.agent._resolve_network_policy", return_value=(None, None)),
+            patch("swival.sandbox_agentfs.maybe_reexec"),
+            patch("swival.sandbox_nono.maybe_reexec"),
+        ):
+            main()
+
+        if expected_splash:
+            assert events == ["reset", "splash", "run_main"]
+        else:
+            assert events == ["run_main"]
+
     def test_no_auto_repl_when_stdin_piped(self):
         """Piped stdin with no question still errors."""
         mock_parser, _ = _run_main_validation(stdin_tty=False, stdin_content="")
