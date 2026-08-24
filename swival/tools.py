@@ -1275,7 +1275,15 @@ def _list_files(
             )
         return "No files matched the pattern."
 
-    matched.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+    # Broken symlinks (e.g. npm's node_modules/.bin) can't be stat'd.
+    # Sort them last instead of failing the whole listing.
+    def _mtime_or_zero(filepath: Path) -> float:
+        try:
+            return filepath.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    matched.sort(key=_mtime_or_zero, reverse=True)
 
     count_truncated = len(matched) > MAX_LIST_RESULTS
     total_matched = len(matched)

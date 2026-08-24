@@ -1,5 +1,6 @@
 """Tests for list_files and grep tools."""
 
+import os
 import time
 
 import pytest
@@ -224,6 +225,17 @@ class TestListFiles:
         result = _list_files("*.NOPE", "README.txt", str(sandbox))
         assert "README.txt" in result
         assert "error" not in result
+
+    def test_broken_symlink_does_not_abort_listing(self, sandbox):
+        """Broken symlinks (e.g. npm's node_modules/.bin) are skipped, not fatal."""
+        bin_dir = sandbox / "node_modules" / ".bin"
+        bin_dir.mkdir(parents=True)
+        (sandbox / "real.txt").write_text("hello")
+        os.symlink(bin_dir / "missing-target", bin_dir / "is-docker")
+
+        result = _list_files("**/*", ".", str(sandbox))
+        assert "error" not in result
+        assert "real.txt" in result
 
     def test_dispatch_list_files(self, sandbox):
         result = dispatch("list_files", {"pattern": "**/*.py"}, str(sandbox))
