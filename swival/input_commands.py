@@ -77,6 +77,13 @@ INPUT_COMMANDS: dict[str, CommandInfo] = {
         kind="state_change",
         options=(("--drop", "Also remove middle turns for more aggressive reduction"),),
     ),
+    "/btw": CommandInfo(
+        desc="Ask a temporary question without changing context",
+        arg="<question>",
+        kind="agent_turn",
+        modes=("repl",),
+        acp=False,
+    ),
     "/continue": CommandInfo(
         desc="Reset turn counter and continue the agent loop",
         kind="agent_turn",

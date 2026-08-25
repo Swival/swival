@@ -167,6 +167,8 @@ Swival exposes manual controls for context management as input commands. These w
 
 `/save [label]` sets a snapshot checkpoint at the current position. `/restore` generates a summary via LLM and collapses everything since the checkpoint. `/unsave` cancels the checkpoint. These are the manual equivalents of the agent's `snapshot` tool.
 
+`/btw <question>` is REPL-only. It runs one question against a private context copy. Swival discards that copy with the answer. It does not summarize or append anything to the live transcript. Your next prompt cannot see the side exchange.
+
 `/clear` drops everything and resets all internal state — conversation, thinking, todos, snapshots, and file tracking.
 
 For the full command reference, see [Usage](usage.md).

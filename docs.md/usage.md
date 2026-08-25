@@ -66,7 +66,7 @@ swival --oneshot-commands "/status"
 swival --oneshot-commands $'/profile fast\n/simplify swival/agent.py'
 ```
 
-Without `--oneshot-commands`, input that looks like a command script is treated as a plain natural-language prompt. A few commands (`/continue`, `/copy`, `/loops`, `/unloop`, `!!`) are REPL-only and are rejected even with `--oneshot-commands`. Most other commands, including `/loop`, work in both modes.
+Without `--oneshot-commands`, input that looks like a command script is treated as a plain natural-language prompt. A few commands (`/btw`, `/continue`, `/copy`, `/loops`, `/unloop`, `!!`) are REPL-only and are rejected even with `--oneshot-commands`. Most other commands, including `/loop`, work in both modes.
 
 `/help` prints the command reference in the terminal.
 
@@ -91,6 +91,10 @@ Without `--oneshot-commands`, input that looks like a command script is treated 
 `/goal` with no argument prints the current status; `/goal replace`, `/goal pause`, `/goal resume`, and `/goal clear` manage the active goal. See [Goals](goal.md) for the full walkthrough, examples, and budget behavior.
 
 `/continue` restarts the agent loop for the existing conversation without adding a new user message.
+
+`/btw <question>` asks a one-off side question. It uses a private copy of the current context. The question, answer, tool activity, and compaction stay in that copy. Swival discards the copy after it displays the answer. Your transcript and session state do not change.
+
+`/btw` cannot pause or complete an active goal. Costs, reports, traces, and cache entries still count. Files, commands, and other external effects persist. REPL-only.
 
 `/loop [interval] <prompt>` schedules a plain prompt to run on a recurring interval. The body must be plain natural-language text; slash commands and `!custom-command` bodies are rejected at registration time. Run those manually instead.
 

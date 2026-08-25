@@ -39,6 +39,7 @@ def _make_ctx(*, loop_registry: LoopRegistry | None = None) -> InputContext:
             "top_p": None,
             "seed": None,
             "llm_kwargs": {},
+            "file_tracker": None,
         },
         loop_registry=loop_registry,
     )
@@ -421,7 +422,7 @@ class TestIterationCrashIsolation:
 
         agent._execute_loop("30s foo", ctx, mode="repl")
         assert len(registry) == 1
-        assert list(registry)[0].consecutive_failures == 1
+        assert list(registry)[0].consecutive_failures == 0
 
 
 class TestReportTurnSync:
@@ -553,32 +554,49 @@ class TestSkillReadRootsIsolation:
 class TestNoContinueHereWrites:
     """Iterations must not write .swival/continue files when they exhaust."""
 
+    def test_disabled_file_tracker_stays_disabled(self, monkeypatch):
+        registry = LoopRegistry()
+        ctx = _make_ctx(loop_registry=registry)
+        seen: list[object] = []
+
+        def fake_execute_input(parsed, iter_ctx, *, mode="repl"):
+            seen.append(iter_ctx.file_tracker)
+            assert iter_ctx.loop_kwargs["file_tracker"] is None
+            return _ok_step()
+
+        monkeypatch.setattr(agent, "execute_input", fake_execute_input)
+        monkeypatch.setattr(agent.fmt, "repl_answer", lambda t: None)
+        agent._execute_loop("5m tracker check", ctx, mode="repl")
+        assert seen == [None]
+        assert ctx.file_tracker is None
+
     def test_iter_loop_kwargs_continue_here_false(self):
         registry = LoopRegistry()
         ctx = _make_ctx(loop_registry=registry)
-        ctx.loop_kwargs["continue_here"] = True
+        # Real REPL loop kwargs do not include this function argument.
+        ctx.loop_kwargs.pop("continue_here", None)
 
-        reg = registry.register(
+        registry.register(
             interval_seconds=300,
             prompt="foo",
             parsed_prompt=agent.parse_input_line("foo"),
         )
-        iter_ctx, iter_subagent = agent._build_iteration_ctx(reg, ctx)
+        iter_ctx = agent._build_isolated_ctx(ctx, "loop")
         try:
             assert iter_ctx.continue_here is False
             assert iter_ctx.no_history is True
             assert iter_ctx.loop_kwargs["continue_here"] is False
-            # Live loop_kwargs must remain unchanged.
-            assert ctx.loop_kwargs["continue_here"] is True
+            # The live loop kwargs remain free of the isolated override.
+            assert "continue_here" not in ctx.loop_kwargs
         finally:
-            if iter_subagent is not None and hasattr(iter_subagent, "shutdown"):
-                iter_subagent.shutdown()
+            if iter_ctx.subagent_manager is not None:
+                iter_ctx.subagent_manager.shutdown()
 
     def test_continue_file_not_written_on_exhaustion(self, monkeypatch, tmp_path):
         """Simulate run_agent_loop's continue-here check inside the iteration."""
         registry = LoopRegistry()
         ctx = _make_ctx(loop_registry=registry)
-        ctx.loop_kwargs["continue_here"] = True
+        ctx.loop_kwargs.pop("continue_here", None)
         ctx.base_dir = str(tmp_path)
 
         writes: list[str] = []
@@ -690,6 +708,95 @@ class TestAutoCancelFooter:
         # There should be WARN_FAILURES+ footers prior to the cancellation,
         # but none on the cancellation iteration itself.
         assert len(final_done) == CANCEL_FAILURES - 1
+
+
+class TestCleanupInterrupts:
+    def test_cleanup_interrupt_preserves_successful_loop(self, monkeypatch):
+        class InterruptingManager:
+            def fresh_copy(self):
+                return self
+
+            def shutdown(self):
+                raise KeyboardInterrupt()
+
+        registry = LoopRegistry()
+        ctx = _make_ctx(loop_registry=registry)
+        ctx.subagent_manager = InterruptingManager()
+        warnings: list[str] = []
+        monkeypatch.setattr(agent, "execute_input", lambda *a, **k: _ok_step())
+        monkeypatch.setattr(agent.fmt, "warning", warnings.append)
+        monkeypatch.setattr(agent.fmt, "info", lambda t: None)
+        monkeypatch.setattr(agent.fmt, "repl_answer", lambda t: None)
+
+        reg = registry.register(
+            interval_seconds=300,
+            prompt="cleanup check",
+            parsed_prompt=agent.parse_input_line("cleanup check"),
+        )
+        reg.consecutive_failures = 5
+        agent._run_loop_iteration_snapshot(reg, ctx)
+        assert len(registry) == 1
+        assert reg.consecutive_failures == 0
+        assert any("interrupted during cleanup" in warning for warning in warnings)
+
+    def test_turn_interrupt_preserves_loop_and_stops_batch(self, monkeypatch):
+        registry = LoopRegistry()
+        ctx = _make_ctx(loop_registry=registry)
+        reg = registry.register(
+            interval_seconds=0,
+            prompt="turn",
+            parsed_prompt=agent.parse_input_line("turn"),
+        )
+        reg.consecutive_failures = 5
+        monkeypatch.setattr(
+            agent,
+            "execute_input",
+            lambda *args, **kwargs: StepResult(kind="agent_turn", interrupted=True),
+        )
+        assert agent._fire_loop_iteration(reg, ctx) is True
+        assert len(registry) == 1
+        assert reg.consecutive_failures == 5
+
+    def test_setup_interrupt_stops_due_batch_without_removing_loop(self, monkeypatch):
+        registry = LoopRegistry()
+        ctx = _make_ctx(loop_registry=registry)
+        reg = registry.register(
+            interval_seconds=0,
+            prompt="setup",
+            parsed_prompt=agent.parse_input_line("setup"),
+        )
+        monkeypatch.setattr(
+            agent,
+            "_build_isolated_ctx",
+            lambda *args: (_ for _ in ()).throw(KeyboardInterrupt()),
+        )
+        assert agent._fire_loop_iteration(reg, ctx) is True
+        assert len(registry) == 1
+
+    def test_auto_cancel_does_not_stop_due_batch(self, monkeypatch):
+        registry = LoopRegistry()
+        ctx = _make_ctx(loop_registry=registry)
+        first = registry.register(
+            interval_seconds=0,
+            prompt="first",
+            parsed_prompt=agent.parse_input_line("first"),
+        )
+        registry.register(
+            interval_seconds=0,
+            prompt="second",
+            parsed_prompt=agent.parse_input_line("second"),
+        )
+        calls: list[str] = []
+
+        def fake_fire(reg, ctx):
+            calls.append(reg.prompt)
+            if reg is first:
+                registry.remove(reg.id)
+            return False
+
+        monkeypatch.setattr(agent, "_fire_loop_iteration", fake_fire)
+        agent._fire_due_loops(ctx)
+        assert calls == ["first", "second"]
 
 
 class TestSessionCostReconcile:

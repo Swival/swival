@@ -207,6 +207,7 @@ class TestRunInputScript:
         result = run_input_script("/continue", ctx, mode="oneshot")
         assert result.text is not None
         assert "not available" in result.text
+        assert result.is_error
 
     def test_last_visible_output_wins(self):
         from swival.agent import run_input_script
@@ -225,6 +226,7 @@ class TestRunInputScript:
             result.text
             == "error: unknown command /nonexistent. Run /help to list commands."
         )
+        assert result.is_error
 
     def test_empty_script(self):
         from swival.agent import run_input_script
@@ -516,6 +518,7 @@ class TestGoalCommand:
         result = execute_input(parse_input_line("/goal Ship it"), ctx, mode="repl")
         assert result.kind == "agent_turn"
         assert ctx.turn_state["max_turns"] == 500
+        assert ctx.turn_state["_swival_goal_previous_max_turns"] == 100
 
     def test_goal_create_preserves_non_default_max_turns(self, monkeypatch):
         from swival.agent import execute_input
@@ -601,6 +604,7 @@ class TestGoalCommand:
         result = execute_input(parse_input_line("/goal clear"), ctx, mode="repl")
         assert result.is_error is False
         assert result.kind == "state_change"
+        assert "_swival_goal_previous_max_turns" not in ctx.turn_state
         assert ctx.goal_state.get() is None
         assert len(calls) == 1  # only the create
         tool_names = {t["function"]["name"] for t in ctx.tools}
@@ -632,8 +636,12 @@ class TestGoalCommand:
             return "done", False, False
 
         monkeypatch.setattr(agent, "_invoke_agent_turn", _fake_invoke)
+        ctx.turn_state["max_turns"] = 500
+        ctx.turn_state["_swival_goal_previous_max_turns"] = 100
         result = _run_agent_step(None, "/goal ship", ctx, goal_launch=True)
         assert result.kind == "agent_turn"
+        assert ctx.turn_state["max_turns"] == 100
+        assert "_swival_goal_previous_max_turns" not in ctx.turn_state
         tool_names = {t["function"]["name"] for t in ctx.tools}
         assert "complete_goal" not in tool_names
 

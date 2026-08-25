@@ -197,6 +197,7 @@
 <p>Swival exposes manual controls for context management as input commands. These work in interactive mode and in one-shot mode when <code>--oneshot-commands</code> is set.</p>
 <p><code>/compact</code> shrinks old tool results (the Level 2 rung). <code>/compact --drop</code> also drops low-importance turns. Both report how many tokens were saved.</p>
 <p><code>/save [label]</code> sets a snapshot checkpoint at the current position. <code>/restore</code> generates a summary via LLM and collapses everything since the checkpoint. <code>/unsave</code> cancels the checkpoint. These are the manual equivalents of the agent's <code>snapshot</code> tool.</p>
+<p><code>/btw &lt;question&gt;</code> is REPL-only. It runs one question against a private context copy. Swival discards that copy with the answer. It does not summarize or append anything to the live transcript. Your next prompt cannot see the side exchange.</p>
 <p><code>/clear</code> drops everything and resets all internal state — conversation, thinking, todos, snapshots, and file tracking.</p>
 <p>For the full command reference, see <a href="usage.html">Usage</a>.</p>
 <h2 id="configuration">Configuration</h2>

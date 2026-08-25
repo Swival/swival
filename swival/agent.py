@@ -4,7 +4,7 @@ import contextlib
 import contextvars
 from contextlib import nullcontext
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 import json
 from typing import Literal
@@ -8190,6 +8190,8 @@ def build_tools(
 _GOAL_TOOL_NAMES = {"complete_goal"}
 _DEFAULT_MAX_TURNS = 100
 _GOAL_DEFAULT_MAX_TURNS = _DEFAULT_MAX_TURNS * 5
+_GOAL_PREVIOUS_MAX_TURNS = "_swival_goal_previous_max_turns"
+_BTW_ABORT_MESSAGE = "/btw aborted; your conversation is unchanged."
 
 
 def _ensure_goal_tools_enabled(tools: list) -> None:
@@ -8215,9 +8217,20 @@ def _ensure_goal_tools_disabled(tools: list) -> None:
 
 
 def _raise_goal_default_max_turns(turn_state: dict) -> None:
-    """Give `/goal` runs a larger budget when the session is still at default."""
-    if turn_state.get("max_turns") == _DEFAULT_MAX_TURNS:
+    """Save and raise the default turn limit for a new goal."""
+    if (
+        turn_state.get("max_turns") == _DEFAULT_MAX_TURNS
+        and _GOAL_PREVIOUS_MAX_TURNS not in turn_state
+    ):
+        turn_state[_GOAL_PREVIOUS_MAX_TURNS] = _DEFAULT_MAX_TURNS
         turn_state["max_turns"] = _GOAL_DEFAULT_MAX_TURNS
+
+
+def _restore_goal_turn_limit(turn_state: dict) -> None:
+    """Restore the turn limit saved before the current goal started."""
+    previous = turn_state.pop(_GOAL_PREVIOUS_MAX_TURNS, None)
+    if previous is not None:
+        turn_state["max_turns"] = previous
 
 
 _COMMAND_PROVIDER_SYSTEM_PROMPT = (
@@ -9260,9 +9273,11 @@ def _run_main(args, report, _write_report, parser):
                     print(answer)
                 if report:
                     _write_report(
-                        "exhausted" if exhausted else "success",
+                        "error"
+                        if result.is_error
+                        else ("exhausted" if exhausted else "success"),
                         answer=answer,
-                        exit_code=2 if exhausted else 0,
+                        exit_code=1 if result.is_error else (2 if exhausted else 0),
                         turns=ctx.turn_state.get("turns_used", 0),
                         model_id=model_id,
                         skills_catalog=skills_catalog,
@@ -9273,6 +9288,8 @@ def _run_main(args, report, _write_report, parser):
                         goal_state=goal_state,
                     )
                 _show_sandbox_review_hint(args)
+                if result.is_error:
+                    sys.exit(1)
                 if exhausted:
                     if args.verbose:
                         fmt.warning("max turns reached, agent stopped.")
@@ -12381,6 +12398,16 @@ def _repl_compact(
     return f"compacted: {before} -> {after} tokens ({saved} saved)"
 
 
+def _teardown_goal(ctx: InputContext) -> None:
+    """Disable completed goal tools and restore the prior turn budget."""
+    if ctx.goal_state is None:
+        return
+    record = ctx.goal_state.get()
+    if record is None or record.status == GoalStatus.COMPLETE:
+        _ensure_goal_tools_disabled(ctx.tools)
+        _restore_goal_turn_limit(ctx.turn_state)
+
+
 def _repl_extend(arg: str, state: dict) -> tuple[str, bool]:
     """Double max turns (default) or set to a specific value.
 
@@ -12395,10 +12422,12 @@ def _repl_extend(arg: str, state: dict) -> tuple[str, bool]:
         if n < 1:
             return "max turns must be at least 1", True
         state["max_turns"] = n
+        state.pop(_GOAL_PREVIOUS_MAX_TURNS, None)
         return f"max turns set to {n}", False
     else:
         old = state["max_turns"]
         state["max_turns"] = old * 2
+        state.pop(_GOAL_PREVIOUS_MAX_TURNS, None)
         return f"max turns doubled: {old} -> {old * 2}", False
 
 
@@ -12643,29 +12672,97 @@ def _run_agent_step(
     ctx: InputContext,
     *,
     interrupt_label: str = "question",
+    interruption_message: str | None = None,
+    exhaustion_message: str | None = None,
     goal_launch: bool = False,
 ) -> StepResult:
-    """Invoke the agent loop, handle interrupts, finalize history.
-
-    Collapses the repeated invoke/interrupt/finalize/exhaustion-warning
-    pattern used by ``/simplify``, ``/learn``, ``/continue``, bang commands,
-    and plain text input.
-    """
+    """Invoke the agent loop and return its normalized result."""
     answer, exhausted, interrupted = _invoke_agent_turn(
         content, ctx, goal_launch=goal_launch
     )
     if interrupted:
-        fmt.warning(f"interrupted, {interrupt_label} aborted.")
+        ctx.last_answer = _last_assistant_text(ctx.messages)
+        fmt.warning(interruption_message or f"interrupted, {interrupt_label} aborted.")
         return StepResult(kind="agent_turn", interrupted=True)
     step = _finalize_agent_step(answer, exhausted, history_label, ctx)
-    if ctx.goal_state is not None:
-        rec = ctx.goal_state.get()
-        if rec is None or rec.status == GoalStatus.COMPLETE:
-            _ensure_goal_tools_disabled(ctx.tools)
-    if exhausted and ctx.verbose:
+    if answer is not None:
+        ctx.last_answer = answer
+    _teardown_goal(ctx)
+    if exhausted and (ctx.verbose or exhaustion_message is not None):
         fmt.warning(
-            f"max turns reached for {interrupt_label}. Use /continue to resume."
+            exhaustion_message
+            or f"max turns reached for {interrupt_label}. Use /continue to resume."
         )
+    return step
+
+
+def _shutdown_isolated_turn(ctx: InputContext) -> bool:
+    """Shut down an isolated manager. Return True when cleanup is interrupted."""
+    try:
+        _shutdown_and_reconcile(
+            ctx.subagent_manager,
+            ctx.loop_kwargs.get("session_cost"),
+            ctx.loop_kwargs.get("verbose"),
+        )
+    except KeyboardInterrupt:
+        return True
+    return False
+
+
+def _execute_btw(cmd_arg: str, ctx: InputContext) -> StepResult:
+    """Answer a side question without retaining its model context."""
+    if not ctx.interactive:
+        return StepResult(
+            kind="info",
+            text="error: /btw is only available in the interactive REPL.",
+            is_error=True,
+        )
+
+    if not cmd_arg.strip():
+        return StepResult(
+            kind="info",
+            text="usage: /btw <question>",
+            is_error=True,
+        )
+
+    try:
+        isolated = _build_isolated_ctx(ctx, "btw")
+    except KeyboardInterrupt:
+        fmt.warning(_BTW_ABORT_MESSAGE)
+        return StepResult(kind="agent_turn", interrupted=True)
+    except AgentError as e:
+        return StepResult(kind="info", text=f"error: {e}", is_error=True)
+
+    try:
+        step = _run_agent_step(
+            cmd_arg,
+            "/btw",
+            isolated,
+            interrupt_label="/btw",
+            interruption_message=_BTW_ABORT_MESSAGE,
+            exhaustion_message=(
+                "max turns reached for /btw. The temporary context was discarded. "
+                "Re-ask with /btw if needed."
+            ),
+        )
+    except BaseException:
+        _shutdown_isolated_turn(isolated)
+        raise
+
+    # _invoke_agent_turn already reconciles an interrupted manager.
+    if step.interrupted:
+        return step
+
+    def _finish_cleanup() -> None:
+        if _shutdown_isolated_turn(isolated):
+            if step.text is not None:
+                fmt.warning("/btw cleanup was interrupted; the answer was shown.")
+            else:
+                fmt.warning(_BTW_ABORT_MESSAGE)
+
+    step.after_render = _finish_cleanup
+    if step.text is not None:
+        ctx.last_answer = step.text
     return step
 
 
@@ -12748,6 +12845,7 @@ def execute_input(
                 return StepResult(
                     kind="info",
                     text=f"{cmd} is not available in {mode} mode.",
+                    is_error=True,
                 )
 
         # Quick shell — run and print, no LLM.
@@ -12799,7 +12897,8 @@ def execute_input(
                 loop_registry=ctx.loop_registry,
                 continue_base_dir=ctx.base_dir if ctx.continue_here else None,
             )
-            _ensure_goal_tools_disabled(ctx.tools)
+            _teardown_goal(ctx)
+            ctx.last_answer = None
             _rpt = ctx.loop_kwargs.get("report")
             if _rpt is not None:
                 _rpt.record_session_clear()
@@ -12839,7 +12938,7 @@ def execute_input(
                 report=ctx.loop_kwargs.get("report"),
             )
             if result.should_disable_tools:
-                _ensure_goal_tools_disabled(ctx.tools)
+                _teardown_goal(ctx)
             if not result.should_start_loop:
                 return StepResult(
                     kind="state_change", text=result.text, is_error=result.is_error
@@ -12967,10 +13066,12 @@ def execute_input(
             )
 
         if cmd == "/copy":
-            _repl_copy(_last_assistant_text(ctx.messages))
+            _repl_copy(ctx.last_answer or _last_assistant_text(ctx.messages))
             return StepResult(kind="flow_control")
-
         # Agent-turn commands.
+        if cmd == "/btw":
+            return _execute_btw(cmd_arg, ctx)
+
         if cmd == "/init":
             return _execute_init(cmd_arg, ctx)
 
@@ -13045,6 +13146,8 @@ def _execute_init(cmd_arg: str, ctx: InputContext) -> StepResult:
             loop_registry=ctx.loop_registry,
         )
     )
+    _teardown_goal(ctx)
+    ctx.last_answer = None
 
     last_answer = None
     any_exhausted = False
@@ -13560,85 +13663,87 @@ def _execute_loop_repl(cmd_arg: str, ctx: InputContext) -> StepResult:
     return StepResult(kind="state_change", text=None)
 
 
+# An agent turn that cannot change the live context.
+_IsolatedTurnKind = Literal["loop", "btw"]
+
+
 def _fork_messages(messages: list) -> list:
-    """Per-message shallow copy: iterations only append, so dict-level copy
-    is enough and avoids deep-copying long tool-result strings."""
+    """Copy message containers for a background iteration."""
     return [dict(m) if isinstance(m, dict) else copy.copy(m) for m in messages]
 
 
-def _build_iteration_ctx(
-    reg: "LoopRegistration", ctx: InputContext
-) -> tuple[InputContext, object]:
-    iter_messages = _fork_messages(ctx.messages)
-    # _run_agent_step ends every plain-prompt turn by calling
-    # _ensure_goal_tools_disabled(ctx.tools) when goal_state has no active
-    # goal; without this fork the live complete_goal tool would leak away.
-    iter_tools = list(ctx.tools)
+def _build_isolated_ctx(ctx: InputContext, kind: _IsolatedTurnKind) -> InputContext:
+    """Build a detached context for a loop or a side question."""
+    messages = _fork_messages(ctx.messages)
 
-    iter_thinking = ThinkingState(verbose=ctx.verbose)
-    iter_todo = TodoState(verbose=ctx.verbose)
-    iter_snapshot = (
-        SnapshotState(verbose=ctx.verbose) if ctx.snapshot_state is not None else None
-    )
-    iter_tracker = FileAccessTracker() if ctx.file_tracker is not None else None
-    iter_goal = GoalState(verbose=ctx.verbose) if ctx.goal_state is not None else None
+    tools = list(ctx.tools)
+    _ensure_goal_tools_disabled(tools)
 
-    max_turns = ctx.turn_state.get("max_turns", 30)
-    iter_turn_state = {"max_turns": max_turns, "turns_used": 0}
+    if kind == "btw":
+        try:
+            thinking = copy.deepcopy(ctx.thinking_state)
+            todo = copy.deepcopy(ctx.todo_state)
+            snapshot = (
+                copy.deepcopy(ctx.snapshot_state)
+                if ctx.snapshot_state is not None
+                else None
+            )
+            tracker = (
+                copy.deepcopy(ctx.file_tracker)
+                if ctx.file_tracker is not None
+                else None
+            )
+        except Exception as e:
+            raise AgentError(f"could not clone isolated state: {e}") from e
+    else:
+        thinking = ThinkingState(verbose=ctx.verbose)
+        todo = TodoState(verbose=ctx.verbose)
+        snapshot = (
+            SnapshotState(verbose=ctx.verbose)
+            if ctx.snapshot_state is not None
+            else None
+        )
+        tracker = FileAccessTracker() if ctx.file_tracker is not None else None
+
+    goal = GoalState(verbose=ctx.verbose) if ctx.goal_state is not None else None
+    turn_state = {"max_turns": ctx.turn_state.get("max_turns", 30), "turns_used": 0}
+    if _GOAL_PREVIOUS_MAX_TURNS in ctx.turn_state:
+        turn_state[_GOAL_PREVIOUS_MAX_TURNS] = ctx.turn_state[_GOAL_PREVIOUS_MAX_TURNS]
+        _restore_goal_turn_limit(turn_state)
 
     if ctx.subagent_manager is not None and hasattr(ctx.subagent_manager, "fresh_copy"):
-        iter_subagent = ctx.subagent_manager.fresh_copy()
+        subagent = ctx.subagent_manager.fresh_copy()
     else:
-        iter_subagent = None
+        subagent = None
+    skill_read_roots = list(ctx.skill_read_roots)
 
-    # use_skill tool can append to skill_read_roots mid-iteration.
-    iter_skill_read_roots = list(ctx.skill_read_roots)
+    loop_overrides = {
+        "thinking_state": thinking,
+        "todo_state": todo,
+        "snapshot_state": snapshot,
+        "goal_state": goal,
+        "file_tracker": tracker,
+        "subagent_manager": subagent,
+        "turn_state": turn_state,
+        "continue_here": False,
+        "skill_read_roots": skill_read_roots,
+    }
+    loop_kwargs = dict(ctx.loop_kwargs)
+    loop_kwargs.update(loop_overrides)
+    if kind == "btw":
+        loop_kwargs["compaction_state"] = None
 
-    iter_loop_kwargs = dict(ctx.loop_kwargs)
-    iter_loop_kwargs.update(
-        thinking_state=iter_thinking,
-        todo_state=iter_todo,
-        snapshot_state=iter_snapshot,
-        goal_state=iter_goal,
-        file_tracker=iter_tracker,
-        subagent_manager=iter_subagent,
-        turn_state=iter_turn_state,
-        continue_here=False,
-        skill_read_roots=iter_skill_read_roots,
-    )
-
-    iter_ctx = InputContext(
-        messages=iter_messages,
-        tools=iter_tools,
-        base_dir=ctx.base_dir,
-        start_dir=ctx.start_dir,
-        turn_state=iter_turn_state,
-        thinking_state=iter_thinking,
-        todo_state=iter_todo,
-        snapshot_state=iter_snapshot,
-        goal_state=iter_goal,
-        file_tracker=iter_tracker,
+    return replace(
+        ctx,
+        messages=messages,
+        tools=tools,
         no_history=True,
-        continue_here=False,
-        verbose=ctx.verbose,
-        loop_kwargs=iter_loop_kwargs,
-        current_profile=ctx.current_profile,
-        profiles=ctx.profiles,
-        startup_profile=ctx.startup_profile,
-        raw_llm_baseline=ctx.raw_llm_baseline,
-        pre_profile_baseline=ctx.pre_profile_baseline,
-        mcp_manager=ctx.mcp_manager,
-        a2a_manager=ctx.a2a_manager,
-        subagent_manager=iter_subagent,
         subagent_holder=None,
-        extra_write_roots=ctx.extra_write_roots,
-        skill_read_roots=iter_skill_read_roots,
-        skills_catalog=ctx.skills_catalog,
-        is_subagent=ctx.is_subagent,
-        trace_dir=ctx.trace_dir,
         loop_registry=None,
+        last_answer=None,
+        loop_kwargs=loop_kwargs,
+        **loop_overrides,
     )
-    return iter_ctx, iter_subagent
 
 
 def _short_error(text: str | None, limit: int = 120) -> str:
@@ -13674,42 +13779,59 @@ def _record_loop_failure(
     return False
 
 
-def _classify_step_outcome(
-    step: StepResult | None,
-) -> tuple[bool, str | None]:
-    if step is None:
-        return True, "interrupted"
+def _classify_step_outcome(step: StepResult) -> tuple[bool, str | None]:
     if step.is_error:
         return True, _short_error(step.text)
-    if step.interrupted:
-        return True, "interrupted"
     return False, None
 
 
-def _run_loop_iteration_snapshot(reg: "LoopRegistration", ctx: InputContext) -> None:
+def _run_after_render(step: StepResult | None) -> None:
+    """Run a step's deferred cleanup exactly once."""
+    if step is None or step.after_render is None:
+        return
+    callback = step.after_render
+    step.after_render = None
+    callback()
+
+
+def _run_loop_iteration_snapshot(reg: "LoopRegistration", ctx: InputContext) -> bool:
     """Fire one iteration of a registered loop in its own snapshot."""
     if ctx.loop_registry is None:
-        return
+        return False
 
     tag = _loop_tag(reg.id)
     fmt.info(f"[loop {reg.id} {time.strftime('%a %H:%M:%S')}] {reg.prompt}")
 
-    iter_ctx, iter_subagent = _build_iteration_ctx(reg, ctx)
+    try:
+        iter_ctx = _build_isolated_ctx(ctx, "loop")
+    except KeyboardInterrupt:
+        fmt.warning(f"{tag} interrupted during setup")
+        reg.last_fire = _loops_mod.monotonic()
+        return True
     step: StepResult | None = None
     failure: bool
     failure_reason: str | None
+    interrupted = False
+    stop_batch = False
 
     try:
         try:
             step = execute_input(reg.parsed_prompt, iter_ctx, mode="repl")
         except KeyboardInterrupt:
-            failure, failure_reason = True, "interrupted"
+            failure, failure_reason = False, None
+            interrupted = True
+            stop_batch = True
             fmt.warning(f"{tag} interrupted")
         except Exception as e:
             failure, failure_reason = True, _short_error(f"{type(e).__name__}: {e}")
             fmt.warning(f"{tag} error: {failure_reason}")
         else:
-            failure, failure_reason = _classify_step_outcome(step)
+            if step.interrupted:
+                failure, failure_reason = False, None
+                interrupted = True
+                stop_batch = True
+            else:
+                failure, failure_reason = _classify_step_outcome(step)
             if failure:
                 fmt.warning(f"{tag} {failure_reason}")
             else:
@@ -13726,37 +13848,36 @@ def _run_loop_iteration_snapshot(reg: "LoopRegistration", ctx: InputContext) -> 
                 ctx.loop_kwargs["turn_offset"] = report.max_turn_seen
     finally:
         try:
-            # Reconciles even without a manager: a direct-LLM command can
-            # record cost without ever creating one.
-            _shutdown_and_reconcile(
-                iter_subagent,
-                ctx.loop_kwargs.get("session_cost"),
-                ctx.loop_kwargs.get("verbose"),
-            )
+            _run_after_render(step)
+            if _shutdown_isolated_turn(iter_ctx):
+                stop_batch = True
+                fmt.warning(f"{tag} interrupted during cleanup")
         finally:
             reg.last_fire = _loops_mod.monotonic()
 
-    cancelled = False
+    auto_cancelled = False
     if failure:
-        cancelled = _record_loop_failure(reg, failure_reason, ctx)
-    else:
+        auto_cancelled = _record_loop_failure(reg, failure_reason, ctx)
+    elif not interrupted:
         reg.consecutive_failures = 0
         reg.last_error = None
-    if not cancelled:
+    if not auto_cancelled:
         fmt.info(
             f"{tag} done. next fire >= {_format_loop_duration(reg.interval_seconds)}."
         )
+    return stop_batch
 
 
-def _fire_loop_iteration(reg: "LoopRegistration", ctx: InputContext) -> None:
+def _fire_loop_iteration(reg: "LoopRegistration", ctx: InputContext) -> bool:
     """Run one iteration, catching driver-level errors with the same policy."""
     try:
-        _run_loop_iteration_snapshot(reg, ctx)
+        return _run_loop_iteration_snapshot(reg, ctx)
     except Exception as e:
         reason = f"driver: {type(e).__name__}: {e}"
         fmt.warning(f"{_loop_tag(reg.id)} driver error: {type(e).__name__}: {e}")
         reg.last_fire = _loops_mod.monotonic()
         _record_loop_failure(reg, reason, ctx)
+        return False
 
 
 def _fire_due_loops(ctx: InputContext) -> None:
@@ -13766,7 +13887,8 @@ def _fire_due_loops(ctx: InputContext) -> None:
         # An earlier iteration in this batch may have auto-cancelled this id.
         if ctx.loop_registry.get(reg.id) is None:
             continue
-        _fire_loop_iteration(reg, ctx)
+        if _fire_loop_iteration(reg, ctx):
+            break
 
 
 def _format_loops_table(registry: "LoopRegistry") -> str:
@@ -13851,6 +13973,7 @@ def run_input_script(
 
     last_text: str | None = None
     last_exhausted = False
+    last_is_error = False
     total_turns = 0
 
     for raw_line in text.splitlines():
@@ -13863,6 +13986,7 @@ def run_input_script(
         ctx.turn_state["turns_used"] = total_turns
 
         step = execute_input(parsed, ctx, mode=mode)
+        _run_after_render(step)
 
         # Accumulate turns. Only agent-turn steps invoke run_agent_loop,
         # which overwrites turns_used with its per-call count.
@@ -13879,6 +14003,9 @@ def run_input_script(
 
         if step.text is not None:
             last_text = step.text
+            last_is_error = step.is_error
+        elif step.is_error:
+            last_is_error = True
 
         if step.stop:
             break
@@ -13894,7 +14021,12 @@ def run_input_script(
             last_exhausted = True
             break
 
-    return StepResult(kind="flow_control", text=last_text, exhausted=last_exhausted)
+    return StepResult(
+        kind="flow_control",
+        text=last_text,
+        exhausted=last_exhausted,
+        is_error=last_is_error,
+    )
 
 
 _REPL_SHIFT_ENTER_SEQUENCES = ("\x1b[27;2;13~", "\x1b[13;2u")
@@ -14035,6 +14167,7 @@ def repl_loop(
         "/simplify to refactor and reduce complexity",
         "/add-dir-ro for read-only access to reference code",
         "/loop 5m prompt to repeat a task on an interval",
+        "/btw question to ask without changing context",
     ]
     random.shuffle(_toolbar_tips)
     _toolbar_state = {
@@ -14310,6 +14443,8 @@ def repl_loop(
                     fmt.warning(result.text)
                 else:
                     fmt.info(result.text)
+
+            _run_after_render(result)
 
             _refresh_toolbar_state()
 

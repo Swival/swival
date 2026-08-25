@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Callable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -62,6 +63,9 @@ class InputContext:
     is_subagent: bool = False
     trace_dir: str | None = None
     loop_registry: "LoopRegistry | None" = None
+    # The last answer displayed by this context. Side questions need this
+    # because their transcript is discarded before `/copy` runs.
+    last_answer: str | None = None
 
 
 @dataclass
@@ -89,6 +93,7 @@ class StepResult:
     exhausted: bool = False
     is_error: bool = False
     interrupted: bool = False
+    after_render: Callable[[], None] | None = None
 
 
 def _strip_outer_blank_lines(text: str) -> str:
