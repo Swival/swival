@@ -845,6 +845,7 @@ _LEAKED_CHANNEL_HEAD_RE = re.compile(
 TRUNCATED_REASON_LENGTH = "length"
 TRUNCATED_REASON_MALFORMED = "malformed_args"
 TRUNCATED_REASON_TEXTUAL_TOOL_CALL = "textual_tool_call_leak"
+TRUNCATED_REASON_DUPLICATE = "duplicate_calls"
 
 
 _STRONG_LEAKED_TOOL_TEXT_RE = re.compile(
@@ -1016,6 +1017,38 @@ def _has_malformed_tool_args(msg) -> bool:
         except (json.JSONDecodeError, TypeError):
             return True
     return False
+
+
+def _duplicate_tool_call_names(msg) -> list[str]:
+    """Return names whose canonical name-and-argument pair occurs twice."""
+    seen = set()
+    duplicates = []
+    for tc in _msg_tool_calls(msg) or []:
+        fn = tc.function if hasattr(tc, "function") else tc.get("function", {}) or {}
+        name = fn.name if hasattr(fn, "name") else fn.get("name", "")
+        raw = _normalize_tool_call_args(_tool_call_args(tc))
+        try:
+            arguments = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        signature = (
+            name,
+            json.dumps(arguments, sort_keys=True, separators=(",", ":"), default=str),
+        )
+        if signature in seen and name not in duplicates:
+            duplicates.append(name or "?")
+        seen.add(signature)
+    return duplicates
+
+
+def _make_duplicate_tool_call_repair_prompt(names) -> str:
+    which = ", ".join(dict.fromkeys(name for name in names if name and name != "?"))
+    target = f" ({which})" if which else ""
+    return (
+        f"Your previous response repeated an identical tool call{target}, so "
+        "nothing was executed. Re-issue each required tool invocation exactly "
+        "once through the tool-calling interface."
+    )
 
 
 def _classify_tool_call_truncation(msg, finish_reason) -> str | None:
@@ -1484,6 +1517,15 @@ def _needs_reasoning_content(base_url: str | None) -> bool:
         "moonshot" in base_lower
         or "xiaomimimo" in base_lower
         or "api.deepseek.com" in base_lower
+    )
+
+
+def _preserves_reasoning_content(extra_body) -> bool:
+    if not isinstance(extra_body, dict):
+        return False
+    template_kwargs = extra_body.get("chat_template_kwargs")
+    return isinstance(template_kwargs, dict) and (
+        template_kwargs.get("preserve_thinking") is True
     )
 
 
@@ -5578,7 +5620,9 @@ def call_llm(
 
     messages = [_strip_internal(m) for m in messages]
 
-    _needs_reasoning = _needs_reasoning_content(base_url)
+    _needs_reasoning = _needs_reasoning_content(
+        base_url
+    ) or _preserves_reasoning_content(extra_body)
     for i, m in enumerate(messages):
         if not (isinstance(m, dict) and m.get("role") == "assistant"):
             continue
@@ -9705,6 +9749,7 @@ def _run_agent_loop(
     _last_turn_used_tools = False
     _textual_tool_call_repair_pending = False
     _malformed_tool_call_repair_pending = False
+    _duplicate_tool_call_repair_pending = False
     # One-shot: a goal-launch turn (synthetic start_prompt appended by /goal)
     # is treated as a continuation for *its own* turn only. Consumed when the
     # first LLM response arrives, regardless of whether tools were called.
@@ -10621,6 +10666,43 @@ def _run_agent_loop(
             )
             continue
 
+        duplicate_tool_names = _duplicate_tool_call_names(msg)
+        if duplicate_tool_names:
+            if report:
+                report.record_recovered_response(
+                    turns + turn_offset, reason=TRUNCATED_REASON_DUPLICATE
+                )
+            if _duplicate_tool_call_repair_pending:
+                if continue_here:
+                    from .continue_here import write_continue_file
+
+                    write_continue_file(
+                        base_dir,
+                        messages,
+                        todo_state=todo_state,
+                        snapshot_state=snapshot_state,
+                        thinking_state=thinking_state,
+                        goal_state=goal_state,
+                    )
+                raise AgentError(
+                    "model emitted duplicate tool calls again after a repair prompt"
+                )
+            _duplicate_tool_call_repair_pending = True
+            if verbose:
+                fmt.warning(
+                    "discarding duplicate tool calls, requesting a single valid call"
+                )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": _make_duplicate_tool_call_repair_prompt(
+                        duplicate_tool_names
+                    ),
+                    "_swival_synthetic": True,
+                }
+            )
+            continue
+
         messages.append(_msg_to_dict(msg))
 
         # Recover from native tool-call markup leaked as plain text. Some weak
@@ -10806,6 +10888,7 @@ def _run_agent_loop(
         _goal_launch_pending = False
         _textual_tool_call_repair_pending = False
         _malformed_tool_call_repair_pending = False
+        _duplicate_tool_call_repair_pending = False
         _goal_completed_by_tool = False
         for tool_call in msg.tool_calls:
             # Check cancellation before each tool call

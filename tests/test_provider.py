@@ -3767,7 +3767,8 @@ class TestPromoteReasoningContent:
 
 class TestReasoningContentOutbound:
     """reasoning_content is stripped on outbound for every route except the
-    models that require the field back (see _needs_reasoning_content).
+    models that require the field back (see _needs_reasoning_content) or a
+    local template configured to preserve thinking.
 
     Stripping is the safe default: it round-trips only where a provider
     mandates it and keeps mid-session model/provider switches working, since a
@@ -3820,6 +3821,43 @@ class TestReasoningContentOutbound:
             assert "reasoning_content" not in asst
             # Stored history keeps it; only the outbound copy drops it.
             assert messages[1]["reasoning_content"] == "leftover thought"
+
+    def test_generic_preserves_reasoning_for_explicit_template_flag(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "tc1",
+                        "type": "function",
+                        "function": {"name": "f", "arguments": "{}"},
+                    }
+                ],
+                "reasoning_content": "I should call f.",
+            },
+            {"role": "tool", "tool_call_id": "tc1", "content": "data"},
+        ]
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                "http://localhost:8766/v1",
+                "qwen4-exp",
+                messages,
+                100,
+                None,
+                None,
+                None,
+                None,
+                False,
+                provider="generic",
+                api_key="omlx",
+                extra_body={"chat_template_kwargs": {"preserve_thinking": True}},
+            )
+            sent = mock_comp.call_args[1]["messages"]
+            asst = [m for m in sent if m.get("role") == "assistant"][0]
+            assert asst["reasoning_content"] == "I should call f."
 
     def test_generic_strips_reasoning_on_non_tool_call_assistant(self):
         """A replayed/imported transcript may carry reasoning_content on an

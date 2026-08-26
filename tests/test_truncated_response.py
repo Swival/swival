@@ -132,6 +132,38 @@ def test_has_malformed_tool_args_no_tool_calls():
     assert _has_malformed_tool_args(_make_message(content="hi")) is False
 
 
+def test_duplicate_tool_call_names_canonicalizes_arguments():
+    from swival.agent import _duplicate_tool_call_names
+
+    msg = _make_message(
+        tool_calls=[
+            _make_tool_call(
+                name="write_file",
+                arguments='{"path":"x","content":"y"}',
+                call_id="a",
+            ),
+            _make_tool_call(
+                name="write_file",
+                arguments='{"content": "y", "path": "x"}',
+                call_id="b",
+            ),
+        ]
+    )
+    assert _duplicate_tool_call_names(msg) == ["write_file"]
+
+
+def test_duplicate_tool_call_names_allows_distinct_arguments():
+    from swival.agent import _duplicate_tool_call_names
+
+    msg = _make_message(
+        tool_calls=[
+            _make_tool_call(arguments='{"thought":"one"}', call_id="a"),
+            _make_tool_call(arguments='{"thought":"two"}', call_id="b"),
+        ]
+    )
+    assert _duplicate_tool_call_names(msg) == []
+
+
 def test_classify_text_only_length_returns_none():
     """Text-only truncation must not be classified — the existing nudge handles it."""
     from swival.agent import _classify_tool_call_truncation
@@ -343,6 +375,49 @@ def test_malformed_args_repeated_gives_up(tmp_path, monkeypatch):
     assert exc.value.code == 1
     # First malformed → re-prompt, second malformed → give up. No endless loop.
     assert len(calls) == 2
+
+
+def test_duplicate_calls_are_discarded_and_reprompted(tmp_path, monkeypatch):
+    from swival import agent
+    from swival import fmt
+
+    fmt.init(color=False)
+    captured = []
+
+    def fake_call_llm(*args, **kwargs):
+        captured.append([dict(m) if isinstance(m, dict) else m for m in args[2]])
+        if len(captured) == 1:
+            return (
+                _make_message(
+                    content="",
+                    tool_calls=[
+                        _make_tool_call(call_id="a"),
+                        _make_tool_call(call_id="b"),
+                    ],
+                ),
+                "tool_calls",
+                [],
+                0,
+                (0, 0),
+            )
+        return _make_message(content="done"), "stop", [], 0, (0, 0)
+
+    monkeypatch.setattr(agent, "call_llm", fake_call_llm)
+    monkeypatch.setattr(agent, "discover_model", lambda *args: ("test-model", None))
+    args = _base_args(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["agent", "q"])
+    monkeypatch.setattr("argparse.ArgumentParser.parse_args", lambda self: args)
+
+    agent.main()
+
+    assert len(captured) == 2
+    assert not any(message.get("role") == "assistant" for message in captured[1])
+    users = [
+        message.get("content", "")
+        for message in captured[1]
+        if message.get("role") == "user"
+    ]
+    assert any("repeated an identical tool call" in content for content in users)
 
 
 # ---------------------------------------------------------------------------
