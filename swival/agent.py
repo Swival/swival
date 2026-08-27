@@ -369,6 +369,15 @@ _CONTEXT_OVERFLOW_RE = re.compile(
     re.IGNORECASE,
 )
 
+_SHARED_ENDPOINT_OVERFLOW_RE = re.compile(
+    r"request\s+(?:is\s+)?too\s+(?:big|large)\s+for\s+"
+    r"(?:the\s+)?shared\s+endpoint\b"
+    r".{0,120}\b\d+(?:\.\d+)?\s*(?:bytes?|[kmgt]i?b)\b"
+    r".{0,120}\blimit\b"
+    r".{0,120}\b\d+(?:\.\d+)?\s*(?:bytes?|[kmgt]i?b)\b",
+    re.IGNORECASE,
+)
+
 # Looser overflow phrasings, only trusted when the context window is unknown.
 # With a known window the proactive pass already prevents nearly every overflow,
 # so the strict patterns stay strict there and an unrelated bad request is not
@@ -389,12 +398,12 @@ _UNKNOWN_WINDOW_OVERFLOW_RE = re.compile(
 def _looks_like_context_overflow(exc, *, unknown_context_window: bool = False) -> bool:
     """Single source of truth for classifying a provider error as overflow.
 
-    The strict tier (always on) is litellm's typed ``ContextWindowExceededError``
-    plus the established context/token phrasings in ``_CONTEXT_OVERFLOW_RE``. The
-    loose tier engages only when ``unknown_context_window`` is true — the regime
-    where the proactive pass can't help and providers are likeliest to phrase the
-    rejection in ways the strict patterns miss — and also treats a 413 Payload
-    Too Large as overflow.
+    The strict tier (always on) is litellm's typed ``ContextWindowExceededError``,
+    the established context/token phrasings in ``_CONTEXT_OVERFLOW_RE``, and an
+    explicit shared-endpoint request-size rejection. The loose tier engages only
+    when ``unknown_context_window`` is true, the regime where the proactive pass
+    cannot help and providers are likeliest to phrase the rejection in ways the
+    strict patterns miss. It also treats a 413 Payload Too Large as overflow.
     """
     import litellm
 
@@ -402,6 +411,8 @@ def _looks_like_context_overflow(exc, *, unknown_context_window: bool = False) -
         return True
     text = str(exc)
     if _CONTEXT_OVERFLOW_RE.search(text):
+        return True
+    if _SHARED_ENDPOINT_OVERFLOW_RE.search(text):
         return True
     if not unknown_context_window:
         return False

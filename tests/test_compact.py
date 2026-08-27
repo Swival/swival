@@ -2,6 +2,7 @@
 compact_messages, drop_middle_turns, clamp_output_tokens, and ContextOverflowError."""
 
 import copy
+import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -918,10 +919,13 @@ class TestContextOverflowClassifier:
                 model="test",
                 llm_provider="openai",
             )
-            with pytest.raises(AgentError):
+            with pytest.raises(AgentError) as exc_info:
                 call_llm(
                     "http://localhost", "model", [], 100, 0.1, 1.0, None, None, False
                 )
+
+        assert not isinstance(exc_info.value, ContextOverflowError)
+        assert mock_comp.call_count == 1
 
     def test_api_error_with_context_keywords(self):
         """call_llm raises ContextOverflowError for APIError with context keywords."""
@@ -3184,6 +3188,14 @@ def _api_error(message, status_code):
     )
 
 
+_HF_SHARED_ENDPOINT_OVERFLOW = (
+    "OpenAIException - 🤗 That request is too big for the shared endpoint "
+    "(601 KB; the limit here is 600 KB, roughly 100k+ tokens). Trim the context, "
+    "or deploy your own for the full window: "
+    "https://endpoints.huggingface.co/new/Qwen/Qwen3.8-Flash-Next"
+)
+
+
 class TestUnknownWindowOverflowDetection:
     """The loose tier engages only when the window is unknown; the strict tier
     always engages; unrelated bad requests stay unclassified in both regimes."""
@@ -3193,6 +3205,7 @@ class TestUnknownWindowOverflowDetection:
         "This model's maximum context length is 4096 tokens",
         "the context window was exceeded",
         "token limit reached",
+        _HF_SHARED_ENDPOINT_OVERFLOW,
     ]
     LOOSE = [
         "prompt is too long: 219763 tokens > 200000 maximum",
@@ -3206,6 +3219,9 @@ class TestUnknownWindowOverflowDetection:
         "invalid temperature value",
         "unsupported parameter: foo",
         "you are not authorized",
+        "the response is too big for the shared endpoint (601 KB; limit 600 KB)",
+        "the request is too big for the shared endpoint",
+        "the request is too big for the shared endpoint (601 KB)",
     ]
 
     @pytest.mark.parametrize("msg", STRICT)
@@ -3286,6 +3302,28 @@ class TestUnknownWindowOverflowDetection:
                 )
         assert not isinstance(ei.value, ContextOverflowError)
         assert getattr(ei.value, "_request_shaped", False) is True
+
+    def test_shared_endpoint_limit_raises_with_known_model_window(self):
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.side_effect = _bad_request(_HF_SHARED_ENDPOINT_OVERFLOW)
+            with pytest.raises(ContextOverflowError) as exc_info:
+                call_llm(
+                    None,
+                    "Qwen/Qwen3.8-Flash-Next",
+                    [],
+                    100,
+                    0.1,
+                    1.0,
+                    None,
+                    None,
+                    False,
+                    provider="huggingface",
+                    api_key="hf_test",
+                    unknown_context_window=False,
+                )
+
+        assert getattr(exc_info.value, "_provider_retries", None) == 0
+        assert mock_comp.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -3454,6 +3492,79 @@ class TestUnknownWindowOverflowLoop:
             )
         assert answer == "recovered"
         assert exhausted is False
+
+    def test_shared_endpoint_limit_recovers_with_known_model_window(self, tmp_path):
+        import litellm
+        from swival.agent import run_agent_loop
+        from swival.report import ReportCollector
+
+        byte_limit = 50_000
+        payload_sizes = []
+
+        def fake_completion(**kwargs):
+            payload = {
+                "messages": kwargs["messages"],
+                "tools": kwargs.get("tools"),
+            }
+            payload_size = len(json.dumps(payload, default=str).encode())
+            payload_sizes.append(payload_size)
+            if payload_size > byte_limit:
+                raise litellm.BadRequestError(
+                    message=_HF_SHARED_ENDPOINT_OVERFLOW,
+                    model="Qwen/Qwen3.8-Flash-Next",
+                    llm_provider="huggingface",
+                )
+            return _completion_ok("recovered")
+
+        messages = [
+            _sys("system"),
+            _user("inspect the file"),
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": '{"path":"large.txt"}',
+                        },
+                    }
+                ],
+            },
+            _tool("call-1", "z" * 80_000),
+            _assistant("I inspected the file."),
+            _user("Finish the task."),
+        ]
+        report = ReportCollector()
+
+        with patch("litellm.completion", side_effect=fake_completion):
+            answer, exhausted = run_agent_loop(
+                messages,
+                _DUMMY_TOOLS,
+                **_loop_kwargs(
+                    tmp_path,
+                    api_base=None,
+                    model_id="Qwen/Qwen3.8-Flash-Next",
+                    context_length=262_144,
+                    llm_kwargs={"provider": "huggingface", "api_key": "hf_test"},
+                    report=report,
+                ),
+            )
+
+        assert answer == "recovered"
+        assert exhausted is False
+        assert len(payload_sizes) == 2
+        assert payload_sizes[0] > byte_limit >= payload_sizes[1]
+        llm_events = [e for e in report.events if e["type"] == "llm_call"]
+        assert llm_events[0]["finish_reason"] == "context_overflow"
+        assert llm_events[1].get("is_retry") is True
+        assert any(
+            e.get("type") == "compaction"
+            and e.get("strategy") == COMPACTION_COMPACT_MESSAGES
+            for e in report.events
+        )
 
     def test_backstop_recovers_unclassified_rejection(self, tmp_path):
         """A non-overflow AgentError marked request-shaped at an unknown window
