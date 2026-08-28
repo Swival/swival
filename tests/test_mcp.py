@@ -20,6 +20,7 @@ from swival.mcp_client import (
     _normalize_result,
     _sanitize_tool_name,
     _mcp_tool_to_openai,
+    _mcp_tool_is_non_idempotent,
     validate_server_name,
 )
 from swival.report import ConfigError
@@ -135,6 +136,33 @@ class TestConvertSchema:
         schema = {"type": "object", "properties": {}, "required": []}
         result = _convert_schema(schema)
         assert result["required"] == []
+
+
+class TestToolAnnotations:
+    def test_explicit_non_idempotent_mutation_is_classified(self):
+        annotations = types.SimpleNamespace(
+            read_only_hint=False,
+            idempotent_hint=False,
+        )
+        tool = types.SimpleNamespace(annotations=annotations)
+        assert _mcp_tool_is_non_idempotent(tool) is True
+
+    @pytest.mark.parametrize(
+        "read_only,idempotent",
+        [(True, False), (False, True), (None, None)],
+    )
+    def test_other_annotation_contracts_keep_normal_repeat_policy(
+        self, read_only, idempotent
+    ):
+        annotations = types.SimpleNamespace(
+            read_only_hint=read_only,
+            idempotent_hint=idempotent,
+        )
+        tool = types.SimpleNamespace(annotations=annotations)
+        assert _mcp_tool_is_non_idempotent(tool) is False
+
+    def test_missing_annotations_keep_normal_repeat_policy(self):
+        assert _mcp_tool_is_non_idempotent(types.SimpleNamespace()) is False
 
 
 # ---------------------------------------------------------------------------

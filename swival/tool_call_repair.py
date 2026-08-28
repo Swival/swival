@@ -579,6 +579,7 @@ class StormBreaker:
         name: str,
         args_json: str,
         mutating: bool,
+        suppress_on_repeat: bool = False,
     ) -> StormVerdict:
         if is_storm_exempt(name):
             return StormVerdict(suppress=False, count=0)
@@ -587,7 +588,8 @@ class StormBreaker:
         if mutating:
             self._recent = [e for e in self._recent if not e.read_only]
         count = sum(1 for e in self._recent if e.name == name and e.args == canonical)
-        if count >= self.threshold - 1:
+        threshold = 2 if suppress_on_repeat else self.threshold
+        if count >= threshold - 1:
             return StormVerdict(
                 suppress=True,
                 reason=(

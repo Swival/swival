@@ -249,6 +249,7 @@ class McpManager:
         self._tool_map: dict[
             str, tuple[str, str]
         ] = {}  # namespaced_name -> (server, orig)
+        self._non_idempotent_tools: set[str] = set()
         self._degraded: set[str] = set()  # servers that crashed after startup
 
         # Per-server lifecycle tasks and their shutdown signals
@@ -339,6 +340,10 @@ class McpManager:
                     break
             info.setdefault(server, []).append((namespaced, desc))
         return info
+
+    def is_non_idempotent_tool(self, namespaced_name: str) -> bool:
+        """Return whether an MCP tool explicitly declares repeat side effects."""
+        return namespaced_name in self._non_idempotent_tools
 
     def add_root(self, path) -> None:
         """Grant one more directory to the servers, as ``/add-dir`` does to us.
@@ -595,6 +600,11 @@ class McpManager:
             tool_pairs = [
                 _mcp_tool_to_openai(name, tool) for tool in tools_result.tools
             ]
+            self._non_idempotent_tools.update(
+                schema["function"]["name"]
+                for schema, tool in zip(tool_pairs, tools_result.tools)
+                if _mcp_tool_is_non_idempotent(tool)
+            )
             tool_pairs = self._apply_flattening(tool_pairs)
             self._tool_schemas[name] = [schema for schema, _original_name in tool_pairs]
             self._tool_original_names[name] = {
@@ -777,6 +787,9 @@ class McpManager:
                         del tool_map[n]
                 self._tool_schemas[server_name] = []
                 self._tool_original_names[server_name] = {}
+                self._non_idempotent_tools.difference_update(
+                    schema["function"]["name"] for schema in schemas
+                )
                 detail = "\n".join(server_collisions)
                 self._server_error_notice(
                     server_name,
@@ -823,6 +836,15 @@ def _mcp_tool_to_openai(server_name: str, tool) -> tuple[dict, str]:
         },
     }
     return result, original_name
+
+
+def _mcp_tool_is_non_idempotent(tool) -> bool:
+    annotations = getattr(tool, "annotations", None)
+    return bool(
+        annotations is not None
+        and annotations.read_only_hint is False
+        and annotations.idempotent_hint is False
+    )
 
 
 def _convert_schema(input_schema: dict) -> dict:

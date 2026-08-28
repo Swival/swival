@@ -221,5 +221,93 @@ def test_storm_breaker_off_dispatches_normally(tmp_path, monkeypatch):
         assert "repeat-loop guard tripped" not in content
 
 
+def test_explicit_non_idempotent_mcp_repeat_dispatches_once(tmp_path, monkeypatch):
+    from swival import mcp_client
+
+    calls = []
+
+    class FakeMcpManager:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def close(self):
+            pass
+
+        def list_tools(self):
+            return [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "mcp__soak__record_once",
+                        "description": "Record one value once.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "key": {"type": "string"},
+                                "value": {},
+                            },
+                            "required": ["key", "value"],
+                        },
+                    },
+                }
+            ]
+
+        def get_tool_info(self):
+            return {"soak": [("mcp__soak__record_once", "Record one value once.")]}
+
+        def is_non_idempotent_tool(self, name):
+            return name == "mcp__soak__record_once"
+
+        def call_tool(self, name, arguments):
+            calls.append((name, arguments))
+            return "recorded", False
+
+    monkeypatch.setattr(mcp_client, "McpManager", FakeMcpManager)
+    args = _base_args(tmp_path, no_mcp=False, network="full")
+    args._resolved_mcp_servers = {"soak": {"command": "unused"}}
+    first = _make_tool_call(
+        "mcp__soak__record_once",
+        '{"key":"only-once","value":{"a":1,"b":2}}',
+        call_id="m1",
+    )
+    repeated = _make_tool_call(
+        "mcp__soak__record_once",
+        '{"value":{"b":2,"a":1},"key":"only-once"}',
+        call_id="m2",
+    )
+    responses = [
+        (_make_message(content="", tool_calls=[first]), "tool_calls", [], 0, (0, 0)),
+        (
+            _make_message(content="", tool_calls=[repeated]),
+            "tool_calls",
+            [],
+            0,
+            (0, 0),
+        ),
+        (_make_message(content="done"), "stop", [], 0, (0, 0)),
+    ]
+
+    captured = _drive_agent(tmp_path, monkeypatch, args, responses)
+
+    assert calls == [
+        ("mcp__soak__record_once", {"key": "only-once", "value": {"a": 1, "b": 2}})
+    ]
+    final_tools = [
+        message
+        for message in captured[-1]
+        if (message.get("role") if isinstance(message, dict) else message.role)
+        == "tool"
+    ]
+    final_content = (
+        final_tools[-1].get("content")
+        if isinstance(final_tools[-1], dict)
+        else final_tools[-1].content
+    )
+    assert "repeat-loop guard tripped" in final_content
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

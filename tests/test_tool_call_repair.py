@@ -385,6 +385,26 @@ def test_storm_breaker_three_identical_reads():
     assert "repeat-loop guard tripped" in v.reason
 
 
+def test_storm_breaker_suppresses_second_explicit_non_idempotent_call():
+    sb = StormBreaker()
+    args = '{"key": "once", "value": {"b": 2, "a": 1}}'
+    first = sb.inspect(
+        "mcp__soak__record_once",
+        args,
+        mutating=False,
+        suppress_on_repeat=True,
+    )
+    second = sb.inspect(
+        "mcp__soak__record_once",
+        '{"value":{"a":1,"b":2},"key":"once"}',
+        mutating=False,
+        suppress_on_repeat=True,
+    )
+    assert first.suppress is False
+    assert second.suppress is True
+    assert second.count == 2
+
+
 def test_storm_breaker_edit_clears_read_only():
     sb = StormBreaker()
     sb.inspect("read_file", '{"file_path": "x"}', mutating=False)

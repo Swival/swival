@@ -330,6 +330,60 @@ def test_loop_recovers_from_textual_tool_call_leak(tmp_path, monkeypatch):
     assert found_trim, "trimmed assistant message should be in history"
 
 
+def test_loop_recovers_from_truncated_textual_tool_call(tmp_path, monkeypatch):
+    from swival import fmt
+
+    fmt.init(color=False)
+
+    captured = []
+
+    def fake_call_llm(*args, **kwargs):
+        messages = args[2]
+        captured.append([dict(m) if isinstance(m, dict) else m for m in messages])
+        if len(captured) == 1:
+            return (
+                _make_message(
+                    content=(
+                        "I'll write the content now.\n\n"
+                        "<tool_call>\n"
+                        "<function=write_file>\n"
+                        "<parameter=file_path>\n"
+                        f"{tmp_path}/output/payload.txt\n"
+                        "</parameter>\n"
+                        "<parameter=content>\n" + "0123456789abcdef" * 256
+                    ),
+                    tool_calls=None,
+                ),
+                "length",
+                [],
+                0,
+                (0, 0),
+            )
+        return _make_message(content="done"), "stop", [], 0, (0, 0)
+
+    monkeypatch.setattr(agent, "call_llm", fake_call_llm)
+    monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+    args = _base_args(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["agent", "q"])
+    monkeypatch.setattr("argparse.ArgumentParser.parse_args", lambda self: args)
+
+    agent.main()
+
+    assert len(captured) == 2
+    second = captured[1]
+    users = [m.get("content", "") for m in second if m.get("role") == "user"]
+    assert any("tool-call markup as plain text" in content for content in users)
+    assert not any("Your response was cut off" in content for content in users)
+
+    assistants = [m for m in second if m.get("role") == "assistant"]
+    assert any(
+        "discarded malformed textual tool-call markup" in (m.get("content") or "")
+        for m in assistants
+    )
+    assert not any("<tool_call>" in (m.get("content") or "") for m in assistants)
+
+
 def test_loop_caps_at_one_repair_then_raises(tmp_path, monkeypatch, capsys):
     """Two consecutive leaks must raise AgentError (main() reports + exits 1)."""
     from swival import fmt

@@ -10720,11 +10720,7 @@ def _run_agent_loop(
         # or poorly configured servers emit a tool call as assistant content
         # with no structured tool_calls; left alone, the loop would treat the
         # template fragments as a final answer.
-        if (
-            not msg.tool_calls
-            and finish_reason != "length"
-            and _last_request_tools is not None
-        ):
+        if not msg.tool_calls and _last_request_tools is not None:
             leak = _classify_textual_tool_call_leak(msg.content)
             if leak is not None:
                 leak_reason, leak_start = leak
@@ -10927,6 +10923,10 @@ def _run_agent_loop(
                     _tc_name,
                     _raw_args,
                     mutating=_tcr_is_mutating(_tc_name),
+                    suppress_on_repeat=bool(
+                        mcp_manager is not None
+                        and mcp_manager.is_non_idempotent_tool(_tc_name)
+                    ),
                 )
                 if _verdict.suppress:
                     if report is not None:
