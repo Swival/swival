@@ -1215,13 +1215,13 @@ def assistant_text(text: str) -> None:
     remaining = len(src_lines) - _ASSISTANT_MAX_LINES
     if remaining > 0:
         text = "\n".join(src_lines[:_ASSISTANT_MAX_LINES])
-    # Render before writing anything, so a failed render leaves no partial
-    # output and errors from the stream itself still propagate.
+    # Render fully before writing anything, so a failed render leaves no
+    # partial output and errors from the stream itself still propagate.
     try:
-        rendered = Segments(_console.render(_LeftBar(Markdown(text))))
+        rendered = Segments(list(_console.render(_LeftBar(Markdown(text)))))
     except Exception as exc:
         _note_render_fallback(exc)
-        rendered = Segments(_console.render(_LeftBar(Text(text))))
+        rendered = Segments(list(_console.render(_LeftBar(Text(text)))))
     _console.print(rendered, end="")
     if remaining > 0:
         _console.print(
@@ -1248,7 +1248,7 @@ def repl_answer(text: str) -> None:
                 background_color="default",
                 word_wrap=True,
             )
-            rendered = Segments(_stdout_console.render(highlighted))
+            rendered = Segments(list(_stdout_console.render(highlighted)))
         except Exception as exc:
             _note_render_fallback(exc)
         else:
