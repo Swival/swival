@@ -868,3 +868,74 @@ class TestGrepStreaming:
         result = _grep("needle", "long.txt", str(tmp_path), context_lines=1)
         for line in result.splitlines():
             assert len(line) <= 2100
+
+    def test_equal_mtime_cap_keeps_first_paths(self, tmp_path):
+        """With equal mtimes, the files kept under the cap are the ones the
+        output order lists first."""
+        from swival import tools
+
+        for name in "abcde":
+            (tmp_path / f"{name}.txt").write_text(f"needle {name}\n")
+            os.utime(tmp_path / f"{name}.txt", (1_000_000, 1_000_000))
+        original = tools.MAX_GREP_FILES
+        tools.MAX_GREP_FILES = 3
+        try:
+            result = _grep("needle", ".", str(tmp_path))
+        finally:
+            tools.MAX_GREP_FILES = original
+        assert (
+            result.index("needle a")
+            < result.index("needle b")
+            < result.index("needle c")
+        )
+        assert "needle d" not in result and "needle e" not in result
+
+    def test_directory_iteration_error_is_skipped(self, tmp_path, monkeypatch):
+        """An OSError while listing a directory drops that directory only,
+        like os.walk with onerror=None."""
+        (tmp_path / "flaky").mkdir()
+        (tmp_path / "flaky" / "x.txt").write_text("needle flaky\n")
+        (tmp_path / "flaky" / "y.txt").write_text("needle flaky\n")
+        (tmp_path / "ok.txt").write_text("needle ok\n")
+        real_scandir = os.scandir
+
+        class _FlakyScanner:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                self._inner.close()
+
+            def __iter__(self):
+                yield next(iter(self._inner))
+                raise OSError("read error")
+
+        def fake_scandir(path):
+            scanner = real_scandir(path)
+            if os.path.basename(path) == "flaky":
+                return _FlakyScanner(scanner)
+            return scanner
+
+        monkeypatch.setattr(os, "scandir", fake_scandir)
+        result = _grep("needle", ".", str(tmp_path))
+        # The entry seen before the error is kept, the rest of the
+        # directory is dropped, and the search goes on elsewhere.
+        assert result.startswith("Found 2 matches")
+        assert "needle ok" in result
+        assert result.count("needle flaky") == 1
+
+    def test_binary_probe_does_not_shrink_with_chunk_size(self, tmp_path):
+        from swival import tools
+        from swival.tools import _iter_lines
+
+        fp = tmp_path / "late_nul.bin"
+        fp.write_bytes(b"needle\n" * 100 + b"\x00" + b"needle\n")
+        original = tools.GREP_CHUNK_BYTES
+        tools.GREP_CHUNK_BYTES = 16
+        try:
+            assert list(_iter_lines(fp)) == []
+        finally:
+            tools.GREP_CHUNK_BYTES = original

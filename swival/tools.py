@@ -1334,6 +1334,25 @@ class _GrepLineTooLong(Exception):
     """A single line exceeded MAX_GREP_LINE_CHARS."""
 
 
+class _GrepCandidate:
+    """Heap key ranking older files first and, on equal mtime, later paths.
+
+    heapq evicts its smallest element, so a heap of these keeps exactly the
+    head of the (-mtime, path) order that grep output uses.
+    """
+
+    __slots__ = ("mtime", "path")
+
+    def __init__(self, mtime: float, path: Path) -> None:
+        self.mtime = mtime
+        self.path = path
+
+    def __lt__(self, other: "_GrepCandidate") -> bool:
+        if self.mtime != other.mtime:
+            return self.mtime < other.mtime
+        return self.path > other.path
+
+
 def _iter_lines(fp: Path) -> Iterator[str]:
     """Yield a file's lines one at a time without loading the whole file.
 
@@ -1346,7 +1365,7 @@ def _iter_lines(fp: Path) -> Iterator[str]:
     decoder = codecs.getincrementaldecoder("utf-8")()
     pending = ""
     with open(fp, "rb") as f:
-        chunk = f.read(GREP_CHUNK_BYTES)
+        chunk = f.read(max(GREP_CHUNK_BYTES, BINARY_CHECK_BYTES))
         if b"\x00" in chunk[:BINARY_CHECK_BYTES]:
             return
         while chunk:
@@ -1494,74 +1513,82 @@ def _grep(
         return f"error: path is not a directory: {path}"
 
     else:
-        # scandir streams directory entries, so even a directory with
-        # millions of files never has to be listed in memory at once.
-        # Symlinked directories are not descended into, like os.walk.
+        # scandir streams each directory's entries, so memory during the
+        # walk is bounded by the subdirectory names of the ancestors on
+        # the current path, as with os.walk, never by the number of files.
+        # Directory errors are skipped like os.walk with onerror=None, and
+        # symlinked directories are checked right before descent so a
+        # directory swapped for a symlink in the meantime is not walked.
         # A bounded min-heap keeps the MAX_GREP_FILES newest candidates,
         # so the files that get searched are the most recently modified
         # ones no matter where the walk happens to visit them.
-        newest: list[tuple[float, Path]] = []
+        newest: list[_GrepCandidate] = []
         stack = [str(root)]
         while stack:
+            directory = stack.pop()
             try:
-                scanner = os.scandir(stack.pop())
+                if os.path.islink(directory):
+                    continue
+                scanner = os.scandir(directory)
             except OSError:
                 continue
             with scanner:
-                for entry in scanner:
-                    try:
-                        is_dir = entry.is_dir()
-                    except OSError:
-                        is_dir = False
-                    if is_dir:
+                try:
+                    for entry in scanner:
                         try:
-                            is_symlink = entry.is_symlink()
+                            is_dir = entry.is_dir()
                         except OSError:
-                            is_symlink = False
-                        if entry.name != ".git" and not is_symlink:
-                            stack.append(entry.path)
-                        continue
+                            is_dir = False
+                        if is_dir:
+                            if entry.name != ".git":
+                                stack.append(entry.path)
+                            continue
 
-                    filepath = Path(entry.path)
-                    # Filter by include pattern
-                    if include:
-                        rel = filepath.relative_to(root)
-                        # PurePath.match handles ** globs (Python 3.12+), but
-                        # '**/*.ext' won't match root-level files (no dir
-                        # component).  Fall back to fnmatch on the bare
-                        # filename so '**/*.zig' still matches 'a.zig'.
-                        if not rel.match(include) and not fnmatch.fnmatch(
-                            entry.name,
-                            include.split("/")[-1] if "/" in include else include,
+                        filepath = Path(entry.path)
+                        # Filter by include pattern
+                        if include:
+                            rel = filepath.relative_to(root)
+                            # PurePath.match handles ** globs (Python 3.12+),
+                            # but '**/*.ext' won't match root-level files (no
+                            # dir component).  Fall back to fnmatch on the
+                            # bare filename so '**/*.zig' still matches
+                            # 'a.zig'.
+                            if not rel.match(include) and not fnmatch.fnmatch(
+                                entry.name,
+                                include.split("/")[-1] if "/" in include else include,
+                            ):
+                                continue
+
+                        # Per-file containment check
+                        if not _is_within_base(
+                            filepath,
+                            base,
+                            files_mode=files_mode,
+                            extra_read_roots=extra_read_roots,
+                            extra_write_roots=extra_write_roots,
                         ):
                             continue
 
-                    # Per-file containment check
-                    if not _is_within_base(
-                        filepath,
-                        base,
-                        files_mode=files_mode,
-                        extra_read_roots=extra_read_roots,
-                        extra_write_roots=extra_write_roots,
-                    ):
-                        continue
-
-                    # Broken symlinks can't be stat'd; skip them like
-                    # unreadable files.
-                    try:
-                        mtime = entry.stat().st_mtime
-                    except OSError:
-                        continue
-                    eligible += 1
-                    candidate = (mtime, filepath)
-                    if len(newest) < MAX_GREP_FILES:
-                        heapq.heappush(newest, candidate)
-                    elif candidate > newest[0]:
-                        heapq.heapreplace(newest, candidate)
+                        # Broken symlinks can't be stat'd; skip them like
+                        # unreadable files.
+                        try:
+                            mtime = entry.stat().st_mtime
+                        except OSError:
+                            continue
+                        eligible += 1
+                        candidate = _GrepCandidate(mtime, filepath)
+                        if len(newest) < MAX_GREP_FILES:
+                            heapq.heappush(newest, candidate)
+                        elif newest[0] < candidate:
+                            heapq.heapreplace(newest, candidate)
+                except OSError:
+                    pass
 
         files_truncated = eligible > MAX_GREP_FILES
         # Newest first, then by path for a stable order among equal mtimes.
-        candidates = sorted(newest, key=lambda c: (-c[0], c[1]))
+        candidates = [
+            (c.mtime, c.path) for c in sorted(newest, key=lambda c: (-c.mtime, c.path))
+        ]
 
     total_found = 0
     retained = 0
