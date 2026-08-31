@@ -173,6 +173,10 @@ class GoalState:
             if status == GoalStatus.COMPLETE and prev != GoalStatus.COMPLETE:
                 self.completed_count += 1
 
+    def rearm_continuation(self) -> None:
+        """Allow automatic continuations again after the model got stuck."""
+        self.continuation_suppressed = False
+
     def pause(self) -> bool:
         if not self.has_active():
             return False

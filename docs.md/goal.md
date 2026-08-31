@@ -24,7 +24,7 @@ Goals are best given as outcomes that can be recognized as done ("get the test s
 
 After each turn that produces a final text answer with an active goal, the runtime injects a synthetic user message containing a continuation prompt. The continuation includes the objective verbatim as inert data, current usage, and remaining budget. Goal continuation turns count against `--max-turns` exactly like any other turn, so the loop never bypasses the user's hard ceiling.
 
-If a continuation produces a final text answer with no tool calls, further continuations are suppressed to avoid a final-text loop, and the model's text is returned as a blocker or progress note.
+If the model answers a continuation with final text and no tool calls, it is treated as stuck: further continuations are suppressed to avoid a final-text loop, and the text is returned as a blocker or progress note. Only the reply that immediately follows a continuation counts: anything that shows the model is still working, such as a tool call or a reply that needed a recovery prompt, re-arms the loop. Sending a new prompt, `/continue`, and `/goal resume` all lift the suppression.
 
 While the goal loop is running, hit `Ctrl+C` at any time to interrupt. Swival stops the run, pauses the goal, and returns you to the REPL prompt. Type any extra context or corrections as a regular message, then run `/continue` to resume the paused goal. This is the way to redirect the agent mid-flight, supply a missing piece of context, or correct course without clearing the goal.
 

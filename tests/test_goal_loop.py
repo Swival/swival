@@ -2,6 +2,8 @@
 
 import types
 
+import pytest
+
 from swival import agent
 from swival.goal import GoalState, GoalStatus
 from swival.session import Session
@@ -38,7 +40,8 @@ class _ScriptedLLM:
     def __call__(self, *args, **kwargs):
         self.calls += 1
         if self.responses:
-            return self.responses.pop(0), "stop"
+            response = self.responses.pop(0)
+            return response if isinstance(response, tuple) else (response, "stop")
         return _msg(content=self.tail_answer), "stop"
 
 
@@ -629,3 +632,140 @@ def test_start_prompt_includes_objective_and_audit():
 def test_start_prompt_empty_without_goal():
     gs = GoalState()
     assert gs.start_prompt() == ""
+
+
+def test_continuation_reinjected_after_productive_tool_turns(tmp_path, monkeypatch):
+    """Tool use after a continuation re-arms the next continuation.
+
+    Regression: the loop used to remember the first continuation forever, so
+    the next no-tool turn (even many productive tool turns later) was misread
+    as an unanswered continuation and suppressed the goal loop.
+    """
+    llm = _ScriptedLLM(
+        [
+            _msg(tool_calls=[_tool_call("think", '{"thought": "plan"}')]),
+            _msg(content="checkpoint one"),
+            _msg(tool_calls=[_tool_call("think", '{"thought": "more"}')]),
+            _msg(content="Let me press Enter."),
+            _msg(tool_calls=[_tool_call("think", '{"thought": "again"}')]),
+            _msg(content="checkpoint three"),
+            _msg(content="blocked for real"),
+        ]
+    )
+    monkeypatch.setattr(agent, "call_llm", llm)
+
+    gs = GoalState()
+    gs.create("finish the game")
+
+    messages = [{"role": "user", "content": "go"}]
+    answer, exhausted = agent.run_agent_loop(
+        messages, [], **_build_loop_kwargs(tmp_path, gs, max_turns=12)
+    )
+    assert answer == "blocked for real"
+    assert exhausted is False
+    assert llm.calls == 7
+    contents = [m["content"] for m in messages if m.get("role") == "user"]
+    assert sum("[goal continuation]" in c for c in contents) == 3
+    assert gs.continuation_suppressed is True
+
+
+def test_new_user_prompt_lifts_continuation_suppression(tmp_path, monkeypatch):
+    """A fresh prompt after suppression re-enables automatic continuations."""
+    llm = _ScriptedLLM(
+        [
+            _msg(content="first pass"),
+            _msg(content="still blocked"),
+        ]
+    )
+    monkeypatch.setattr(agent, "call_llm", llm)
+
+    gs = GoalState()
+    gs.create("ship it")
+    messages = [{"role": "user", "content": "go"}]
+    agent.run_agent_loop(messages, [], **_build_loop_kwargs(tmp_path, gs, max_turns=8))
+    assert gs.continuation_suppressed is True
+    assert llm.calls == 2
+
+    llm.responses = [
+        _msg(tool_calls=[_tool_call("think", '{"thought": "resume"}')]),
+        _msg(content="progress report"),
+        _msg(content="done for now"),
+    ]
+    messages.append({"role": "user", "content": "continue"})
+    answer, _ = agent.run_agent_loop(
+        messages, [], **_build_loop_kwargs(tmp_path, gs, max_turns=8)
+    )
+    assert answer == "done for now"
+    assert llm.calls == 5
+    contents = [m["content"] for m in messages if m.get("role") == "user"]
+    assert sum("[goal continuation]" in c for c in contents) == 2
+
+
+_UNUSABLE_REPLIES = {
+    "empty": _msg(),
+    "truncated": (_msg(content="partial"), "length"),
+    "malformed_args": _msg(tool_calls=[_tool_call("think", "{not json")]),
+    "duplicate_calls": _msg(
+        tool_calls=[
+            _tool_call("think", '{"thought": "x"}', tc_id="tc1"),
+            _tool_call("think", '{"thought": "x"}', tc_id="tc2"),
+        ]
+    ),
+    "textual_leak": _msg(
+        content="Let me read the file.\n</parameter>\n</function>\n</tool_call>\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("kind", sorted(_UNUSABLE_REPLIES))
+def test_recovery_prompt_rearms_continuation(tmp_path, monkeypatch, kind):
+    """A reply that needed a recovery prompt counts as acting on the continuation."""
+    llm = _ScriptedLLM(
+        [
+            _msg(content="first pass"),
+            _UNUSABLE_REPLIES[kind],
+            _msg(content="Let me try that again."),
+            _msg(content="blocked"),
+        ]
+    )
+    monkeypatch.setattr(agent, "call_llm", llm)
+
+    gs = GoalState()
+    gs.create("ship it")
+    messages = [{"role": "user", "content": "go"}]
+    answer, _ = agent.run_agent_loop(
+        messages, [], **_build_loop_kwargs(tmp_path, gs, max_turns=12)
+    )
+    assert answer == "blocked"
+    assert llm.calls == 4
+    contents = [m["content"] for m in messages if m.get("role") == "user"]
+    assert sum("[goal continuation]" in c for c in contents) == 2
+    assert gs.continuation_suppressed is True
+
+
+def test_goal_launch_repair_prompt_rearms_continuation(tmp_path, monkeypatch):
+    """A malformed launch reply is not a no-tool launch reply."""
+    llm = _ScriptedLLM(
+        [
+            _msg(tool_calls=[_tool_call("think", "{not json")]),
+            _msg(content="Let me retry."),
+            _msg(content="blocked"),
+        ]
+    )
+    monkeypatch.setattr(agent, "call_llm", llm)
+
+    gs = GoalState()
+    gs.create("ship it")
+    messages = [
+        {"role": "user", "content": gs.start_prompt(), "_swival_synthetic": True}
+    ]
+    answer, _ = agent.run_agent_loop(
+        messages,
+        [],
+        **_build_loop_kwargs(tmp_path, gs, max_turns=8),
+        goal_launch_turn=True,
+    )
+    assert answer == "blocked"
+    assert llm.calls == 3
+    contents = [m["content"] for m in messages if m.get("role") == "user"]
+    assert sum("[goal continuation]" in c for c in contents) == 1

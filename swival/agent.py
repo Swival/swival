@@ -3866,10 +3866,12 @@ def _show_state_summaries(
 def _maybe_make_continuation_message(
     goal_state,
     *,
-    last_turn_was_continuation: bool,
-    last_turn_used_tools: bool,
+    unanswered_continuation: bool,
 ) -> tuple[str, str] | None:
     """Decide whether to inject a goal continuation message.
+
+    ``unanswered_continuation`` means the reply that just arrived answered
+    a continuation (or the goal launch) without calling any tool.
 
     Returns ``(kind, content)`` where kind is "continuation" or "budget_limit",
     or None if no injection is needed.
@@ -3892,10 +3894,8 @@ def _maybe_make_continuation_message(
     if goal_state.continuation_suppressed:
         return None
 
-    # If the previous turn was already a continuation that produced no tool
-    # calls, suppress further continuations to avoid an infinite final-text
-    # loop. The caller handles the suppression flag.
-    if last_turn_was_continuation and not last_turn_used_tools:
+    # Asking again after a text-only reply would just loop on final text.
+    if unanswered_continuation:
         return None
 
     return ("continuation", goal_state.continuation_prompt())
@@ -9783,20 +9783,23 @@ def _run_agent_loop(
         "tool_policy": tool_policy,
     }
 
-    # Goal-loop bookkeeping. last_turn_was_goal_continuation tracks whether the
-    # current turn was driven by an automatic continuation prompt; this matters
-    # when deciding to suppress further continuations after a no-tool-call turn.
-    _last_turn_was_continuation = False
-    _last_turn_used_tools = False
+    # True until the model acts on the last goal continuation prompt.
+    # A goal-launch turn counts as a continuation for its first reply.
+    _continuation_pending = bool(goal_launch_turn)
     _textual_tool_call_repair_pending = False
     _malformed_tool_call_repair_pending = False
     _duplicate_tool_call_repair_pending = False
-    # One-shot: a goal-launch turn (synthetic start_prompt appended by /goal)
-    # is treated as a continuation for *its own* turn only. Consumed when the
-    # first LLM response arrives, regardless of whether tools were called.
-    _goal_launch_pending = bool(goal_launch_turn)
     _final_attempt_injected_for_goal: str | None = None
     _turn_token_baseline: int | None = None
+
+    def _reprompt(content: str) -> None:
+        """Ask the model to retry after an unusable reply.
+
+        The model did try to act, so the goal continuation is re-armed.
+        """
+        nonlocal _continuation_pending
+        messages.append({"role": "user", "content": content, "_swival_synthetic": True})
+        _continuation_pending = False
 
     def _account_goal_usage(
         prompt_tokens: int, cache_stats: tuple, elapsed_s: float
@@ -9914,13 +9917,13 @@ def _run_agent_loop(
         _write_turns()
         return _CONTEXT_EXHAUSTED_FALLBACK
 
-    # Reset dirty state only if the last message is a user message
-    # (new scope boundary). Skip on /continue where the last message
-    # is an assistant or tool message from the previous run.
-    if snapshot_state is not None:
-        last_role = _msg_role(messages[-1]) if messages else ""
-        if last_role == "user":
+    # A new user message is a scope boundary. Skip on /continue where the
+    # last message is an assistant or tool message from the previous run.
+    if messages and _msg_role(messages[-1]) == "user":
+        if snapshot_state is not None:
             snapshot_state.reset_dirty()
+        if goal_state is not None:
+            goal_state.rearm_continuation()
 
     _snapshot_strip_marker = "\n\n" + SNAPSHOT_HISTORY_SENTINEL
 
@@ -10094,7 +10097,6 @@ def _run_agent_loop(
             _turn_token_baseline = (
                 goal_state.current.tokens_used if goal_state.current else None
             )
-            _last_turn_used_tools = False
             rec = goal_state.get()
             if (
                 turns == max_turns
@@ -10645,17 +10647,11 @@ def _run_agent_loop(
             # Give the message placeholder content so it's valid in history
             _set_msg_content(msg, _EMPTY_ASSISTANT_PLACEHOLDER)
             messages.append(_msg_to_dict(msg))
-            messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "Your response was empty. Please continue working on "
-                        "the task using the available tools."
-                        if _last_request_tools is not None
-                        else "Your response was empty. Please answer the question directly."
-                    ),
-                    "_swival_synthetic": True,
-                }
+            _reprompt(
+                "Your response was empty. Please continue working on "
+                "the task using the available tools."
+                if _last_request_tools is not None
+                else "Your response was empty. Please answer the question directly."
             )
             continue
 
@@ -10696,14 +10692,8 @@ def _run_agent_loop(
                     "discarding tool call with malformed arguments, "
                     "requesting a valid retry"
                 )
-            messages.append(
-                {
-                    "role": "user",
-                    "content": _make_malformed_tool_call_repair_prompt(
-                        _malformed_tool_call_names(msg)
-                    ),
-                    "_swival_synthetic": True,
-                }
+            _reprompt(
+                _make_malformed_tool_call_repair_prompt(_malformed_tool_call_names(msg))
             )
             continue
 
@@ -10733,15 +10723,7 @@ def _run_agent_loop(
                 fmt.warning(
                     "discarding duplicate tool calls, requesting a single valid call"
                 )
-            messages.append(
-                {
-                    "role": "user",
-                    "content": _make_duplicate_tool_call_repair_prompt(
-                        duplicate_tool_names
-                    ),
-                    "_swival_synthetic": True,
-                }
-            )
+            _reprompt(_make_duplicate_tool_call_repair_prompt(duplicate_tool_names))
             continue
 
         messages.append(_msg_to_dict(msg))
@@ -10785,13 +10767,7 @@ def _run_agent_loop(
                         "after a repair prompt"
                     )
                 _textual_tool_call_repair_pending = True
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": _make_textual_tool_call_repair_prompt(),
-                        "_swival_synthetic": True,
-                    }
-                )
+                _reprompt(_make_textual_tool_call_repair_prompt())
                 continue
 
         # Emit events for streaming consumers: text_chunk for final answers only,
@@ -10822,17 +10798,11 @@ def _run_agent_loop(
                     fmt.info(
                         "Response truncated (finish_reason=length), prompting continuation."
                     )
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "Your response was cut off. Please use the provided tools "
-                            "to complete the task step by step."
-                            if _last_request_tools is not None
-                            else "Your response was cut off. Please continue the answer directly."
-                        ),
-                        "_swival_synthetic": True,
-                    }
+                _reprompt(
+                    "Your response was cut off. Please use the provided tools "
+                    "to complete the task step by step."
+                    if _last_request_tools is not None
+                    else "Your response was cut off. Please continue the answer directly."
                 )
                 continue
             # Model produced a final text answer
@@ -10853,20 +10823,12 @@ def _run_agent_loop(
                 )
 
             # Goal-driven automatic continuation. The active goal stays in the
-            # loop as long as turns remain and progress is being made. A pending
-            # goal-launch counts as a continuation for *this* turn so a no-tool
-            # first response suppresses further auto-continuations immediately.
-            _effective_was_continuation = (
-                _last_turn_was_continuation or _goal_launch_pending
-            )
-            _goal_launch_pending = False
+            # loop as long as turns remain and progress is being made.
             if turns >= max_turns:
                 _continuation_msg = None
             else:
                 _continuation_msg = _maybe_make_continuation_message(
-                    goal_state,
-                    last_turn_was_continuation=_effective_was_continuation,
-                    last_turn_used_tools=_last_turn_used_tools,
+                    goal_state, unanswered_continuation=_continuation_pending
                 )
             if _continuation_msg is not None:
                 kind, content = _continuation_msg
@@ -10883,8 +10845,7 @@ def _run_agent_loop(
                         "_swival_synthetic": True,
                     }
                 )
-                _last_turn_was_continuation = kind == "continuation"
-                _last_turn_used_tools = False
+                _continuation_pending = kind == "continuation"
                 if verbose:
                     fmt.info(
                         "goal active — injecting continuation prompt"
@@ -10893,13 +10854,7 @@ def _run_agent_loop(
                     )
                 continue
 
-            # No continuation: return final text. Mark suppression if this
-            # was a no-tool continuation turn so future turns won't keep looping.
-            if (
-                goal_state is not None
-                and _effective_was_continuation
-                and not _last_turn_used_tools
-            ):
+            if goal_state is not None and _continuation_pending:
                 goal_state.continuation_suppressed = True
                 if verbose:
                     fmt.info(
@@ -10921,8 +10876,7 @@ def _run_agent_loop(
         interventions: list[str] = []
         all_tools_readonly = True
         image_stash: list[dict] = []
-        _last_turn_used_tools = True
-        _goal_launch_pending = False
+        _continuation_pending = False
         _textual_tool_call_repair_pending = False
         _malformed_tool_call_repair_pending = False
         _duplicate_tool_call_repair_pending = False
@@ -13045,6 +12999,7 @@ def execute_input(
                 rec = ctx.goal_state.get()
                 if rec is not None and rec.status == GoalStatus.PAUSED:
                     ctx.goal_state.resume()
+                ctx.goal_state.rearm_continuation()
             return _run_agent_step(
                 None, "(continued)", ctx, interrupt_label="continuation"
             )

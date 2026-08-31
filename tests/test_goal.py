@@ -212,6 +212,14 @@ def test_continuation_suppression_is_session_state():
     assert state.continuation_suppressed is False
 
 
+def test_rearm_continuation_lifts_suppression():
+    state = GoalState()
+    state.create("x")
+    state.continuation_suppressed = True
+    state.rearm_continuation()
+    assert state.continuation_suppressed is False
+
+
 def test_complete_goal_only_complete_via_set_status():
     state = GoalState()
     state.create("x")
