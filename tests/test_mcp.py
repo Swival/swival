@@ -21,6 +21,7 @@ from swival.mcp_client import (
     _sanitize_tool_name,
     _mcp_tool_to_openai,
     _mcp_tool_is_non_idempotent,
+    _convert_mcp_tool_pairs,
     validate_server_name,
 )
 from swival.report import ConfigError
@@ -139,6 +140,22 @@ class TestConvertSchema:
 
 
 class TestToolAnnotations:
+    def test_conversion_records_real_pair_shape(self):
+        annotations = types.SimpleNamespace(
+            read_only_hint=False,
+            idempotent_hint=False,
+        )
+        tool = types.SimpleNamespace(
+            name="record_once",
+            description="Record one value.",
+            input_schema={"type": "object", "properties": {}},
+            annotations=annotations,
+        )
+        pairs, non_idempotent = _convert_mcp_tool_pairs("soak", [tool])
+        assert pairs[0][0]["function"]["name"] == "mcp__soak__record_once"
+        assert pairs[0][1] == "record_once"
+        assert non_idempotent == {"mcp__soak__record_once"}
+
     def test_explicit_non_idempotent_mutation_is_classified(self):
         annotations = types.SimpleNamespace(
             read_only_hint=False,

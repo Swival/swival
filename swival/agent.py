@@ -861,6 +861,7 @@ TRUNCATED_REASON_DUPLICATE = "duplicate_calls"
 
 _STRONG_LEAKED_TOOL_TEXT_RE = re.compile(
     r"</?tool_call\b"
+    r"|</?invoke\b"
     r"|<function=[^>\n]+>"
     r"|<parameter=[^>\n]+>"
 )
@@ -3937,10 +3938,11 @@ def _accumulate_consecutive_errors(
     else:
         level = "nudge"
         interventions.append(
-            f"IMPORTANT: You have called `{name}` {count} times with the same error. "
+            f"IMPORTANT: `{name}` returned the same error {count} times. "
             f"The error is: {canonical}\n"
-            "Please carefully re-read the error message and fix your tool call. "
-            "If you cannot use this tool correctly, use a different approach."
+            "Do not repeat an identical call unchanged. "
+            "If the user explicitly requires one materially different call, "
+            "make that call once. Otherwise, use a different approach."
         )
     if report:
         report.record_guardrail(turn, name, level)
@@ -4913,6 +4915,7 @@ def _call_command_with_tools(
     tool_activity: list[dict] = []
     response_text = ""
     malformed_consecutive = 0
+    textual_leak_pending = False
 
     for _ in range(_COMMAND_TOOL_MAX_ROUNDS):
         transcript = _render_transcript(transcript_messages)
@@ -4924,6 +4927,32 @@ def _call_command_with_tools(
 
         calls = _parse_swival_calls(response_text)
         if not calls:
+            leak = _classify_textual_tool_call_leak(response_text)
+            if leak is not None:
+                leak_reason, leak_start = leak
+                prefix = response_text[:leak_start].rstrip()
+                trimmed = (
+                    prefix + "\n\n" if prefix else ""
+                ) + "[discarded malformed textual tool-call markup]"
+                if report:
+                    report.record_recovered_response(
+                        outer_turn + outer_turn_offset,
+                        reason=leak_reason,
+                    )
+                if textual_leak_pending:
+                    raise AgentError(
+                        "command provider emitted tool-call markup as plain text "
+                        "again after a repair prompt"
+                    )
+                textual_leak_pending = True
+                transcript_messages.append({"role": "assistant", "content": trimmed})
+                transcript_messages.append(
+                    {
+                        "role": "user",
+                        "content": _make_textual_tool_call_repair_prompt(),
+                    }
+                )
+                continue
             malformed_reason = _classify_malformed_swival_call_text(response_text)
             if malformed_reason is None:
                 break
@@ -4953,6 +4982,7 @@ def _call_command_with_tools(
             )
             continue
         malformed_consecutive = 0
+        textual_leak_pending = False
 
         transcript_messages.append({"role": "assistant", "content": response_text})
 

@@ -597,14 +597,10 @@ class McpManager:
             self._sessions[name] = session
 
             # Convert schemas
-            tool_pairs = [
-                _mcp_tool_to_openai(name, tool) for tool in tools_result.tools
-            ]
-            self._non_idempotent_tools.update(
-                schema["function"]["name"]
-                for schema, tool in zip(tool_pairs, tools_result.tools)
-                if _mcp_tool_is_non_idempotent(tool)
+            tool_pairs, non_idempotent_tools = _convert_mcp_tool_pairs(
+                name, tools_result.tools
             )
+            self._non_idempotent_tools.update(non_idempotent_tools)
             tool_pairs = self._apply_flattening(tool_pairs)
             self._tool_schemas[name] = [schema for schema, _original_name in tool_pairs]
             self._tool_original_names[name] = {
@@ -845,6 +841,16 @@ def _mcp_tool_is_non_idempotent(tool) -> bool:
         and annotations.read_only_hint is False
         and annotations.idempotent_hint is False
     )
+
+
+def _convert_mcp_tool_pairs(server_name: str, tools) -> tuple[list[tuple], set[str]]:
+    tool_pairs = [_mcp_tool_to_openai(server_name, tool) for tool in tools]
+    non_idempotent = {
+        schema["function"]["name"]
+        for (schema, _original_name), tool in zip(tool_pairs, tools)
+        if _mcp_tool_is_non_idempotent(tool)
+    }
+    return tool_pairs, non_idempotent
 
 
 def _convert_schema(input_schema: dict) -> dict:

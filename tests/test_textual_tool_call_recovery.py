@@ -143,6 +143,13 @@ def test_classify_function_assignment_form():
     assert result[0] == TRUNCATED_REASON_TEXTUAL_TOOL_CALL
 
 
+def test_classify_trailing_invoke_marker():
+    content = "I need to continue with another tool call.\n\n</invoke>"
+    result = _classify_textual_tool_call_leak(content)
+    assert result is not None
+    assert result[0] == TRUNCATED_REASON_TEXTUAL_TOOL_CALL
+
+
 def test_classify_llama3_python_tag_with_json_body():
     content = '<|python_tag|>{"name": "edit_file", "arguments": {}}'
     result = _classify_textual_tool_call_leak(content)

@@ -132,7 +132,11 @@ def test_guardrail_escalates_on_repeated_identical_errors(tmp_path, monkeypatch)
 
     third_call_guardrails = _guardrail_user_messages(snapshots[2])
     assert any(
-        "IMPORTANT: You have called `read_file` 2 times" in m
+        "IMPORTANT: `read_file` returned the same error 2 times" in m
+        for m in third_call_guardrails
+    )
+    assert any(
+        "If the user explicitly requires one materially different call" in m
         for m in third_call_guardrails
     )
 
@@ -277,7 +281,7 @@ def test_repaired_run_command_error_still_triggers_guardrail(tmp_path, monkeypat
 
     assert len(snapshots) == 3
     assert any(
-        "IMPORTANT: You have called `run_command` 2 times" in m
+        "IMPORTANT: `run_command` returned the same error 2 times" in m
         for m in _guardrail_user_messages(snapshots[2])
     )
     assert [count for _tool, count, _err in guardrail_calls] == [2]
@@ -330,8 +334,8 @@ def test_multiple_tool_interventions_are_combined_into_one_user_message(
     assert len(snapshots) == 3
     guardrail_msgs = _guardrail_user_messages(snapshots[2])
     assert len(guardrail_msgs) == 1
-    assert "`read_file` 2 times" in guardrail_msgs[0]
-    assert "`run_command` 2 times" in guardrail_msgs[0]
+    assert "`read_file` returned the same error 2 times" in guardrail_msgs[0]
+    assert "`run_command` returned the same error 2 times" in guardrail_msgs[0]
 
     tool_names = {tool for tool, _count, _err in guardrail_calls}
     counts = sorted(count for _tool, count, _err in guardrail_calls)

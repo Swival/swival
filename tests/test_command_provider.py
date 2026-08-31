@@ -703,6 +703,27 @@ class TestCommandProviderMalformedRecovery:
         with pytest.raises(AgentError, match="malformed <swival:call>"):
             self._invoke(tmp_path)
 
+    def test_textual_tool_leak_then_clean(self, tmp_path, monkeypatch):
+        self._setup(
+            monkeypatch,
+            [
+                '<tool_call>{"name":"lookup_user"}</tool_call>',
+                "Here is the answer: 42.",
+            ],
+        )
+        msg, reason, activity = self._invoke(tmp_path)
+        assert reason == "stop"
+        assert "42" in msg.content
+        assert activity == []
+
+    def test_repeated_textual_tool_leak_raises(self, tmp_path, monkeypatch):
+        from swival.report import AgentError
+
+        leak = '<tool_call>{"name":"lookup_user"}</tool_call>'
+        self._setup(monkeypatch, [leak, leak])
+        with pytest.raises(AgentError, match="tool-call markup as plain text"):
+            self._invoke(tmp_path)
+
     def test_parseable_call_resets_counter(self, tmp_path, monkeypatch):
         """One malformed round, one parseable round, one malformed round must not raise."""
         self._setup(
