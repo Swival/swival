@@ -1334,25 +1334,6 @@ class _GrepLineTooLong(Exception):
     """A single line exceeded MAX_GREP_LINE_CHARS."""
 
 
-class _GrepCandidate:
-    """Heap key ranking older files first and, on equal mtime, later paths.
-
-    heapq evicts its smallest element, so a heap of these keeps exactly the
-    head of the (-mtime, path) order that grep output uses.
-    """
-
-    __slots__ = ("mtime", "path")
-
-    def __init__(self, mtime: float, path: Path) -> None:
-        self.mtime = mtime
-        self.path = path
-
-    def __lt__(self, other: "_GrepCandidate") -> bool:
-        if self.mtime != other.mtime:
-            return self.mtime < other.mtime
-        return self.path > other.path
-
-
 def _iter_lines(fp: Path) -> Iterator[str]:
     """Yield a file's lines one at a time without loading the whole file.
 
@@ -1366,11 +1347,12 @@ def _iter_lines(fp: Path) -> Iterator[str]:
     pending = ""
     with open(fp, "rb") as f:
         chunk = f.read(max(GREP_CHUNK_BYTES, BINARY_CHECK_BYTES))
-        if b"\x00" in chunk[:BINARY_CHECK_BYTES]:
+        if chunk.find(b"\x00", 0, BINARY_CHECK_BYTES) != -1:
             return
         while chunk:
             pending += decoder.decode(chunk)
             if pending:
+                buffered = len(pending)
                 lines = pending.splitlines()
                 # Hold back an unterminated tail, and a trailing "\r" whose
                 # "\n" partner may open the next chunk.
@@ -1381,7 +1363,12 @@ def _iter_lines(fp: Path) -> Iterator[str]:
                     pending = lines.pop()
                 else:
                     pending = ""
-                if any(len(line) > MAX_GREP_LINE_CHARS for line in lines):
+                # A completed line can only be over the cap if the buffer
+                # it came from was, which keeps the per-line scan off the
+                # common path.
+                if buffered > MAX_GREP_LINE_CHARS and any(
+                    len(line) > MAX_GREP_LINE_CHARS for line in lines
+                ):
                     raise _GrepLineTooLong(fp)
                 yield from lines
             # The held tail is a single line, possibly followed by one "\r".
@@ -1416,30 +1403,55 @@ def _grep_file(
         matched = regex.search(line) is not None
         if matched:
             count += 1
-        if len(line) > MAX_LINE_LENGTH:
-            line = line[:MAX_LINE_LENGTH]
+        line = line[:MAX_LINE_LENGTH]
         if matched and count <= keep:
             entry = (line_no, line, True)
-            if (
-                context_lines > 0
-                and blocks
-                and line_no - context_lines <= blocks[-1][-1][0] + 1
-            ):
-                prev = blocks[-1]
-                prev_end = prev[-1][0]
-                prev.extend(ctx for ctx in before if ctx[0] > prev_end)
-                prev.append(entry)
-            elif context_lines > 0:
-                blocks.append([*before, entry])
+            if blocks and line_no - context_lines <= blocks[-1][-1][0] + 1:
+                prev_end = blocks[-1][-1][0]
+                blocks[-1].extend(ctx for ctx in before if ctx[0] > prev_end)
+                blocks[-1].append(entry)
             else:
-                blocks.append([entry])
+                blocks.append([*before, entry])
             after_needed = context_lines
         elif after_needed > 0:
             blocks[-1].append((line_no, line, False))
             after_needed -= 1
-        if context_lines > 0:
+        # Leading context is only ever read by a later retained match.
+        if count < keep:
             before.append((line_no, line, False))
     return count, blocks
+
+
+def _iter_files(root: Path) -> Iterator[os.DirEntry]:
+    """Yield the file entries under root depth first, pruning .git.
+
+    Entries stream out of scandir one directory at a time, so memory is
+    bounded by the subdirectory names of the ancestors on the current
+    path rather than by the number of files, as with os.walk.
+    Also like os.walk, an entry whose type cannot be read counts as a
+    file, a directory that fails to open or iterate is skipped, and a
+    symlinked directory is checked right before descent so a directory
+    swapped for a symlink in the meantime is not walked.
+    """
+    stack = [str(root)]
+    while stack:
+        directory = stack.pop()
+        try:
+            if os.path.islink(directory):
+                continue
+            scanner = os.scandir(directory)
+        except OSError:
+            continue
+        with scanner, contextlib.suppress(OSError):
+            for entry in scanner:
+                try:
+                    is_dir = entry.is_dir()
+                except OSError:
+                    is_dir = False
+                if not is_dir:
+                    yield entry
+                elif entry.name != ".git":
+                    stack.append(entry.path)
 
 
 def _grep(
@@ -1492,10 +1504,7 @@ def _grep(
         return f'error: path does not exist: "{path}"'
 
     base = Path(base_dir).resolve()
-
-    candidates: list[tuple[float, Path]] = []
     eligible = 0
-    files_truncated = False
 
     if root.is_file():
         # Single file — ignore include, grep it directly.
@@ -1507,97 +1516,59 @@ def _grep(
             extra_write_roots=extra_write_roots,
         ):
             return f"error: {path} is outside allowed roots"
-        candidates.append((0.0, root))
+        candidates = [root]
 
     elif not root.is_dir():
         return f"error: path is not a directory: {path}"
 
     else:
-        # scandir streams each directory's entries, so memory during the
-        # walk is bounded by the subdirectory names of the ancestors on
-        # the current path, as with os.walk, never by the number of files.
-        # Directory errors are skipped like os.walk with onerror=None, and
-        # symlinked directories are checked right before descent so a
-        # directory swapped for a symlink in the meantime is not walked.
-        # A bounded min-heap keeps the MAX_GREP_FILES newest candidates,
-        # so the files that get searched are the most recently modified
-        # ones no matter where the walk happens to visit them.
-        newest: list[_GrepCandidate] = []
-        stack = [str(root)]
-        while stack:
-            directory = stack.pop()
-            try:
-                if os.path.islink(directory):
+        # PurePath.match handles ** globs (Python 3.12+), but '**/*.ext'
+        # won't match root-level files (no dir component).  Fall back to
+        # fnmatch on the bare filename so '**/*.zig' still matches 'a.zig'.
+        include_name = include.rsplit("/", 1)[-1] if include else None
+
+        def eligible_files() -> Iterator[tuple[float, Path]]:
+            nonlocal eligible
+            for entry in _iter_files(root):
+                filepath = Path(entry.path)
+                if (
+                    include
+                    and not filepath.relative_to(root).match(include)
+                    and not fnmatch.fnmatch(entry.name, include_name)
+                ):
                     continue
-                scanner = os.scandir(directory)
-            except OSError:
-                continue
-            with scanner:
+                if not _is_within_base(
+                    filepath,
+                    base,
+                    files_mode=files_mode,
+                    extra_read_roots=extra_read_roots,
+                    extra_write_roots=extra_write_roots,
+                ):
+                    continue
+                # Broken symlinks can't be stat'd; skip them like
+                # unreadable files.
                 try:
-                    for entry in scanner:
-                        try:
-                            is_dir = entry.is_dir()
-                        except OSError:
-                            is_dir = False
-                        if is_dir:
-                            if entry.name != ".git":
-                                stack.append(entry.path)
-                            continue
-
-                        filepath = Path(entry.path)
-                        # Filter by include pattern
-                        if include:
-                            rel = filepath.relative_to(root)
-                            # PurePath.match handles ** globs (Python 3.12+),
-                            # but '**/*.ext' won't match root-level files (no
-                            # dir component).  Fall back to fnmatch on the
-                            # bare filename so '**/*.zig' still matches
-                            # 'a.zig'.
-                            if not rel.match(include) and not fnmatch.fnmatch(
-                                entry.name,
-                                include.split("/")[-1] if "/" in include else include,
-                            ):
-                                continue
-
-                        # Per-file containment check
-                        if not _is_within_base(
-                            filepath,
-                            base,
-                            files_mode=files_mode,
-                            extra_read_roots=extra_read_roots,
-                            extra_write_roots=extra_write_roots,
-                        ):
-                            continue
-
-                        # Broken symlinks can't be stat'd; skip them like
-                        # unreadable files.
-                        try:
-                            mtime = entry.stat().st_mtime
-                        except OSError:
-                            continue
-                        eligible += 1
-                        candidate = _GrepCandidate(mtime, filepath)
-                        if len(newest) < MAX_GREP_FILES:
-                            heapq.heappush(newest, candidate)
-                        elif newest[0] < candidate:
-                            heapq.heapreplace(newest, candidate)
+                    mtime = entry.stat().st_mtime
                 except OSError:
-                    pass
+                    continue
+                eligible += 1
+                yield mtime, filepath
 
-        files_truncated = eligible > MAX_GREP_FILES
-        # Newest first, then by path for a stable order among equal mtimes.
-        candidates = [
-            (c.mtime, c.path) for c in sorted(newest, key=lambda c: (-c.mtime, c.path))
-        ]
+        # nsmallest keeps a bounded heap over the stream, so only the
+        # MAX_GREP_FILES newest files are ever held, already in the
+        # newest-first, then path order the output uses.
+        newest = heapq.nsmallest(
+            MAX_GREP_FILES, eligible_files(), key=lambda c: (-c[0], c[1])
+        )
+        candidates = [filepath for _, filepath in newest]
 
     total_found = 0
-    retained = 0
     skipped_long_lines = 0
     grouped: dict[Path, list[list[tuple[int, str, bool]]]] = {}
-    for _, filepath in candidates:
+    for filepath in candidates:
         try:
             count, blocks = _grep_file(
-                filepath, regex, context_lines, MAX_GREP_MATCHES - retained
+                filepath, regex, context_lines, max(0, MAX_GREP_MATCHES - total_found)
             )
         except (UnicodeDecodeError, OSError):
             continue
@@ -1605,12 +1576,11 @@ def _grep(
             skipped_long_lines += 1
             continue
         total_found += count
-        retained += min(count, MAX_GREP_MATCHES - retained)
         if blocks:
             grouped[filepath] = blocks
 
     notes: list[str] = []
-    if files_truncated:
+    if eligible > MAX_GREP_FILES:
         notes.append(
             f"Only the {MAX_GREP_FILES} most recently modified of {eligible} "
             "files were searched; results may be incomplete. Narrow the path "

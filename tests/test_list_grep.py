@@ -5,7 +5,16 @@ import time
 
 import pytest
 
-from swival.tools import _check_pattern, _grep, _is_within_base, _list_files, dispatch
+from swival import tools
+from swival.tools import (
+    _check_pattern,
+    _grep,
+    _GrepLineTooLong,
+    _is_within_base,
+    _iter_lines,
+    _list_files,
+    dispatch,
+)
 
 
 @pytest.fixture
@@ -186,8 +195,6 @@ class TestListFiles:
 
     def test_walk_truncation_stops_early(self, sandbox, monkeypatch):
         """Walk should bail out when the visit cap is reached."""
-        from swival import tools
-
         many_dir = sandbox / "many"
         many_dir.mkdir()
         for i in range(50):
@@ -199,8 +206,6 @@ class TestListFiles:
 
     def test_walk_truncation_no_matches(self, sandbox, monkeypatch):
         """When walk halts early with no matches, message should say so."""
-        from swival import tools
-
         many_dir = sandbox / "many"
         many_dir.mkdir()
         for i in range(50):
@@ -621,9 +626,6 @@ class TestGrepStreaming:
     """grep must not hold whole files or every match in memory."""
 
     def test_iter_lines_matches_splitlines_across_chunks(self, tmp_path):
-        from swival import tools
-        from swival.tools import _iter_lines
-
         chunk = tools.GREP_CHUNK_BYTES
         # Pieces chosen so that "\r\n" and a multibyte character straddle
         # the first chunk boundary, with every separator splitlines knows.
@@ -635,8 +637,6 @@ class TestGrepStreaming:
         assert list(_iter_lines(fp)) == text.splitlines()
 
     def test_iter_lines_trailing_cr_and_empty_file(self, tmp_path):
-        from swival.tools import _iter_lines
-
         fp = tmp_path / "cr.txt"
         fp.write_bytes(b"abc\r")
         assert list(_iter_lines(fp)) == ["abc"]
@@ -644,8 +644,6 @@ class TestGrepStreaming:
         assert list(_iter_lines(fp)) == []
 
     def test_iter_lines_binary_yields_nothing(self, tmp_path):
-        from swival.tools import _iter_lines
-
         fp = tmp_path / "bin.dat"
         fp.write_bytes(b"needle\x00needle\n")
         assert list(_iter_lines(fp)) == []
@@ -662,12 +660,12 @@ class TestGrepStreaming:
 
     def test_line_numbers_agree_with_read_file(self, tmp_path):
         """Form feeds are line breaks for read_file, so they must be for grep too."""
-        from swival.tools import _read_file
-
         (tmp_path / "ff.c").write_text("int a;\n\x0cint needle;\nint b;\n")
         result = _grep("needle", "ff.c", str(tmp_path))
         assert "Line 3: int needle;" in result
-        assert "int needle;" in _read_file("ff.c", str(tmp_path), offset=3, limit=1)
+        assert "int needle;" in tools._read_file(
+            "ff.c", str(tmp_path), offset=3, limit=1
+        )
 
     def test_peak_memory_stays_flat(self, tmp_path):
         """Regression for the OOM in issue #34.
@@ -712,12 +710,10 @@ class TestGrepStreaming:
         assert "old3.txt:" in result
         assert "old2.txt:" not in result
 
-    def test_context_blocks_merge_and_trail_past_cap(self, tmp_path):
+    def test_context_blocks_merge_and_trail_past_cap(self, tmp_path, monkeypatch):
         """Context windows merge when they touch, and the last retained
         match still shows its trailing context even when later matches
         are beyond the cap."""
-        from swival import tools
-
         lines = [
             "m1",
             "gap",
@@ -741,34 +737,23 @@ class TestGrepStreaming:
 
         # With the cap at 2, m3 is only counted. Its line still appears
         # as plain trailing context of m2, and nothing after it.
-        original = tools.MAX_GREP_MATCHES
-        tools.MAX_GREP_MATCHES = 2
-        try:
-            result = _grep(r"^m\d$", "f.txt", str(tmp_path), context_lines=6)
-        finally:
-            tools.MAX_GREP_MATCHES = original
+        monkeypatch.setattr(tools, "MAX_GREP_MATCHES", 2)
+        result = _grep(r"^m\d$", "f.txt", str(tmp_path), context_lines=6)
         assert result.startswith("Found 3 matches")
         assert result.count("<<<") == 2
         assert "Line 10: m3\n(Results truncated" in result
         assert "Line 11: end" not in result
 
-    def test_file_cap_keeps_newest_files_with_note(self, tmp_path):
+    def test_file_cap_keeps_newest_files_with_note(self, tmp_path, monkeypatch):
         """Under the file cap, the newest files are searched regardless of
         the order in which the walk visits them."""
-        from swival import tools
-
+        # The alphabetically first files are the oldest ones.
         for i in range(6):
             (tmp_path / f"f{i}.txt").write_text(f"needle f{i}\n")
-        # Make the alphabetically first files the oldest ones.
-        for i in range(6):
             os.utime(tmp_path / f"f{i}.txt", (1_000_000 + i, 1_000_000 + i))
-        original = tools.MAX_GREP_FILES
-        tools.MAX_GREP_FILES = 4
-        try:
-            result = _grep("needle", ".", str(tmp_path))
-            missing = _grep("absent", ".", str(tmp_path))
-        finally:
-            tools.MAX_GREP_FILES = original
+        monkeypatch.setattr(tools, "MAX_GREP_FILES", 4)
+        result = _grep("needle", ".", str(tmp_path))
+        missing = _grep("absent", ".", str(tmp_path))
 
         assert result.startswith("Found 4 matches")
         for i in (2, 3, 4, 5):
@@ -809,32 +794,24 @@ class TestGrepStreaming:
         assert result.startswith("Found 1 match")
         assert "ok.txt" in result
 
-    def test_line_cap_is_exact_at_the_boundary(self, tmp_path):
+    def test_line_cap_is_exact_at_the_boundary(self, tmp_path, monkeypatch):
         """A line of exactly the cap is accepted even when its CRLF straddles
         a chunk; one character more is rejected however the line ends."""
-        from swival import tools
-        from swival.tools import _GrepLineTooLong, _iter_lines
-
         fp = tmp_path / "edge.txt"
-        original = (tools.MAX_GREP_LINE_CHARS, tools.GREP_CHUNK_BYTES)
-        tools.MAX_GREP_LINE_CHARS, tools.GREP_CHUNK_BYTES = 4, 5
-        try:
-            fp.write_bytes(b"abcd\r\nxy\n")
-            assert list(_iter_lines(fp)) == ["abcd", "xy"]
-            fp.write_bytes(b"abcd\r")
-            assert list(_iter_lines(fp)) == ["abcd"]
-            fp.write_bytes(b"abcde\n")
-            with pytest.raises(_GrepLineTooLong):
-                list(_iter_lines(fp))
-            fp.write_bytes(b"x\nabcde")
-            with pytest.raises(_GrepLineTooLong):
-                list(_iter_lines(fp))
-        finally:
-            tools.MAX_GREP_LINE_CHARS, tools.GREP_CHUNK_BYTES = original
+        monkeypatch.setattr(tools, "MAX_GREP_LINE_CHARS", 4)
+        monkeypatch.setattr(tools, "GREP_CHUNK_BYTES", 5)
+        fp.write_bytes(b"abcd\r\nxy\n")
+        assert list(_iter_lines(fp)) == ["abcd", "xy"]
+        fp.write_bytes(b"abcd\r")
+        assert list(_iter_lines(fp)) == ["abcd"]
+        fp.write_bytes(b"abcde\n")
+        with pytest.raises(_GrepLineTooLong):
+            list(_iter_lines(fp))
+        fp.write_bytes(b"x\nabcde")
+        with pytest.raises(_GrepLineTooLong):
+            list(_iter_lines(fp))
 
     def test_context_lines_are_clamped(self, tmp_path):
-        from swival import tools
-
         (tmp_path / "f.txt").write_text("\n".join(str(i) for i in range(400)) + "\n")
         capped = _grep(
             "^200$", "f.txt", str(tmp_path), context_lines=tools.MAX_GREP_CONTEXT_LINES
@@ -844,17 +821,11 @@ class TestGrepStreaming:
         assert "Line 101: 100" in huge and "Line 100: 99" not in huge
         assert "Line 301: 300" in huge and "Line 302: 301" not in huge
 
-    def test_oversized_line_skips_file_with_note(self, tmp_path):
-        from swival import tools
-
+    def test_oversized_line_skips_file_with_note(self, tmp_path, monkeypatch):
         (tmp_path / "minified.js").write_text("needle " + "z" * 5000)
         (tmp_path / "ok.js").write_text("needle\n")
-        original = tools.MAX_GREP_LINE_CHARS
-        tools.MAX_GREP_LINE_CHARS = 1024
-        try:
-            result = _grep("needle", ".", str(tmp_path))
-        finally:
-            tools.MAX_GREP_LINE_CHARS = original
+        monkeypatch.setattr(tools, "MAX_GREP_LINE_CHARS", 1024)
+        result = _grep("needle", ".", str(tmp_path))
 
         assert "Found 1 match" in result
         assert "ok.js" in result
@@ -869,20 +840,14 @@ class TestGrepStreaming:
         for line in result.splitlines():
             assert len(line) <= 2100
 
-    def test_equal_mtime_cap_keeps_first_paths(self, tmp_path):
+    def test_equal_mtime_cap_keeps_first_paths(self, tmp_path, monkeypatch):
         """With equal mtimes, the files kept under the cap are the ones the
         output order lists first."""
-        from swival import tools
-
         for name in "abcde":
             (tmp_path / f"{name}.txt").write_text(f"needle {name}\n")
             os.utime(tmp_path / f"{name}.txt", (1_000_000, 1_000_000))
-        original = tools.MAX_GREP_FILES
-        tools.MAX_GREP_FILES = 3
-        try:
-            result = _grep("needle", ".", str(tmp_path))
-        finally:
-            tools.MAX_GREP_FILES = original
+        monkeypatch.setattr(tools, "MAX_GREP_FILES", 3)
+        result = _grep("needle", ".", str(tmp_path))
         assert (
             result.index("needle a")
             < result.index("needle b")
@@ -927,15 +892,8 @@ class TestGrepStreaming:
         assert "needle ok" in result
         assert result.count("needle flaky") == 1
 
-    def test_binary_probe_does_not_shrink_with_chunk_size(self, tmp_path):
-        from swival import tools
-        from swival.tools import _iter_lines
-
+    def test_binary_probe_does_not_shrink_with_chunk_size(self, tmp_path, monkeypatch):
         fp = tmp_path / "late_nul.bin"
         fp.write_bytes(b"needle\n" * 100 + b"\x00" + b"needle\n")
-        original = tools.GREP_CHUNK_BYTES
-        tools.GREP_CHUNK_BYTES = 16
-        try:
-            assert list(_iter_lines(fp)) == []
-        finally:
-            tools.GREP_CHUNK_BYTES = original
+        monkeypatch.setattr(tools, "GREP_CHUNK_BYTES", 16)
+        assert list(_iter_lines(fp)) == []
