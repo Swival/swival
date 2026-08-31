@@ -24,7 +24,7 @@ from rich.progress import (
 )
 from rich.rule import Rule
 from rich.spinner import Spinner
-from rich.segment import Segment
+from rich.segment import Segment, Segments
 from rich.style import Style
 from rich.text import Text
 
@@ -1185,36 +1185,76 @@ class _LeftBar:
             yield newline
 
 
+_render_fallback_noted = False
+
+
+def _note_render_fallback(exc: Exception) -> None:
+    """Explain once per process why output switched to plain text.
+
+    Markdown and Syntax import pygments lexers and styles lazily, so the
+    first fenced code block can fail long after startup, typically because
+    the environment was reinstalled under a running process.
+    The flag is deliberately not part of reset_state(): the notice is
+    about the process, not the turn.
+    """
+    global _render_fallback_noted
+    if _render_fallback_noted:
+        return
+    _render_fallback_noted = True
+    _console.print(
+        Text(
+            f"  rich rendering failed ({type(exc).__name__}: {exc}), "
+            "showing plain text instead",
+            style="yellow dim",
+        )
+    )
+
+
 def assistant_text(text: str) -> None:
     src_lines = text.split("\n")
-    if len(src_lines) > _ASSISTANT_MAX_LINES:
-        remaining = len(src_lines) - _ASSISTANT_MAX_LINES
+    remaining = len(src_lines) - _ASSISTANT_MAX_LINES
+    if remaining > 0:
         text = "\n".join(src_lines[:_ASSISTANT_MAX_LINES])
-        md = Markdown(text)
-        _console.print(_LeftBar(md), end="")
+    # Render before writing anything, so a failed render leaves no partial
+    # output and errors from the stream itself still propagate.
+    try:
+        rendered = Segments(_console.render(_LeftBar(Markdown(text))))
+    except Exception as exc:
+        _note_render_fallback(exc)
+        rendered = Segments(_console.render(_LeftBar(Text(text))))
+    _console.print(rendered, end="")
+    if remaining > 0:
         _console.print(
             Text(f"  │ ... {remaining} more lines (truncated)", style="blue dim")
         )
-    else:
-        md = Markdown(text)
-        _console.print(_LeftBar(md), end="")
 
 
 def repl_answer(text: str) -> None:
-    """Print a REPL answer to stdout, with syntax highlighting when on a TTY."""
-    if _stdout_console.is_terminal and not _stdout_console.no_color:
-        from rich.syntax import Syntax
+    """Print a REPL answer to stdout, with syntax highlighting when on a TTY.
 
-        highlighted = Syntax(
-            text,
-            "markdown",
-            theme="ansi_dark",
-            background_color="default",
-            word_wrap=True,
-        )
-        _stdout_console.print(highlighted)
-    else:
-        print(text)
+    The answer is the one thing that must reach the user, so a rendering
+    failure degrades to a plain print instead of propagating.
+    Rendering happens before any write for the same reason as in
+    assistant_text.
+    """
+    if _stdout_console.is_terminal and not _stdout_console.no_color:
+        try:
+            from rich.syntax import Syntax
+
+            highlighted = Syntax(
+                text,
+                "markdown",
+                theme="ansi_dark",
+                background_color="default",
+                word_wrap=True,
+            )
+            rendered = Segments(_stdout_console.render(highlighted))
+        except Exception as exc:
+            _note_render_fallback(exc)
+        else:
+            _stdout_console.print(rendered)
+            return
+    print(text)
 
 
 # -- Reviewer feedback -------------------------------------------------------

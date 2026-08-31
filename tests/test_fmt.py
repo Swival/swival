@@ -2,6 +2,7 @@
 
 from io import StringIO
 
+import pytest
 from rich.console import Console
 
 from swival import fmt
@@ -473,6 +474,100 @@ class TestAssistantText:
         out = _capture(fmt.assistant_text, "")
         assert isinstance(out, str)
 
+    def test_falls_back_to_plain_text_when_rendering_fails(self, monkeypatch):
+        """A lazy pygments import failing inside Markdown must not lose the text."""
+        monkeypatch.setattr(fmt, "Markdown", _BrokenMarkdown)
+        monkeypatch.setattr(fmt, "_render_fallback_noted", False)
+        text = "Here:\n```python\nprint('hi')\n```"
+        out = _capture(fmt.assistant_text, text)
+        assert "│ print('hi')" in out
+        assert "rich rendering failed" in out
+        assert "pygments.styles.monokai" in out
+        assert "showing plain text instead" in out
+
+    def test_fallback_keeps_truncation_marker(self, monkeypatch):
+        monkeypatch.setattr(fmt, "Markdown", _BrokenMarkdown)
+        monkeypatch.setattr(fmt, "_render_fallback_noted", False)
+        long_text = "\n".join(f"Line {i}" for i in range(200))
+        out = _capture(fmt.assistant_text, long_text)
+        assert "Line 99" in out
+        assert "Line 100" not in out
+        assert "100 more lines" in out
+
+    def test_fallback_note_survives_turn_reset(self, monkeypatch):
+        """turn_header() resets per-turn state but must not repeat the notice."""
+        monkeypatch.setattr(fmt, "Markdown", _BrokenMarkdown)
+        monkeypatch.setattr(fmt, "_render_fallback_noted", False)
+        buf = StringIO()
+        old = fmt._console
+        fmt._console = Console(file=buf, no_color=True, width=80)
+        fmt.reset_state()
+        try:
+            fmt.assistant_text("first")
+            fmt.turn_header(2, 10, 100)
+            fmt.assistant_text("second")
+        finally:
+            fmt.reset_state()
+            fmt._console = old
+        out = buf.getvalue()
+        assert "first" in out
+        assert "second" in out
+        assert out.count("rich rendering failed") == 1
+
+    def test_write_errors_propagate(self, monkeypatch):
+        """Only rendering is guarded; a broken stream is a real error."""
+        monkeypatch.setattr(fmt, "_render_fallback_noted", False)
+        old = fmt._console
+        fmt._console = Console(file=_BrokenPipe(), no_color=True, width=80)
+        try:
+            with pytest.raises(OSError, match="stream closed"):
+                fmt.assistant_text("hello")
+        finally:
+            fmt._console = old
+        assert fmt._render_fallback_noted is False
+
+    def test_segments_match_direct_print(self):
+        """Pre-rendering must not change the output."""
+        text = "# Title\n\nSome *emphasis* and code:\n\n```python\nprint('hi')\n```\n"
+        direct = StringIO()
+        _styled_console(direct).print(fmt._LeftBar(fmt.Markdown(text)), end="")
+        via_fmt = StringIO()
+        old = fmt._console
+        fmt._console = _styled_console(via_fmt)
+        try:
+            fmt.assistant_text(text)
+        finally:
+            fmt._console = old
+        assert via_fmt.getvalue() == direct.getvalue()
+
+
+class _BrokenMarkdown:
+    """Stands in for rich.markdown.Markdown when pygments is missing on disk."""
+
+    def __init__(self, text, **_kwargs):
+        self.text = text
+
+    def __rich_console__(self, console, options):
+        raise ModuleNotFoundError("No module named 'pygments.styles.monokai'")
+        yield
+
+
+class _BrokenPipe:
+    """A file object whose every write fails, like a closed stderr.
+
+    Raises a plain OSError on purpose: rich turns BrokenPipeError into
+    a SystemExit after redirecting stdout to /dev/null.
+    """
+
+    def write(self, _text):
+        raise OSError("stream closed")
+
+    def flush(self):
+        pass
+
+    def isatty(self):
+        return False
+
 
 class TestModelInfo:
     def test_basic(self):
@@ -783,6 +878,34 @@ class TestReplAnswer:
         output = buf.getvalue()
         assert "**bold text**" in output  # raw markers preserved for copy/paste
         assert "\x1b[" in output  # but with ANSI styling
+
+    def test_falls_back_to_plain_print_when_highlighting_fails(
+        self, monkeypatch, capsys
+    ):
+        """The answer must still reach stdout when Syntax cannot be built."""
+
+        def _broken_syntax(*_args, **_kwargs):
+            raise ModuleNotFoundError("No module named 'pygments.styles.default'")
+
+        monkeypatch.setattr("rich.syntax.Syntax", _broken_syntax)
+        monkeypatch.setattr(fmt, "_render_fallback_noted", False)
+        stdout_buf = StringIO()
+        stderr_buf = StringIO()
+        old_stdout = fmt._stdout_console
+        old_stderr = fmt._console
+        fmt._stdout_console = _styled_console(stdout_buf)
+        fmt._console = Console(file=stderr_buf, no_color=True, width=80)
+        fmt.reset_state()
+        try:
+            fmt.repl_answer("hello world")
+        finally:
+            fmt.reset_state()
+            fmt._stdout_console = old_stdout
+            fmt._console = old_stderr
+        captured = capsys.readouterr()
+        assert "hello world" in captured.out
+        assert stdout_buf.getvalue() == ""
+        assert "rich rendering failed" in stderr_buf.getvalue()
 
 
 class TestReviewFeedback:
