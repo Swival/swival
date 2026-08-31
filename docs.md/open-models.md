@@ -28,6 +28,8 @@ These are engineering choices, not marketing claims. Each one exists because a s
 
 **Durable state tools.** The `think` tool gives the model a structured scratchpad that persists across compaction. The `todo` tool tracks work items that survive context drops. The `snapshot` tool lets the agent compress its own investigation into a summary and reclaim context space on demand. These tools exist because smaller models need external scaffolding to stay on track through multi-step tasks.
 
+**Announced actions.** Some models narrate the next step ("Let me run the tests") and then end their turn without the tool call. Swival does not take that as a final answer. It asks once for the tool call before accepting the text.
+
 **Error guardrails.** If the model repeats the same error twice, Swival warns it. Three times, it tells the model to stop and try something different. This keeps small models from burning their entire context budget on a loop.
 
 ### A real example

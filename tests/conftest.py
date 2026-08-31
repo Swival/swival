@@ -1,6 +1,7 @@
 """Shared test fixtures."""
 
 import shutil
+import types
 from contextlib import contextmanager
 from io import StringIO
 from pathlib import Path
@@ -8,6 +9,9 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
+from swival.snapshot import SnapshotState
+from swival.thinking import ThinkingState
+from swival.todo import TodoState
 from swival.tools import _execute_command_call
 
 _FAKE_TTY_ENV = {"TERM": "xterm-256color"}
@@ -164,4 +168,70 @@ def _isolate_global_agents_md(monkeypatch):
     monkeypatch.setattr(
         "swival.agent._global_agents_md_path",
         lambda: Path("/nonexistent/.agents/AGENTS.md"),
+    )
+
+
+def make_message(content=None, tool_calls=None):
+    """Assistant message shaped like a provider response object."""
+    return types.SimpleNamespace(
+        content=content, tool_calls=tool_calls, role="assistant"
+    )
+
+
+def make_tool_call(name, args=None, tc_id="tc1"):
+    return types.SimpleNamespace(
+        id=tc_id,
+        function=types.SimpleNamespace(
+            name=name, arguments="{}" if args is None else args
+        ),
+    )
+
+
+class ScriptedLLM:
+    """call_llm stand-in that plays scripted responses, then a final answer.
+
+    A response may be ``(message, finish_reason)``; a bare message means
+    ``"stop"``.
+    """
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = 0
+        self.tail_answer = "all done"
+
+    def __call__(self, *args, **kwargs):
+        self.calls += 1
+        if self.responses:
+            response = self.responses.pop(0)
+            return response if isinstance(response, tuple) else (response, "stop")
+        return make_message(content=self.tail_answer), "stop"
+
+
+def build_loop_kwargs(tmp_path, goal_state=None, *, max_turns=4):
+    """Minimal run_agent_loop() kwargs for a mocked provider."""
+    return dict(
+        api_base="http://x",
+        model_id="m",
+        max_turns=max_turns,
+        max_output_tokens=None,
+        temperature=None,
+        top_p=None,
+        seed=None,
+        context_length=128000,
+        base_dir=str(tmp_path),
+        thinking_state=ThinkingState(),
+        todo_state=TodoState(),
+        snapshot_state=SnapshotState(),
+        goal_state=goal_state,
+        resolved_commands={},
+        skills_catalog={},
+        skill_read_roots=[],
+        extra_write_roots=[],
+        files_mode="all",
+        commands_unrestricted=False,
+        shell_allowed=False,
+        verbose=False,
+        llm_kwargs={"provider": "generic"},
+        file_tracker=None,
+        continue_here=False,
     )

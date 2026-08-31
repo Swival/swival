@@ -857,6 +857,7 @@ TRUNCATED_REASON_LENGTH = "length"
 TRUNCATED_REASON_MALFORMED = "malformed_args"
 TRUNCATED_REASON_TEXTUAL_TOOL_CALL = "textual_tool_call_leak"
 TRUNCATED_REASON_DUPLICATE = "duplicate_calls"
+TRUNCATED_REASON_ANNOUNCED_ACTION = "announced_action"
 
 
 _STRONG_LEAKED_TOOL_TEXT_RE = re.compile(
@@ -970,6 +971,42 @@ def _make_textual_tool_call_repair_prompt() -> str:
         "no tool was executed. Continue the task. Use the available tools "
         "through the proper tool-calling interface, or give a final answer "
         "only if no tool call is needed."
+    )
+
+
+_ANNOUNCED_ACTION_RE = re.compile(
+    r"\b(?:let me|let['’]s|i(?:['’]ll| will| need to|(?:['’]m| am) going to))\b",
+    re.IGNORECASE,
+)
+_OFFER_TO_USER_RE = re.compile(
+    r"\b(?:let me know|if you(?:['’]d| would)? (?:like|want|prefer)|would you like"
+    r"|want me to|sh(?:ould|all) i|happy to|i(?:['’]ll| will) (?:leave|wait|stop))\b",
+    re.IGNORECASE,
+)
+
+
+def _announces_pending_action(content: str | None) -> bool:
+    """True when the reply ends by saying what the model is about to do.
+
+    Only the last paragraph counts: a real final answer often recaps
+    earlier steps in the same words.
+    """
+    if not content:
+        return False
+    paragraphs = [p for p in _strip_code_spans(content).split("\n\n") if p.strip()]
+    if not paragraphs:
+        return False
+    tail = paragraphs[-1]
+    if _OFFER_TO_USER_RE.search(tail):
+        return False
+    return _ANNOUNCED_ACTION_RE.search(tail) is not None
+
+
+def _make_announced_action_nudge() -> str:
+    return (
+        "Your previous response announced an action but made no tool call, "
+        "so nothing was executed. Make the tool call now. Reply with text "
+        "only if the task is complete or you are blocked."
     )
 
 
@@ -9786,6 +9823,7 @@ def _run_agent_loop(
     # True until the model acts on the last goal continuation prompt.
     # A goal-launch turn counts as a continuation for its first reply.
     _continuation_pending = bool(goal_launch_turn)
+    _announced_action_nudge_pending = False
     _textual_tool_call_repair_pending = False
     _malformed_tool_call_repair_pending = False
     _duplicate_tool_call_repair_pending = False
@@ -9795,7 +9833,8 @@ def _run_agent_loop(
     def _reprompt(content: str) -> None:
         """Ask the model to retry after an unusable reply.
 
-        The model did try to act, so the goal continuation is re-armed.
+        Clears the continuation flag: an unusable reply is not the model
+        ignoring the continuation prompt.
         """
         nonlocal _continuation_pending
         messages.append({"role": "user", "content": content, "_swival_synthetic": True})
@@ -10770,6 +10809,26 @@ def _run_agent_loop(
                 _reprompt(_make_textual_tool_call_repair_prompt())
                 continue
 
+            # A reply that only says what it is about to do is not an answer.
+            if (
+                finish_reason != "length"
+                and turns < max_turns
+                and not _announced_action_nudge_pending
+                and _announces_pending_action(msg.content)
+            ):
+                _announced_action_nudge_pending = True
+                if report:
+                    report.record_recovered_response(
+                        turns + turn_offset, reason=TRUNCATED_REASON_ANNOUNCED_ACTION
+                    )
+                if verbose:
+                    fmt.warning(
+                        "response announced an action without a tool call, "
+                        "requesting the tool call"
+                    )
+                _reprompt(_make_announced_action_nudge())
+                continue
+
         # Emit events for streaming consumers: text_chunk for final answers only,
         # status_update for intermediate reasoning (before tool calls).
         if msg.content and not msg.tool_calls and finish_reason != "length":
@@ -10877,6 +10936,7 @@ def _run_agent_loop(
         all_tools_readonly = True
         image_stash: list[dict] = []
         _continuation_pending = False
+        _announced_action_nudge_pending = False
         _textual_tool_call_repair_pending = False
         _malformed_tool_call_repair_pending = False
         _duplicate_tool_call_repair_pending = False

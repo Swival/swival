@@ -66,6 +66,8 @@ Trash retention is enforced automatically. Entries older than seven days are rem
 
 Set `case_insensitive` to `true` for case-insensitive matching. Results are capped at 100 matches and long lines are truncated to 2,000 characters.
 
+Memory use does not depend on the size of the workspace. Files are streamed line by line rather than loaded whole, only the 100 retained matches and their context are kept, and `context_lines` is clamped to 100. When more than 20,000 files are eligible, only the 20,000 most recently modified ones are searched and the result says so. A file containing a single line longer than 8 MB is skipped and reported the same way. The match count in the `Found N matches` header still reflects every match seen in the searched files, so it remains a useful hint that the pattern needs narrowing.
+
 ## `outline`
 
 `outline` shows the structural skeleton of one or more files: classes, functions, and top-level declarations with line numbers. No bodies are included. This is useful for surveying a file before reading specific sections.

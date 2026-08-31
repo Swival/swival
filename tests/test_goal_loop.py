@@ -1,77 +1,14 @@
 """Integration tests for goal-driven agent loop continuation."""
 
-import types
-
 import pytest
 
 from swival import agent
 from swival.goal import GoalState, GoalStatus
 from swival.session import Session
-from swival.snapshot import SnapshotState
-from swival.thinking import ThinkingState
-from swival.todo import TodoState
-
-
-def _msg(content=None, tool_calls=None):
-    m = types.SimpleNamespace()
-    m.content = content
-    m.tool_calls = tool_calls
-    m.role = "assistant"
-    return m
-
-
-def _tool_call(name, args=None, tc_id="tc1"):
-    return types.SimpleNamespace(
-        id=tc_id,
-        function=types.SimpleNamespace(
-            name=name, arguments="{}" if args is None else args
-        ),
-    )
-
-
-class _ScriptedLLM:
-    """Returns scripted responses, then defaults to a final answer."""
-
-    def __init__(self, responses):
-        self.responses = list(responses)
-        self.calls = 0
-        self.tail_answer = "all done"
-
-    def __call__(self, *args, **kwargs):
-        self.calls += 1
-        if self.responses:
-            response = self.responses.pop(0)
-            return response if isinstance(response, tuple) else (response, "stop")
-        return _msg(content=self.tail_answer), "stop"
-
-
-def _build_loop_kwargs(tmp_path, goal_state, *, max_turns=4):
-    return dict(
-        api_base="http://x",
-        model_id="m",
-        max_turns=max_turns,
-        max_output_tokens=None,
-        temperature=None,
-        top_p=None,
-        seed=None,
-        context_length=128000,
-        base_dir=str(tmp_path),
-        thinking_state=ThinkingState(),
-        todo_state=TodoState(),
-        snapshot_state=SnapshotState(),
-        goal_state=goal_state,
-        resolved_commands={},
-        skills_catalog={},
-        skill_read_roots=[],
-        extra_write_roots=[],
-        files_mode="all",
-        commands_unrestricted=False,
-        shell_allowed=False,
-        verbose=False,
-        llm_kwargs={"provider": "generic"},
-        file_tracker=None,
-        continue_here=False,
-    )
+from tests.conftest import ScriptedLLM as _ScriptedLLM
+from tests.conftest import build_loop_kwargs as _build_loop_kwargs
+from tests.conftest import make_message as _msg
+from tests.conftest import make_tool_call as _tool_call
 
 
 def test_loop_returns_immediately_without_goal(tmp_path, monkeypatch):
@@ -646,7 +583,7 @@ def test_continuation_reinjected_after_productive_tool_turns(tmp_path, monkeypat
             _msg(tool_calls=[_tool_call("think", '{"thought": "plan"}')]),
             _msg(content="checkpoint one"),
             _msg(tool_calls=[_tool_call("think", '{"thought": "more"}')]),
-            _msg(content="Let me press Enter."),
+            _msg(content="checkpoint two"),
             _msg(tool_calls=[_tool_call("think", '{"thought": "again"}')]),
             _msg(content="checkpoint three"),
             _msg(content="blocked for real"),
@@ -724,7 +661,7 @@ def test_recovery_prompt_rearms_continuation(tmp_path, monkeypatch, kind):
         [
             _msg(content="first pass"),
             _UNUSABLE_REPLIES[kind],
-            _msg(content="Let me try that again."),
+            _msg(content="second pass"),
             _msg(content="blocked"),
         ]
     )
@@ -748,7 +685,7 @@ def test_goal_launch_repair_prompt_rearms_continuation(tmp_path, monkeypatch):
     llm = _ScriptedLLM(
         [
             _msg(tool_calls=[_tool_call("think", "{not json")]),
-            _msg(content="Let me retry."),
+            _msg(content="second pass"),
             _msg(content="blocked"),
         ]
     )

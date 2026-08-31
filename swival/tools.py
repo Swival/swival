@@ -1,10 +1,12 @@
 """Tool definitions and implementations for an LLM agent."""
 
 import base64
+import codecs
 import contextlib
 import copy
 import fnmatch
 import hashlib
+import heapq
 import json
 import os
 import re
@@ -13,6 +15,8 @@ import subprocess
 import sys
 import threading
 import uuid
+from collections import deque
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Literal
@@ -1104,6 +1108,11 @@ def safe_resolve(
 MAX_LIST_RESULTS = 100
 MAX_LIST_WALK_ENTRIES = 20_000
 MAX_GREP_MATCHES = 100
+MAX_GREP_FILES = 20_000
+MAX_GREP_CONTEXT_LINES = 100
+MAX_GREP_LINE_CHARS = 8 * 1024 * 1024
+GREP_CHUNK_BYTES = 64 * 1024
+_LINE_BREAK_CHARS = "\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"
 
 
 def _check_pattern(pattern: str) -> str | None:
@@ -1321,6 +1330,99 @@ def _list_files(
     return result
 
 
+class _GrepLineTooLong(Exception):
+    """A single line exceeded MAX_GREP_LINE_CHARS."""
+
+
+def _iter_lines(fp: Path) -> Iterator[str]:
+    """Yield a file's lines one at a time without loading the whole file.
+
+    Lines are split exactly like str.splitlines() so that grep line numbers
+    agree with read_file offsets.
+    Binary files yield nothing.
+    Raises UnicodeDecodeError for invalid UTF-8, OSError on read failures
+    and _GrepLineTooLong when one line grows past MAX_GREP_LINE_CHARS.
+    """
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    pending = ""
+    with open(fp, "rb") as f:
+        chunk = f.read(GREP_CHUNK_BYTES)
+        if b"\x00" in chunk[:BINARY_CHECK_BYTES]:
+            return
+        while chunk:
+            pending += decoder.decode(chunk)
+            if pending:
+                lines = pending.splitlines()
+                # Hold back an unterminated tail, and a trailing "\r" whose
+                # "\n" partner may open the next chunk.
+                last_char = pending[-1]
+                if last_char == "\r":
+                    pending = lines.pop() + "\r"
+                elif last_char not in _LINE_BREAK_CHARS:
+                    pending = lines.pop()
+                else:
+                    pending = ""
+                if any(len(line) > MAX_GREP_LINE_CHARS for line in lines):
+                    raise _GrepLineTooLong(fp)
+                yield from lines
+            # The held tail is a single line, possibly followed by one "\r".
+            tail_len = len(pending) - (1 if pending.endswith("\r") else 0)
+            if tail_len > MAX_GREP_LINE_CHARS:
+                raise _GrepLineTooLong(fp)
+            chunk = f.read(GREP_CHUNK_BYTES)
+        pending += decoder.decode(b"", final=True)
+    yield from pending.splitlines()
+
+
+def _grep_file(
+    fp: Path,
+    regex: re.Pattern,
+    context_lines: int,
+    keep: int,
+) -> tuple[int, list[list[tuple[int, str, bool]]]]:
+    """Search one file, streaming it line by line.
+
+    Returns the total number of matching lines and the context blocks for
+    the first `keep` matches only.
+    Each block is a list of (line_no, text, is_match) entries, with
+    overlapping or adjacent windows merged into one block.
+    Retained text is clipped to MAX_LINE_LENGTH so a pathological file
+    cannot pin a huge line in memory.
+    """
+    blocks: list[list[tuple[int, str, bool]]] = []
+    before: deque[tuple[int, str, bool]] = deque(maxlen=context_lines)
+    after_needed = 0
+    count = 0
+    for line_no, line in enumerate(_iter_lines(fp), start=1):
+        matched = regex.search(line) is not None
+        if matched:
+            count += 1
+        if len(line) > MAX_LINE_LENGTH:
+            line = line[:MAX_LINE_LENGTH]
+        if matched and count <= keep:
+            entry = (line_no, line, True)
+            if (
+                context_lines > 0
+                and blocks
+                and line_no - context_lines <= blocks[-1][-1][0] + 1
+            ):
+                prev = blocks[-1]
+                prev_end = prev[-1][0]
+                prev.extend(ctx for ctx in before if ctx[0] > prev_end)
+                prev.append(entry)
+            elif context_lines > 0:
+                blocks.append([*before, entry])
+            else:
+                blocks.append([entry])
+            after_needed = context_lines
+        elif after_needed > 0:
+            blocks[-1].append((line_no, line, False))
+            after_needed -= 1
+        if context_lines > 0:
+            before.append((line_no, line, False))
+    return count, blocks
+
+
 def _grep(
     pattern: str,
     path: str,
@@ -1332,8 +1434,16 @@ def _grep(
     extra_write_roots: list[Path] = (),
     files_mode: str = "some",
 ) -> str:
-    """Search file contents for a regex pattern."""
-    context_lines = max(0, context_lines)  # defensive clamp
+    """Search file contents for a regex pattern.
+
+    Memory stays bounded whatever the workspace looks like: files are
+    streamed one at a time, only the first MAX_GREP_MATCHES matches (plus
+    their context) are retained, and only the MAX_GREP_FILES most recently
+    modified files are searched.
+    Files are visited newest first so the retained matches always come
+    from the most recently modified files.
+    """
+    context_lines = min(max(0, context_lines), MAX_GREP_CONTEXT_LINES)
 
     # Validate include pattern — only enforce in sandboxed mode
     if include is not None and files_mode != "all":
@@ -1364,19 +1474,9 @@ def _grep(
 
     base = Path(base_dir).resolve()
 
-    # Collect ALL matches as (file_path, line_no, line_text, mtime),
-    # then sort and cap — so the cap always picks the newest files.
-    matches: list[tuple[Path, int, str, float]] = []
-    # Cache file lines for context expansion (avoids re-reading files)
-    file_lines: dict[Path, list[str]] = {}
-
-    def _search_file(fp: Path, mtime: float, text: str) -> None:
-        lines = text.splitlines()
-        if context_lines > 0:
-            file_lines[fp] = lines
-        for line_no, line in enumerate(lines, start=1):
-            if regex.search(line):
-                matches.append((fp, line_no, line, mtime))
+    candidates: list[tuple[float, Path]] = []
+    eligible = 0
+    files_truncated = False
 
     if root.is_file():
         # Single file — ignore include, grep it directly.
@@ -1388,112 +1488,119 @@ def _grep(
             extra_write_roots=extra_write_roots,
         ):
             return f"error: {path} is outside allowed roots"
-        # Skip binary (silent, consistent with directory mode)
-        try:
-            with open(root, "rb") as f:
-                chunk = f.read(BINARY_CHECK_BYTES)
-        except (PermissionError, OSError):
-            chunk = b""
-        if b"\x00" not in chunk:
-            try:
-                text = root.read_text(encoding="utf-8")
-            except (UnicodeDecodeError, PermissionError, OSError):
-                text = ""
-            _search_file(root, root.stat().st_mtime, text)
+        candidates.append((0.0, root))
 
     elif not root.is_dir():
         return f"error: path is not a directory: {path}"
 
     else:
-        # Walk the tree, pruning .git directories
-        for dirpath, dirs, files in os.walk(root):
-            dirs[:] = [d for d in dirs if d != ".git"]
-            for filename in files:
-                # Filter by include pattern
-                if include:
-                    rel = (Path(dirpath) / filename).relative_to(root)
-                    # PurePath.match handles ** globs (Python 3.12+), but
-                    # '**/*.ext' won't match root-level files (no dir
-                    # component).  Fall back to fnmatch on the bare
-                    # filename so '**/*.zig' still matches 'a.zig'.
-                    if not rel.match(include) and not fnmatch.fnmatch(
-                        filename,
-                        include.split("/")[-1] if "/" in include else include,
+        # scandir streams directory entries, so even a directory with
+        # millions of files never has to be listed in memory at once.
+        # Symlinked directories are not descended into, like os.walk.
+        # A bounded min-heap keeps the MAX_GREP_FILES newest candidates,
+        # so the files that get searched are the most recently modified
+        # ones no matter where the walk happens to visit them.
+        newest: list[tuple[float, Path]] = []
+        stack = [str(root)]
+        while stack:
+            try:
+                scanner = os.scandir(stack.pop())
+            except OSError:
+                continue
+            with scanner:
+                for entry in scanner:
+                    try:
+                        is_dir = entry.is_dir()
+                    except OSError:
+                        is_dir = False
+                    if is_dir:
+                        try:
+                            is_symlink = entry.is_symlink()
+                        except OSError:
+                            is_symlink = False
+                        if entry.name != ".git" and not is_symlink:
+                            stack.append(entry.path)
+                        continue
+
+                    filepath = Path(entry.path)
+                    # Filter by include pattern
+                    if include:
+                        rel = filepath.relative_to(root)
+                        # PurePath.match handles ** globs (Python 3.12+), but
+                        # '**/*.ext' won't match root-level files (no dir
+                        # component).  Fall back to fnmatch on the bare
+                        # filename so '**/*.zig' still matches 'a.zig'.
+                        if not rel.match(include) and not fnmatch.fnmatch(
+                            entry.name,
+                            include.split("/")[-1] if "/" in include else include,
+                        ):
+                            continue
+
+                    # Per-file containment check
+                    if not _is_within_base(
+                        filepath,
+                        base,
+                        files_mode=files_mode,
+                        extra_read_roots=extra_read_roots,
+                        extra_write_roots=extra_write_roots,
                     ):
                         continue
 
-                filepath = Path(dirpath) / filename
+                    # Broken symlinks can't be stat'd; skip them like
+                    # unreadable files.
+                    try:
+                        mtime = entry.stat().st_mtime
+                    except OSError:
+                        continue
+                    eligible += 1
+                    candidate = (mtime, filepath)
+                    if len(newest) < MAX_GREP_FILES:
+                        heapq.heappush(newest, candidate)
+                    elif candidate > newest[0]:
+                        heapq.heapreplace(newest, candidate)
 
-                # Per-file containment check
-                if not _is_within_base(
-                    filepath,
-                    base,
-                    files_mode=files_mode,
-                    extra_read_roots=extra_read_roots,
-                    extra_write_roots=extra_write_roots,
-                ):
-                    continue
+        files_truncated = eligible > MAX_GREP_FILES
+        # Newest first, then by path for a stable order among equal mtimes.
+        candidates = sorted(newest, key=lambda c: (-c[0], c[1]))
 
-                # Skip binary files
-                try:
-                    with open(filepath, "rb") as f:
-                        chunk = f.read(BINARY_CHECK_BYTES)
-                except (PermissionError, OSError):
-                    continue
-                if b"\x00" in chunk:
-                    continue
-
-                # Read and search
-                try:
-                    text = filepath.read_text(encoding="utf-8")
-                except (UnicodeDecodeError, PermissionError, OSError):
-                    continue
-
-                _search_file(filepath, filepath.stat().st_mtime, text)
-
-    if not matches:
-        return "No matches found."
-
-    # Sort by file mtime (newest first), then by line number within each file
-    matches.sort(key=lambda m: (-m[3], m[0], m[1]))
-
-    # Cap after sorting so the top-100 are truly the newest
-    total_found = len(matches)
-    truncated = total_found > MAX_GREP_MATCHES
-    matches = matches[:MAX_GREP_MATCHES]
-
-    # Group capped matches by file, preserving mtime-based order.
-    # Build context blocks: list of (line_no, line_text, is_match) triples.
-    # When context_lines == 0, each match is its own single-entry block.
-    file_match_map: dict[Path, list[tuple[int, str]]] = {}
-    for filepath, line_no, line_text, _ in matches:
-        file_match_map.setdefault(filepath, []).append((line_no, line_text))
-
+    total_found = 0
+    retained = 0
+    skipped_long_lines = 0
     grouped: dict[Path, list[list[tuple[int, str, bool]]]] = {}
-    for filepath, file_match_tuples in file_match_map.items():
-        if context_lines > 0:
-            all_lines = file_lines.get(filepath, [])
-            match_line_nos = {ln for ln, _ in file_match_tuples}
-            blocks: list[list[tuple[int, str, bool]]] = []
-            for line_no, _ in file_match_tuples:
-                start = max(0, line_no - 1 - context_lines)
-                end = min(len(all_lines), line_no + context_lines)
-                window = [
-                    (i + 1, all_lines[i], (i + 1) in match_line_nos)
-                    for i in range(start, end)
-                ]
-                # Merge with previous block if overlapping/adjacent
-                if blocks and window[0][0] <= blocks[-1][-1][0] + 1:
-                    prev = blocks[-1]
-                    prev_end = prev[-1][0]
-                    for entry in window:
-                        if entry[0] > prev_end:
-                            prev.append(entry)
-                else:
-                    blocks.append(window)
+    for _, filepath in candidates:
+        try:
+            count, blocks = _grep_file(
+                filepath, regex, context_lines, MAX_GREP_MATCHES - retained
+            )
+        except (UnicodeDecodeError, OSError):
+            continue
+        except _GrepLineTooLong:
+            skipped_long_lines += 1
+            continue
+        total_found += count
+        retained += min(count, MAX_GREP_MATCHES - retained)
+        if blocks:
             grouped[filepath] = blocks
-        else:
-            grouped[filepath] = [[(ln, lt, True)] for ln, lt in file_match_tuples]
+
+    notes: list[str] = []
+    if files_truncated:
+        notes.append(
+            f"Only the {MAX_GREP_FILES} most recently modified of {eligible} "
+            "files were searched; results may be incomplete. Narrow the path "
+            "or include pattern."
+        )
+    if skipped_long_lines:
+        notes.append(
+            f"Skipped {skipped_long_lines} file"
+            f"{'s' if skipped_long_lines != 1 else ''} containing a line "
+            f"longer than {MAX_GREP_LINE_CHARS // (1024 * 1024)}MB."
+        )
+
+    if not grouped:
+        result = "No matches found."
+        if notes:
+            result += "\n(" + " ".join(notes) + ")"
+        return result
 
     output_parts: list[str] = []
     total_bytes = 0
@@ -1526,8 +1633,6 @@ def _grep(
                 output_parts.append(sep)
                 total_bytes += encoded_len
             for line_no, line_text, is_match in block:
-                if len(line_text) > MAX_LINE_LENGTH:
-                    line_text = line_text[:MAX_LINE_LENGTH]
                 marker = "  <<<" if context_lines > 0 and is_match else ""
                 entry = f"  Line {line_no}: {line_text}{marker}"
                 encoded_len = len(entry.encode("utf-8")) + 1
@@ -1542,11 +1647,14 @@ def _grep(
             break
 
     result = "\n".join(output_parts)
-    if truncated or byte_truncated:
-        result += (
-            "\n(Results truncated: showing first 100 matches. "
-            "Use a more specific pattern or path.)"
+    if total_found > MAX_GREP_MATCHES or byte_truncated:
+        notes.insert(
+            0,
+            f"Results truncated: showing first {MAX_GREP_MATCHES} matches. "
+            "Use a more specific pattern or path.",
         )
+    if notes:
+        result += "\n(" + " ".join(notes) + ")"
     return result
 
 

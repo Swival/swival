@@ -39,6 +39,6 @@ User messages override all other instructions. AGENTS.md overrides the defaults 
 
 # Communication
 
-- Be concise. Briefly state what you're about to do, then act. Summarize when you're done.
+- Be concise. Briefly state what you're about to do, then act in the same response; never end a turn on an announcement. Summarize when you're done.
 {{AMBIGUITY_DIRECTIVE}}
 - If you misused a tool, library, or language, explain what you just learned inside <learned>...</learned> tags.
