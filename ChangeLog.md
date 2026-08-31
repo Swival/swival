@@ -2,9 +2,25 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.42
+
+- Added `/btw <question>` for one-off REPL side questions.
+  It uses an isolated copy of the current context, then discards its transcript and session-state changes.
+  Costs still count, and external effects persist.
+- Goal mode now continues correctly after tool use or response recovery.
+  New prompts, `/continue`, and `/goal resume` also restart automatic continuation after the model gets stuck.
+- When a model announces its next action but ends the turn without making the tool call, Swival now asks once for the action to be performed.
+- Identical duplicate tool calls in one response are now discarded before anything executes.
+  MCP tools explicitly marked as non-read-only and non-idempotent are also protected from a second identical invocation.
+- Tool-call markup leaked into plain text is now repaired when output is truncated and when using command providers, instead of being mistaken for a final answer.
+- Hugging Face shared-endpoint request-size rejections now trigger context compaction and an automatic retry, even when the model advertises a larger context window.
+- `grep` now streams files and retains bounded results instead of loading entire workspaces into memory, preventing out-of-memory failures on large repositories.
+  Search limits and skipped oversized files are reported clearly.
+- `list_files` no longer fails an entire listing because it encounters a broken symlink.
+- Local endpoints configured with `extra_body.chat_template_kwargs.preserve_thinking = true` now retain `reasoning_content` when replaying tool-call turns.
+
 ## 1.0.41
 
-- Added `/btw <question>` for REPL side questions. It uses and discards a private context copy. Costs still count. External effects persist.
 - Nono sandbox workflows now use the signed `jedisct1/swival` profile pack. This restores `--sandbox nono` after Nono 0.71 removed its built-in profile. `--nono-profile` also accepts registry-pack references, and `--network provider-only` explains how to install its required pack when it is missing.
 - Updated LiteLLM to 1.97, which provides prebuilt ABI3 wheels for Python 3.14 on supported platforms. Installing Swival on Python 3.14 no longer requires a local Rust build.
 
