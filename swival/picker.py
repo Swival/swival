@@ -254,22 +254,25 @@ def pick_model(
     Falls back to a numbered list when the inline application cannot run,
     unless an explicit *input*/*output* pair was supplied (tests).
     """
-    explicit_io = input is not None or output is not None
-    try:
-        return _pick_with_app(
-            state,
-            title=title,
-            allow_search=allow_search,
-            on_toggle_favorite=on_toggle_favorite,
-            input=input,
-            output=output,
-        )
-    except (KeyboardInterrupt, EOFError):
-        return PickResult(kind="cancel")
-    except Exception:
-        if explicit_io:
-            raise
-        return _pick_basic(state, title=title)
+    from .fmt import suspend_live
+
+    with suspend_live():
+        explicit_io = input is not None or output is not None
+        try:
+            return _pick_with_app(
+                state,
+                title=title,
+                allow_search=allow_search,
+                on_toggle_favorite=on_toggle_favorite,
+                input=input,
+                output=output,
+            )
+        except (KeyboardInterrupt, EOFError):
+            return PickResult(kind="cancel")
+        except Exception:
+            if explicit_io:
+                raise
+            return _pick_basic(state, title=title)
 
 
 def _pick_with_app(
@@ -475,12 +478,15 @@ def _mini_prompt(label: str, *, default: str = "", input=None, output=None) -> s
     from prompt_toolkit import PromptSession
     from prompt_toolkit.output import create_output
 
+    from .fmt import suspend_live
+
     session = PromptSession(
         input=input,
         output=output if output is not None else create_output(sys.stderr),
     )
     try:
-        return session.prompt(f"{label}: ", default=default).strip()
+        with suspend_live():
+            return session.prompt(f"{label}: ", default=default).strip()
     except (KeyboardInterrupt, EOFError):
         return ""
 
@@ -503,102 +509,107 @@ def choose_model(
     Raises :class:`~swival.model_catalog.CatalogUnavailable` when the initial
     catalog cannot be fetched at all.
     """
-    from .model_catalog import CatalogUnavailable, is_hf_router, list_models
-    from .model_prefs import load_prefs, toggle_favorite
+    from .fmt import suspend_live
 
-    hf_explorer = is_hf_router(provider, base_url)
-    catalog = list_models(provider, base_url, api_key)
+    # One suspension for the whole flow, so the REPL prompt does not flash
+    # between picker rounds.
+    with suspend_live():
+        from .model_catalog import CatalogUnavailable, is_hf_router, list_models
+        from .model_prefs import load_prefs, toggle_favorite
 
-    prefs = load_prefs()
-    if prefs.warning:
-        fmt.warning(prefs.warning)
+        hf_explorer = is_hf_router(provider, base_url)
+        catalog = list_models(provider, base_url, api_key)
 
-    state = PickerState(
-        entries=catalog.entries,
-        favorites=set(prefs.favorites_for(provider)),
-        recents=prefs.recents_for(provider),
-        current=current,
-        query=initial_query,
-        # Swival is a tool-calling agent, so the explorer starts on the
-        # tools-capable subset; the hidden count keeps that visible and ^t
-        # lifts it.
-        tools_only=hf_explorer,
-    )
-    search_query: str | None = None  # None = browsing the main catalog
+        prefs = load_prefs()
+        if prefs.warning:
+            fmt.warning(prefs.warning)
 
-    while True:
-        if search_query is None:
-            title = f"Select a model · {catalog.source}"
-        else:
-            title = f"HuggingFace search results for {search_query!r}"
-
-        res = pick_model(
-            state,
-            title=title,
-            allow_search=hf_explorer,
-            on_toggle_favorite=lambda mid: toggle_favorite(provider, mid),
-            input=input,
-            output=output,
+        state = PickerState(
+            entries=catalog.entries,
+            favorites=set(prefs.favorites_for(provider)),
+            recents=prefs.recents_for(provider),
+            current=current,
+            query=initial_query,
+            # Swival is a tool-calling agent, so the explorer starts on the
+            # tools-capable subset; the hidden count keeps that visible and ^t
+            # lifts it.
+            tools_only=hf_explorer,
         )
+        search_query: str | None = None  # None = browsing the main catalog
 
-        if res.kind == "selected":
-            return res.entry.id, res.entry
+        while True:
+            if search_query is None:
+                title = f"Select a model · {catalog.source}"
+            else:
+                title = f"HuggingFace search results for {search_query!r}"
 
-        if res.kind == "manual":
-            text = _mini_prompt(
-                "Model id (blank to go back)",
-                default=state.query,
+            res = pick_model(
+                state,
+                title=title,
+                allow_search=hf_explorer,
+                on_toggle_favorite=lambda mid: toggle_favorite(provider, mid),
                 input=input,
                 output=output,
             )
-            if text:
-                return text, None
-            continue
 
-        if res.kind == "refresh":
-            try:
-                if search_query is None:
-                    catalog = list_models(provider, base_url, api_key, refresh=True)
-                    state.set_entries(catalog.entries)
-                else:
-                    from .model_catalog import search_hf_models
+            if res.kind == "selected":
+                return res.entry.id, res.entry
 
-                    state.set_entries(search_hf_models(search_query, api_key))
-            except CatalogUnavailable as e:
-                fmt.warning(f"refresh failed: {e.reason}")
-            continue
-
-        if res.kind == "search":
-            q = _mini_prompt(
-                "Search all of Hugging Face (blank to go back)",
-                default=state.query,
-                input=input,
-                output=output,
-            )
-            if not q:
+            if res.kind == "manual":
+                text = _mini_prompt(
+                    "Model id (blank to go back)",
+                    default=state.query,
+                    input=input,
+                    output=output,
+                )
+                if text:
+                    return text, None
                 continue
-            from .model_catalog import search_hf_models
 
-            try:
-                results = search_hf_models(q, api_key)
-            except CatalogUnavailable as e:
-                fmt.warning(f"search failed: {e.reason}")
-                continue
-            if not results:
-                fmt.info(f"no provider-served chat models match {q!r} on the hub")
-                continue
-            search_query = q
-            state.set_entries(results)
-            state.set_query("")
-            continue
+            if res.kind == "refresh":
+                try:
+                    if search_query is None:
+                        catalog = list_models(provider, base_url, api_key, refresh=True)
+                        state.set_entries(catalog.entries)
+                    else:
+                        from .model_catalog import search_hf_models
 
-        # cancel: inside search results, back out to the main catalog first.
-        if search_query is not None:
-            search_query = None
-            state.set_entries(catalog.entries)
-            state.set_query("")
-            continue
-        return None
+                        state.set_entries(search_hf_models(search_query, api_key))
+                except CatalogUnavailable as e:
+                    fmt.warning(f"refresh failed: {e.reason}")
+                continue
+
+            if res.kind == "search":
+                q = _mini_prompt(
+                    "Search all of Hugging Face (blank to go back)",
+                    default=state.query,
+                    input=input,
+                    output=output,
+                )
+                if not q:
+                    continue
+                from .model_catalog import search_hf_models
+
+                try:
+                    results = search_hf_models(q, api_key)
+                except CatalogUnavailable as e:
+                    fmt.warning(f"search failed: {e.reason}")
+                    continue
+                if not results:
+                    fmt.info(f"no provider-served chat models match {q!r} on the hub")
+                    continue
+                search_query = q
+                state.set_entries(results)
+                state.set_query("")
+                continue
+
+            # cancel: inside search results, back out to the main catalog first.
+            if search_query is not None:
+                search_query = None
+                state.set_entries(catalog.entries)
+                state.set_query("")
+                continue
+            return None
 
 
 def _pick_basic(state: PickerState, *, title: str) -> PickResult:

@@ -1,9 +1,9 @@
 """Tests for the REPL front end: output routing, queueing, interrupts,
 suspension and the status region."""
 
+import contextlib
 import io
 import queue
-import re
 import signal
 import sys
 import threading
@@ -13,7 +13,9 @@ from types import SimpleNamespace
 import pytest
 from prompt_toolkit.document import Document
 from rich.console import Console
+from rich.text import Text
 
+from conftest import styled_console
 from swival import fmt
 from swival.repl_ui import (
     ReplEvent,
@@ -45,7 +47,6 @@ class _FakeApp:
     def __init__(self):
         self.loop = _ImmediateLoop()
         self.results = queue.Queue()
-        self.invalidations = 0
 
     @property
     def is_done(self):
@@ -55,7 +56,7 @@ class _FakeApp:
         self.results.put(result)
 
     def invalidate(self):
-        self.invalidations += 1
+        pass
 
 
 class _FakeSession:
@@ -66,9 +67,8 @@ class _FakeSession:
     until ``app.exit()`` supplies a result.
     """
 
-    def __init__(self, script, *, blocking=False):
+    def __init__(self, script):
         self.script = list(script)
-        self.blocking = blocking
         self.app = _FakeApp()
         self.default_buffer = SimpleNamespace(text="", document=Document(""))
         self.calls = []
@@ -214,8 +214,9 @@ class TestQueueing:
         assert _is_exit_command("/exit")
         assert _is_exit_command("  /QUIT  ")
         assert _is_exit_command("/exit\nmore")
-        assert not _is_exit_command("/exit now")
+        assert _is_exit_command("/exit now")
         assert not _is_exit_command("hello")
+        assert not _is_exit_command("/copy")
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +329,7 @@ class TestUiThread:
         assert events[0].kind == "exit"
 
     def test_stop_unblocks_a_waiting_prompt(self):
-        session = _FakeSession(["<block>"], blocking=True)
+        session = _FakeSession(["<block>"])
         ui = _make_ui(session)
         ui.start()
         time.sleep(0.2)
@@ -336,19 +337,19 @@ class TestUiThread:
         assert not ui._thread.is_alive()
 
     def test_suspension_parks_prompt_and_restores_draft(self):
-        session = _FakeSession(["<block>", "<block>"], blocking=True)
+        session = _FakeSession(["<block>", "<block>"])
         ui = _make_ui(session)
         ui.start()
         try:
             time.sleep(0.2)
-            assert ui._router.prompt_active
+            assert ui._router.app is not None
             session.default_buffer.text = "draft"
             session.default_buffer.document = Document("draft", 3)
             real_err = ui._original_streams["stderr"]
             with ui.suspended():
                 assert ui._parked.is_set()
                 assert sys.stderr is real_err
-                assert not ui._router.prompt_active
+                assert ui._router.app is None
             deadline = time.monotonic() + 5
             while len(session.calls) < 2 and time.monotonic() < deadline:
                 time.sleep(0.01)
@@ -361,7 +362,7 @@ class TestUiThread:
             ui.stop()
 
     def test_nested_suspension_resumes_once(self):
-        session = _FakeSession(["<block>", "<block>"], blocking=True)
+        session = _FakeSession(["<block>", "<block>"])
         ui = _make_ui(session)
         ui.start()
         try:
@@ -404,7 +405,7 @@ class TestUiThread:
             time.sleep(1.2)
 
     def test_output_during_prompt_goes_above_it(self):
-        session = _FakeSession(["<block>"], blocking=True)
+        session = _FakeSession(["<block>"])
         ui = _make_ui(session)
         captured = io.StringIO()
         ui.start()
@@ -466,8 +467,8 @@ class TestRendering:
                 raise RuntimeError("boom")
 
         ui = _make_ui(_FakeSession([]))
-        ui.add_slot(_Broken("x"))
-        assert ui.live_fragments(80, 24, 4) == []
+        with ui._slot(_Broken("x")):
+            assert ui.live_fragments(80, 24, 4) == []
 
     def test_toolbar_flash_overrides_fragments(self):
         ui = ReplUI(
@@ -487,15 +488,26 @@ class TestRendering:
         assert "".join(t for _s, t in wide).endswith("hint")
         assert len("".join(t for _s, t in wide)) == 38
 
-    def test_placeholder_and_prompt_follow_busy_state(self):
+    def test_placeholder_and_prompt_follow_busy_state(self, monkeypatch):
+        monkeypatch.setattr(fmt, "animations_enabled", lambda: True)
         ui = _make_ui(_FakeSession([]))
         assert "Ask anything" in ui.placeholder()
         assert ui.prompt_style() == "class:prompt"
         assert ui.border_phase() is None
+        assert ui._border_style() == "class:frame.border"
         ui.set_busy(True)
         assert "queues" in ui.placeholder()
         assert ui.prompt_style() == "class:prompt.busy"
         assert 0 <= ui.border_phase() < 1
+        assert ui._border_style().startswith("class:frame.border class:frame.border.s")
+
+    def test_border_stays_still_without_animations(self, monkeypatch):
+        monkeypatch.setattr(fmt, "animations_enabled", lambda: False)
+        ui = _make_ui(_FakeSession([]))
+        ui.set_busy(True)
+        assert ui.border_phase() is None
+        assert ui._border_style() == "class:frame.border"
+        assert ui._animating() is False
 
     def test_shrink_wrap_caps_height_at_preferred(self):
         from prompt_toolkit.layout import Window
@@ -525,8 +537,6 @@ class _RecordingBackend:
         self.calls = []
 
     def _cm(self, name, handle="handle"):
-        import contextlib
-
         @contextlib.contextmanager
         def cm(*args):
             self.calls.append((name, args))
@@ -541,7 +551,7 @@ class _RecordingBackend:
 class TestFmtBackend:
     @pytest.fixture
     def tty_console(self, monkeypatch):
-        console = Console(file=io.StringIO(), force_terminal=True, width=80)
+        console = styled_console(io.StringIO())
         monkeypatch.setattr(fmt, "_console", console)
         yield console
         fmt.set_live_backend(None)
@@ -557,7 +567,7 @@ class TestFmtBackend:
             pass
         with fmt.input_marquee("text"):
             pass
-        with fmt.input_marquee_then_spinner("text", "Thinking", 4.0):
+        with fmt.input_marquee_then_spinner("text", "Thinking"):
             pass
         with fmt.stream_raw():
             pass
@@ -574,6 +584,7 @@ class TestFmtBackend:
             "stream_channels",
         ]
         assert backend.calls[1][1] == ("ls", 30)
+        assert backend.calls[4][1] == ("text", "Thinking", 4.0)
 
     def test_suspend_live_parks_backend(self, tty_console):
         backend = _RecordingBackend()
@@ -607,7 +618,7 @@ class TestFmtBackend:
 
     def test_prompt_echo_indents_continuation_lines(self, tty_console):
         fmt.repl_prompt_echo("first\nsecond")
-        out = re.sub(r"\x1b\[[0-9;]*m", "", tty_console.file.getvalue())
+        out = Text.from_ansi(tty_console.file.getvalue()).plain
         assert "❯ first" in out
         assert "\n  second" in out
 

@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-from swival.input_commands import INPUT_COMMANDS
+from swival.input_commands import EXIT_COMMANDS, INPUT_COMMANDS
 
 
 # -- registry / dispatcher guard -------------------------------------------
@@ -34,6 +34,10 @@ class TestRegistryMatchesDispatcher:
         # Pattern: cmd == "/foo" or cmd == "!!"
         for cmd in re.findall(r'cmd\s*==\s*["\']([/!][a-z!-]+)["\']', source):
             dispatched.add(cmd)
+
+        # Pattern: cmd in EXIT_COMMANDS
+        if re.search(r"cmd\s+in\s+EXIT_COMMANDS", source):
+            dispatched.update(EXIT_COMMANDS)
 
         registry = set(INPUT_COMMANDS.keys())
 

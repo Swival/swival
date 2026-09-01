@@ -84,6 +84,7 @@ from .a2a_types import (
     EVENT_TOOL_FINISH,
     EVENT_TOOL_START,
 )
+from .input_commands import EXIT_COMMANDS
 from .input_dispatch import (
     InputContext,
     ParsedInput,
@@ -117,7 +118,6 @@ from .tools import (
 )
 from .repair import format_repair_feedback, repair_tool_args, validate_required_args
 from .keepawake import keep_awake
-from .repl_ui import _repl_key_bindings
 from .tool_call_repair import (
     StormBreaker,
     content_is_pure_tool_call,
@@ -13010,7 +13010,7 @@ def execute_input(
             return StepResult(kind="state_change")
 
         # Flow control.
-        if cmd in ("/exit", "/quit"):
+        if cmd in EXIT_COMMANDS:
             return StepResult(kind="flow_control", stop=True)
 
         # State-change commands.
@@ -13118,33 +13118,24 @@ def execute_input(
             return StepResult(kind="state_change", text=msg, is_error=err)
 
         if cmd == "/model":
-            interactive = (
-                mode == "repl"
-                and ctx.interactive
-                and sys.stdin.isatty()
-                and sys.stderr.isatty()
+            new_last, msg, err = _repl_model(
+                cmd_arg,
+                profiles=ctx.profiles,
+                current_profile=ctx.current_profile,
+                startup_profile=ctx.startup_profile,
+                raw_baseline=ctx.raw_llm_baseline,
+                pre_profile_baseline=ctx.pre_profile_baseline,
+                repl_kwargs=ctx.loop_kwargs,
+                subagent_manager=ctx.subagent_manager,
+                last_model=ctx.last_model,
+                interactive=(
+                    mode == "repl"
+                    and ctx.interactive
+                    and sys.stdin.isatty()
+                    and sys.stderr.isatty()
+                ),
+                verbose=ctx.verbose,
             )
-            # Only a bare /model opens the picker, which needs the terminal
-            # to itself.
-            terminal = (
-                fmt.suspend_live()
-                if interactive and not cmd_arg.strip()
-                else nullcontext()
-            )
-            with terminal:
-                new_last, msg, err = _repl_model(
-                    cmd_arg,
-                    profiles=ctx.profiles,
-                    current_profile=ctx.current_profile,
-                    startup_profile=ctx.startup_profile,
-                    raw_baseline=ctx.raw_llm_baseline,
-                    pre_profile_baseline=ctx.pre_profile_baseline,
-                    repl_kwargs=ctx.loop_kwargs,
-                    subagent_manager=ctx.subagent_manager,
-                    last_model=ctx.last_model,
-                    interactive=interactive,
-                    verbose=ctx.verbose,
-                )
             ctx.last_model = new_last
             return StepResult(kind="state_change", text=msg, is_error=err)
 
@@ -13385,15 +13376,10 @@ def _execute_simplify(cmd_arg: str, ctx: InputContext) -> StepResult:
 
 
 def _execute_audit(cmd_arg: str, ctx: InputContext) -> StepResult:
-    """Handle the /audit command by delegating to swival.audit.
-
-    The audit draws its own full-width live panel, so the REPL prompt steps
-    aside for the duration.
-    """
+    """Handle the /audit command by delegating to swival.audit."""
     from .audit import run_audit_command
 
-    with fmt.suspend_live():
-        return _execute_delegated_command(cmd_arg, ctx, "/audit", run_audit_command)
+    return _execute_delegated_command(cmd_arg, ctx, "/audit", run_audit_command)
 
 
 _LOOP_DURATION_RE = re.compile(r"^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$")
@@ -14051,7 +14037,7 @@ def _format_loops_table(registry: "LoopRegistry") -> str:
     now = _loops_mod.monotonic()
     lines = ["active loops:"]
     for reg in registry:
-        remaining = max(0, reg.interval_seconds - (now - reg.last_fire))
+        remaining = reg.seconds_until_due(now)
         line = (
             f"  {reg.id}: every {_format_loop_duration(reg.interval_seconds)}, "
             f"next >= {_format_loop_duration(int(remaining))}, "
@@ -14185,14 +14171,10 @@ def run_input_script(
 
 def _seconds_until_next_loop(ctx: InputContext) -> float | None:
     """How long the idle prompt may block before a /loop registration is due."""
-    registry = ctx.loop_registry
-    if registry is None or len(registry) == 0:
+    if ctx.loop_registry is None:
         return None
-    now = _loops_mod.monotonic()
-    delays = [
-        max(0.0, reg.interval_seconds - (now - reg.last_fire)) for reg in registry
-    ]
-    return max(min(delays), 0.25)
+    delay = ctx.loop_registry.seconds_until_due()
+    return None if delay is None else max(delay, 0.25)
 
 
 def repl_loop(
@@ -14387,11 +14369,7 @@ def repl_loop(
         return any(_msg_role(m) != "system" for m in messages)
 
     ui = ReplUI(has_conversation=_has_conversation, toolbar_fragments=_bottom_toolbar)
-    ui.build_session(
-        history_path=history_path,
-        completer=completer,
-        key_bindings=_repl_key_bindings(ui),
-    )
+    ui.build_session(history_path=history_path, completer=completer)
 
     if verbose:
         fmt.repl_banner()
@@ -14440,7 +14418,6 @@ def repl_loop(
         net_jail=net_jail,
         session_cost=session_cost,
     )
-    _refresh_toolbar_state()
 
     ctx = InputContext(
         messages=messages,
@@ -14490,14 +14467,8 @@ def repl_loop(
             )
 
     def _fire_loops_while_idle():
-        ui.set_busy(True)
-        try:
+        with ui.turn():
             _fire_due_loops(ctx)
-        except KeyboardInterrupt:
-            fmt.warning("interrupted.")
-            ui.recall_queued()
-        finally:
-            ui.set_busy(False)
         _refresh_toolbar_state()
 
     def _handle_line(line: str) -> bool:
@@ -14511,9 +14482,8 @@ def repl_loop(
 
         if parsed.is_plain_text:
             ctx.loop_kwargs["repl_input_text"] = parsed.raw
-        ui.set_busy(True)
         result = None
-        try:
+        with ui.turn():
             try:
                 result = execute_input(parsed, ctx, mode="repl")
             finally:
@@ -14533,18 +14503,13 @@ def repl_loop(
             _run_after_render(result)
             if result.interrupted:
                 ui.recall_queued()
-        except KeyboardInterrupt:
-            # A Ctrl-C that landed outside the agent loop's own handlers,
-            # for instance during a state command. Nothing to roll back.
-            fmt.warning("interrupted.")
-            ui.recall_queued()
-        finally:
-            ui.set_busy(False)
         return bool(result is not None and result.stop)
 
     _exit_outcome = "error"
     _exit_code = 1
     ui.start()
+    # After start, so the git status does not delay the first prompt.
+    _refresh_toolbar_state()
     try:
         while True:
             # A Ctrl-C can land here when the key was pressed just as a turn

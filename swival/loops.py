@@ -32,6 +32,12 @@ class LoopRegistration:
     consecutive_failures: int = 0
     last_error: str | None = None
 
+    def seconds_until_due(self, now: float | None = None) -> float:
+        """Time left before this loop fires again; zero when it is due."""
+        if now is None:
+            now = monotonic()
+        return max(0.0, self.interval_seconds - (now - self.last_fire))
+
 
 @dataclass
 class LoopRegistry:
@@ -94,7 +100,12 @@ class LoopRegistry:
 
     def due(self) -> list[LoopRegistration]:
         """Return registrations whose interval has elapsed, in id order."""
+        now = monotonic()
+        return [r for r in self._loops if r.seconds_until_due(now) <= 0]
+
+    def seconds_until_due(self) -> float | None:
+        """Time until the earliest loop fires; ``None`` with no loops."""
         if not self._loops:
-            return []
-        t = monotonic()
-        return [r for r in self._loops if t - r.last_fire >= r.interval_seconds]
+            return None
+        now = monotonic()
+        return min(r.seconds_until_due(now) for r in self._loops)

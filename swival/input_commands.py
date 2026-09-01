@@ -15,6 +15,9 @@ class CommandInfo(NamedTuple):
     acp: bool = True
 
 
+# Commands that end the interactive session.
+EXIT_COMMANDS = ("/exit", "/quit")
+
 INPUT_COMMANDS: dict[str, CommandInfo] = {
     "!!": CommandInfo(
         desc="Run a shell command and print output (no LLM)",

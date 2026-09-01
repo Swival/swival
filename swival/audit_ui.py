@@ -172,6 +172,7 @@ class AuditUI:
         self._spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
         self._tick = 0
         self._progress = None  # set when enabled in __enter__
+        self._terminal = None
 
     @property
     def is_live(self) -> bool:
@@ -182,6 +183,9 @@ class AuditUI:
         if not self._enabled:
             return self
 
+        # The panel needs the whole terminal; the REPL prompt steps aside.
+        self._terminal = fmt.suspend_live()
+        self._terminal.__enter__()
         self._progress = fmt.bar_progress(transient=False)
 
         self._live = Live(
@@ -213,6 +217,9 @@ class AuditUI:
                 self._live.stop()
             except Exception as e:
                 fmt.warning(f"audit-ui: failed to stop live region: {e}")
+        if self._terminal is not None:
+            self._terminal.__exit__(None, None, None)
+            self._terminal = None
 
     # ------------------------------------------------------------------
     # Public API (thread-safe)
@@ -363,7 +370,7 @@ class AuditUI:
         table.add_column(style="bold")
         table.add_column()
         table.add_row("Run", f"{self.run_id} · {self.branch} @ {self.commit}")
-        table.add_row("Elapsed", _fmt_duration(elapsed))
+        table.add_row("Elapsed", fmt.format_duration(elapsed))
 
         outcomes = Text()
         outcomes.append(f"{self._tally_verified} verified", style="green")
@@ -617,7 +624,7 @@ class AuditUI:
         else:
             header.append("idle", style="dim")
         header.append("  ·  ", style="dim")
-        header.append(_fmt_duration(elapsed), style="cyan")
+        header.append(fmt.format_duration(elapsed), style="cyan")
 
         rows = [header]
 
@@ -634,7 +641,7 @@ class AuditUI:
                 line.append(f"worker {slot}", style="bold")
                 line.append(" · ", style="dim")
                 line.append(label, style="white")
-                line.append(f"  {_fmt_duration(age)}", style="dim")
+                line.append(f"  {fmt.format_duration(age)}", style="dim")
                 if turn:
                     suffix = (
                         f"  turn {turn}/{max_turns}" if max_turns else f"  turn {turn}"
@@ -664,17 +671,6 @@ class AuditUI:
             padding=(0, 1),
         )
         return panel
-
-
-def _fmt_duration(seconds: float) -> str:
-    seconds = max(0.0, float(seconds))
-    if seconds < 60:
-        return f"{seconds:0.1f}s"
-    m, s = divmod(int(seconds), 60)
-    if m < 60:
-        return f"{m}m{s:02d}s"
-    h, m = divmod(m, 60)
-    return f"{h}h{m:02d}m"
 
 
 def _phase_banner_text(title: str, color: str) -> Text:

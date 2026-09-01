@@ -2,6 +2,8 @@
 
 import contextlib
 import difflib
+import functools
+import inspect
 import math
 import os
 import threading
@@ -52,8 +54,36 @@ def set_live_backend(backend) -> None:
     _live_backend = backend
 
 
-def live_backend():
-    return _live_backend
+def _live_display(fn):
+    """Route a transient display to the right renderer.
+
+    Off a terminal it is a no-op yielding a dummy handle. With a live backend
+    installed, the backend method of the same name and arguments takes over.
+    Otherwise the decorated generator runs the Rich implementation. Keeping
+    the policy here means a new display cannot forget the backend and draw a
+    Live region under the REPL prompt.
+    """
+    rich_display = contextlib.contextmanager(fn)
+    signature = inspect.signature(fn)
+
+    @contextlib.contextmanager
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not _console.is_terminal:
+            yield _noop
+            return
+        backend = _live_backend
+        if backend is not None:
+            # Bind defaults so backend methods need not repeat them.
+            bound = signature.bind(*args, **kwargs)
+            bound.apply_defaults()
+            with getattr(backend, fn.__name__)(*bound.args, **bound.kwargs) as handle:
+                yield handle
+            return
+        with rich_display(*args, **kwargs) as handle:
+            yield handle
+
+    return wrapper
 
 
 @contextlib.contextmanager
@@ -65,18 +95,24 @@ def suspend_live():
     applications render on a clean screen. Everything resumes when the block
     exits.
     """
-    suspend = _active_live_suspend
-    resume = suspend() if suspend is not None else None
-    backend = _live_backend
-    try:
-        if backend is not None:
-            with backend.suspend():
-                yield
-        else:
-            yield
-    finally:
-        if resume is not None:
-            resume()
+    with contextlib.ExitStack() as stack:
+        if _active_live_suspend is not None:
+            stack.callback(_active_live_suspend())
+        if _live_backend is not None:
+            stack.enter_context(_live_backend.suspend())
+        yield
+
+
+def format_duration(seconds: float) -> str:
+    """Compact elapsed time: ``3.2s``, ``4m05s``, ``1h12m``."""
+    seconds = max(0.0, float(seconds))
+    if seconds < 60:
+        return f"{seconds:0.1f}s"
+    m, s = divmod(int(seconds), 60)
+    if m < 60:
+        return f"{m}m{s:02d}s"
+    h, m = divmod(m, 60)
+    return f"{h}h{m:02d}m"
 
 
 def reset_state() -> None:
@@ -259,7 +295,34 @@ _SPINNER_PHASES: list[tuple[float, str, str, str]] = [
 ]
 
 
-@contextlib.contextmanager
+def spinner_phase(elapsed: float) -> tuple[int, str, str, str]:
+    """The ``(index, spinner_name, style, verb)`` in effect after ``elapsed``."""
+    index = 0
+    for i, phase in enumerate(_SPINNER_PHASES):
+        if elapsed >= phase[0]:
+            index = i
+    _, name, style, verb = _SPINNER_PHASES[index]
+    return index, name, style, verb
+
+
+def split_spinner_label(label: str) -> tuple[str, str]:
+    """Split ``"Thinking (turn 2/5)"`` into the first description and the
+    parenthesized suffix the later phase verbs keep."""
+    if "(" in label:
+        suffix = " " + label[label.index("(") :].strip()
+        return f"{_SPINNER_PHASES[0][3]}{suffix}", suffix
+    return label, ""
+
+
+def command_label(label: str | None) -> str:
+    """One-line, length-capped label for a running command."""
+    label = " ".join((label or "command").split())
+    if len(label) > 50:
+        label = label[:49] + "…"
+    return label
+
+
+@_live_display
 def llm_spinner(label: str = "Thinking"):
     """Context manager showing a phase-cycling spinner on stderr.
 
@@ -268,21 +331,7 @@ def llm_spinner(label: str = "Thinking"):
     callable that early-stops the display so a different live region
     can take over.
     """
-    if not _console.is_terminal:
-        yield _noop
-        return
-    if _live_backend is not None:
-        with _live_backend.llm_spinner(label) as dismiss:
-            yield dismiss
-        return
-
-    suffix = ""
-    if "(" in label:
-        idx = label.index("(")
-        suffix = " " + label[idx:].strip()
-        initial_desc = f"{_SPINNER_PHASES[0][3]}{suffix}"
-    else:
-        initial_desc = label
+    initial_desc, suffix = split_spinner_label(label)
 
     spinner_col = SpinnerColumn("dots", style="cyan", speed=1.5)
     progress = Progress(
@@ -301,14 +350,9 @@ def llm_spinner(label: str = "Thinking"):
         t0 = time.monotonic()
         phase_idx = 0
         while not stop.wait(0.3):
-            elapsed = time.monotonic() - t0
-            new_idx = phase_idx
-            for i, (threshold, _, _, _) in enumerate(_SPINNER_PHASES):
-                if elapsed >= threshold:
-                    new_idx = i
+            new_idx, name, style, verb = spinner_phase(time.monotonic() - t0)
             if new_idx != phase_idx:
                 phase_idx = new_idx
-                _, name, style, verb = _SPINNER_PHASES[phase_idx]
                 spinner_col.spinner = Spinner(name, style=style, speed=1.5)
                 progress.update(task_id, description=f"{verb}{suffix}")
 
@@ -331,7 +375,7 @@ def llm_spinner(label: str = "Thinking"):
         dismiss()
 
 
-@contextlib.contextmanager
+@_live_display
 def command_spinner(label: str, timeout: float | None = None):
     """Progress display on stderr while a shell command runs.
 
@@ -344,17 +388,7 @@ def command_spinner(label: str, timeout: float | None = None):
     Only one Rich live display may be active at a time, so callers must not
     start this while another live display (e.g. the LLM spinner) is running.
     """
-    if not _console.is_terminal:
-        yield _noop
-        return
-    if _live_backend is not None:
-        with _live_backend.command_spinner(label, timeout) as dismiss:
-            yield dismiss
-        return
-
-    label = " ".join((label or "command").split())
-    if len(label) > 50:
-        label = label[:49] + "…"
+    label = command_label(label)
 
     determinate = bool(timeout and timeout > 0)
     columns = [
@@ -424,7 +458,7 @@ def command_spinner(label: str, timeout: float | None = None):
         dismiss()
 
 
-@contextlib.contextmanager
+@_live_display
 def step_spinner(label: str):
     """Spinner with a live-updatable label plus an elapsed timer on stderr.
 
@@ -435,14 +469,6 @@ def step_spinner(label: str):
     Only one Rich live display may be active at a time, so callers must not
     start this while another live display is running.
     """
-    if not _console.is_terminal:
-        yield _noop
-        return
-    if _live_backend is not None:
-        with _live_backend.step_spinner(label) as update:
-            yield update
-        return
-
     progress = Progress(
         SpinnerColumn("dots", style="cyan", speed=1.5),
         TextColumn("  {task.description}"),
@@ -487,6 +513,7 @@ def step_spinner(label: str):
 
 _INPUT_MARQUEE_PREFIX = "  > "
 _INPUT_MARQUEE_SEPARATOR = "   ·   "
+MARQUEE_FRAME_SECONDS = 0.06
 
 
 def _input_marquee_text(text: str, offset: int, width: int) -> Text:
@@ -508,20 +535,13 @@ def _input_marquee_text(text: str, offset: int, width: int) -> Text:
     return line
 
 
-@contextlib.contextmanager
+@_live_display
 def input_marquee(text: str):
     """Context manager showing a scrolling marquee of ``text`` on stderr.
 
     Used by the REPL as visual feedback while the LLM is processing the
     user's prompt. The line is cleared as soon as the context exits.
     """
-    if not _console.is_terminal:
-        yield _noop
-        return
-    if _live_backend is not None:
-        with _live_backend.input_marquee(text) as dismiss:
-            yield dismiss
-        return
 
     def _frame(offset: int) -> Text:
         return _input_marquee_text(text, offset, _console.width)
@@ -537,7 +557,7 @@ def input_marquee(text: str):
 
     def _scroll():
         offset = 0
-        while not stop.wait(0.06):
+        while not stop.wait(MARQUEE_FRAME_SECONDS):
             offset += 1
             try:
                 live.update(_frame(offset), refresh=True)
@@ -562,7 +582,7 @@ def input_marquee(text: str):
         dismiss()
 
 
-@contextlib.contextmanager
+@_live_display
 def input_marquee_then_spinner(text: str, spinner_label: str, delay: float = 4.0):
     """Show the input marquee, then swap to the labeled spinner after ``delay``.
 
@@ -571,16 +591,6 @@ def input_marquee_then_spinner(text: str, spinner_label: str, delay: float = 4.0
     yielded ``dismiss()`` stops whichever indicator is currently active and
     cancels any pending transition.
     """
-    if not _console.is_terminal:
-        yield _noop
-        return
-    if _live_backend is not None:
-        with _live_backend.input_marquee_then_spinner(
-            text, spinner_label, delay
-        ) as dismiss:
-            yield dismiss
-        return
-
     marquee_cm = input_marquee(text)
     marquee_dismiss = marquee_cm.__enter__()
 
@@ -784,7 +794,7 @@ def render_stream_channels(
     return text
 
 
-@contextlib.contextmanager
+@_live_display
 def stream_raw():
     """Context manager that displays streamed LLM output as plain text on stderr.
 
@@ -793,14 +803,6 @@ def stream_raw():
     transient, so it is wiped on exit and the caller can re-print the finished
     response with formatting.
     """
-    if not _console.is_terminal:
-        yield _noop
-        return
-    if _live_backend is not None:
-        with _live_backend.stream_raw() as update:
-            yield update
-        return
-
     with Live(
         console=_console,
         transient=True,
@@ -818,7 +820,7 @@ def stream_raw():
         yield update
 
 
-@contextlib.contextmanager
+@_live_display
 def stream_channels():
     """Channel-aware variant of :func:`stream_raw`.
 
@@ -826,14 +828,6 @@ def stream_channels():
     viewport with thinking, answer, and tool-call activity styled distinctly.
     Like ``stream_raw`` the region is transient and a no-op off a terminal.
     """
-    if not _console.is_terminal:
-        yield _noop
-        return
-    if _live_backend is not None:
-        with _live_backend.stream_channels() as update:
-            yield update
-        return
-
     with Live(
         console=_console,
         transient=True,
@@ -1466,11 +1460,14 @@ def repl_banner() -> None:
     )
 
 
+PROMPT_SYMBOL = "\u276f "
+
+
 def repl_prompt_echo(text: str) -> None:
     """Leave the submitted prompt in scrollback once the input box is erased."""
     lines = text.split("\n")
     out = Text()
-    out.append("\u276f ", style="bold green")
+    out.append(PROMPT_SYMBOL, style="bold green")
     out.append(lines[0], style="bold")
     for line in lines[1:]:
         out.append("\n  ")

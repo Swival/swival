@@ -35,10 +35,9 @@ from swival.agent import (
     remember_agents_fact,
     _repl_remember,
     _repl_status,
-    _repl_key_bindings,
     CompactionState,
 )
-from swival.repl_ui import _REPL_SHIFT_ENTER_SEQUENCES
+from swival.repl_ui import _REPL_SHIFT_ENTER_SEQUENCES, _repl_key_bindings
 from swival.command_policy import CommandPolicy
 from swival.snapshot import SnapshotState
 from swival.thinking import ThinkingState
