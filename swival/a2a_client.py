@@ -7,6 +7,7 @@ pattern as McpManager.
 
 import asyncio
 import atexit
+import concurrent.futures
 import threading
 import time
 from typing import Any
@@ -229,7 +230,8 @@ class A2aManager:
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
         try:
             return future.result(timeout=timeout)
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, concurrent.futures.CancelledError):
+            # concurrent.futures raises its own CancelledError, distinct from asyncio's.
             raise A2aShutdownError("operation cancelled during shutdown")
         except TimeoutError:
             future.cancel()
@@ -444,7 +446,9 @@ class A2aManager:
             agent_collisions = []
             for schema in schemas:
                 namespaced = schema["function"]["name"]
-                skill_id = schema["function"].get("_a2a_skill_id", namespaced)
+                # The skill id follows the last "__"; sanitize_skill_id never
+                # emits a double underscore.
+                skill_id = namespaced.rsplit("__", 1)[-1]
 
                 if namespaced in tool_map:
                     existing_agent, existing_skill = tool_map[namespaced]
@@ -521,6 +525,5 @@ def _skill_to_tool(agent_name: str, skill: AgentSkill) -> dict:
                 },
                 "required": ["message"],
             },
-            "_a2a_skill_id": skill_id,
         },
     }

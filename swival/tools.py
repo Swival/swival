@@ -4,7 +4,6 @@ import base64
 import codecs
 import contextlib
 import copy
-import fnmatch
 import hashlib
 import heapq
 import json
@@ -1522,19 +1521,18 @@ def _grep(
         return f"error: path is not a directory: {path}"
 
     else:
-        # PurePath.match handles ** globs (Python 3.12+), but '**/*.ext'
-        # won't match root-level files (no dir component).  Fall back to
-        # fnmatch on the bare filename so '**/*.zig' still matches 'a.zig'.
-        include_name = include.rsplit("/", 1)[-1] if include else None
+        # full_match makes '**' recursive and honours directory components;
+        # the '**/' prefix keeps '*.py' matching at any depth, root included.
+        include_pattern = (
+            include if not include or include.startswith("**/") else f"**/{include}"
+        )
 
         def eligible_files() -> Iterator[tuple[float, Path]]:
             nonlocal eligible
             for entry in _iter_files(root):
                 filepath = Path(entry.path)
-                if (
-                    include
-                    and not filepath.relative_to(root).match(include)
-                    and not fnmatch.fnmatch(entry.name, include_name)
+                if include and not filepath.relative_to(root).full_match(
+                    include_pattern
                 ):
                     continue
                 if not _is_within_base(
@@ -2088,7 +2086,7 @@ def _read_files(
                 request,
                 result,
             )
-            files_with_errors += 1
+            ok = False
         else:
             content, content_truncated, next_offset, checksum = _split_read_result(
                 result
@@ -2102,18 +2100,24 @@ def _read_files(
                 next_offset=next_offset,
                 checksum=checksum,
             )
-            files_succeeded += 1
+            ok = True
 
         section_bytes = len(section.encode("utf-8")) + 2
-        if total_bytes + section_bytes > MAX_OUTPUT_BYTES:
-            if not sections:
-                sections.append(section)
-                total_bytes += section_bytes
-            skipped_files = len(files) - (i + 1)
+        if total_bytes + section_bytes > MAX_OUTPUT_BYTES and sections:
+            # Count only files whose section is emitted.
+            skipped_files = len(files) - i
             break
 
         sections.append(section)
         total_bytes += section_bytes
+        if ok:
+            files_succeeded += 1
+        else:
+            files_with_errors += 1
+        if total_bytes > MAX_OUTPUT_BYTES:
+            # A single oversized first section is emitted alone.
+            skipped_files = len(files) - (i + 1)
+            break
 
     header = "\n".join(
         [
@@ -2130,6 +2134,17 @@ def _read_files(
             f"\n\n[batch_truncated: {skipped_files} file(s) skipped due to size limit]"
         )
     return output
+
+
+_PROTECTED_CONFIG_NAMES = frozenset({"swival.toml", "mcp.json"})
+
+
+def _is_protected_config(resolved: Path) -> bool:
+    """True for project config files the agent must never touch.
+
+    Case-insensitive, since macOS and Windows filesystems are.
+    """
+    return resolved.name.lower() in _PROTECTED_CONFIG_NAMES
 
 
 def _write_file(
@@ -2178,7 +2193,7 @@ def _write_file(
         return f"error: {exc}"
 
     # Protect project config files from being overwritten.
-    if resolved.name in ("swival.toml", "mcp.json"):
+    if _is_protected_config(resolved):
         return (
             f"error: cannot overwrite {resolved.name} — "
             "this file must never be modified by the agent under any circumstances"
@@ -2202,6 +2217,11 @@ def _write_file(
         except ValueError as exc:
             return f"error: {exc}"
 
+        if _is_protected_config(move_from_resolved):
+            return (
+                f"error: cannot move {move_from_resolved.name} — "
+                "this file must never be modified by the agent under any circumstances"
+            )
         if move_from_resolved == resolved:
             return (
                 f"error: write_file move_from={move_from!r} and file_path={file_path!r} "
@@ -2277,7 +2297,7 @@ def _edit_file(
         return f"error: {exc}"
 
     # Protect project config files from being edited.
-    if resolved.name in ("swival.toml", "mcp.json"):
+    if _is_protected_config(resolved):
         return (
             f"error: cannot edit {resolved.name} — "
             "this file must never be modified by the agent under any circumstances"
@@ -2304,7 +2324,7 @@ def _edit_file(
         )
 
     try:
-        content = resolved.read_text(encoding="utf-8")
+        content = resolved.read_bytes().decode("utf-8")
     except UnicodeDecodeError as exc:
         return (
             f"error: edit_file: {file_path} is not valid UTF-8 text; "
@@ -2312,6 +2332,11 @@ def _edit_file(
         )
     except (PermissionError, OSError) as exc:
         return f"error: edit_file: cannot read {file_path}: {exc}"
+
+    # Edit CRLF files on LF-normalized text and restore the endings on write.
+    crlf = "\r\n" in content and "\n" not in content.replace("\r\n", "")
+    if crlf:
+        content = content.replace("\r\n", "\n")
 
     try:
         new_content = replace(
@@ -2324,7 +2349,9 @@ def _edit_file(
     except ValueError as exc:
         return f"error: edit_file: {exc} (in {file_path})"
 
-    resolved.write_text(new_content, encoding="utf-8")
+    if crlf:
+        new_content = new_content.replace("\r\n", "\n").replace("\n", "\r\n")
+    resolved.write_bytes(new_content.encode("utf-8"))
 
     if verbose:
         try:
@@ -2479,6 +2506,12 @@ def _delete_file(
         )
     except ValueError as exc:
         return f"error: {exc}"
+
+    if _is_protected_config(resolved):
+        return (
+            f"error: cannot delete {resolved.name} — "
+            "this file must never be modified by the agent under any circumstances"
+        )
 
     # 2. Build pre-resolution path for existence/type checks.
     original = (
@@ -2757,6 +2790,9 @@ def _save_large_output_with_path(
 
     meta = _extract_preview(output)
     truncated = len(meta.text) < len(output)
+    # The untrusted header shifts every line in the saved file.
+    header_lines = _untrusted_hdr.count("\n")
+    last_line = meta.last_line + header_lines
 
     preview_parts = ["[preview]"]
     if _untrusted_hdr:
@@ -2765,13 +2801,13 @@ def _save_large_output_with_path(
     if truncated:
         if meta.partial_line:
             preview_parts.append(
-                f"[... preview truncated within line {meta.last_line};"
+                f"[... preview truncated within line {last_line};"
                 " use read_file for full output]"
             )
         else:
-            next_offset = meta.last_line + 1
+            next_offset = last_line + 1
             preview_parts.append(
-                f"[... preview includes lines 1-{meta.last_line};"
+                f"[... preview includes lines 1-{last_line};"
                 f" use read_file offset={next_offset} for more]"
             )
     preview_parts.append("[/preview]")

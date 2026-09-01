@@ -1748,7 +1748,8 @@ def remember_agents_fact(base_dir: str, text: str) -> tuple[str, bool, bool]:
             return "Already in AGENTS.md, skipping.", False, False
 
     insert_pos = conv_end
-    if not conv_body.endswith("\n") and conv_body.strip():
+    # conv_body can be empty even when the heading lacks a trailing newline.
+    if insert_pos > 0 and not content[:insert_pos].endswith("\n"):
         bullet = "\n" + bullet
 
     new_content = content[:insert_pos] + bullet + content[insert_pos:]
@@ -4763,10 +4764,13 @@ class _SyntheticMessage:
         self.tool_calls = None
 
     def model_dump(self, **kwargs):
-        d = {"role": self.role, "content": self.content}
+        d = {
+            "role": self.role,
+            "content": self.content,
+            "tool_calls": self.tool_calls,
+        }
         if kwargs.get("exclude_none"):
             return {k: v for k, v in d.items() if v is not None}
-        d["tool_calls"] = self.tool_calls
         return d
 
 
@@ -7650,7 +7654,7 @@ def main():
                 sorted(args.commands)
                 if isinstance(args.commands, list)
                 else args.commands
-                if args.commands in ("all", "none")
+                if args.commands in ("all", "none", "ask")
                 else sorted(
                     c.strip() for c in (args.commands or "").split(",") if c.strip()
                 )
@@ -7773,6 +7777,11 @@ def main():
             143: "interrupted",
         }.get(_run_exit_code, "error")
         raise
+    except KeyboardInterrupt:
+        # Ctrl-C outside the agent loop must not report success to the exit hook.
+        _run_outcome = "interrupted"
+        _run_exit_code = 130
+        raise SystemExit(130)
     finally:
         # --- Lifecycle exit hook ---
         _lc_cmd = getattr(args, "_lifecycle_cmd", None)
@@ -9013,7 +9022,7 @@ def _run_main(args, report, _write_report, parser):
     _sa_val = getattr(args, "subagents", None)
     if _sa_val is True:
         _subagents = True
-    elif _sa_val is False:
+    elif _sa_val is False or getattr(args, "no_subagents", None) is True:
         _subagents = False
     else:
         _subagents = (
@@ -11417,21 +11426,10 @@ def _is_text_file(f: Path) -> bool:
     try:
         header.decode("utf-8")
         return True
-    except UnicodeDecodeError:
-        # The 512-byte boundary may split a multibyte character (up to 4 bytes
-        # wide).  Trim the last 3 bytes and retry before concluding the file is
-        # non-UTF-8.  A genuine encoding error earlier in the buffer still
-        # fails here.
-        try:
-            header[:-3].decode("utf-8")
-            return True
-        except UnicodeDecodeError:
-            return False
-
-
-def _is_available_command(f: Path) -> bool:
-    """Return True if *f* is a candidate that can be executed or inlined."""
-    return _is_command_candidate(f) and (os.access(f, os.X_OK) or _is_text_file(f))
+    except UnicodeDecodeError as exc:
+        # A full buffer may end mid-character; only an error starting in the
+        # last 3 bytes can be that truncation rather than a real encoding error.
+        return len(header) == 512 and exc.start >= len(header) - 3
 
 
 def _read_text_command(path: Path) -> str | None:
@@ -11469,29 +11467,30 @@ def discover_custom_commands() -> list[str]:
     ci = sys.platform == "win32"
     names: set[str] = set()
 
-    if ci:
-        stems: dict[str, list[Path]] = {}
-        for f in commands_dir.iterdir():
-            if _is_available_command(f):
-                key = f.stem.lower()
-                stems.setdefault(key, []).append(f)
-        for key, files in stems.items():
-            if len(files) == 1 and _CUSTOM_CMD_NAME_RE.fullmatch(key):
-                names.add(key)
-    else:
-        exact_names: set[str] = set()
-        stem_files: dict[str, list[Path]] = {}
-        for f in commands_dir.iterdir():
-            if not _is_available_command(f):
-                continue
-            if _CUSTOM_CMD_NAME_RE.fullmatch(f.name):
-                exact_names.add(f.name)
-            if f.stem != f.name and _CUSTOM_CMD_NAME_RE.fullmatch(f.stem):
-                stem_files.setdefault(f.stem, []).append(f)
-        names = set(exact_names)
-        for stem, files in stem_files.items():
-            if len(files) == 1:
-                names.add(stem)
+    # Same tier resolution as _repl_run_custom_command: the first non-empty
+    # tier must hold exactly one file.  Files key on their stem, since a name
+    # with an extension is never a valid command name.
+    buckets: dict[str, list[list[Path]]] = {}
+    for f in commands_dir.iterdir():
+        if not _is_command_candidate(f):
+            continue
+        key = f.stem.lower() if ci else f.stem
+        if not _CUSTOM_CMD_NAME_RE.fullmatch(key):
+            continue
+        is_exact = (f.name.lower() if ci else f.name) == key
+        if os.access(f, os.X_OK):
+            tier = 0 if is_exact else 1
+        elif _is_text_file(f):
+            tier = 2 if is_exact else 3
+        else:
+            continue
+        buckets.setdefault(key, [[], [], [], []])[tier].append(f)
+    for key, tiers in buckets.items():
+        for tier_files in tiers:
+            if tier_files:
+                if len(tier_files) == 1:
+                    names.add(key)
+                break
 
     return sorted(names)
 
@@ -12614,12 +12613,14 @@ def _repl_snapshot_save(
     """Returns ``(message, is_error)``."""
     if snapshot_state is None:
         return "snapshot not available", True
-    result = snapshot_state.save_at_index(label, len(messages))
-    if result.startswith("error:"):
+    if snapshot_state.explicit_active:
         return (
             f"checkpoint already active (label={snapshot_state.explicit_label!r}). Cancel it first with /unsave.",
             True,
         )
+    result = snapshot_state.save_at_index(label, len(messages))
+    if result.startswith("error:"):
+        return result.removeprefix("error: "), True
     return f"checkpoint saved: {label}", False
 
 
@@ -12705,7 +12706,8 @@ def _patch_system_instructions(
         re.search(tag_re, new_instructions, re.DOTALL) if new_instructions else None
     )
     replacement = new_tag.group(0) if new_tag else ""
-    updated = re.sub(tag_re, replacement, old, count=1, flags=re.DOTALL)
+    # Callable replacement: AGENTS.md may contain backslashes.
+    updated = re.sub(tag_re, lambda _m: replacement, old, count=1, flags=re.DOTALL)
     _set_msg_content(messages[0], updated)
 
 
@@ -14472,6 +14474,7 @@ def repl_loop(
         network_mode=network_mode,
         net_jail=net_jail,
         session_cost=session_cost,
+        continue_here=continue_here,
     )
 
     ctx = InputContext(

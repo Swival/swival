@@ -110,15 +110,15 @@ def parse_frontmatter(text: str) -> dict | str:
                 i += 1
             continue
 
-        # Check for literal block scalar: key: |
-        if raw_value == "|":
-            # Collect indented block, preserving newlines
+        # Block scalars: "|" keeps newlines, ">" folds them.
+        if raw_value in ("|", "|-", ">", ">-"):
             block_lines = []
             i += 1
             while i < len(fm_lines) and fm_lines[i] and fm_lines[i][0] in (" ", "\t"):
                 block_lines.append(fm_lines[i].strip())
                 i += 1
-            result[key] = "\n".join(block_lines)
+            joiner = "\n" if raw_value[0] == "|" else " "
+            result[key] = joiner.join(block_lines)
             continue
 
         # Check for quoted value

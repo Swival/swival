@@ -34,24 +34,110 @@ _TEMP_SCRIPT_RE = re.compile(r"(/tmp/swival-|\.swival/tmp/|/tmp/)")
 # flags like -ec always resolve to the same bucket regardless of hash seed.
 _INLINE_CODE_FLAGS = ("c", "e")
 
+# node/bun run code with -e (-c is --check), so prefer e for them.
+_INLINE_FLAG_PRIORITY = {"node": ("e", "c"), "bun": ("e", "c")}
+
+# Options that consume the next token, per interpreter; their value must
+# not end the flag scan as if it were the script name.
+_VALUE_TAKING_FLAGS: dict[str, frozenset[str]] = {
+    "bash": frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"}),
+    "sh": frozenset({"-o", "+o"}),
+    "python": frozenset({"-X", "-W", "-Q"}),
+    "python3": frozenset({"-X", "-W", "-Q"}),
+    "perl": frozenset({"-I", "-M", "-m"}),
+    "ruby": frozenset({"-I", "-r", "-C", "-E", "-F", "-K"}),
+    "node": frozenset(
+        {
+            "-r",
+            "--require",
+            "--import",
+            "--loader",
+            "--experimental-loader",
+            "--input-type",
+            "--title",
+            "--env-file",
+        }
+    ),
+    "bun": frozenset({"-r", "--preload", "--loader", "--env-file", "--cwd"}),
+}
+
 
 def _has_inline_code_flag(argv: list[str]) -> str | None:
-    """Return the highest-priority inline-code flag letter found in *argv*.
+    """Return the inline-code flag letter among *argv*'s leading options.
 
-    Handles combined short flags like ``-lc`` or ``-ec``.
-    Only inspects arguments before the first non-flag argument.
-    Priority follows ``_INLINE_CODE_FLAGS`` order (c before e).
+    Handles combined short flags like ``-lc``, skips values of known
+    value-taking options, and scans every leading option before choosing so
+    ``bash -e -c code`` resolves like ``bash -ec``.
     """
-    for arg in argv[1:]:
-        if not arg.startswith("-") or arg == "--":
+    interp = os.path.basename(argv[0])
+    value_flags = _VALUE_TAKING_FLAGS.get(interp, frozenset())
+    found: set[str] = set()
+    i = 1
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--" or arg == "-":
             break
-        stripped = arg.lstrip("-")
-        if not stripped:
+        if arg in value_flags:
+            i += 2
             continue
-        for ch in _INLINE_CODE_FLAGS:
-            if ch in stripped:
-                return ch
+        if arg.startswith("--") or arg.startswith("+"):
+            i += 1
+            continue
+        if not arg.startswith("-"):
+            break
+        found.update(arg[1:])
+        i += 1
+    for ch in _INLINE_FLAG_PRIORITY.get(interp, _INLINE_CODE_FLAGS):
+        if ch in found:
+            return ch
     return None
+
+
+_ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+# Wrappers that run whatever follows them, and their options that consume
+# the next token.
+_TRANSPARENT_WRAPPERS: dict[str, frozenset[str]] = {
+    "env": frozenset({"-u", "-C", "-S", "--unset", "--chdir", "--split-string"}),
+    "command": frozenset(),
+    "builtin": frozenset(),
+    "exec": frozenset({"-a"}),
+}
+
+# Shell builtins that evaluate their arguments as shell code.
+_SHELL_EVAL_BUILTINS = frozenset({"eval", "source", "."})
+
+
+def _strip_transparent_prefix(argv: list[str]) -> list[str]:
+    """Drop leading ``NAME=value`` assignments and ``env``-style wrappers so
+    the wrapped command is what gets bucketed.  Returns *argv* unchanged when
+    nothing would be left.
+    """
+    i = 0
+    n = len(argv)
+    while i < n:
+        if _ENV_ASSIGNMENT_RE.match(argv[i]):
+            i += 1
+            continue
+        value_opts = _TRANSPARENT_WRAPPERS.get(os.path.basename(argv[i]))
+        if value_opts is None:
+            break
+        i += 1
+        while i < n:
+            tok = argv[i]
+            if tok == "--":
+                i += 1
+                break
+            if tok in value_opts:
+                i += 2
+                continue
+            if tok.startswith("-") or _ENV_ASSIGNMENT_RE.match(tok):
+                i += 1
+                continue
+            break
+    if 0 < i < n:
+        return argv[i:]
+    return argv
 
 
 HIGH_RISK_BUCKETS = {
@@ -87,6 +173,7 @@ _SHELL_BUCKET = "<shell>"
 def normalize_bucket(argv: list[str]) -> str:
     if not argv:
         return ""
+    argv = _strip_transparent_prefix(argv)
 
     for prefix, extra_count in _WRAPPER_PATTERNS:
         plen = len(prefix)
@@ -101,6 +188,9 @@ def normalize_bucket(argv: list[str]) -> str:
     # The bucket prefix is the full path for path-invoked commands, so that
     # approving "ls" does not also approve "/tmp/ls" or "./ls".
     prefix = cmd if is_path else basename
+
+    if basename in _SHELL_EVAL_BUILTINS:
+        return _SHELL_BUCKET
 
     # Interpreter inline-code detection applies regardless of path form,
     # so that /bin/bash -c and bash -c get equivalent treatment.
@@ -168,7 +258,7 @@ class CommandPolicy:
         if self.mode == "none":
             return "error: commands are disabled (commands=none). Adjust your plan."
         if self.mode == "allowlist":
-            basename = os.path.basename(argv[0])
+            basename = os.path.basename(_strip_transparent_prefix(argv)[0])
             if basename in self.allowed_basenames:
                 return None
             return (

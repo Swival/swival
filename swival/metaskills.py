@@ -107,7 +107,7 @@ def _build_result_envelope(
         if "trace" in envelope and len(envelope["trace"]) > 1:
             envelope["trace"] = [{"kind": "truncated"}]
         answer = envelope.get("answer", "")
-        if len(answer) > budget.max_result_chars // 2:
+        if isinstance(answer, str) and len(answer) > budget.max_result_chars // 2:
             envelope["answer"] = answer[: budget.max_result_chars // 2]
             envelope["answer_truncated"] = True
         text = _dumps()
@@ -249,14 +249,18 @@ class MetaskillHostAPI:
         result = dispatch("run_command", args, base_dir, **dispatch_kwargs)
         duration = time.monotonic() - t0
 
-        ok = not result.startswith("error:") and "Exit code:" not in result
-        exit_code = 0 if ok else 1
-        if not ok and "Exit code:" in result:
-            import re
+        import re
 
-            m = re.search(r"Exit code: (\d+)", result)
-            if m:
-                exit_code = int(m.group(1))
+        # run_command reports a non-zero status on the first line, or on the
+        # last line when the output was saved to a file; anchor the search so
+        # output text cannot spoof it.
+        m = re.match(r"Exit code: (\d+)", result)
+        if m is None and "too large for context" in result:
+            m = re.search(r"\nExit code: (\d+)\Z", result)
+        ok = not result.startswith("error:") and m is None
+        exit_code = 0 if ok else 1
+        if m:
+            exit_code = int(m.group(1))
 
         if self._report is not None:
             self._report.events.append(

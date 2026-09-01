@@ -363,6 +363,7 @@ def make_isolated_loop_kwargs(
     kw["thinking_state"] = ThinkingState(verbose=False)
     kw["todo_state"] = TodoState(verbose=False)
     kw["snapshot_state"] = None
+    kw["goal_state"] = None
     kw["file_tracker"] = FileAccessTracker()
     kw["extra_write_roots"] = []
     kw["skill_read_roots"] = []

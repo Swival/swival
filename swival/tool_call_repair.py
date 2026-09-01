@@ -139,6 +139,11 @@ def repair_truncated_json(text: str) -> TruncationResult:
         notes.append("filled dangling key with null")
 
     if in_string:
+        # A dangling escape would turn the closing quote into \".
+        trailing = len(s) - len(s.rstrip("\\"))
+        if trailing % 2 == 1:
+            s = s[:-1]
+            notes.append("dropped dangling escape")
         s += '"'
         if stack and stack[-1] == '"':
             stack.pop()

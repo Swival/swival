@@ -76,10 +76,23 @@ def load_prefs() -> ModelPrefs:
     )
 
 
+def _preserve_malformed(prefs: ModelPrefs) -> None:
+    """Move an unparseable prefs file aside before saving over it, so the
+    user's favorites are not silently wiped."""
+    if not prefs.warning:
+        return
+    path = prefs_path()
+    try:
+        os.replace(path, path.with_name(path.name + ".bad"))
+    except OSError:
+        pass
+
+
 def toggle_favorite(provider: str, model_id: str) -> bool:
     """Flip favorite status for (provider, model_id); returns the new status."""
     provider = normalize_provider(provider)
     prefs = load_prefs()
+    _preserve_malformed(prefs)
     favs = prefs.favorites.setdefault(provider, [])
     if model_id in favs:
         favs.remove(model_id)
@@ -95,6 +108,7 @@ def record_recent(provider: str, model_id: str) -> None:
     """Push (provider, model_id) to the front of the MRU recents list."""
     provider = normalize_provider(provider)
     prefs = load_prefs()
+    _preserve_malformed(prefs)
     recents = prefs.recents.setdefault(provider, [])
     if model_id in recents:
         recents.remove(model_id)

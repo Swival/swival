@@ -9,6 +9,7 @@ import os
 import threading
 import time
 
+from rich.cells import cell_len
 from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
@@ -523,7 +524,15 @@ def _input_marquee_text(text: str, offset: int, width: int) -> Text:
     start = offset % len(base)
     repeats = math.ceil((start + content_width) / len(base)) + 1
     tiled = base * repeats
-    visible = tiled[start : start + content_width]
+    # The budget is in cells; wide characters take two.
+    visible = ""
+    used = 0
+    for ch in tiled[start:]:
+        w = cell_len(ch)
+        if used + w > content_width:
+            break
+        visible += ch
+        used += w
 
     line = Text(_INPUT_MARQUEE_PREFIX, style="bold cyan")
     band = (offset * 1.4) % (content_width + 24) - 12

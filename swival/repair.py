@@ -8,6 +8,7 @@ the telemetry pipeline can measure which fixes actually help.
 
 import difflib
 import json as _json
+import math
 import re
 from typing import Any
 
@@ -160,21 +161,25 @@ def _repair_near_miss_fields(
     """Rename argument keys that are close matches to known property names."""
     known = set(properties)
     renames: list[tuple[str, str]] = []
+    # Targets present or already claimed; never merge two keys into one.
+    claimed: set[str] = set(result)
     for key in list(result):
         if key in known:
             continue
         # Check explicit aliases first (catches pairs too dissimilar for
         # difflib, e.g. "path" → "file_path").
         alias_targets = _FIELD_ALIASES.get(key, ())
-        hit = next((t for t in alias_targets if t in known and t not in result), None)
+        hit = next((t for t in alias_targets if t in known and t not in claimed), None)
         if hit:
             renames.append((key, hit))
+            claimed.add(hit)
             continue
         matches = difflib.get_close_matches(key, known, n=1, cutoff=0.8)
         if matches:
             correct = matches[0]
-            if correct not in result:
+            if correct not in claimed:
                 renames.append((key, correct))
+                claimed.add(correct)
     for old, new in renames:
         result[new] = result.pop(old)
         repairs.append({"type": "rename_field", "field": new, "from": old})
@@ -244,7 +249,12 @@ def _coerce_scalar(value: Any, expected: str) -> Any:
     if expected == "string" and isinstance(value, (int, float, bool)):
         return str(value)
 
-    if expected == "integer" and isinstance(value, float) and value == int(value):
+    if (
+        expected == "integer"
+        and isinstance(value, float)
+        and math.isfinite(value)
+        and value == int(value)
+    ):
         return int(value)
 
     return _SKIP

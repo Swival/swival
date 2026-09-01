@@ -77,6 +77,14 @@ _DEFAULT_METRICS: dict[str, int] = {
 _debug_log_path: Path | None = None
 _debug_log_lock = threading.Lock()
 
+# Metrics are bumped from worker threads; keep the increments atomic.
+_metrics_lock = threading.Lock()
+
+
+def _bump_metric(metrics: dict, key: str, n: int = 1) -> None:
+    with _metrics_lock:
+        metrics[key] = metrics.get(key, 0) + n
+
 
 _current_ui = threading.local()
 
@@ -977,7 +985,9 @@ def _resolve_relative_import(
             leading_dots += 1
         rest = imp[leading_dots:].replace(".", "/")
         parents = "../" * (leading_dots - 1)
-        imp = f"./{parents}{rest}" if rest else (f"./{parents}".rstrip("/") or ".")
+        # A bare "." targets the package directory; keep the "./" prefix so
+        # its __init__.py is tried.
+        imp = f"./{parents}{rest}" if rest else f"./{parents}."
 
     explicit_relative = imp.startswith("./") or imp.startswith("../")
     zig_style = importer_ext == ".zig" and imp.endswith(".zig")
@@ -1717,7 +1727,7 @@ def _parse_records(
 
     if saw_none and records:
         if metrics is not None:
-            metrics["lenient_corrections"] = metrics.get("lenient_corrections", 0) + 1
+            _bump_metric(metrics, "lenient_corrections")
         _debug_log(
             "records_lenient_discard_none",
             record_type=target_name,
@@ -1763,13 +1773,19 @@ def _validate_records(
             if key in record:
                 v = record[key]
                 values = v if isinstance(v, list) else [v]
+                normalized: list[str] = []
                 for val in values:
-                    if val.strip().lower() not in allowed_lc:
+                    norm = val.strip().lower()
+                    if norm not in allowed_lc:
                         raise ValueError(
                             f"invalid enum value '{val}' for key '{key}' "
                             f"in record {idx}; allowed: "
                             f"{sorted(enum_orig[key])}"
                         )
+                    normalized.append(norm)
+                # Store the canonical lowercase form; downstream compares
+                # against lowercase constants.
+                record[key] = normalized if isinstance(v, list) else normalized[0]
 
         for key in booleans:
             if key in record:
@@ -1791,9 +1807,7 @@ def _validate_records(
             )
         if len(records) > 1:
             if metrics is not None:
-                metrics["lenient_corrections"] = (
-                    metrics.get("lenient_corrections", 0) + 1
-                )
+                _bump_metric(metrics, "lenient_corrections")
             _debug_log(
                 "records_lenient_truncate",
                 record_type=rec_schema.name,
@@ -1824,9 +1838,9 @@ def _bump_parse_failure(metrics: dict[str, int], record_name: str) -> None:
     a high-level reader can still see total failures, while a debugger can see
     which phase contributed.
     """
-    metrics["parse_failures"] = metrics.get("parse_failures", 0) + 1
+    _bump_metric(metrics, "parse_failures")
     typed_key = f"parse_failures_{record_name}"
-    metrics[typed_key] = metrics.get(typed_key, 0) + 1
+    _bump_metric(metrics, typed_key)
 
 
 _PARSE_FAILURE_BREAKDOWN: tuple[tuple[str, str], ...] = (
@@ -1944,12 +1958,12 @@ def _parse_records_with_repair(
             result = _repair_records_response(
                 ctx, raw, error_msg, worked_example, schema, metrics=metrics
             )
-            metrics["repair_successes"] = metrics.get("repair_successes", 0) + 1
+            _bump_metric(metrics, "repair_successes")
             _debug_log("records_repair_ok", record_type=schema.record.name)
             _ui_info(None, "  repair succeeded")
             return result
         except ValueError as repair_err:
-            metrics["repair_failures"] = metrics.get("repair_failures", 0) + 1
+            _bump_metric(metrics, "repair_failures")
             _debug_log(
                 "records_repair_failed",
                 record_type=schema.record.name,
@@ -2050,9 +2064,7 @@ def _call_audit_llm(
             if not content:
                 empty_retries += 1
                 if metrics is not None:
-                    metrics["empty_response_retries"] = (
-                        metrics.get("empty_response_retries", 0) + 1
-                    )
+                    _bump_metric(metrics, "empty_response_retries")
                 if empty_retries > 3:
                     break
                 _debug_log("llm_empty", task=trace_task, limit=limit)
@@ -2086,7 +2098,7 @@ def _call_audit_llm(
 
     if shrinks:
         if metrics is not None:
-            metrics["truncated_calls"] = metrics.get("truncated_calls", 0) + 1
+            _bump_metric(metrics, "truncated_calls")
         if truncation_out is not None:
             truncation_out.append(
                 {
@@ -2923,7 +2935,7 @@ def _phase2_triage_one(
         f"Repository profile:\n{profile_json}\n\n"
         f"Attack-surface metadata:\nscore={score}\n\n"
         f"Direct imports/includes:\n{imports_summary}\n\n"
-        f"Direct callers:\n{callers_summary}\n\n"
+        f"Files this calls into / depends on:\n{callers_summary}\n\n"
         f"Committed primary file contents:\n{content}\n\n"
         f"The file is: {path}"
     )
@@ -3501,7 +3513,7 @@ def _phase3_deep_review(
             # with the format, so an empty inventory on the files triage
             # rated highest gets one identical re-ask. Sampling variance is
             # the mechanism; the prompt stays byte-identical (cache-friendly).
-            state.metrics["high_none_retries"] += 1
+            _bump_metric(state.metrics, "high_none_retries")
             inventory = _phase3a_inventory(
                 path, state, ctx, content, callee_context=callee_context
             )
@@ -3560,7 +3572,7 @@ def _deep_review_one(
         return DeepReviewResult(path=path, findings=findings)
     except (ValueError, RuntimeError) as e:
         if isinstance(e, ValueError):
-            state.metrics["analytical_retries"] += 1
+            _bump_metric(state.metrics, "analytical_retries")
         _ui_info(ui, f"  retrying deep review for {path} after error: {e}")
         try:
             findings = _phase3_deep_review(path, state, ctx, ui=ui)
@@ -3711,7 +3723,7 @@ def _phase4c_reproduce(
         answer = answer or ""
         verdict = _parse_verdict_line(answer)
         if verdict is None:
-            state.metrics["verifier_no_verdict"] += 1
+            _bump_metric(state.metrics, "verifier_no_verdict")
             _ui_info(ui, f"    verifier [{locs}]: no verdict token — {finding.title}")
             raise _TransientVerifierError(
                 "verifier produced no verdict token"
@@ -4164,7 +4176,7 @@ def _adjudicate_one(
         v = None
         for attempt in range(2):
             if attempt:
-                state.metrics["phase45_lens_retries"] += 1
+                _bump_metric(state.metrics, "phase45_lens_retries")
             try:
                 v = _phase45_review_one(
                     finding, lens, surface, evidence, reproducer_summary, state, ctx
@@ -4968,6 +4980,8 @@ def run_audit_command(cmd_arg: str, ctx: InputContext) -> str:
                 workers = int(parts[i])
             except ValueError:
                 return f"error: --workers requires an integer, got {parts[i]!r}"
+            if workers < 1:
+                return "error: --workers must be at least 1"
         elif parts[i] == "--patch-max-turns":
             if i + 1 >= len(parts):
                 return "error: --patch-max-turns requires an integer"
@@ -5151,9 +5165,7 @@ def _run_pipeline_body(
                 "continuing with empty profile (later phases lose enrichment)",
             )
             state.repo_profile = {}
-            state.metrics["phase1_profile_failures"] = (
-                state.metrics.get("phase1_profile_failures", 0) + 1
-            )
+            _bump_metric(state.metrics, "phase1_profile_failures")
         ph1.advance()
         state.phase = "triage"
         state.save()

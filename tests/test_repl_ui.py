@@ -641,11 +641,18 @@ class TestFmtBackend:
 
 @pytest.mark.skipif(not hasattr(signal, "pthread_kill"), reason="needs pthread_kill")
 def test_interrupt_main_thread_breaks_blocking_wait():
-    gate = threading.Event()
-    interrupted = False
-    threading.Timer(0.1, _interrupt_main_thread).start()
+    # A process started as a background job inherits SIGINT ignored, and
+    # Python then never installs its default handler; pin it so the test
+    # checks delivery, not the inherited disposition.
+    prior = signal.signal(signal.SIGINT, signal.default_int_handler)
     try:
-        gate.wait(timeout=5)
-    except KeyboardInterrupt:
-        interrupted = True
-    assert interrupted
+        gate = threading.Event()
+        interrupted = False
+        threading.Timer(0.1, _interrupt_main_thread).start()
+        try:
+            gate.wait(timeout=5)
+        except KeyboardInterrupt:
+            interrupted = True
+        assert interrupted
+    finally:
+        signal.signal(signal.SIGINT, prior)

@@ -295,7 +295,12 @@ class SnapshotState:
             for i, msg in enumerate(messages):
                 tc_id = _msg_tool_call_id(msg)
                 if tc_id == self.explicit_begin_tool_call_id:
-                    # Start after the save response message
+                    # Also skip sibling results from the same tool batch;
+                    # their assistant message stays.
+                    while (
+                        i + 1 < len(messages) and _msg_role(messages[i + 1]) == "tool"
+                    ):
+                        i += 1
                     return i + 1
             return (
                 "error: explicit checkpoint marker was removed (likely by compaction). "

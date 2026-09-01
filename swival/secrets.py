@@ -44,7 +44,13 @@ class SecretShield:
                 pat = dict(pat)
                 pat.setdefault("body_alphabet", ALPHANUMERIC)
                 pat.setdefault("min_body_length", len(pat.get("prefix", "")) + 8)
-                self._encryptor.register(SimpleTokenPattern(**pat))
+                try:
+                    pattern = SimpleTokenPattern(**pat)
+                except TypeError as exc:
+                    raise ConfigError(
+                        f"invalid encrypt_secrets_patterns entry {pat.get('name')!r}: {exc}"
+                    ) from exc
+                self._encryptor.register(pattern)
 
     @classmethod
     def from_config(
@@ -55,7 +61,10 @@ class SecretShield:
         extra_patterns: list | None = None,
     ) -> "SecretShield":
         """Construct from string config values (hex key, UTF-8 tweak)."""
-        key = bytes.fromhex(key_hex) if key_hex else None
+        try:
+            key = bytes.fromhex(key_hex) if key_hex else None
+        except ValueError as exc:
+            raise ConfigError(f"encrypt_secrets_key is not valid hex: {exc}") from exc
         tweak = tweak_str.encode("utf-8") if tweak_str else None
         return cls(key=key, tweak=tweak, extra_patterns=extra_patterns)
 

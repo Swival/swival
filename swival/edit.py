@@ -50,8 +50,11 @@ def _exact_match_spans(content: str, old_string: str) -> list[tuple[int, int]]:
 
 
 def _line_at_offset(content: str, offset: int) -> int:
-    """Return the 1-based line number for a character offset."""
-    return content.count("\n", 0, offset) + 1
+    """Return the 1-based line number for a character offset.
+
+    Uses ``splitlines`` semantics to agree with read_file and grep output.
+    """
+    return len((content[:offset] + "x").splitlines())
 
 
 def _span_lines(content: str, start: int, end: int) -> tuple[int, int]:
@@ -72,6 +75,9 @@ def _prepare_fuzzy(
     """Shared prep for fuzzy matching: split lines, apply normalize + strip."""
     content_lines = content.split("\n")
     old_lines = old_string.split("\n")
+    if old_string.endswith("\n"):
+        # A trailing newline ends the last line; it is not an extra empty line.
+        old_lines.pop()
     prep = normalize or (lambda s: s)
     prepped_old = [prep(line.strip()) for line in old_lines]
     return content_lines, prepped_old, len(old_lines), prep
@@ -101,7 +107,7 @@ def _fuzzy_match_spans(
         end = start + sum(len(content_lines[i + k]) + 1 for k in range(old_len))
         if not old_string.endswith("\n") and end > 0 and end <= len(content) + 1:
             end -= 1
-        spans.append((start, end))
+        spans.append((start, min(end, len(content))))
     return spans
 
 
@@ -151,13 +157,22 @@ def _replace_all_exact(content: str, old_string: str, new_string: str) -> str:
 def _replace_all_fuzzy(
     content: str, old_string: str, new_string: str, normalize=None
 ) -> str:
-    """Replace all fuzzy matches, re-scanning after each replacement."""
+    """Replace all fuzzy matches.
+
+    Spans are found once and applied right-to-left; re-scanning after each
+    replacement would loop forever when ``new_string`` fuzzy-matches
+    ``old_string``.
+    """
+    spans = _fuzzy_match_spans(content, old_string, normalize=normalize)
+    kept: list[tuple[int, int]] = []
+    last_end = -1
+    for start, end in spans:
+        if start >= last_end:
+            kept.append((start, end))
+            last_end = end
     result = content
-    while True:
-        spans = _fuzzy_match_spans(result, old_string, normalize=normalize)
-        if not spans:
-            break
-        result = _replace_span(result, spans[0], new_string, old_string)
+    for span in reversed(kept):
+        result = _replace_span(result, span, new_string, old_string)
     return result
 
 

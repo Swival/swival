@@ -1,9 +1,9 @@
 """Memory entry parsing and retrieval for budgeted injection."""
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
-from .tokens import count_tokens
+from .tokens import count_tokens, truncate_to_tokens
 
 # Regex for ATX headings: 1-6 '#' chars followed by a space
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
@@ -144,6 +144,17 @@ def retrieve_bm25(
         if len(results) >= top_k:
             break
         if remaining <= 0:
+            break
+        if entry.tokens > remaining:
+            # Like the no-query packer: truncate the last entry if enough
+            # budget remains, then stop.
+            if remaining > 20:
+                truncated = replace(
+                    entry,
+                    content=truncate_to_tokens(entry.content, remaining),
+                    _tokens=None,
+                )
+                results.append((truncated, float(score)))
             break
         results.append((entry, float(score)))
         remaining -= entry.tokens

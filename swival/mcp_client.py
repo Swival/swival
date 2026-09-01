@@ -513,7 +513,8 @@ class McpManager:
             raise McpWaitTimeout(f"call did not finish within {timeout}s")
         try:
             return future.result()
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, concurrent.futures.CancelledError):
+            # concurrent.futures raises its own CancelledError, distinct from asyncio's.
             raise McpShutdownError("operation cancelled during shutdown")
 
     def _start_server_task(self, name: str, config: dict, timeout: float = 30) -> None:

@@ -141,17 +141,20 @@ def _walk_python(nodes: list[ast.stmt], depth: int, level: int, out: list[str]):
 def _func_signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
     args = node.args
     parts: list[str] = []
-    num_args = len(args.args)
+    # ``defaults`` covers positional-only and regular positional args together.
+    positional = list(args.posonlyargs) + list(args.args)
     num_defaults = len(args.defaults)
-    first_default = num_args - num_defaults
+    first_default = len(positional) - num_defaults
 
-    for i, arg in enumerate(args.args):
+    for i, arg in enumerate(positional):
         p = arg.arg
         if arg.annotation:
             p += f": {_expr_text(arg.annotation)}"
         if i >= first_default:
             p += "=..."
         parts.append(p)
+        if args.posonlyargs and i == len(args.posonlyargs) - 1:
+            parts.append("/")
 
     if args.vararg:
         p = f"*{args.vararg.arg}"
@@ -363,8 +366,10 @@ def _match_span_decl(line: str) -> tuple[str, str] | None:
 
 
 def _heuristic_symbol_spans(content: str) -> dict[str, SymbolSpan]:
-    masked = mask_noncode(content)
-    lines = masked.splitlines()
+    # Normalize CRLF and split on "\n" only so line offsets stay aligned
+    # with ``masked`` (mask_noncode is length-preserving).
+    masked = mask_noncode(content.replace("\r\n", "\n"))
+    lines = masked.split("\n")
     offsets: list[int] = []
     pos = 0
     for ln in lines:

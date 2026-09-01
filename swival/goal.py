@@ -541,6 +541,8 @@ _MUTATING_OR_WORK_STARTING = frozenset(
         "move_file",
         "run_command",
         "run_shell_command",
+        "run_python",
+        "run_metaskill",
         "use_skill",
         "spawn_subagent",
         "subagent",

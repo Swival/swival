@@ -104,6 +104,8 @@ class TerminalSink:
             self._feed_emulated(text)
             return
         if self._plain_capped:
+            if text:
+                self.output_truncated = True
             return
         if _CONTROL_RE.search(text) is None:
             self._append_plain(text)
@@ -123,8 +125,9 @@ class TerminalSink:
             self._plain.append(text)
             self._plain_len += len(enc)
             if self._plain_len >= MAX_COMMITTED_BYTES:
+                # Exactly filling the cap drops nothing; later input marks
+                # the truncation.
                 self._plain_capped = True
-                self.output_truncated = True
             return
         head_bytes = enc[:remaining]
         head = head_bytes.decode("utf-8", errors="ignore")

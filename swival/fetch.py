@@ -88,6 +88,11 @@ class _RedirectError(Exception):
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Raising skips the close in http_error_30x, so close here.
+        try:
+            fp.close()
+        except Exception:
+            pass
         raise _RedirectError(newurl, code)
 
 

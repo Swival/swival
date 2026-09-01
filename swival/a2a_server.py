@@ -507,7 +507,10 @@ class A2aServer:
         if not auth.startswith("Bearer "):
             return "Missing or invalid Authorization header"
         token = auth[7:]
-        if not hmac.compare_digest(token, self.auth_token):
+        # compare_digest rejects non-ASCII str, so compare bytes.
+        if not hmac.compare_digest(
+            token.encode("utf-8", "surrogateescape"), self.auth_token.encode("utf-8")
+        ):
             return "Invalid bearer token"
         return None
 
@@ -543,6 +546,27 @@ class A2aServer:
         if not message:
             return (
                 _jsonrpc_error(req_id, INVALID_PARAMS, "Missing 'message' in params"),
+                "",
+                None,
+                None,
+            )
+        if not isinstance(message, dict):
+            return (
+                _jsonrpc_error(req_id, INVALID_PARAMS, "'message' must be an object"),
+                "",
+                None,
+                None,
+            )
+        parts = message.get("parts", [])
+        if not isinstance(parts, list) or not all(
+            isinstance(p, dict) and isinstance(p.get("text", ""), str) for p in parts
+        ):
+            return (
+                _jsonrpc_error(
+                    req_id,
+                    INVALID_PARAMS,
+                    "'message.parts' must be a list of part objects",
+                ),
                 "",
                 None,
                 None,
@@ -727,12 +751,15 @@ class A2aServer:
         await lock.acquire()
         try:
             session = self._get_or_create_session(context_id)
-        except RuntimeError as exc:
+        except BaseException as exc:
+            # Release the lock on any failure; a held lock wedges the context.
             lock.release()
             # Clean up the orphaned lock if no session was created
             if context_id not in self._sessions:
                 self._context_locks.pop(context_id, None)
-            return _jsonrpc_error(req_id, RATE_LIMITED, str(exc))
+            if isinstance(exc, RuntimeError):
+                return _jsonrpc_error(req_id, RATE_LIMITED, str(exc))
+            raise
 
         # Mark active immediately so cross-context eviction cannot
         # remove this just-admitted session before the generator starts.
@@ -770,6 +797,8 @@ class A2aServer:
             # deduplicate the post-loop final artifact (only suppress if
             # the exact same text was already streamed).
             last_streamed_text: str | None = None
+            # True once the task has reached a terminal state.
+            finalized = False
 
             try:
                 while not ask_future.done():
@@ -831,6 +860,7 @@ class A2aServer:
                         "taskId": task.id,
                     }
                     task.messages.append(agent_msg)
+                    finalized = True
                     final_evt = TaskStatusUpdateEvent(
                         task_id=task.id,
                         context_id=context_id,
@@ -844,6 +874,7 @@ class A2aServer:
                     return
 
                 self._finalize_task(task, result, context_id)
+                finalized = True
 
                 # Emit final artifact unless the exact same text was
                 # already streamed via text_chunk.
@@ -874,17 +905,13 @@ class A2aServer:
 
             finally:
                 session.event_callback = None
-                if not ask_future.done():
-                    # Client disconnected while ask() is still running.
-                    # Signal cancellation and hand off the cleanup to a
-                    # background task that will wait for the thread to
-                    # finish, finalize the task, then release the lock
-                    # and semaphore.  This avoids the "shield +
-                    # CancelledError" problem: the cleanup task is
-                    # independent and won't be cancelled when the
-                    # generator is torn down.  _active_contexts is
-                    # cleared inside _streaming_cleanup once done.
-                    task.cancel_flag.set()
+                if not finalized:
+                    # Client disconnected before the task was finalized.
+                    # Cancel ask() if it is still running and let an
+                    # independent task finalize and release the lock and
+                    # semaphore, since it survives the generator's teardown.
+                    if not ask_future.done():
+                        task.cancel_flag.set()
                     session.cancel_flag = None
                     asyncio.ensure_future(
                         self._streaming_cleanup(ask_future, lock, task, context_id)
@@ -1069,7 +1096,11 @@ class A2aServer:
             # For streaming, acquire now; release is inside the generator's
             # finally block so the slot stays held for the stream's lifetime.
             await self._concurrency_sem.acquire()
-            resp = await self._dispatch_method(method, params, req_id)
+            try:
+                resp = await self._dispatch_method(method, params, req_id)
+            except BaseException:
+                self._concurrency_sem.release()
+                raise
             if not isinstance(resp, StreamingResponse):
                 # Error path (validation failure) — release immediately
                 self._concurrency_sem.release()
