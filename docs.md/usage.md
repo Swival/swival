@@ -154,6 +154,8 @@ Switches are transactional: the new model is fully resolved (including context-w
 
 Catalogs are available for LM Studio (all downloaded models, loaded ones first), llama.cpp, OpenAI-compatible servers, Apple Foundation Models, HuggingFace, OpenRouter, Google Gemini, and ChatGPT. For bedrock, GEAP, and the command provider there is no listing, but `/model ID` still works. Favorites and recents live in `$XDG_CONFIG_HOME/swival/models.toml` (usually `~/.config/swival/models.toml`), a plain TOML file that is safe to edit by hand.
 
+`/reasoning` shows the reasoning effort the session currently runs with, together with the valid levels. `/reasoning LEVEL` changes it on the spot for models that support tunable reasoning (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `default` to stop sending the parameter), which is handy when a task turns out to need more or less thinking than you planned for at startup. `/reasoning -` goes back to the level in force before the last switch. The change applies to the next turn and to subagents spawned afterwards; `/profile` still resets the effort to whatever the profile says.
+
 `/init` scans your project for build/test/lint/format commands and cross-cutting conventions, then generates a structured `AGENTS.md` file with a `## Workflow` section (exact commands including an after-every-edit reflex) followed by a `## Conventions` section. Validates the output and retries once if the structure is wrong.
 
 `/exit` and `/quit` leave the REPL. Pressing `Ctrl-D` exits as well.

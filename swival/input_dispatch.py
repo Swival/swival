@@ -50,6 +50,9 @@ class InputContext:
     # (provider, model_id) the session ran before the last /model switch
     # (for /model -). Self-validating: ignored when the provider changes.
     last_model: "tuple[str, str] | None" = None
+    # Reasoning effort in force before the last /reasoning switch (for
+    # /reasoning -). "default" stands for an unset effort.
+    last_reasoning_effort: str | None = None
     # External managers.
     mcp_manager: object = None
     a2a_manager: object = None

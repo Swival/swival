@@ -167,6 +167,12 @@ INPUT_COMMANDS: dict[str, CommandInfo] = {
         kind="flow_control",
         acp=False,
     ),
+    "/reasoning": CommandInfo(
+        desc="Set the reasoning effort for the session (no arg = show, - = revert)",
+        arg="[level|-]",
+        arg_type="reasoning",
+        kind="state_change",
+    ),
     "/remember": CommandInfo(
         desc="Add a durable project fact to AGENTS.md",
         arg="<text>",

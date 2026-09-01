@@ -5,6 +5,7 @@ import sys
 from prompt_toolkit.completion import Completer, Completion, PathCompleter
 from prompt_toolkit.document import Document
 
+from .config import REASONING_LEVELS
 from .input_commands import INPUT_COMMANDS
 from .skills import find_skill_prefix
 
@@ -69,6 +70,8 @@ class SwivalCompleter(Completer):
                 yield from self._path_completer.get_completions(sub_doc, complete_event)
             elif arg_type == "model" and self.model_candidates is not None:
                 yield from self._complete_models(arg_text)
+            elif arg_type == "reasoning":
+                yield from self._complete_reasoning_levels(arg_text)
             return
 
         if text.startswith("!") and " " not in text:
@@ -106,6 +109,12 @@ class SwivalCompleter(Completer):
         for name in candidates:
             if name.lower().startswith(prefix):
                 yield Completion(name, start_position=-len(arg_text))
+
+    def _complete_reasoning_levels(self, arg_text: str):
+        prefix = arg_text.lower()
+        for level in (*REASONING_LEVELS, "-"):
+            if level.startswith(prefix):
+                yield Completion(level, start_position=-len(arg_text))
 
     def _complete_custom_commands(self, text: str):
         from .agent import discover_custom_commands

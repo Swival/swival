@@ -48,7 +48,7 @@ from ._msg import (
     _set_msg_content,
     _tool_call_id,
 )
-from .config import _UNSET
+from .config import _UNSET, REASONING_LEVELS
 from .config import find_project_root as _find_project_root
 from .cost import CostObservation, SessionCost
 from .report import (
@@ -6451,14 +6451,13 @@ def build_parser():
         help='Extra parameters to pass to the LLM API as JSON (e.g. \'{"chat_template_kwargs": {"enable_thinking": false}}\').',
     )
 
-    _REASONING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "default")
     provider_group.add_argument(
         "--reasoning-effort",
-        choices=_REASONING_LEVELS,
+        choices=REASONING_LEVELS,
         default=_UNSET,
         metavar="LEVEL",
         help="Reasoning effort level for models that support it (e.g. gpt-5.4). "
-        f"One of: {', '.join(_REASONING_LEVELS)}.",
+        f"One of: {', '.join(REASONING_LEVELS)}.",
     )
 
     provider_group.add_argument(
@@ -12710,6 +12709,46 @@ def _patch_system_instructions(
     _set_msg_content(messages[0], updated)
 
 
+def _repl_reasoning(
+    cmd_arg: str,
+    *,
+    repl_kwargs: dict,
+    subagent_manager=None,
+    last_effort: str | None = None,
+) -> tuple[str | None, str, bool]:
+    """Handle /reasoning.
+
+    Returns ``(last_effort, message, is_error)`` where ``last_effort`` is the
+    level the caller should store for a later ``/reasoning -`` revert. An
+    unset effort is recorded as "default", which call_llm treats the same way.
+    """
+    llm_kwargs = repl_kwargs.get("llm_kwargs", {})
+    current = llm_kwargs.get("reasoning_effort") or "default"
+    arg = cmd_arg.strip().lower()
+
+    if not arg:
+        levels = ", ".join(REASONING_LEVELS)
+        return last_effort, f"reasoning effort: {current}\nlevels: {levels}", False
+
+    if arg == "-":
+        if last_effort is None:
+            return last_effort, "no previous reasoning effort to revert to", True
+        new_effort = last_effort
+    elif arg in REASONING_LEVELS:
+        new_effort = arg
+    else:
+        levels = ", ".join(REASONING_LEVELS)
+        return last_effort, f"unknown reasoning effort {arg!r} (one of: {levels})", True
+
+    if new_effort == current:
+        return last_effort, f"reasoning effort already {current}", False
+
+    new_kwargs = dict(llm_kwargs)
+    new_kwargs["reasoning_effort"] = new_effort
+    _commit_llm_runtime(repl_kwargs, subagent_manager, {"llm_kwargs": new_kwargs})
+    return current, f"reasoning effort: {new_effort} (was {current})", False
+
+
 def _repl_remember(
     text: str, base_dir: str, messages: list, start_dir: "Path | None" = None
 ) -> tuple[str, bool]:
@@ -13117,6 +13156,10 @@ def execute_input(
                 verbose=ctx.verbose,
             )
             ctx.current_profile = new_profile
+            if not err:
+                # The profile decides the effort from here on, so a stale
+                # /reasoning - must not drag the old one back.
+                ctx.last_reasoning_effort = None
             return StepResult(kind="state_change", text=msg, is_error=err)
 
         if cmd == "/model":
@@ -13139,6 +13182,16 @@ def execute_input(
                 verbose=ctx.verbose,
             )
             ctx.last_model = new_last
+            return StepResult(kind="state_change", text=msg, is_error=err)
+
+        if cmd == "/reasoning":
+            new_last, msg, err = _repl_reasoning(
+                cmd_arg,
+                repl_kwargs=ctx.loop_kwargs,
+                subagent_manager=ctx.subagent_manager,
+                last_effort=ctx.last_reasoning_effort,
+            )
+            ctx.last_reasoning_effort = new_last
             return StepResult(kind="state_change", text=msg, is_error=err)
 
         if cmd == "/remember":
