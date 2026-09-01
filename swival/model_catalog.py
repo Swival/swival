@@ -308,6 +308,24 @@ def _as_price(value) -> float | None:
         return None
 
 
+def _per_million(cost_per_token) -> float | None:
+    """Providers quote USD per token; the picker shows USD per Mtok."""
+    if not isinstance(cost_per_token, (int, float)):
+        return None
+    return float(cost_per_token) * 1_000_000
+
+
+def _litellm_registry() -> dict:
+    """Return litellm's bundled model cost map without a network fetch."""
+    try:
+        os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        import litellm
+
+        return litellm.model_cost
+    except Exception as e:
+        raise CatalogUnavailable(f"could not load the litellm model registry: {e}")
+
+
 def _fmt_ctx(n: int | None) -> str:
     if not n:
         return "?"
@@ -566,11 +584,8 @@ def _fetch_openrouter(base_url: str | None, api_key: str | None, timeout: float)
         if not isinstance(model_id, str):
             continue
         pricing = m.get("pricing") or {}
-        pin = _as_price(pricing.get("prompt"))
-        pout = _as_price(pricing.get("completion"))
-        # OpenRouter prices are per token; normalize to USD per Mtok.
-        price_in = pin * 1_000_000 if pin is not None else None
-        price_out = pout * 1_000_000 if pout is not None else None
+        price_in = _per_million(_as_price(pricing.get("prompt")))
+        price_out = _per_million(_as_price(pricing.get("completion")))
         supported = m.get("supported_parameters") or []
         tags = []
         if model_id.endswith(":free") or (price_in == 0 and price_out == 0):
@@ -626,18 +641,8 @@ def _fetch_chatgpt(base_url: str | None, api_key: str | None, timeout: float):
     litellm ships a registry of the models it can route, which tracks the
     supported set better than a hardcoded list here would.
     """
-    try:
-        # Use litellm's bundled cost map rather than fetching it remotely,
-        # matching agent._import_litellm.
-        os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-        import litellm
-
-        registry = litellm.model_cost
-    except Exception as e:
-        raise CatalogUnavailable(f"could not load the litellm model registry: {e}")
-
     entries = []
-    for key, info in registry.items():
+    for key, info in _litellm_registry().items():
         if not key.startswith("chatgpt/"):
             continue
         bare = key.removeprefix("chatgpt/")

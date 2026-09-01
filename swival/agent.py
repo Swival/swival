@@ -6,6 +6,7 @@ from contextlib import nullcontext
 import copy
 from dataclasses import dataclass, replace
 from datetime import datetime
+import functools
 import json
 from typing import Literal
 import math
@@ -639,6 +640,7 @@ def _retries_from_exc(exc):
     return getattr(exc, "_provider_retries", 0)
 
 
+@functools.cache
 def _swival_version() -> str:
     try:
         return metadata.version("swival")
