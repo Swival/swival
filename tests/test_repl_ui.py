@@ -430,6 +430,17 @@ class TestRendering:
         text = _render_ansi(slot.render(80, 5), 80)
         assert "Thinking (turn 2/5)" in text
 
+    def test_spinner_slots_advance_frames_over_time(self):
+        # Each redraw builds a fresh Rich Spinner, whose animation clock
+        # starts at its first render, so the glyph must follow the slot's
+        # own elapsed time or the spinner freezes on frame zero.
+        for slot in (_SpinnerSlot("Thinking"), _CommandSlot("ls", None)):
+            frames = set()
+            for elapsed in (0.0, 0.1, 0.2, 0.3):
+                slot.started = time.monotonic() - elapsed
+                frames.add(_render_ansi(slot.render(80, 5), 80)[:4])
+            assert len(frames) > 1, type(slot).__name__
+
     def test_command_slot_shows_bar_with_timeout(self):
         slot = _CommandSlot("sleep 5", 30)
         text = _render_ansi(slot.render(100, 5), 100)

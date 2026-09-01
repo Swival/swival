@@ -376,9 +376,21 @@ class _OutputRouter:
                 pass
 
 
+def _spinner_frame(name: str, style: str, elapsed: float) -> Text:
+    """The spinner glyph for ``elapsed`` seconds into a slot's life.
+
+    Rich anchors a Spinner's animation clock on the first ``render()`` call,
+    so a Spinner built fresh for every redraw would always show frame zero.
+    Pinning the clock at zero makes the frame a pure function of ``elapsed``.
+    """
+    spinner = Spinner(name, style=style, speed=1.5)
+    spinner.start_time = 0.0
+    return spinner.render(elapsed)
+
+
 def _spinner_text(name: str, style: str, desc: str, elapsed: float) -> Text:
     text = Text("  ")
-    text.append_text(Spinner(name, style=style, speed=1.5).render(elapsed))
+    text.append_text(_spinner_frame(name, style, elapsed))
     text.append(f"  {desc}", style=style)
     text.append(f"  {fmt.format_duration(elapsed)}", style="dim")
     return text
@@ -436,9 +448,7 @@ class _CommandSlot(_Slot):
     def render(self, width: int, budget: int):
         grid = Table.grid(padding=(0, 1))
         cells = [
-            Text("  ").append_text(
-                Spinner("dots", style="cyan", speed=1.5).render(self.elapsed)
-            ),
+            Text("  ").append_text(_spinner_frame("dots", "cyan", self.elapsed)),
             Text(f"Running {self.label}", style="cyan"),
         ]
         if self.timeout is not None:
