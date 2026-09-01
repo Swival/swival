@@ -117,6 +117,7 @@ from .tools import (
 )
 from .repair import format_repair_feedback, repair_tool_args, validate_required_args
 from .keepawake import keep_awake
+from .repl_ui import _repl_key_bindings
 from .tool_call_repair import (
     StormBreaker,
     content_is_pure_tool_call,
@@ -13117,24 +13118,33 @@ def execute_input(
             return StepResult(kind="state_change", text=msg, is_error=err)
 
         if cmd == "/model":
-            new_last, msg, err = _repl_model(
-                cmd_arg,
-                profiles=ctx.profiles,
-                current_profile=ctx.current_profile,
-                startup_profile=ctx.startup_profile,
-                raw_baseline=ctx.raw_llm_baseline,
-                pre_profile_baseline=ctx.pre_profile_baseline,
-                repl_kwargs=ctx.loop_kwargs,
-                subagent_manager=ctx.subagent_manager,
-                last_model=ctx.last_model,
-                interactive=(
-                    mode == "repl"
-                    and ctx.interactive
-                    and sys.stdin.isatty()
-                    and sys.stderr.isatty()
-                ),
-                verbose=ctx.verbose,
+            interactive = (
+                mode == "repl"
+                and ctx.interactive
+                and sys.stdin.isatty()
+                and sys.stderr.isatty()
             )
+            # Only a bare /model opens the picker, which needs the terminal
+            # to itself.
+            terminal = (
+                fmt.suspend_live()
+                if interactive and not cmd_arg.strip()
+                else nullcontext()
+            )
+            with terminal:
+                new_last, msg, err = _repl_model(
+                    cmd_arg,
+                    profiles=ctx.profiles,
+                    current_profile=ctx.current_profile,
+                    startup_profile=ctx.startup_profile,
+                    raw_baseline=ctx.raw_llm_baseline,
+                    pre_profile_baseline=ctx.pre_profile_baseline,
+                    repl_kwargs=ctx.loop_kwargs,
+                    subagent_manager=ctx.subagent_manager,
+                    last_model=ctx.last_model,
+                    interactive=interactive,
+                    verbose=ctx.verbose,
+                )
             ctx.last_model = new_last
             return StepResult(kind="state_change", text=msg, is_error=err)
 
@@ -13375,10 +13385,15 @@ def _execute_simplify(cmd_arg: str, ctx: InputContext) -> StepResult:
 
 
 def _execute_audit(cmd_arg: str, ctx: InputContext) -> StepResult:
-    """Handle the /audit command by delegating to swival.audit."""
+    """Handle the /audit command by delegating to swival.audit.
+
+    The audit draws its own full-width live panel, so the REPL prompt steps
+    aside for the duration.
+    """
     from .audit import run_audit_command
 
-    return _execute_delegated_command(cmd_arg, ctx, "/audit", run_audit_command)
+    with fmt.suspend_live():
+        return _execute_delegated_command(cmd_arg, ctx, "/audit", run_audit_command)
 
 
 _LOOP_DURATION_RE = re.compile(r"^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$")
@@ -14168,31 +14183,16 @@ def run_input_script(
     )
 
 
-_REPL_SHIFT_ENTER_SEQUENCES = ("\x1b[27;2;13~", "\x1b[13;2u")
-
-
-def _repl_key_bindings():
-    from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
-    from prompt_toolkit.key_binding import KeyBindings
-    from prompt_toolkit.keys import Keys
-
-    for sequence in _REPL_SHIFT_ENTER_SEQUENCES:
-        ANSI_SEQUENCES[sequence] = Keys.ControlM
-
-    kb = KeyBindings()
-
-    @kb.add("c-j")
-    def _insert_newline(event):
-        event.current_buffer.insert_text("\n")
-
-    @kb.add("c-m")
-    def _insert_newline_or_accept(event):
-        if event.data in _REPL_SHIFT_ENTER_SEQUENCES:
-            event.current_buffer.insert_text("\n")
-        else:
-            event.current_buffer.validate_and_handle()
-
-    return kb
+def _seconds_until_next_loop(ctx: InputContext) -> float | None:
+    """How long the idle prompt may block before a /loop registration is due."""
+    registry = ctx.loop_registry
+    if registry is None or len(registry) == 0:
+        return None
+    now = _loops_mod.monotonic()
+    delays = [
+        max(0.0, reg.interval_seconds - (now - reg.last_fire)) for reg in registry
+    ]
+    return max(min(delays), 0.25)
 
 
 def repl_loop(
@@ -14252,50 +14252,32 @@ def repl_loop(
     net_jail: list | None = None,
     session_cost: SessionCost | None = None,
 ):
-    """Interactive read-eval-print loop."""
-    from prompt_toolkit import PromptSession
-    from prompt_toolkit.filters import is_done
-    from prompt_toolkit.formatted_text import FormattedText
-    from prompt_toolkit.history import FileHistory
-    from prompt_toolkit.styles import Style
-    from prompt_toolkit.widgets.base import Border
+    """Interactive read-eval-print loop.
 
+    The prompt runs on its own thread (see ``repl_ui``) so the user can type
+    the next message while a turn runs here on the main thread. Submitted
+    lines arrive as events; lines submitted during a turn are queued and run
+    in order once it finishes.
+    """
     from .completer import SwivalCompleter
-
-    class _SafeFileHistory(FileHistory):
-        def store_string(self, string: str) -> None:
-            os.makedirs(os.path.dirname(self.filename), exist_ok=True)
-            super().store_string(string)
+    from .repl_ui import ReplUI
 
     history_path = os.path.join(base_dir, ".swival", "repl_history")
-    os.makedirs(os.path.dirname(history_path), exist_ok=True)
-    prompt_style = Style.from_dict(
-        {
-            "": "ansicyan",
-            "prompt": "bold ansigreen",
-            "frame.border": "ansicyan",
-            "bottom-toolbar": "noreverse bg:ansibrightblack ansiwhite",
-            "bottom-toolbar.key": "bold ansiyellow",
-            "bottom-toolbar.model": "ansicyan",
-            "bottom-toolbar.tip": "italic ansibrightblack",
-        }
-    )
     completer = SwivalCompleter(skills_catalog=skills_catalog)
-    kb = _repl_key_bindings()
 
     turn_state = {"max_turns": max_turns, "turns_used": 0}
     _toolbar_tips = [
-        "Shift+Enter newline │ @ file │ / commands │ ! shell",
-        "/compact to free context │ /status for session info",
-        "@ to attach files │ /add-dir to expand workspace",
-        "/goal to set an objective │ /todo to track work items",
-        "/save before risky changes │ /restore to roll back",
+        "Shift+Enter newline · @ file · / commands · ! shell",
+        "/compact to free context · /status for session info",
+        "@ to attach files · /add-dir to expand workspace",
+        "/goal to set an objective · /todo to track work items",
+        "/save before risky changes · /restore to roll back",
         "/copy to copy last answer to clipboard",
-        "^R history │ Shift+Enter/^J for multiline input",
-        "pipe input: echo 'task' | swival │ output goes to stdout",
-        "/clear to start fresh │ /continue to reset turn counter",
+        "^R history · Shift+Enter/^J for multiline input",
+        "Enter while the model works queues the next message",
+        "/clear to start fresh · /continue to reset turn counter",
         "/profile to switch providers mid-session",
-        "/model to pick a model │ /model --fav to tag favorites",
+        "/model to pick a model · /model --fav to tag favorites",
         "/remember to persist a project fact to AGENTS.md",
         "/learn to review mistakes and save lessons",
         "/init to auto-detect project conventions",
@@ -14346,26 +14328,32 @@ def repl_loop(
     _S_KEY = "class:bottom-toolbar.key"
     _S_MODEL = "class:bottom-toolbar.model"
     _S_TIP = "class:bottom-toolbar.tip"
+    _S_SEP = "class:bottom-toolbar.sep"
 
     def _bottom_toolbar():
         parts = []
+
+        def _sep():
+            parts.append((_S_SEP, "  ·  "))
+
         total_tok = _toolbar_state["total_tok"]
         if report:
             if total_tok >= 1000:
                 parts.append((_S, f" {total_tok // 1000}k tok"))
             else:
                 parts.append((_S, f" {total_tok} tok"))
-        parts.append((_S, f" │ ctx {_toolbar_state['ctx_pct']}%"))
+            _sep()
+        parts.append((_S, f"ctx {_toolbar_state['ctx_pct']}%"))
 
         dirty = _toolbar_state["git_dirty"]
         if dirty:
-            parts.append((_S, " │ "))
+            _sep()
             parts.append((_S_KEY, f"{dirty} changed"))
 
         if subagent_manager:
             running = subagent_manager.running_count
             if running:
-                parts.append((_S, " │ "))
+                _sep()
                 parts.append((_S_KEY, f"{running} agent{'s' if running > 1 else ''}"))
 
         remaining = todo_state.remaining_count
@@ -14375,7 +14363,7 @@ def repl_loop(
                 label = next_todo
                 if len(label) > 40:
                     label = label[:37] + "..."
-                parts.append((_S, " │ "))
+                _sep()
                 parts.append((_S_KEY, label))
                 if remaining > 1:
                     parts.append((_S, f" +{remaining - 1}"))
@@ -14385,50 +14373,25 @@ def repl_loop(
             objective = goal_state.current.objective
             if len(objective) > 40:
                 objective = objective[:37] + "..."
-            parts.append((_S, " │ "))
+            _sep()
             parts.append((_S_MODEL, objective))
 
         has_contextual = dirty or remaining or has_goal
         if not has_contextual:
             tip = _toolbar_tips[_toolbar_state["tip_idx"] % len(_toolbar_tips)]
-            parts.append((_S, " │ "))
+            _sep()
             parts.append((_S_TIP, tip))
         return parts
 
-    _border_saved = (
-        Border.VERTICAL,
-        Border.TOP_LEFT,
-        Border.TOP_RIGHT,
-        Border.BOTTOM_LEFT,
-        Border.BOTTOM_RIGHT,
+    def _has_conversation():
+        return any(_msg_role(m) != "system" for m in messages)
+
+    ui = ReplUI(has_conversation=_has_conversation, toolbar_fragments=_bottom_toolbar)
+    ui.build_session(
+        history_path=history_path,
+        completer=completer,
+        key_bindings=_repl_key_bindings(ui),
     )
-    Border.VERTICAL = " "
-    Border.TOP_LEFT = "─"
-    Border.TOP_RIGHT = "─"
-    Border.BOTTOM_LEFT = "─"
-    Border.BOTTOM_RIGHT = "─"
-    try:
-        session = PromptSession(
-            history=_SafeFileHistory(history_path),
-            enable_history_search=True,
-            style=prompt_style,
-            completer=completer,
-            complete_while_typing=False,
-            key_bindings=kb,
-            prompt_continuation="    ... ",
-            mouse_support=False,
-            show_frame=~is_done,
-            bottom_toolbar=_bottom_toolbar,
-        )
-    finally:
-        (
-            Border.VERTICAL,
-            Border.TOP_LEFT,
-            Border.TOP_RIGHT,
-            Border.BOTTOM_LEFT,
-            Border.BOTTOM_RIGHT,
-        ) = _border_saved
-    prompt_text = FormattedText([("class:prompt", "swival> ")])
 
     if verbose:
         fmt.repl_banner()
@@ -14513,9 +14476,6 @@ def repl_loop(
 
     completer.model_candidates = lambda: _model_completion_candidates(ctx)
 
-    def _has_conversation():
-        return any(_msg_role(m) != "system" for m in messages)
-
     def _write_continue_state():
         if continue_here and _has_conversation():
             from .continue_here import write_continue_file
@@ -14529,44 +14489,31 @@ def repl_loop(
                 goal_state=goal_state,
             )
 
-    _exit_outcome = "error"
-    _exit_code = 1
-    ctrl_c_armed = False
-    try:
-        while True:
-            try:
-                _fire_due_loops(ctx)
-            except KeyboardInterrupt:
-                print(file=sys.stderr)  # newline after ^C
-            print(file=sys.stderr)  # blank line before prompt
-            try:
-                line = session.prompt(prompt_text)
-            except KeyboardInterrupt:
-                print(file=sys.stderr)  # newline after ^C
-                if session.default_buffer.text:
-                    ctrl_c_armed = False
-                    continue
-                if not ctrl_c_armed and _has_conversation():
-                    ctrl_c_armed = True
-                    fmt.info("Press Ctrl-C again or Ctrl-D to exit")
-                    continue
-                _write_continue_state()
-                break
-            except EOFError:
-                print(file=sys.stderr)  # newline after ^D
-                _write_continue_state()
-                break
-            ctrl_c_armed = False
+    def _fire_loops_while_idle():
+        ui.set_busy(True)
+        try:
+            _fire_due_loops(ctx)
+        except KeyboardInterrupt:
+            fmt.warning("interrupted.")
+            ui.recall_queued()
+        finally:
+            ui.set_busy(False)
+        _refresh_toolbar_state()
 
-            parsed = parse_input_line(line)
-            if not parsed.raw:
-                continue
+    def _handle_line(line: str) -> bool:
+        """Run one submitted line. Returns True when the REPL should stop."""
+        parsed = parse_input_line(line)
+        if not parsed.raw:
+            return False
 
-            if report is not None:
-                report.record_repl_turn(parsed.raw)
+        if report is not None:
+            report.record_repl_turn(parsed.raw)
 
-            if parsed.is_plain_text:
-                ctx.loop_kwargs["repl_input_text"] = parsed.raw
+        if parsed.is_plain_text:
+            ctx.loop_kwargs["repl_input_text"] = parsed.raw
+        ui.set_busy(True)
+        result = None
+        try:
             try:
                 result = execute_input(parsed, ctx, mode="repl")
             finally:
@@ -14584,15 +14531,44 @@ def repl_loop(
                     fmt.info(result.text)
 
             _run_after_render(result)
+            if result.interrupted:
+                ui.recall_queued()
+        except KeyboardInterrupt:
+            # A Ctrl-C that landed outside the agent loop's own handlers,
+            # for instance during a state command. Nothing to roll back.
+            fmt.warning("interrupted.")
+            ui.recall_queued()
+        finally:
+            ui.set_busy(False)
+        return bool(result is not None and result.stop)
 
-            _refresh_toolbar_state()
-
-            if result.stop:
+    _exit_outcome = "error"
+    _exit_code = 1
+    ui.start()
+    try:
+        while True:
+            # A Ctrl-C can land here when the key was pressed just as a turn
+            # ended. There is nothing to interrupt, so it is ignored.
+            try:
+                event = ui.next_event(timeout=_seconds_until_next_loop(ctx))
+                if event is None:
+                    _fire_loops_while_idle()
+                    continue
+                if event.kind == "exit":
+                    _write_continue_state()
+                    break
+                stop = _handle_line(event.text)
+                print(file=sys.stderr)  # blank line before the next exchange
+                _refresh_toolbar_state()
+            except KeyboardInterrupt:
+                continue
+            if stop:
                 break
 
         _exit_outcome = "success"
         _exit_code = 0
     finally:
+        ui.stop()
         if on_exit:
             on_exit(_exit_outcome, _exit_code)
 

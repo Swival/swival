@@ -49,9 +49,11 @@ swival
 
 It starts automatically when no task is given on a terminal. Pass `--repl` to force REPL mode even when a task argument is present or when stdin is not a terminal (useful for `expect`-style scripting). `--repl` is incompatible with `--reviewer`, `--self-review`, `--reviewer-mode`, and `--acp`. (`--serve` and `--acp` are separate run modes; `--serve` simply takes precedence and starts the server instead of a REPL.)
 
-The REPL is built on `prompt-toolkit`, so it supports input history, history search, and normal terminal line editing.
+The prompt is a framed input box that stays on screen the whole session. It is built on `prompt-toolkit`, so it supports input history (`^R` to search), Tab completion, normal terminal line editing, and Shift+Enter (or `^J`) for multi-line input.
 
-The REPL greets you with an animated splash, and the rule that marks the start of each request flows into place before it settles. These only play on a genuine interactive terminal with color, never when output is piped or redirected. To turn them off entirely, for a slow terminal, a screen reader, a remote shell, or just a preference for reduced motion, set `SWIVAL_ANIMATIONS=0`:
+The input stays live while the model works. Everything the agent prints scrolls up above the box, and the transient displays (the spinner, the streamed answer, the progress bar of a running command) sit between the output and the box. You can type or edit the next message during a turn; pressing Enter queues it, the queue is shown above the box, and queued messages run in order once the turn is over. Ctrl-C interrupts the running turn; anything queued at that point is moved back into the editor rather than run unattended, so a correction typed after seeing the model head the wrong way is not followed by stale follow-ups. Ctrl-C on an empty idle prompt asks for a second press before quitting (Ctrl-D quits right away); on a half-typed line it just clears the line.
+
+The REPL greets you with an animated splash, and in one-shot mode the rule that marks the start of each request flows into place before it settles. These only play on a genuine interactive terminal with color, never when output is piped or redirected. To turn them off entirely, for a slow terminal, a screen reader, a remote shell, or just a preference for reduced motion, set `SWIVAL_ANIMATIONS=0`:
 
 ```sh
 SWIVAL_ANIMATIONS=0 swival
@@ -102,7 +104,7 @@ The interval grammar is forgiving: the compact form (`5m`, `30s`, `1h30m`) still
 
 If the input never looks like an interval, the whole argument becomes the prompt and the interval defaults to 10 minutes. If it begins as an interval but is malformed, the command errors rather than silently scheduling the wrong prompt.
 
-In REPL mode `/loop` is a background scheduler. Registration runs the first iteration immediately, then returns the prompt to you. Subsequent iterations fire between your commands when their interval has elapsed, each in a snapshot of the live session: the iteration sees the current conversation but its own messages, todos, thinking notes, snapshot state, file tracker, and goal state are discarded at the end.
+In REPL mode `/loop` is a background scheduler. Registration runs the first iteration immediately, then returns the prompt to you. Subsequent iterations fire on schedule whenever no turn of yours is running, including while you are sitting at the prompt, and their output scrolls up above the input box. Each iteration runs in a snapshot of the live session: the iteration sees the current conversation but its own messages, todos, thinking notes, snapshot state, file tracker, and goal state are discarded at the end.
 
 The live transcript is never mutated, and iterations do not write to `.swival/HISTORY.md` or the continue file. Filesystem effects (files written, MCP calls, etc.) are real and not rolled back.
 

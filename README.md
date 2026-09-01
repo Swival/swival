@@ -179,7 +179,9 @@ swival
 ```
 
 The REPL carries conversation history across questions, which makes it good for
-exploratory work and longer tasks. `/model` opens an interactive picker over
+exploratory work and longer tasks. The input box stays live while the model
+works: type the next message during a turn and Enter queues it, Ctrl-C
+interrupts. `/model` opens an interactive picker over
 whatever your provider can serve right now (for HuggingFace, the models
 currently backed by inference providers, with context and pricing shown), and
 favorites tagged with `*` stay pinned across sessions for quick switching.

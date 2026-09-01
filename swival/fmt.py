@@ -37,27 +37,46 @@ _think_count = 0
 
 _active_live_suspend = None
 
+# Installed by the interactive REPL, which draws transient displays inside
+# its own prompt layout. While it is set, the Live-based paths below hand
+# over to it; without it (one-shot mode, Session, tests) nothing changes.
+_live_backend = None
+
 
 def _noop(*_args, **_kwargs) -> None:
     return
 
 
+def set_live_backend(backend) -> None:
+    global _live_backend
+    _live_backend = backend
+
+
+def live_backend():
+    return _live_backend
+
+
 @contextlib.contextmanager
 def suspend_live():
-    """Temporarily stop the active live display so interactive prompts render cleanly.
+    """Hand the raw terminal to an interactive prompt for the duration.
 
-    No-op when no live display is running. The display resumes (with its
-    timing reset) when the block exits.
+    Stops the active live display, if any, and parks the REPL front end when
+    one owns the terminal, so ``input()`` and nested prompt_toolkit
+    applications render on a clean screen. Everything resumes when the block
+    exits.
     """
     suspend = _active_live_suspend
-    if suspend is None:
-        yield
-        return
-    resume = suspend()
+    resume = suspend() if suspend is not None else None
+    backend = _live_backend
     try:
-        yield
+        if backend is not None:
+            with backend.suspend():
+                yield
+        else:
+            yield
     finally:
-        resume()
+        if resume is not None:
+            resume()
 
 
 def reset_state() -> None:
@@ -171,10 +190,12 @@ def turn_header(
     title = _turn_title(n, max_n, token_est, context_length)
     if not _console.is_terminal:
         _console.print(Rule(title, style="cyan"))
-    elif n <= 1 and animations_enabled():
+    elif n <= 1 and animations_enabled() and _live_backend is None:
         # Animate only the opening turn of each request; the agent's own
         # follow-up turns settle to a static rule so a long internal loop
-        # doesn't pay the animation cost on every iteration.
+        # doesn't pay the animation cost on every iteration. The REPL front
+        # end skips it too: a Live region cannot share the screen with the
+        # prompt drawn below it.
         _animate_turn_rule(title)
     else:
         _console.print(_GradientRule(title))
@@ -250,6 +271,10 @@ def llm_spinner(label: str = "Thinking"):
     if not _console.is_terminal:
         yield _noop
         return
+    if _live_backend is not None:
+        with _live_backend.llm_spinner(label) as dismiss:
+            yield dismiss
+        return
 
     suffix = ""
     if "(" in label:
@@ -321,6 +346,10 @@ def command_spinner(label: str, timeout: float | None = None):
     """
     if not _console.is_terminal:
         yield _noop
+        return
+    if _live_backend is not None:
+        with _live_backend.command_spinner(label, timeout) as dismiss:
+            yield dismiss
         return
 
     label = " ".join((label or "command").split())
@@ -409,6 +438,10 @@ def step_spinner(label: str):
     if not _console.is_terminal:
         yield _noop
         return
+    if _live_backend is not None:
+        with _live_backend.step_spinner(label) as update:
+            yield update
+        return
 
     progress = Progress(
         SpinnerColumn("dots", style="cyan", speed=1.5),
@@ -485,6 +518,10 @@ def input_marquee(text: str):
     if not _console.is_terminal:
         yield _noop
         return
+    if _live_backend is not None:
+        with _live_backend.input_marquee(text) as dismiss:
+            yield dismiss
+        return
 
     def _frame(offset: int) -> Text:
         return _input_marquee_text(text, offset, _console.width)
@@ -536,6 +573,12 @@ def input_marquee_then_spinner(text: str, spinner_label: str, delay: float = 4.0
     """
     if not _console.is_terminal:
         yield _noop
+        return
+    if _live_backend is not None:
+        with _live_backend.input_marquee_then_spinner(
+            text, spinner_label, delay
+        ) as dismiss:
+            yield dismiss
         return
 
     marquee_cm = input_marquee(text)
@@ -753,6 +796,10 @@ def stream_raw():
     if not _console.is_terminal:
         yield _noop
         return
+    if _live_backend is not None:
+        with _live_backend.stream_raw() as update:
+            yield update
+        return
 
     with Live(
         console=_console,
@@ -781,6 +828,10 @@ def stream_channels():
     """
     if not _console.is_terminal:
         yield _noop
+        return
+    if _live_backend is not None:
+        with _live_backend.stream_channels() as update:
+            yield update
         return
 
     with Live(
@@ -1413,6 +1464,18 @@ def repl_banner() -> None:
             style="dim",
         )
     )
+
+
+def repl_prompt_echo(text: str) -> None:
+    """Leave the submitted prompt in scrollback once the input box is erased."""
+    lines = text.split("\n")
+    out = Text()
+    out.append("\u276f ", style="bold green")
+    out.append(lines[0], style="bold")
+    for line in lines[1:]:
+        out.append("\n  ")
+        out.append(line, style="bold")
+    _console.print(out)
 
 
 _LOGO = r"""

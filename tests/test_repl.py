@@ -36,9 +36,9 @@ from swival.agent import (
     _repl_remember,
     _repl_status,
     _repl_key_bindings,
-    _REPL_SHIFT_ENTER_SEQUENCES,
     CompactionState,
 )
+from swival.repl_ui import _REPL_SHIFT_ENTER_SEQUENCES
 from swival.command_policy import CommandPolicy
 from swival.snapshot import SnapshotState
 from swival.thinking import ThinkingState
@@ -435,7 +435,7 @@ class TestReplLoop:
             repl_loop([], [], **_loop_kwargs(tmp_path))
         _, kwargs = mock_cls.call_args
         assert "key_bindings" in kwargs
-        assert kwargs["prompt_continuation"] == "    ... "
+        assert kwargs["prompt_continuation"] == "  "
         assert kwargs.get("multiline", False) is not True
 
     def test_shift_enter_inserts_newline_without_stealing_enter(self):
