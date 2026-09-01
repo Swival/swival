@@ -4,12 +4,12 @@ All notable user-facing changes to Swival.
 
 ## 1.0.43
 
-- The REPL has been redesigned around a framed input box that stays live while the model works.
-  You can type or edit the next message during a turn; Enter queues it and queued messages run in order once the turn finishes.
+- The REPL has been redesigned.
+  You can now type or edit the next message during a turn; Enter queues it and queued messages run in order once the turn finishes.
   Ctrl-C interrupts the running turn and moves any queued messages back into the editor instead of running them unattended.
-  The spinner, the streamed answer, and command progress now render above the box instead of taking over the terminal, and agent output scrolls up above it.
 - `/loop` iterations in the REPL now fire on schedule while you are idle at the prompt, instead of waiting for your next command.
 - The `Session` object was not reaching the agent loop in REPL mode, so a context window learned from a provider rejection was not remembered. Fixed.
+- Updated google-cloud-aiplatform to 2.0, whose wheels no longer require a local Rust build on newer Python versions.
 
 ## 1.0.42
 
