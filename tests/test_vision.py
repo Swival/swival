@@ -1,20 +1,24 @@
 """Tests for vision/image support."""
 
 import base64
+import copy
 import struct
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from swival import fmt
+from swival import agent, fmt
 from swival._msg import _msg_content
 from swival.agent import (
     SYNTHETIC_USER_PREFIXES,
     _IMAGE_SYNTHETIC_PREFIX,
     _IMAGE_TOKEN_ESTIMATE,
+    _image_pending,
+    _is_vision_capability_rejection,
     _is_vision_rejection,
     _model_supports_vision,
+    _replace_last_image_message,
     _resolve_model_str,
     _strip_image_content,
     compact_messages,
@@ -29,6 +33,7 @@ from swival.tools import (
     _view_image,
     dispatch,
 )
+from tests.conftest import build_loop_kwargs, make_message
 
 
 @pytest.fixture(autouse=True)
@@ -321,37 +326,20 @@ class TestOverflowAfterImageInjection:
             },
         ]
 
-    def test_vision_pending_replaces_image_before_compaction(self):
-        """Simulate the overflow path: when _vision_pending is True,
-        the image message should be replaced with an explanatory fallback
-        BEFORE compaction strips it silently."""
+    def test_pending_image_replaced_before_compaction(self):
+        """The overflow path replaces an unanswered image with an explanatory
+        fallback BEFORE compaction strips it silently."""
         messages = self._make_messages_with_image()
 
-        # This is the logic from run_agent_loop's compaction path:
-        # when _vision_pending is True, scan backward and replace.
-        _vision_pending = True
-        if _vision_pending:
-            for i in range(len(messages) - 1, -1, -1):
-                if (
-                    isinstance(messages[i], dict)
-                    and isinstance(messages[i].get("content"), list)
-                    and any(
-                        p.get("type") == "image_url"
-                        for p in messages[i]["content"]
-                        if isinstance(p, dict)
-                    )
-                ):
-                    messages[i] = {
-                        "role": "user",
-                        "content": (
-                            _IMAGE_SYNTHETIC_PREFIX
-                            + " The image was dropped during context compaction "
-                            "and could not be analyzed. Inform the user that the "
-                            "image could not be processed due to context limits."
-                        ),
-                    }
-                    break
-            _vision_pending = False
+        assert _image_pending(messages)
+        _replace_last_image_message(
+            messages,
+            _IMAGE_SYNTHETIC_PREFIX
+            + " The image was dropped during context compaction "
+            "and could not be analyzed. Inform the user that the "
+            "image could not be processed due to context limits.",
+        )
+        assert not _image_pending(messages)
 
         # Now compact — should not have any list content left
         result = compact_messages(messages)
@@ -369,9 +357,9 @@ class TestOverflowAfterImageInjection:
         assert len(fallback) == 1
         assert fallback[0]["content"].startswith(_IMAGE_SYNTHETIC_PREFIX)
 
-    def test_without_vision_pending_strips_silently(self):
-        """When _vision_pending is False (image was already processed),
-        compaction strips the base64 data as a plain cleanup."""
+    def test_processed_image_strips_silently(self):
+        """An image the model already processed is stripped by compaction as
+        a plain cleanup, with no explanatory fallback."""
         messages = self._make_messages_with_image()
         result = compact_messages(messages)
         # Should strip image data but not add the explanatory fallback
@@ -398,7 +386,7 @@ class TestCompactionImageStripping:
             },
             {"role": "assistant", "content": "It's a cat."},
         ]
-        _strip_image_content(messages)
+        _strip_image_content(messages, note=" [image data removed during compaction]")
         # Image message should be flattened to text
         assert isinstance(messages[1]["content"], str)
         assert "[image] What is this?" in messages[1]["content"]
@@ -612,6 +600,47 @@ class TestIsVisionRejection:
     def test_no_match_generic(self):
         assert not _is_vision_rejection(AgentError("server error 500"))
 
+    def test_matches_vllm_image_limit(self):
+        """vLLM's wording for a text-only model (issue #35)."""
+        assert _is_vision_rejection(
+            AgentError(
+                "LLM call failed: litellm.BadRequestError: OpenAIException - "
+                "At most 0 image(s) may be provided in one prompt. (parameter=image)"
+            )
+        )
+
+
+class TestIsVisionCapabilityRejection:
+    def test_vllm_zero_images(self):
+        assert _is_vision_capability_rejection(
+            AgentError("At most 0 image(s) may be provided in one prompt.")
+        )
+
+    def test_does_not_support(self):
+        assert _is_vision_capability_rejection(
+            AgentError("This model does not support image input")
+        )
+
+    def test_glm_content_type(self):
+        assert _is_vision_capability_rejection(
+            AgentError("messages.content.type is invalid, allowed values: ['text']")
+        )
+
+    def test_too_large_is_about_this_image(self):
+        assert not _is_vision_capability_rejection(
+            AgentError("image exceeds 5 MB maximum")
+        )
+
+    def test_unsupported_format_is_about_this_image(self):
+        assert not _is_vision_capability_rejection(
+            AgentError("You uploaded an unsupported image.")
+        )
+
+    def test_format_not_supported_is_about_this_image(self):
+        assert not _is_vision_capability_rejection(
+            AgentError("image format is not supported")
+        )
+
 
 # ---------------------------------------------------------------------------
 # _resolve_model_str
@@ -698,3 +727,233 @@ class TestContinueHereSyntheticDetection:
         from swival.continue_here import _is_synthetic
 
         assert _is_synthetic("[image] What is in this photo?")
+
+
+# ---------------------------------------------------------------------------
+# Image rejection recovery across turns (issue #35)
+# ---------------------------------------------------------------------------
+
+
+def _image_message():
+    return {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "[image] Describe the attached image(s)."},
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64," + "A" * 64},
+            },
+        ],
+    }
+
+
+class TestImagePending:
+    def test_no_messages(self):
+        assert _image_pending([]) is False
+
+    def test_no_image(self):
+        assert _image_pending([{"role": "user", "content": "hi"}]) is False
+
+    def test_image_is_last(self):
+        assert _image_pending([{"role": "user", "content": "hi"}, _image_message()])
+
+    def test_user_text_after_image_still_pending(self):
+        """The REPL appends the next prompt after the unanswered image."""
+        msgs = [_image_message(), {"role": "user", "content": "no images please"}]
+        assert _image_pending(msgs)
+
+    def test_assistant_reply_after_image_not_pending(self):
+        msgs = [_image_message(), {"role": "assistant", "content": "It shows a cat."}]
+        assert _image_pending(msgs) is False
+
+
+_VLLM_REJECTION = (
+    "LLM call failed: litellm.BadRequestError: OpenAIException - "
+    "At most 0 image(s) may be provided in one prompt. (parameter=image)"
+)
+
+
+def _names(tools):
+    return [t["function"]["name"] for t in tools]
+
+
+class TestImageRejectionRecovery:
+    @pytest.fixture(autouse=True)
+    def _fresh_rejection_registry(self, monkeypatch):
+        monkeypatch.setattr(agent, "_VISION_REJECTED_MODELS", set())
+        monkeypatch.setattr(agent, "_model_supports_vision", lambda _m: None)
+
+    @staticmethod
+    def _tools():
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+            for name in ("read_file", "view_image")
+        ]
+
+    @staticmethod
+    def _final(text="done"):
+        return make_message(text), "stop", [], 0, (0, 0)
+
+    def _run(self, tmp_path, messages, fake_call_llm, **overrides):
+        kwargs = build_loop_kwargs(tmp_path, max_turns=3) | {
+            "api_base": "http://127.0.0.1:1234",
+            "model_id": "text-only-model",
+            "context_length": None,
+            **overrides,
+        }
+        with patch("swival.agent.call_llm", side_effect=fake_call_llm):
+            return agent.run_agent_loop(messages, self._tools(), **kwargs)
+
+    def _record(self, reject_first=None):
+        """Record each request as (messages, tools). With *reject_first*, the
+        first call raises what it returns and later calls succeed."""
+        calls = []
+
+        def fake_call_llm(*args, **kwargs):
+            msgs = args[2]
+            tools_arg = args[7] if len(args) > 7 else kwargs.get("tools")
+            calls.append((copy.deepcopy(msgs), tools_arg))
+            if len(calls) == 1 and reject_first is not None:
+                raise reject_first()
+            return self._final()
+
+        return calls, fake_call_llm
+
+    def test_stale_image_from_previous_turn_is_dropped_and_retried(self, tmp_path):
+        """An image left in history by an earlier turn is dropped, the call
+        retried, and view_image withdrawn."""
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "look at the png"},
+            _image_message(),
+            {"role": "user", "content": "the model does not support images"},
+        ]
+        calls, fake = self._record(lambda: AgentError(_VLLM_REJECTION))
+
+        result = self._run(tmp_path, messages, fake)
+
+        assert result[0] == "done"
+        assert len(calls) == 2
+        assert _has_image_content(calls[0][0])
+        assert not _has_image_content(calls[1][0])
+        fallback = [
+            m
+            for m in calls[1][0]
+            if isinstance(m.get("content"), str)
+            and m["content"].startswith(_IMAGE_SYNTHETIC_PREFIX)
+        ]
+        assert len(fallback) == 1
+        assert "could not be analyzed" in fallback[0]["content"]
+        assert "At most 0 image(s)" in fallback[0]["content"]
+        assert not _has_image_content(messages)
+        assert _names(calls[0][1]) == ["read_file", "view_image"]
+        assert _names(calls[1][1]) == ["read_file"]
+
+    def test_uncategorized_400_with_pending_image_is_treated_as_rejection(
+        self, tmp_path
+    ):
+        """Provider wording varies; a request-shaped 4xx while an image is in
+        flight gets one retry without the image."""
+
+        def bad_request():
+            err = AgentError("LLM call failed: BadRequestError: unprocessable")
+            err._request_shaped = True
+            return err
+
+        messages = [{"role": "system", "content": "sys"}, _image_message()]
+        calls, fake = self._record(bad_request)
+
+        result = self._run(tmp_path, messages, fake)
+
+        assert result[0] == "done"
+        assert len(calls) == 2
+        assert not _has_image_content(calls[1][0])
+        assert "view_image" in _names(calls[1][1])
+
+    def test_content_specific_rejection_keeps_view_image(self, tmp_path):
+        """A vision-capable provider complaining about this image must not
+        withdraw the tool: the model may try a smaller one."""
+        messages = [{"role": "system", "content": "sys"}, _image_message()]
+        calls, fake = self._record(
+            lambda: AgentError("LLM call failed: image exceeds 5 MB maximum")
+        )
+
+        result = self._run(tmp_path, messages, fake)
+
+        assert result[0] == "done"
+        assert len(calls) == 2
+        assert not _has_image_content(calls[1][0])
+        assert "view_image" in _names(calls[1][1])
+        assert agent._VISION_REJECTED_MODELS == set()
+
+    def test_unrelated_error_with_pending_image_is_not_retried(self, tmp_path):
+        messages = [{"role": "system", "content": "sys"}, _image_message()]
+        calls, fake = self._record(
+            lambda: AgentError("LLM call failed: connection timeout")
+        )
+
+        with pytest.raises(AgentError, match="connection timeout"):
+            self._run(tmp_path, messages, fake)
+
+        assert len(calls) == 1
+        assert _has_image_content(messages)
+
+    def test_rejection_is_remembered_for_later_loops(self, tmp_path):
+        """Once a model has refused an image, a fresh loop for the same model
+        does not offer view_image at all."""
+        messages = [{"role": "system", "content": "sys"}, _image_message()]
+        _, fake = self._record(lambda: AgentError(_VLLM_REJECTION))
+        self._run(tmp_path, messages, fake)
+
+        calls, fake = self._record()
+        self._run(
+            tmp_path,
+            [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+            fake,
+        )
+        assert _names(calls[0][1]) == ["read_file"]
+
+    def test_analyzed_image_is_stripped_after_model_switch(self, tmp_path):
+        """After a model switch, an already answered image is stripped without
+        the note meant for an unanswered one."""
+        messages = [
+            {"role": "system", "content": "sys"},
+            _image_message(),
+            {"role": "assistant", "content": "It shows a cat."},
+            {"role": "user", "content": "and now?"},
+        ]
+        calls, fake = self._record(lambda: AgentError(_VLLM_REJECTION))
+
+        result = self._run(tmp_path, messages, fake)
+
+        assert result[0] == "done"
+        assert len(calls) == 2
+        assert not _has_image_content(calls[1][0])
+        assert "the model rejected it" in messages[1]["content"]
+        assert not any(
+            isinstance(m.get("content"), str)
+            and "could not be analyzed" in m["content"]
+            for m in messages
+        )
+
+    def test_rejection_memory_is_per_endpoint(self, tmp_path):
+        """The same model id on another endpoint may well be a different
+        server with a vision projector loaded."""
+        messages = [{"role": "system", "content": "sys"}, _image_message()]
+        _, fake = self._record(lambda: AgentError(_VLLM_REJECTION))
+        self._run(tmp_path, messages, fake)
+
+        calls, fake = self._record()
+        self._run(
+            tmp_path,
+            [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+            fake,
+            api_base="http://127.0.0.1:9999",
+        )
+        assert "view_image" in _names(calls[0][1])

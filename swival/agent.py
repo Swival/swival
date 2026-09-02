@@ -163,14 +163,26 @@ _APPLEFM_DROP_LOGGED: set[str] = set()
 
 _IMAGE_SYNTHETIC_PREFIX = "[image]"
 
-_VISION_REJECTION_PATTERNS = (
-    "image_url",
-    "image input",
-    "image content",
+# Wording that blames the model rather than this particular image.
+# Only these withdraw view_image: a size or format complaint must not.
+_VISION_CAPABILITY_PATTERNS = (
     "vision",
     "multimodal",
+    "support image",
     "content.type is invalid",
+    "at most 0 image",
+    "text-only",
+    "text only",
 )
+
+# Anything that mentions an image at all is worth one retry without it.
+_VISION_REJECTION_PATTERNS = ("image", *_VISION_CAPABILITY_PATTERNS)
+
+# (api_base, model string) pairs that rejected an image. litellm's registry
+# knows nothing about most local models, so text-only ones are learned at
+# runtime. Process-wide on purpose: the same endpoint serving the same model
+# id is the same server, whichever Session talks to it.
+_VISION_REJECTED_MODELS: set[tuple[str | None, str]] = set()
 
 # Canonical prefixes for synthetic user messages injected by the agent loop.
 # Used by continue_here._find_user_task to skip interventions.
@@ -2161,12 +2173,42 @@ def _replace_last_image_message(messages: list, fallback_text: str) -> bool:
     return False
 
 
-def _strip_image_content(messages: list) -> None:
-    """Replace list-valued content (multimodal image messages) with text-only."""
+def _image_pending(messages: list) -> bool:
+    """True when an attached image has no assistant reply after it yet."""
+    return _has_image_content(messages[_last_assistant_index(messages) + 1 :])
+
+
+def _without_view_image(tools: list | None) -> list | None:
+    if tools is None:
+        return None
+    return [t for t in tools if t.get("function", {}).get("name") != "view_image"]
+
+
+def _vision_unsupported(provider: str, model_id: str, api_base: str | None) -> bool:
+    """True when the model is known to refuse images, either from litellm's
+    registry or because it already rejected one in this process."""
+    if provider == "command":
+        return False
+    model_str = _resolve_model_str(provider, model_id)
+    if (api_base, model_str) in _VISION_REJECTED_MODELS:
+        return True
+    return _model_supports_vision(model_str) is False
+
+
+def _remember_vision_rejection(
+    provider: str, model_id: str, api_base: str | None
+) -> None:
+    if provider != "command":
+        _VISION_REJECTED_MODELS.add((api_base, _resolve_model_str(provider, model_id)))
+
+
+def _strip_image_content(messages: list, note: str) -> None:
+    """Replace multimodal content with its text plus *note* saying why the
+    image is gone."""
     for msg in messages:
         if isinstance(msg, dict) and isinstance(msg.get("content"), list):
             text = _msg_content(msg)  # extracts text parts
-            msg["content"] = text + " [image data removed during compaction]"
+            msg["content"] = text + note
 
 
 def compact_messages(messages: list) -> list:
@@ -2175,7 +2217,7 @@ def compact_messages(messages: list) -> list:
     Uses per-tool structured summaries (via ``compact_tool_result``) instead of
     a blanket character-count truncation.
     """
-    _strip_image_content(messages)
+    _strip_image_content(messages, note=" [image data removed during compaction]")
     turns = group_into_turns(messages)
     # Skip the most recent 2 turns
     cutoff = max(0, len(turns) - 2)
@@ -2501,7 +2543,7 @@ def _emergency_truncate(messages: list, context_length: int) -> list:
     target = context_length - MIN_OUTPUT_TOKENS
 
     # Stage 1: compact every remaining tool result
-    _strip_image_content(messages)
+    _strip_image_content(messages, note=" [image data removed during compaction]")
     turns = group_into_turns(messages)
     tc_idx: dict = {}
     for turn in turns:
@@ -5113,10 +5155,19 @@ def _model_supports_vision(model_str: str) -> bool | None:
         return None
 
 
+def _error_mentions(error: "AgentError", patterns: tuple[str, ...]) -> bool:
+    msg = str(error).lower()
+    return any(pattern in msg for pattern in patterns)
+
+
 def _is_vision_rejection(error: "AgentError") -> bool:
     """Heuristic: does this error look like a vision/multimodal rejection?"""
-    msg = str(error).lower()
-    return any(pattern in msg for pattern in _VISION_REJECTION_PATTERNS)
+    return _error_mentions(error, _VISION_REJECTION_PATTERNS)
+
+
+def _is_vision_capability_rejection(error: "AgentError") -> bool:
+    """Does the rejection blame the model rather than this particular image?"""
+    return _error_mentions(error, _VISION_CAPABILITY_PATTERNS)
 
 
 def _call_llm_with_dismiss(dismiss, llm_args, **llm_kwargs):
@@ -9795,7 +9846,6 @@ def _run_agent_loop(
     todo_last_used = 0
     snapshot_read_streak = 0
     snapshot_nudge_fired = False
-    _vision_pending = False
     _provider_retries = 0
     loop_start = time.monotonic()
 
@@ -9977,14 +10027,9 @@ def _run_agent_loop(
 
     _snapshot_strip_marker = "\n\n" + SNAPSHOT_HISTORY_SENTINEL
 
-    # Strip view_image from tools if the model is known to lack vision support
     provider = llm_kwargs.get("provider", "lmstudio")
-    if provider != "command":
-        model_str = _resolve_model_str(provider, model_id)
-        if _model_supports_vision(model_str) is False:
-            tools = [
-                t for t in tools if t.get("function", {}).get("name") != "view_image"
-            ]
+    if _vision_unsupported(provider, model_id, api_base):
+        tools = _without_view_image(tools)
     effective_tools = None if provider == "command" else tools
     _last_request_tools = effective_tools
 
@@ -10116,6 +10161,13 @@ def _run_agent_loop(
         effective_tools = None
         _is_tools_retry = True
         turns -= 1
+
+    def _forget_vision():
+        """Remember that this model refuses images and stop offering view_image."""
+        nonlocal tools, effective_tools
+        _remember_vision_rejection(provider, model_id, api_base)
+        tools = _without_view_image(tools)
+        effective_tools = _without_view_image(effective_tools)
 
     _summary_kwargs = dict(
         call_llm_fn=_call_llm_for_secondary,
@@ -10356,7 +10408,7 @@ def _run_agent_loop(
                             f"learned context window from provider: {_learned} tokens"
                         )
 
-            if _vision_pending:
+            if _image_pending(messages):
                 _replace_last_image_message(
                     messages,
                     _IMAGE_SYNTHETIC_PREFIX
@@ -10364,7 +10416,6 @@ def _run_agent_loop(
                     "and could not be analyzed. Inform the user that the "
                     "image could not be processed due to context limits.",
                 )
-                _vision_pending = False
 
             # The provider rejected a prompt our estimate believed fit, so the
             # estimate undercounted. Compact to a budget below the current size
@@ -10589,19 +10640,31 @@ def _run_agent_loop(
             if isinstance(e, ToolsNotSupportedError):
                 _drop_tools(e, time.monotonic() - t0, token_est)
                 continue
-            if _vision_pending and _is_vision_rejection(e):
-                _vision_pending = False
-                _replace_last_image_message(
-                    messages,
-                    _IMAGE_SYNTHETIC_PREFIX + " The image could not be sent "
-                    "to the model — it does not support image analysis. "
-                    "Please inform the user and suggest a vision-capable model.",
-                )
-                if verbose:
-                    fmt.warning(
-                        "Model rejected image content, retrying without image..."
+            # Provider wording varies, so with an image in the prompt any
+            # uncategorized 4xx earns one retry without images; an unrelated
+            # 400 just resurfaces. Images an earlier model already analyzed
+            # go too, or a model switch would trip this on every turn.
+            if _has_image_content(messages) and (
+                _is_vision_rejection(e) or getattr(e, "_request_shaped", False)
+            ):
+                if _image_pending(messages):
+                    _replace_last_image_message(
+                        messages,
+                        _IMAGE_SYNTHETIC_PREFIX
+                        + " The provider rejected the request while the image "
+                        "was attached, so it was removed and could not be "
+                        f"analyzed: {_short_error(str(e), 200)} Inform the "
+                        "user; if the model does not support image input, "
+                        "suggest a vision-capable model.",
                     )
-                continue  # retry the LLM call with text-only
+                _strip_image_content(
+                    messages, note=" [image data removed: the model rejected it]"
+                )
+                if _is_vision_capability_rejection(e):
+                    _forget_vision()
+                fmt.warning("model rejected the image, retrying without it")
+                turns -= 1
+                continue
             _recovered = False
             if _terminal_floor_eligible(e, context_length):
                 # Phase 4: at an unknown window an uncategorized 4xx may be an
@@ -10644,7 +10707,6 @@ def _run_agent_loop(
                     )
                     _last_request_tools = None
                     _is_tools_retry = False
-                    _vision_pending = False
                     _recovered = True
                 elif not _probe_rejected_minimal:
                     # Every minimal budget was rejected as overflow: the input
@@ -10667,7 +10729,6 @@ def _run_agent_loop(
                 raise
         else:
             _last_request_tools = effective_tools
-            _vision_pending = False  # success — clear the flag
             elapsed = time.monotonic() - t0
             if verbose:
                 fmt.llm_timing(elapsed, finish_reason)
@@ -11140,14 +11201,7 @@ def _run_agent_loop(
 
         # Inject image data into conversation after all tool calls are processed
         if image_stash:
-            provider = llm_kwargs.get("provider", "lmstudio")
-            if provider == "command":
-                vision_support = None
-            else:
-                model_str = _resolve_model_str(provider, model_id)
-                vision_support = _model_supports_vision(model_str)
-
-            if vision_support is False:
+            if _vision_unsupported(provider, model_id, api_base):
                 messages.append(
                     {
                         "role": "user",
@@ -11180,7 +11234,6 @@ def _run_agent_loop(
                         }
                     )
                 messages.append({"role": "user", "content": parts})
-                _vision_pending = True
             image_stash.clear()
 
         if interventions:
