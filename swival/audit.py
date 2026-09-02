@@ -27,6 +27,8 @@ from .audit_ui import AuditUI, PhaseHandle
 from .worktree import (
     Worktree as _Worktree,
     git as _git,
+    git_bytes as _git_bytes,
+    git_command as _git_command,
     make_isolated_loop_kwargs as _make_isolated_loop_kwargs,
     match_path_glob as _match_path_glob,
 )
@@ -603,17 +605,9 @@ def _dirty_worktree_warning(base_dir: str, scope: AuditScope) -> str | None:
 
 
 def _git_show(path: str, base_dir: str) -> str:
-    result = subprocess.run(
-        ["git", "show", f"HEAD:{path}"],
-        capture_output=True,
-        cwd=base_dir,
-        timeout=30,
+    return _git_bytes(["show", f"HEAD:{path}"], base_dir, working_tree=False).decode(
+        errors="replace"
     )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"git show HEAD:{path} failed: {result.stderr.decode(errors='replace').strip()}"
-        )
-    return result.stdout.decode(errors="replace")
 
 
 # ---------------------------------------------------------------------------
@@ -786,12 +780,16 @@ def _git_show_many(paths: list[str], base_dir: str) -> dict[str, str]:
     if not safe_paths:
         return {}
 
+    command, git_cwd, git_env = _git_command(
+        ["cat-file", "--batch"], base_dir, working_tree=False
+    )
     proc = subprocess.Popen(
-        ["git", "cat-file", "--batch"],
+        command,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        cwd=base_dir,
+        cwd=git_cwd,
+        env=git_env,
     )
 
     def _writer():
@@ -3818,13 +3816,11 @@ def _phase5_patch(
                     error="turn budget exhausted",
                 )
 
-            diff = subprocess.run(
-                ["git", "diff"],
-                capture_output=True,
-                cwd=str(work_dir),
-                timeout=10,
+            patch_text = (
+                _git_bytes(["diff"], str(work_dir), timeout=10)
+                .decode(errors="replace")
+                .strip()
             )
-            patch_text = diff.stdout.decode(errors="replace").strip()
             if not patch_text:
                 _ui_info(ui, "    patch: no changes produced")
                 return PatchGenerationResult(

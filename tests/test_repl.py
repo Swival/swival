@@ -508,7 +508,7 @@ class TestReplLoop:
             ) as mock_cls,
             patch("swival.agent.run_agent_loop"),
             patch("swival.agent.estimate_tokens", return_value=42),
-            patch("subprocess.check_output", return_value=b""),
+            patch("swival.agent._internal_git", return_value=""),
         ):
             repl_loop(
                 [],
@@ -538,14 +538,14 @@ class TestReplLoop:
             tracker.record_write(f"file{idx}.py")
 
         mock_session = self._mock_session(["/exit"])
-        git_porcelain = b" M foo.py\n M bar.py\n?? new.txt\n"
+        git_porcelain = " M foo.py\n M bar.py\n?? new.txt\n"
         with (
             patch(
                 "prompt_toolkit.PromptSession", return_value=mock_session
             ) as mock_cls,
             patch("swival.agent.run_agent_loop"),
             patch("swival.agent.estimate_tokens", return_value=42),
-            patch("subprocess.check_output", return_value=git_porcelain),
+            patch("swival.agent._internal_git", return_value=git_porcelain),
             patch("time.time", side_effect=[0.0, 90.0]),
         ):
             repl_loop(

@@ -16,6 +16,33 @@ if TYPE_CHECKING:
     from .input_dispatch import InputContext
 
 _GIT_TIMEOUT = 30
+_GIT_CONFIG_ENV_PREFIXES = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+_GIT_REPOSITORY_ENV = {
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_ATTR_SOURCE",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_DIR",
+    "GIT_GRAFT_FILE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_PREFIX",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_SHALLOW_FILE",
+    "GIT_WORK_TREE",
+}
+_GIT_SAFE_CONFIG = (
+    "safe.bareRepository=explicit",
+    f"core.hooksPath={os.devnull}",
+    "core.fsmonitor=false",
+    "attr.tree=",
+    "core.attributesFile=",
+)
 
 
 def fd_anchored_cwd(root_fd: int) -> "str | None":
@@ -55,15 +82,131 @@ def _fd_cwd(cwd: str, root_fd: "int | None") -> str:
     return fd_anchored_cwd(root_fd) or cwd
 
 
+def _git_env() -> dict[str, str]:
+    env = dict(os.environ)
+    for name in tuple(env):
+        if name in _GIT_REPOSITORY_ENV or name.startswith(_GIT_CONFIG_ENV_PREFIXES):
+            env.pop(name)
+    env.update(
+        {
+            "GIT_LFS_SKIP_SMUDGE": "1",
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+    )
+    return env
+
+
+def _git_argv(args: list[str]) -> list[str]:
+    command = ["git", "--no-pager"]
+    for value in _GIT_SAFE_CONFIG:
+        command.extend(("-c", value))
+    if args and args[0] == "diff":
+        command.extend(
+            (
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--ignore-submodules=dirty",
+                *args[1:],
+            )
+        )
+    elif args and args[0] == "status":
+        command.extend(("status", "--ignore-submodules=dirty", *args[1:]))
+    else:
+        command.extend(args)
+    return command
+
+
+def _configured_filters(cwd: str, *, timeout: int, root_fd: "int | None") -> set[str]:
+    args = [
+        "config",
+        "--includes",
+        "--null",
+        "--name-only",
+        "--get-regexp",
+        r"^filter\.",
+    ]
+    result = subprocess.run(
+        _git_argv(args),
+        capture_output=True,
+        cwd=_fd_cwd(cwd, root_fd),
+        env=_git_env(),
+        timeout=timeout,
+    )
+    if result.returncode == 1:
+        return set()
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", "replace").strip()
+        raise RuntimeError(f"git {' '.join(args)} failed: {stderr}")
+
+    drivers = set()
+    for raw_name in result.stdout.split(b"\0"):
+        name = raw_name.decode("utf-8", "surrogateescape")
+        parsed = name.removeprefix("filter.").rsplit(".", 1)
+        if (
+            len(parsed) == 2
+            and parsed[0]
+            and parsed[1].lower()
+            in {
+                "clean",
+                "process",
+                "required",
+                "smudge",
+            }
+        ):
+            drivers.add(parsed[0])
+    return drivers
+
+
+def git_command(
+    args: list[str],
+    cwd: str,
+    *,
+    timeout: int = _GIT_TIMEOUT,
+    root_fd: "int | None" = None,
+    working_tree: bool = True,
+) -> tuple[list[str], str, dict[str, str]]:
+    """Build a hardened internal Git subprocess."""
+    env = _git_env()
+    if working_tree:
+        overrides = []
+        for driver in sorted(
+            _configured_filters(cwd, timeout=timeout, root_fd=root_fd)
+        ):
+            overrides.extend(
+                (
+                    (f"filter.{driver}.process", ""),
+                    (f"filter.{driver}.clean", ""),
+                    (f"filter.{driver}.smudge", ""),
+                    (f"filter.{driver}.required", "false"),
+                )
+            )
+        if overrides:
+            env["GIT_CONFIG_COUNT"] = str(len(overrides))
+            for index, (key, value) in enumerate(overrides):
+                env[f"GIT_CONFIG_KEY_{index}"] = key
+                env[f"GIT_CONFIG_VALUE_{index}"] = value
+    return _git_argv(args), _fd_cwd(cwd, root_fd), env
+
+
 def git(
     args: list[str],
     cwd: str,
     *,
     timeout: int = _GIT_TIMEOUT,
     root_fd: "int | None" = None,
+    working_tree: bool = True,
 ) -> str:
     """Run a git command and return stripped stdout, raising on failure."""
-    return git_raw(args, cwd, timeout=timeout, root_fd=root_fd).strip()
+    return git_raw(
+        args,
+        cwd,
+        timeout=timeout,
+        root_fd=root_fd,
+        working_tree=working_tree,
+    ).strip()
 
 
 def git_bytes(
@@ -72,6 +215,7 @@ def git_bytes(
     *,
     timeout: int = _GIT_TIMEOUT,
     root_fd: "int | None" = None,
+    working_tree: bool = True,
 ) -> bytes:
     """Like :func:`git` but returns stdout byte-for-byte, unstripped.
 
@@ -79,10 +223,18 @@ def git_bytes(
     content, otherwise ``git apply`` rejects them and hashes stop being
     reproducible.
     """
+    command, git_cwd, env = git_command(
+        args,
+        cwd,
+        timeout=timeout,
+        root_fd=root_fd,
+        working_tree=working_tree,
+    )
     result = subprocess.run(
-        ["git"] + args,
+        command,
         capture_output=True,
-        cwd=_fd_cwd(cwd, root_fd),
+        cwd=git_cwd,
+        env=env,
         timeout=timeout,
     )
     if result.returncode != 0:
@@ -97,6 +249,7 @@ def git_raw(
     *,
     timeout: int = _GIT_TIMEOUT,
     root_fd: "int | None" = None,
+    working_tree: bool = True,
 ) -> str:
     """Unstripped git stdout decoded with surrogateescape.
 
@@ -104,9 +257,13 @@ def git_raw(
     itself produces via ``os.fsdecode``, so non-UTF-8 filenames survive
     the round trip instead of failing or being silently replaced.
     """
-    return git_bytes(args, cwd, timeout=timeout, root_fd=root_fd).decode(
-        "utf-8", "surrogateescape"
-    )
+    return git_bytes(
+        args,
+        cwd,
+        timeout=timeout,
+        root_fd=root_fd,
+        working_tree=working_tree,
+    ).decode("utf-8", "surrogateescape")
 
 
 class Worktree:
@@ -248,9 +405,22 @@ class Worktree:
                     "not a worktree of this repository"
                 )
         git(
-            ["worktree", "add", "--detach", str(self.work_dir), self.commit],
+            [
+                "worktree",
+                "add",
+                "--no-checkout",
+                "--detach",
+                str(self.work_dir),
+                self.commit,
+            ],
             self.base_dir,
+            working_tree=False,
         )
+        try:
+            git(["reset", "--hard", self.commit], str(self.work_dir))
+        except BaseException:
+            self._cleanup()
+            raise
         self._mark_owned()
         return self.work_dir
 

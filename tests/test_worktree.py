@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import shlex
+import stat
 import subprocess
 import threading
 import types
@@ -35,8 +38,227 @@ class TestGitWrapper:
         with pytest.raises(RuntimeError, match="git rev-parse"):
             git(["rev-parse", "not-a-ref"], str(tmp_path))
 
+    @pytest.mark.skipif(os.name == "nt", reason="uses a POSIX marker script")
+    def test_disables_external_diff_commands(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_git(repo)
+        _commit_file(repo, "a.py", "old\n")
+        _commit_file(repo, ".gitattributes", "*.py filter=x=y -text\n")
+        (repo / "a.py").write_text("new\n")
+        marker = tmp_path / "external-diff-executed"
+        external_diff = tmp_path / "external-diff"
+        external_diff.write_text(f"#!/bin/sh\n: > {shlex.quote(str(marker))}\n")
+        external_diff.chmod(external_diff.stat().st_mode | stat.S_IXUSR)
+        filter_marker = tmp_path / "clean-filter-executed"
+        content_filter = tmp_path / "clean-filter"
+        content_filter.write_text(
+            f"#!/bin/sh\n: > {shlex.quote(str(filter_marker))}\ncat\n"
+        )
+        content_filter.chmod(content_filter.stat().st_mode | stat.S_IXUSR)
+        for key, value in (
+            ("diff.external", str(external_diff)),
+            ("filter.x=y.clean", str(content_filter)),
+            ("filter.x=y.required", "true"),
+        ):
+            subprocess.run(
+                ["git", "config", key, value],
+                cwd=repo,
+                capture_output=True,
+                check=True,
+            )
+
+        subprocess.run(
+            ["git", "diff", "--no-ext-diff", "--no-textconv"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+        )
+        assert filter_marker.exists(), "the raw Git control did not run the filter"
+        filter_marker.unlink()
+
+        diff = git(["diff"], str(repo))
+
+        assert "-old" in diff
+        assert "+new" in diff
+        assert not marker.exists()
+        assert not filter_marker.exists()
+
+    @pytest.mark.skipif(os.name == "nt", reason="uses a POSIX marker script")
+    def test_status_does_not_run_filters_in_dirty_submodules(self, tmp_path):
+        child = tmp_path / "child"
+        child.mkdir()
+        _init_git(child)
+        _commit_file(child, "tracked.txt", "tracked\n")
+        _commit_file(child, ".gitattributes", "*.txt filter=evil -text\n")
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_git(repo)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                str(child),
+                "sub",
+            ],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "add submodule"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+        )
+
+        marker = tmp_path / "submodule-filter-executed"
+        content_filter = tmp_path / "submodule-filter"
+        content_filter.write_text(f"#!/bin/sh\n: > {shlex.quote(str(marker))}\ncat\n")
+        content_filter.chmod(content_filter.stat().st_mode | stat.S_IXUSR)
+        subprocess.run(
+            ["git", "config", "filter.evil.clean", str(content_filter)],
+            cwd=repo / "sub",
+            capture_output=True,
+            check=True,
+        )
+        old_commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo / "sub",
+            capture_output=True,
+            check=True,
+            text=True,
+        ).stdout.strip()
+        (repo / "sub" / "tracked.txt").write_text("changed\n")
+
+        subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+        )
+        assert marker.exists(), "the raw Git control did not run the submodule filter"
+        marker.unlink()
+
+        assert git(["status", "--porcelain"], str(repo)) == ""
+        assert not marker.exists()
+
+        subprocess.run(
+            ["git", "reset", "--hard", "HEAD"],
+            cwd=repo / "sub",
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=repo / "sub",
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=repo / "sub",
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", "advance submodule"],
+            cwd=repo / "sub",
+            capture_output=True,
+            check=True,
+        )
+        new_commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo / "sub",
+            capture_output=True,
+            check=True,
+            text=True,
+        ).stdout.strip()
+        marker.unlink(missing_ok=True)
+
+        assert "sub" in git(["status", "--porcelain"], str(repo))
+        assert not marker.exists()
+        diff = git(["diff"], str(repo))
+        assert f"-Subproject commit {old_commit}" in diff
+        assert f"+Subproject commit {new_commit}" in diff
+        assert not marker.exists()
+
 
 class TestWorktree:
+    @pytest.mark.skipif(os.name == "nt", reason="uses POSIX Git hook scripts")
+    def test_does_not_execute_repository_hooks_or_filters(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_git(repo)
+        _commit_file(repo, "tracked.txt", "tracked\n")
+        _commit_file(repo, ".gitattributes", "*.txt filter=x=y -text\n")
+
+        hooks = tmp_path / "hooks"
+        hooks.mkdir()
+        hook_marker = tmp_path / "hook-executed"
+        hook = hooks / "post-checkout"
+        hook.write_text(f"#!/bin/sh\n: > {shlex.quote(str(hook_marker))}\n")
+        hook.chmod(hook.stat().st_mode | stat.S_IXUSR)
+
+        filter_marker = tmp_path / "filter-executed"
+        content_filter = tmp_path / "content-filter"
+        content_filter.write_text(
+            f"#!/bin/sh\n: > {shlex.quote(str(filter_marker))}\ncat\n"
+        )
+        content_filter.chmod(content_filter.stat().st_mode | stat.S_IXUSR)
+
+        subprocess.run(
+            ["git", "config", "core.hooksPath", str(hooks)],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+        )
+        included = tmp_path / "conditional.gitconfig"
+        included.write_text(
+            f'[filter "x=y"]\n    smudge = {content_filter}\n    required = true\n'
+        )
+        for name in ("raw", "wt"):
+            subprocess.run(
+                [
+                    "git",
+                    "config",
+                    f"includeIf.gitdir:**/worktrees/{name}.path",
+                    str(included),
+                ],
+                cwd=repo,
+                capture_output=True,
+                check=True,
+            )
+
+        raw = tmp_path / "raw"
+        subprocess.run(
+            ["git", "worktree", "add", "--detach", str(raw), "HEAD"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+        )
+        assert hook_marker.exists(), "the raw Git control did not run the hook"
+        assert filter_marker.exists(), "the raw Git control did not run the filter"
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(raw)],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+        )
+        hook_marker.unlink()
+        filter_marker.unlink()
+
+        work = tmp_path / "wt"
+        with Worktree(str(repo), work) as wd:
+            assert (wd / "tracked.txt").read_text() == "tracked\n"
+
+        assert not hook_marker.exists()
+        assert not filter_marker.exists()
+
     def test_detached_at_explicit_commit(self, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()

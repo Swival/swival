@@ -126,6 +126,7 @@ from .tool_call_repair import (
     repair_truncated_json,
     scavenge_tool_calls,
 )
+from .worktree import git as _internal_git
 
 # LiteLLM's ChatGPT Responses transformer falls back to model_construct() when
 # strict validation of a response.completed event fails, which skips the usage
@@ -14392,14 +14393,13 @@ def repl_loop(
 
     def _refresh_toolbar_state():
         try:
-            out = subprocess.check_output(
-                ["git", "status", "--porcelain"],
-                cwd=base_dir,
-                stderr=subprocess.DEVNULL,
+            out = _internal_git(
+                ["status", "--porcelain"],
+                base_dir,
                 timeout=2,
             )
             _toolbar_state["git_dirty"] = len(
-                [ln for ln in out.decode().splitlines() if ln.strip()]
+                [ln for ln in out.splitlines() if ln.strip()]
             )
         except Exception:
             _toolbar_state["git_dirty"] = 0

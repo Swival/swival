@@ -15,6 +15,7 @@ from pathlib import Path
 
 
 from .report import LifecycleError as LifecycleError  # re-export
+from .worktree import git as _internal_git
 
 
 _GIT_ENV_MAP = {
@@ -29,16 +30,8 @@ _GIT_ENV_MAP = {
 }
 
 
-def _git_output(argv: list[str], cwd: str) -> str:
-    return (
-        subprocess.check_output(
-            argv,
-            cwd=cwd,
-            stderr=subprocess.DEVNULL,
-        )
-        .decode()
-        .strip()
-    )
+def _git_output(args: list[str], cwd: str, *, working_tree: bool = False) -> str:
+    return _internal_git(args, cwd, timeout=5, working_tree=working_tree)
 
 
 def _hash48(text: str) -> str:
@@ -54,8 +47,8 @@ def _git_metadata(base_dir: str) -> dict[str, str]:
     result: dict[str, str] = {}
 
     try:
-        repo_root = _git_output(["git", "rev-parse", "--show-toplevel"], base_dir)
-    except (subprocess.CalledProcessError, FileNotFoundError):
+        repo_root = _git_output(["rev-parse", "--show-toplevel"], base_dir)
+    except (RuntimeError, FileNotFoundError, subprocess.TimeoutExpired):
         result["git_present"] = "0"
         return result
 
@@ -64,25 +57,23 @@ def _git_metadata(base_dir: str) -> dict[str, str]:
 
     # HEAD sha
     try:
-        result["git_head"] = _git_output(["git", "rev-parse", "HEAD"], base_dir)
-    except (subprocess.CalledProcessError, FileNotFoundError):
+        result["git_head"] = _git_output(["rev-parse", "HEAD"], base_dir)
+    except (RuntimeError, FileNotFoundError, subprocess.TimeoutExpired):
         pass
 
     # Dirty? (includes staged changes, unstaged changes, and untracked files)
     try:
-        status_out = _git_output(["git", "status", "--porcelain"], base_dir)
+        status_out = _git_output(["status", "--porcelain"], base_dir, working_tree=True)
         result["git_dirty"] = "1" if status_out else "0"
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (RuntimeError, FileNotFoundError, subprocess.TimeoutExpired):
         pass
 
     # Remote origin URL
     try:
-        origin_url = _git_output(
-            ["git", "config", "--get", "remote.origin.url"], base_dir
-        )
+        origin_url = _git_output(["config", "--get", "remote.origin.url"], base_dir)
         if origin_url:
             result["git_remote"] = origin_url
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (RuntimeError, FileNotFoundError, subprocess.TimeoutExpired):
         pass
 
     # project_rel: relative path from repo root to base_dir

@@ -3652,9 +3652,6 @@ class TestVerificationGates:
             captured["max_turns"] = max_turns
             return {"base_dir": str(work_dir)}
 
-        class FakeDiff:
-            stdout = b"diff --git a/main.c b/main.c\n"
-
         monkeypatch.setattr(audit_mod, "_worktree", FakeWorktree)
         monkeypatch.setattr(
             audit_mod, "_gather_evidence", lambda finding, state, ctx: ("source", 1)
@@ -3663,7 +3660,9 @@ class TestVerificationGates:
         monkeypatch.setattr(
             agent_mod, "run_agent_loop", lambda messages, tools, **kw: ("done", False)
         )
-        monkeypatch.setattr(audit_mod.subprocess, "run", lambda *a, **kw: FakeDiff())
+        monkeypatch.setattr(
+            audit_mod, "_git_bytes", lambda *a, **kw: b"diff --git a/main.c b/main.c\n"
+        )
         ctx = SimpleNamespace(base_dir=str(tmp_path), tools=[], loop_kwargs={})
         state = self._make_state(tmp_path)
 

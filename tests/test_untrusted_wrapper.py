@@ -1,5 +1,6 @@
 """Tests for untrusted-content wrappers in swival.tools."""
 
+from swival.fetch import FetchResult
 from swival.report import ReportCollector
 from swival.tools import _wrap_untrusted, dispatch
 
@@ -112,7 +113,16 @@ class TestFetchUrlErrorNotCounted:
         import swival.fetch
 
         monkeypatch.setattr(
-            swival.fetch, "fetch_url", lambda **kw: "error: invalid URL"
+            swival.fetch,
+            "_fetch",
+            lambda **kw: FetchResult(
+                body="error: invalid URL",
+                final_url=kw["url"],
+                status=None,
+                content_type=None,
+                raw_bytes=0,
+                saved_path=None,
+            ),
         )
         result = dispatch(
             "fetch_url",
@@ -127,7 +137,18 @@ class TestFetchUrlErrorNotCounted:
         r = ReportCollector()
         import swival.fetch
 
-        monkeypatch.setattr(swival.fetch, "fetch_url", lambda **kw: "page content here")
+        monkeypatch.setattr(
+            swival.fetch,
+            "_fetch",
+            lambda **kw: FetchResult(
+                body="page content here",
+                final_url=kw["url"],
+                status=200,
+                content_type="text/plain",
+                raw_bytes=17,
+                saved_path=None,
+            ),
+        )
         result = dispatch(
             "fetch_url",
             {"url": "https://example.com"},

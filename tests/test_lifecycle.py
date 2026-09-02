@@ -1,8 +1,10 @@
 """Tests for the lifecycle hook system."""
 
 import os
+import shlex
 import stat
 import subprocess
+import sys
 import types
 
 import pytest
@@ -43,6 +45,36 @@ class TestNormalizeRemote:
 
 
 class TestGitMetadata:
+    def test_does_not_execute_repository_fsmonitor(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+        marker = tmp_path / "fsmonitor-executed"
+        payload = tmp_path / "fsmonitor.py"
+        payload.write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
+        command = shlex.join([sys.executable, str(payload)])
+        subprocess.run(
+            ["git", "config", "core.fsmonitor", command],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+        )
+
+        subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+        )
+        assert marker.exists(), "the raw Git control did not execute fsmonitor"
+        marker.unlink()
+
+        meta = _git_metadata(str(repo))
+
+        assert meta["git_present"] == "1"
+        assert meta["git_dirty"] == "0"
+        assert not marker.exists()
+
     def test_inside_git_repo(self, tmp_path):
         subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
         subprocess.run(
