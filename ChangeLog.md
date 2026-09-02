@@ -2,10 +2,13 @@
 
 All notable user-facing changes to Swival.
 
-## 1.0.43
+## 1.0.44 (unreleased)
 
 - Automatic Git metadata collection and `/audit` now ignore repository-configured hooks, filesystem monitors, filters, diff helpers, text conversion, and alternate attribute sources.
   This prevents a received directory with a preserved malicious `.git/config` from running code before a prompt or during an audit.
+
+## 1.0.43
+
 - The REPL has been redesigned.
   You can now type or edit the next message during a turn; Enter queues it and queued messages run in order once the turn finishes.
   Ctrl-C interrupts the running turn and moves any queued messages back into the editor instead of running them unattended.
