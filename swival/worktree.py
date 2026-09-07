@@ -599,6 +599,7 @@ def call_llm_text(
         vertex_location=llm_kwargs.get("vertex_location"),
         pricing_provider=llm_kwargs.get("pricing_provider"),
         session_cost=loop_kwargs.get("session_cost"),
+        session_id=llm_kwargs.get("session_id"),
     )
     return _msg_content(msg) or "", cache_stats
 

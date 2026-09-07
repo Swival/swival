@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import threading
+import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -640,6 +641,7 @@ class Session:
             "messages": self._make_initial_messages(system_content),
             "compaction_state": CompactionState() if self.proactive_summaries else None,
             "session_cost": SessionCost(),
+            "llm_kwargs": {**self._llm_kwargs, "session_id": str(uuid.uuid4())},
             "resolved_system_content": system_content,
             # Shared turn budget so a /extend issued via parse_commands persists
             # across subsequent ask() calls, mirroring the REPL.
@@ -671,7 +673,7 @@ class Session:
             commands_unrestricted=self._commands_unrestricted,
             shell_allowed=self._shell_allowed,
             verbose=self.verbose,
-            llm_kwargs=self._llm_kwargs,
+            llm_kwargs=state["llm_kwargs"],
             file_tracker=state["file_tracker"],
             session_cost=state["session_cost"],
             continue_here=self.continue_here,

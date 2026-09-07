@@ -394,6 +394,7 @@ def _subagent_thread_fn(
 ):
     try:
         from .agent import run_agent_loop, CompactionState
+        import uuid
 
         thinking_state = ThinkingState(verbose=False)
         todo_state = TodoState(verbose=False)
@@ -405,6 +406,10 @@ def _subagent_thread_fn(
         messages.append({"role": "user", "content": task})
 
         kwargs = {**template}
+        kwargs["llm_kwargs"] = {
+            **template.get("llm_kwargs", {}),
+            "session_id": str(uuid.uuid4()),
+        }
         kwargs.update(
             thinking_state=thinking_state,
             todo_state=todo_state,

@@ -20,6 +20,7 @@ import shlex
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 import urllib.error
 import uuid as _uuid
@@ -3310,6 +3311,7 @@ def _provider_extra_kwargs(llm_kwargs):
             "vertex_project",
             "vertex_location",
             "pricing_provider",
+            "session_id",
         )
         if llm_kwargs.get(key) is not None
     }
@@ -5701,6 +5703,7 @@ def call_llm(
     unknown_context_window=False,
     pricing_provider=None,
     session_cost=None,
+    session_id=None,
 ):
     """Call LiteLLM with the appropriate provider.
 
@@ -5825,6 +5828,16 @@ def call_llm(
             "api_key": api_key or "none",
             "extra_headers": {"User-Agent": _swival_user_agent(user_agent)},
         }
+        if (
+            provider == "generic"
+            and urllib.parse.urlsplit(base_url).hostname == "opencode.ai"
+        ):
+            kwargs["extra_headers"].update(
+                {
+                    "x-opencode-session": session_id or str(_uuid.uuid4()),
+                    "x-opencode-client": "swival",
+                }
+            )
     elif provider == "chatgpt":
         kwargs = {
             "extra_headers": {
@@ -8952,6 +8965,7 @@ def _run_main(args, report, _write_report, parser):
         )
     except ConfigError as e:
         parser.error(str(e))
+    llm_kwargs["session_id"] = str(_uuid.uuid4())
     if args.user_agent is not None:
         llm_kwargs["user_agent"] = args.user_agent
     if args.extra_body is not None:
@@ -9795,6 +9809,10 @@ def _run_agent_loop(
     Returns (final_answer, exhausted). final_answer is the last
     assistant text (may be None). exhausted is True if max_turns hit.
     """
+    # Keep one routing ID across turns, retries, and compaction calls.
+    if "session_id" not in llm_kwargs:
+        llm_kwargs["session_id"] = str(_uuid.uuid4())
+
     # Thread cache, secret_shield, and llm_filter into llm_kwargs (for main
     # loop calls via **llm_kwargs) and create a wrapper for secondary call
     # sites that pass call_llm as a function reference (compaction summaries,
@@ -13122,6 +13140,9 @@ def execute_input(
             return StepResult(kind="state_change", text=msg, is_error=err)
 
         if cmd in ("/clear", "/new"):
+            ctx.loop_kwargs.setdefault("llm_kwargs", {})["session_id"] = str(
+                _uuid.uuid4()
+            )
             _reset_subagent(ctx)
             msg = _repl_clear(
                 ctx.messages,
