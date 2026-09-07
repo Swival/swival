@@ -1070,6 +1070,12 @@ class TestCaptureProcessSanitizes:
         def kill(self):
             pass
 
+    def test_binary_character_set_controls_do_not_reach_preview(self, tmp_path):
+        from swival.tools import _capture_process
+
+        proc = self._FakeProc(b"before\x0eafter")
+        assert _capture_process(proc, 30, str(tmp_path)) == "beforeafter"
+
     def test_progress_bar_collapses_past_1mb_keeps_final_frame(self, tmp_path):
         """The key regression: a multi-megabyte progress stream collapses to its
         final frame, proving the sink sees the tail rather than a discarded head.

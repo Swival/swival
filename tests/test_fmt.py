@@ -11,6 +11,154 @@ from tests.conftest import capture_styled as _capture_styled
 from tests.conftest import styled_console as _styled_console
 
 
+class TestTerminalControls:
+    @pytest.fixture
+    def display(self, monkeypatch):
+        buf = StringIO()
+        styled = _styled_console(buf)
+        console = fmt.TerminalConsole(
+            file=buf,
+            force_terminal=True,
+            color_system=styled.color_system,
+            no_color=False,
+            width=80,
+            _environ={"TERM": "xterm-256color"},
+        )
+        monkeypatch.setattr(fmt, "_console", console)
+        monkeypatch.setattr(fmt, "_stdout_console", console)
+        return buf
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            "\x0e",
+            "\x0f",
+            "\x1b(0",
+            "\x1b)0\x0e",
+            "\x9b2J",
+            "\x1b[2J",
+            "\x1b]52;c;abc\x07",
+        ],
+    )
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "tool",
+            "shell",
+            "diff",
+            "markdown",
+            "thinking",
+            "answer",
+            "stream",
+            "warning",
+        ],
+    )
+    def test_external_text_cannot_change_terminal_state(self, display, payload, path):
+        text = "before" + payload + "after"
+        if path == "tool":
+            fmt.tool_result("read_file", 0, text)
+        elif path == "shell":
+            fmt.quick_shell(text, 0, text)
+        elif path == "diff":
+            fmt.tool_diff(text, "old\n", text + "\n")
+        elif path == "markdown":
+            fmt.assistant_text(text)
+        elif path == "thinking":
+            fmt.thinking_block(text)
+        elif path == "answer":
+            fmt.repl_answer(text)
+        elif path == "stream":
+            with fmt.stream_channels() as update:
+                update(text, text, text)
+        else:
+            fmt.warning(text)
+        out = display.getvalue()
+        assert payload not in out
+        assert "before" in out
+        assert "after" in out
+
+    @pytest.mark.parametrize("fallback", [False, True])
+    def test_plain_terminal_answer_is_safe(
+        self, display, monkeypatch, capsys, fallback
+    ):
+        text = "before\x0e\x1b(0after"
+        if fallback:
+            monkeypatch.setattr("rich.syntax.Syntax", lambda *a, **k: 1 / 0)
+        else:
+            monkeypatch.setattr(fmt._stdout_console, "no_color", True)
+        fmt.repl_answer(text)
+        out = capsys.readouterr().out
+        assert "\x0e" not in out and "\x1b" not in out
+        assert "before" in out and "after" in out
+
+    def test_redirected_answer_preserves_original(self, monkeypatch, capsys):
+        monkeypatch.setattr(fmt, "_stdout_console", Console(file=StringIO()))
+        text = "before\x0e\x1b(0after\n\tend"
+        fmt.repl_answer(text)
+        assert capsys.readouterr().out == text + "\n"
+
+    def test_rich_controls_and_styles_still_work(self, display):
+        from rich.control import Control
+        from rich.text import Text
+
+        fmt._console.print(Text("colored", style="bold red"))
+        fmt._console.control(Control.show_cursor(False))
+        out = display.getvalue()
+        assert "\x1b[1;31mcolored\x1b[0m" in out
+        assert "\x1b[?25l" in out
+
+    def test_hyperlink_cannot_embed_terminal_controls(self, display):
+        from rich.text import Text
+
+        fmt._console.print(Text("click", style="link https://example.org/\x1b(0"))
+        assert "\x1b(0" not in display.getvalue()
+
+    def test_plain_answer_and_external_diagnostics(self, display, capsys):
+        text = "before\x0e\x1b(0after"
+        fmt.print_answer(text)
+        fmt.raw_stderr(text)
+        captured = capsys.readouterr()
+        for out in (captured.out, captured.err):
+            assert "\x0e" not in out and "\x1b" not in out
+            assert "before" in out and "after" in out
+
+    def test_controls_split_across_styled_segments(self, display):
+        from rich.segment import Segment, Segments
+
+        fmt._console.print(Segments([Segment("\x1b"), Segment("(0after\x0e")]))
+        assert "\x1b" not in display.getvalue()
+        assert "\x0e" not in display.getvalue()
+
+    def test_replacements_fit_stream_viewport(self):
+        text = "start" + "\x0e" * 40 + "end"
+        rendered = fmt.render_stream_channels("", text, "", width=10, height=3)
+        assert all(len(line) <= 10 for line in rendered.plain.splitlines())
+        assert rendered.plain.endswith("end")
+
+    def test_plain_unicode_and_whitespace_unchanged(self):
+        from swival.terminal import terminal_safe_text
+
+        text = "café 日本語\n\t  text  \n\n" + "x" * 10000
+        assert terminal_safe_text(text) == text
+
+    def test_rendering_does_not_mutate_original(self, display):
+        from rich.text import Text
+
+        original = Text("before\x0e\x1b(0after", style="bold")
+        before = original.copy()
+        fmt._console.print(original)
+        assert original == before
+
+    @pytest.mark.parametrize("flags", [{}, {"color": True}, {"no_color": True}])
+    def test_init_keeps_both_consoles_safe(self, display, monkeypatch, flags):
+        fmt.init(**flags)
+        for console in (fmt._console, fmt._stdout_console):
+            monkeypatch.setattr(console, "file", display)
+            console.print("before\x0e\x1b(0after")
+        assert "\x0e" not in display.getvalue()
+        assert "\x1b(0" not in display.getvalue()
+
+
 def _capture(func, *args, **kwargs):
     """Call a fmt function with a captured console and return plain-text output."""
     buf = StringIO()

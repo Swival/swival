@@ -1,5 +1,7 @@
 """Tests for the terminal control-sequence sanitizer."""
 
+import pytest
+
 from swival.terminal import (
     MAX_COMMITTED_BYTES,
     TerminalSink,
@@ -171,3 +173,22 @@ def test_tab_kept_literal_on_plain_path():
 def test_tab_expands_to_stop_in_emulated_mode():
     # A control byte forces emulation; the tab then positions the cursor.
     assert sanitize_terminal_output("\x1b[0ma\tb") == "a" + " " * 7 + "b"
+
+
+@pytest.mark.parametrize("code", [*range(9), *range(11, 32), 127, *range(128, 160)])
+def test_individual_controls_never_escape_plain_mode(code):
+    control = chr(code)
+    for chunks in (
+        (f"before{control}after".encode(),),
+        (b"before", control.encode(), b"after"),
+    ):
+        assert control not in _feed_chunks(*chunks)
+
+
+@pytest.mark.parametrize(
+    "sequence", ["\x1b(0", "\x1b)0", "\x1b(B", "\x1b%G", "\x1b$)B"]
+)
+def test_charset_designation_consumed_across_chunk_boundaries(sequence):
+    data = ("before" + sequence + "after").encode()
+    for split in range(len(data) + 1):
+        assert _feed_chunks(data[:split], data[split:]) == "beforeafter"

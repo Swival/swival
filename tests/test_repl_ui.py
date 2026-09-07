@@ -32,6 +32,12 @@ from swival.repl_ui import (
 )
 
 
+def test_live_renderer_does_not_emit_external_terminal_controls():
+    out = _render_ansi(Text("before\x0e\x1b(0after"), 80)
+    assert "\x0e" not in out and "\x1b(0" not in out
+    assert "before" in out and "after" in out
+
+
 class _ImmediateLoop:
     """Stand-in event loop that runs callbacks on the calling thread."""
 
@@ -438,7 +444,9 @@ class TestRendering:
             frames = set()
             for elapsed in (0.0, 0.1, 0.2, 0.3):
                 slot.started = time.monotonic() - elapsed
-                frames.add(_render_ansi(slot.render(80, 5), 80)[:4])
+                frames.add(
+                    Text.from_ansi(_render_ansi(slot.render(80, 5), 80)).plain[:4]
+                )
             assert len(frames) > 1, type(slot).__name__
 
     def test_command_slot_shows_bar_with_timeout(self):
