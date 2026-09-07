@@ -6,6 +6,7 @@ import functools
 import inspect
 import math
 import os
+import sys
 import threading
 import time
 
@@ -32,9 +33,34 @@ from rich.style import Style
 from rich.text import Text
 
 from .cost import CostSnapshot
+from .terminal import terminal_safe_text
 
-_console = Console(stderr=True)
-_stdout_console = Console(stderr=False)
+
+class TerminalConsole(Console):
+    """Keep external text inert while retaining Rich's own terminal controls."""
+
+    def render(self, renderable, options=None):
+        if isinstance(renderable, str):
+            renderable = terminal_safe_text(renderable)
+        elif isinstance(renderable, Text):
+            safe = terminal_safe_text(renderable.plain)
+            if safe != renderable.plain:
+                renderable = renderable.copy()
+                renderable.plain = safe
+        for segment in super().render(renderable, options):
+            if segment.control:
+                yield segment
+                continue
+            text, style, _ = segment
+            if style and style.link:
+                link = style.link
+                if terminal_safe_text(link) != link or "\n" in link or "\t" in link:
+                    style = style.update_link(None)
+            yield Segment(terminal_safe_text(text), style)
+
+
+_console = TerminalConsole(stderr=True)
+_stdout_console = TerminalConsole(stderr=False)
 
 _think_count = 0
 
@@ -136,8 +162,8 @@ def init(*, color: bool = False, no_color: bool = False) -> None:
     if no_color:
         kwargs["no_color"] = True
         stdout_kwargs["no_color"] = True
-    _console = Console(**kwargs)
-    _stdout_console = Console(**stdout_kwargs)
+    _console = TerminalConsole(**kwargs)
+    _stdout_console = TerminalConsole(**stdout_kwargs)
 
 
 # -- Turn structure ----------------------------------------------------------
@@ -724,7 +750,7 @@ def _wrap_and_tail(text: str, width: int, height: int) -> list[str]:
     """
     width = max(width, 1)
     rows: list[str] = []
-    for line in text.split("\n"):
+    for line in terminal_safe_text(text).split("\n"):
         rows.extend(_wrap_to_rows(line, width))
     rows = _collapse_blank_rows(rows)
     return rows[-max(height, 1) :]
@@ -1308,7 +1334,19 @@ def repl_answer(text: str) -> None:
         else:
             _stdout_console.print(rendered)
             return
-    print(text)
+    print_answer(text)
+
+
+def print_answer(text: str, *, flush: bool = False) -> None:
+    """Print a plain answer, protecting terminals but preserving piped data."""
+    if _stdout_console.is_terminal:
+        text = terminal_safe_text(text)
+    print(text, flush=flush)
+
+
+def raw_stderr(text: str) -> None:
+    """Relay external diagnostics without letting them control the terminal."""
+    print(terminal_safe_text(text), end="", file=sys.stderr)
 
 
 # -- Reviewer feedback -------------------------------------------------------

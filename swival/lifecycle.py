@@ -9,11 +9,11 @@ import hashlib
 import os
 import shlex
 import subprocess
-import sys
 import time
 from pathlib import Path
 
 
+from . import fmt
 from .report import LifecycleError as LifecycleError  # re-export
 from .worktree import git as _internal_git
 
@@ -176,10 +176,10 @@ def _warn_hook(result: dict, verbose: bool) -> None:
     """Log a lifecycle hook warning if verbose."""
     if not verbose:
         return
-    print(f"warning: {result['error']}", file=sys.stderr)
+    fmt.raw_stderr(f"warning: {result['error']}\n")
     stderr = result.get("stderr", "")
     if stderr:
-        print(f"  stderr: {stderr[:500]}", file=sys.stderr)
+        fmt.raw_stderr(f"  stderr: {stderr[:500]}\n")
 
 
 def run_lifecycle_hook(

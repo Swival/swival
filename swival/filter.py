@@ -3,7 +3,7 @@
 import json
 import shlex
 import subprocess
-import sys
+from . import fmt
 from ._msg import _msg_get, _msg_role, _msg_tool_calls, _msg_tool_call_id, _msg_name
 
 
@@ -132,7 +132,7 @@ def run_llm_filter(
         raise FilterError(f"filter command failed to start: {e}")
 
     if result.stderr:
-        print(result.stderr, end="", file=sys.stderr)
+        fmt.raw_stderr(result.stderr)
 
     if result.returncode != 0:
         raise FilterError(f"filter exited with code {result.returncode}: {llm_filter}")

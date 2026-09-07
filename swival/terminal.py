@@ -31,8 +31,13 @@ MAX_COMMITTED_BYTES = 1 * 1024 * 1024
 TAB_WIDTH = 8
 _MAX_PENDING = 8192
 
-_CONTROL_RE = re.compile("[\x1b\r\x08-]")
+_CONTROL_RE = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 _C1_INTRODUCERS = frozenset({0x90, 0x9B, 0x9D, 0x9E, 0x9F})
+
+
+def terminal_safe_text(text: str) -> str:
+    """Make display text inert without emulating a terminal or truncating it."""
+    return _CONTROL_RE.sub("\ufffd", text)
 
 
 def _join_one_newline(a: str, b: str) -> str:
@@ -186,7 +191,15 @@ class TerminalSink:
             if nxt == "8":
                 self._restore_cursor()
                 return i + 2, False
-            return i + 2, False
+            # Consume complete character-set designations without leaking text.
+            j = i + 1
+            while j < n and 0x20 <= ord(data[j]) <= 0x2F:
+                j += 1
+            if j == n:
+                return i, True
+            if 0x30 <= ord(data[j]) <= 0x7E:
+                return j + 1, False
+            return j, False
         o = ord(ch)
         if o == 0x9B:
             return self._consume_csi(data, i + 1)

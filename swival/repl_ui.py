@@ -29,7 +29,6 @@ from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.formatted_text.utils import fragment_list_width
 from prompt_toolkit.layout.containers import Container
 from prompt_toolkit.layout.dimension import Dimension
-from rich.console import Console
 from rich.progress_bar import ProgressBar
 from rich.spinner import Spinner
 from rich.table import Table
@@ -1173,7 +1172,7 @@ class _ShrinkWrap(Container):
 def _render_ansi(renderable, width: int) -> str:
     """Render a Rich renderable to an ANSI string at the given width."""
     real = fmt._console
-    console = Console(
+    console = fmt.TerminalConsole(
         file=io.StringIO(),
         force_terminal=True,
         color_system=real.color_system,

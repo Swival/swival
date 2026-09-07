@@ -4968,7 +4968,7 @@ def _run_command_once(parts, transcript, verbose, command_str):
         raise AgentError(f"command provider failed: {error_text}")
 
     if proc.stderr.strip() and verbose:
-        print(proc.stderr, end="", file=sys.stderr)
+        fmt.raw_stderr(proc.stderr)
 
     response_text = proc.stdout.strip()
     if not response_text:
@@ -9469,7 +9469,7 @@ def _run_main(args, report, _write_report, parser):
                 # Per-step history is already written by _finalize_agent_step
                 # inside execute_input, so no additional append_history here.
                 if answer is not None:
-                    print(answer)
+                    fmt.print_answer(answer)
                 if report:
                     _write_report(
                         "error"
@@ -9606,7 +9606,7 @@ def _run_main(args, report, _write_report, parser):
                     base_dir, args.question, answer, diagnostics=args.verbose
                 )
             if answer is not None:
-                print(answer)
+                fmt.print_answer(answer)
             if report:
                 _write_report(
                     "exhausted" if exhausted else "success",
@@ -11444,7 +11444,7 @@ def _repl_run_custom_command(
         return None
 
     if proc.stderr:
-        print(proc.stderr, end="", file=sys.stderr)
+        fmt.raw_stderr(proc.stderr)
 
     stdout = proc.stdout.strip()
     if not stdout:
@@ -13736,7 +13736,7 @@ def _loop_emit_repl(answer: str | None) -> None:
 def _loop_emit_oneshot(answer: str | None) -> None:
     """Render an iteration's answer for one-shot mode by streaming to stdout."""
     if answer:
-        print(answer, flush=True)
+        fmt.print_answer(answer, flush=True)
         print(flush=True)
 
 
