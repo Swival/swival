@@ -267,13 +267,13 @@ class TerminalSink:
         if final == "A":
             self._row = max(0, self._row - count)
         elif final == "B":
-            self._advance_row(count)
+            self._cursor_down(count)
         elif final == "C":
             self._col = min(MAX_COLS - 1, self._col + count)
         elif final == "D":
             self._col = max(0, self._col - count)
         elif final == "E":
-            self._advance_row(count)
+            self._cursor_down(count)
             self._col = 0
         elif final == "F":
             self._row = max(0, self._row - count)
@@ -308,6 +308,14 @@ class TerminalSink:
     def _line_feed(self) -> None:
         self._col = 0
         self._advance_row(1)
+
+    def _cursor_down(self, count: int) -> None:
+        """Move the cursor down, stopping at the bottom row.
+
+        Cursor motion never scrolls, unlike a line feed.
+        The clamp also stops a huge repeat count from allocating a row per step.
+        """
+        self._advance_row(min(count, MAX_ROWS - 1 - self._row))
 
     def _advance_row(self, k: int) -> None:
         self._row += k

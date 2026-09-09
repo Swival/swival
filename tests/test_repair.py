@@ -1,5 +1,10 @@
 """Tests for schema-aware tool-call argument repair."""
 
+import json
+
+import pytest
+
+from tests.conftest import make_tool_call
 from swival.repair import repair_tool_args
 
 
@@ -113,6 +118,53 @@ class TestNoOpOnValidArgs:
         result, repairs = repair_tool_args(args, {"type": "object", "properties": {}})
         assert result == args
         assert repairs == []
+
+
+@pytest.mark.parametrize("path", ["[draft].txt", "what?.txt", "star*.txt"])
+@pytest.mark.parametrize(
+    "operation", ["read_file", "write_file", "edit_file", "delete_file"]
+)
+def test_dispatch_preserves_literal_filename(tmp_path, path, operation):
+    from swival.agent import handle_tool_call
+    from swival.thinking import ThinkingState
+    from swival.tracker import FileAccessTracker
+
+    target = tmp_path / path
+    decoy = tmp_path / path.translate(str.maketrans("", "", "[]?*"))
+    target.write_text("original\n")
+    decoy.write_text("original\n")
+    tracker = FileAccessTracker()
+    tracker.record_read(str(target.resolve()))
+    tracker.record_read(str(decoy.resolve()))
+    args = {"file_path": path}
+    if operation == "write_file":
+        args["content"] = "updated\n"
+    elif operation == "edit_file":
+        args.update(old_string="original", new_string="updated")
+    call = make_tool_call(operation, json.dumps(args), tc_id="literal-path")
+    message, metadata = handle_tool_call(
+        call, str(tmp_path), ThinkingState(), False, file_tracker=tracker
+    )
+    assert metadata["succeeded"], message
+    assert metadata["arguments"]["file_path"] == path
+    assert decoy.read_text() == "original\n"
+    if operation == "delete_file":
+        assert not target.exists()
+    else:
+        expected = "original\n" if operation == "read_file" else "updated\n"
+        assert target.read_text() == expected
+
+
+@pytest.mark.parametrize("path", ["[draft].txt", "what?.txt", "star*.txt"])
+def test_new_file_path_keeps_literal_characters(tmp_path, path):
+    from swival.tools import dispatch, get_tool_schema
+
+    args = {"file_path": path, "content": "new\n"}
+    repaired, _ = repair_tool_args(args, get_tool_schema("write_file"))
+    result = dispatch("write_file", repaired, str(tmp_path))
+    assert not result.startswith("error:")
+    assert sorted(p.name for p in tmp_path.iterdir()) == [path]
+    assert (tmp_path / path).read_text() == "new\n"
 
 
 class TestCoerceTypes:

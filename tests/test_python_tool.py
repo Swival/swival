@@ -68,6 +68,36 @@ def test_timeout(tmp_base):
     assert "timed out" in result
 
 
+@pytest.mark.parametrize("output_size", [0, 25_000])
+def test_timeout_is_reported_as_failure(tmp_path, output_size):
+    import json
+
+    from conftest import make_tool_call
+    from swival._msg import _msg_content
+    from swival.agent import handle_tool_call
+
+    args = {
+        "code": f"import time; print('x' * {output_size}, flush=True); time.sleep(5)",
+        "timeout": 1,
+    }
+    message, metadata = handle_tool_call(
+        make_tool_call("run_python", json.dumps(args)),
+        str(tmp_path),
+        thinking_state=None,
+        verbose=False,
+        commands_unrestricted=True,
+    )
+    result = _msg_content(message)
+    assert result.startswith("error: command timed out after 1s")
+    assert metadata["succeeded"] is False
+    if output_size:
+        assert "[preview]" in result
+        assert result.endswith("[/preview]")
+        saved = next((tmp_path / ".swival").glob("cmd_output_*.txt"))
+        assert saved.read_text().startswith("error: command timed out after 1s\n")
+        assert "x" * output_size in saved.read_text()
+
+
 def test_empty_code_rejected(tmp_base):
     result = _run_python("   ", tmp_base, timeout=5)
     assert result.startswith("error:")

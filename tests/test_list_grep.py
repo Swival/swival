@@ -1,7 +1,11 @@
 """Tests for list_files and grep tools."""
 
 import os
+import re
+import subprocess
+import sys
 import time
+import warnings
 
 import pytest
 
@@ -15,6 +19,30 @@ from swival.tools import (
     _list_files,
     dispatch,
 )
+
+
+def _run_grep_script(body: str, *args: str) -> None:
+    """Run *body* against a freshly imported swival.tools, in a subprocess.
+
+    The filter that hides the regex FutureWarning is installed when
+    swival.tools is imported. A caller that resets the filters afterwards
+    would drop it, so the import has to happen inside the recording block.
+    Only a new interpreter can guarantee that ordering.
+    """
+    script = (
+        "import sys\n"
+        "import warnings\n"
+        "with warnings.catch_warnings(record=True) as seen:\n"
+        '    warnings.simplefilter("always")\n'
+        "    from swival.tools import _grep\n" + body
+    )
+    run = subprocess.run(
+        [sys.executable, "-c", script, *args],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert run.returncode == 0, run.stderr
 
 
 @pytest.fixture
@@ -284,6 +312,64 @@ class TestGrep:
         result = _grep("[invalid", ".", str(sandbox))
         assert "error" in result
         assert "invalid regex" in result
+
+    @pytest.mark.parametrize(
+        "pattern, escaped",
+        [("[[]", r"\["), ("[a&&b]", r"[a\&b]"), ("[a||b]", r"[a\|b]")],
+    )
+    def test_regex_future_warning_does_not_leak(self, tmp_path, pattern, escaped):
+        (tmp_path / "sample.txt").write_text("[\na\n&\n|\nb\nunmatched\n")
+        _run_grep_script(
+            """
+    result = _grep(sys.argv[1], "sample.txt", sys.argv[3])
+    assert result == _grep(sys.argv[2], "sample.txt", sys.argv[3])
+    assert not seen, seen
+    warnings.warn("unrelated warning", FutureWarning)
+    warnings.warn("Possible nested set at position 1", FutureWarning)
+    warnings.warn_explicit(
+        "unrelated warning", FutureWarning, "tools.py", 1, module="swival.tools"
+    )
+    assert len(seen) == 3, seen
+""",
+            pattern,
+            escaped,
+            str(tmp_path),
+        )
+
+    def test_warning_does_not_hide_invalid_regex(self, sandbox):
+        _run_grep_script(
+            """
+    result = _grep("[a--b]", ".", sys.argv[1])
+    assert result.startswith("error: invalid regex"), result
+    assert not seen, seen
+""",
+            str(sandbox),
+        )
+
+    def test_concurrent_greps_preserve_warning_filters(self, tmp_path, monkeypatch):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+
+        (tmp_path / "sample.txt").write_text("needle\n")
+        filters = warnings.filters
+        compile_regex = re.compile
+        entered = Barrier(2)
+
+        def compile_concurrently(pattern, flags=0):
+            if pattern == "needle":
+                entered.wait(timeout=5)
+                assert warnings.filters is filters
+            return compile_regex(pattern, flags)
+
+        monkeypatch.setattr(re, "compile", compile_concurrently)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            calls = [
+                pool.submit(_grep, "needle", "sample.txt", str(tmp_path))
+                for _ in range(2)
+            ]
+            for call in calls:
+                assert "needle" in call.result(timeout=10)
+        assert warnings.filters is filters
 
     def test_include_dotdot_rejected(self, sandbox):
         result = _grep("import", ".", str(sandbox), include="../*.py")
@@ -624,6 +710,29 @@ class TestGrepTilde:
 
 class TestGrepStreaming:
     """grep must not hold whole files or every match in memory."""
+
+    @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires named pipes")
+    def test_named_pipes_are_not_opened_or_counted(self, tmp_path, monkeypatch):
+        regular = tmp_path / "regular.txt"
+        regular.write_text("needle\n")
+        (tmp_path / "regular-link.txt").symlink_to(regular)
+        fifo = tmp_path / "pipe"
+        os.mkfifo(fifo)
+        fifo_link = tmp_path / "pipe-link"
+        fifo_link.symlink_to(fifo)
+        real_open = open
+
+        def checked_open(path, *args, **kwargs):
+            assert path not in (fifo, fifo_link), "grep tried to open a named pipe"
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(tools, "open", checked_open, raising=False)
+        monkeypatch.setattr(tools, "MAX_GREP_FILES", 2)
+        result = _grep("needle", ".", str(tmp_path))
+        assert result.startswith("Found 2 matches")
+        assert "regular.txt:" in result
+        assert "regular-link.txt:" in result
+        assert "Only the" not in result
 
     def test_iter_lines_matches_splitlines_across_chunks(self, tmp_path):
         chunk = tools.GREP_CHUNK_BYTES

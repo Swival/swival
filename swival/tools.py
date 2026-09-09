@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import uuid
+import warnings
 from collections import deque
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -23,6 +24,15 @@ from typing import Literal
 from ._env import child_env
 from .a2a_types import A2A_META_PREFIX
 from .terminal import TerminalSink
+from .tracker import FileAccessTracker
+
+# Install once so concurrent greps never swap global warning filters.
+warnings.filterwarnings(
+    "ignore",
+    message=r"Possible (?:nested set|set (?:difference|intersection|symmetric difference|union)) at position \d+$",
+    category=FutureWarning,
+    module=r"^swival\.tools$",
+)
 
 TOOLS = [
     {
@@ -847,6 +857,15 @@ _APPLEFM_SCALARS = frozenset({"string", "integer", "number", "boolean"})
 _APPLEFM_UNSUPPORTED_KEYS = ("anyOf", "oneOf", "allOf", "not", "$ref")
 
 
+def _is_applefm_scalar(spec_type) -> bool:
+    """Whether a JSON Schema ``type`` names one supported scalar.
+
+    A union writes the type as a list, which is unhashable.
+    The string check must therefore come first.
+    """
+    return isinstance(spec_type, str) and spec_type in _APPLEFM_SCALARS
+
+
 def _applefm_property_ok(spec) -> bool:
     """Whether a single property schema is expressible in Apple's GenerationSchema.
 
@@ -859,7 +878,7 @@ def _applefm_property_ok(spec) -> bool:
     if any(key in spec for key in _APPLEFM_UNSUPPORTED_KEYS):
         return False
     spec_type = spec.get("type")
-    if spec_type in _APPLEFM_SCALARS:
+    if _is_applefm_scalar(spec_type):
         return True
     if spec_type == "array":
         items = spec.get("items")
@@ -867,7 +886,7 @@ def _applefm_property_ok(spec) -> bool:
             return False
         if any(key in items for key in _APPLEFM_UNSUPPORTED_KEYS):
             return False
-        return items.get("type") in _APPLEFM_SCALARS
+        return _is_applefm_scalar(items.get("type"))
     return False
 
 
@@ -1026,6 +1045,17 @@ def _expand_tilde(raw: str) -> str:
         f"Path {raw!r} uses ~user syntax, which is not supported. "
         f"Use an absolute path instead."
     )
+
+
+def _lexical_path(file_path: str, base_dir: str) -> Path:
+    """Join a tool path onto the workspace without following symlinks.
+
+    Existence checks need the path the caller named, so a dangling symlink
+    stays visible instead of looking absent.
+    The expansion must match ``safe_resolve``, or the check and the mutation
+    can describe different files.
+    """
+    return Path(base_dir) / _expand_tilde(file_path)
 
 
 def _memory_path(base_dir: str) -> Path:
@@ -1543,9 +1573,11 @@ def _grep(
                     extra_write_roots=extra_write_roots,
                 ):
                     continue
-                # Broken symlinks can't be stat'd; skip them like
-                # unreadable files.
+                # Skip unreadable files, broken symlinks, and special files
+                # such as FIFOs that could block when opened.
                 try:
+                    if not entry.is_file():
+                        continue
                     mtime = entry.stat().st_mtime
                 except OSError:
                     continue
@@ -2067,6 +2099,7 @@ def _read_files(
         except ValueError:
             pass  # Let _read_file return the path error in the normal format.
 
+        pending_reads = FileAccessTracker() if tracker is not None else None
         result = _read_file(
             file_path=file_path,
             base_dir=base_dir,
@@ -2076,7 +2109,7 @@ def _read_files(
             extra_read_roots=extra_read_roots,
             extra_write_roots=extra_write_roots,
             files_mode=files_mode,
-            tracker=tracker,
+            tracker=pending_reads,
         )
 
         if result.startswith("error: "):
@@ -2109,6 +2142,8 @@ def _read_files(
             break
 
         sections.append(section)
+        if pending_reads is not None:
+            tracker.absorb(pending_reads)
         total_bytes += section_bytes
         if ok:
             files_succeeded += 1
@@ -2231,11 +2266,7 @@ def _write_file(
 
         # Use the original (pre-resolved) path for existence/type checks so
         # that dangling symlinks are handled consistently with delete_file.
-        move_from_original = (
-            Path(base_dir) / move_from
-            if not Path(move_from).is_absolute()
-            else Path(move_from)
-        )
+        move_from_original = _lexical_path(move_from, base_dir)
 
         if not move_from_original.exists() and not move_from_original.is_symlink():
             return f"error: move_from not found: {move_from}"
@@ -2514,11 +2545,7 @@ def _delete_file(
         )
 
     # 2. Build pre-resolution path for existence/type checks.
-    original = (
-        Path(base_dir) / file_path
-        if not Path(file_path).is_absolute()
-        else Path(file_path)
-    )
+    original = _lexical_path(file_path, base_dir)
 
     # 3. Existence check (is_symlink catches dangling symlinks).
     if not original.exists() and not original.is_symlink():
@@ -3048,6 +3075,7 @@ def _capture_process(
     reader_thread = threading.Thread(target=_reader, daemon=True)
     reader_thread.start()
 
+    timeout_status = f"error: command timed out after {timeout}s"
     timed_out = False
     try:
         proc.wait(timeout=timeout)
@@ -3072,7 +3100,7 @@ def _capture_process(
     parts: list[str] = []
 
     if timed_out:
-        parts.append(f"error: command timed out after {timeout}s")
+        parts.append(timeout_status)
     elif proc.returncode != 0:
         parts.append(f"Exit code: {proc.returncode}")
 
@@ -3088,15 +3116,18 @@ def _capture_process(
 
     # Save large output to file instead of stuffing the context
     if len(result.encode("utf-8")) > MAX_INLINE_OUTPUT:
-        exit_info = ""
-        if timed_out:
-            exit_info = f"\nerror: command timed out after {timeout}s"
-        elif proc.returncode != 0:
-            exit_info = f"\nExit code: {proc.returncode}"
         saved = _save_large_output(
             result, base_dir, was_truncated=output_truncated, scratch_dir=scratch_dir
         )
-        result = saved + exit_info
+        if timed_out:
+            # A failed disk write returns the original text, status included.
+            # Only the summary notice needs the status added.
+            prefix = "" if saved.startswith("error:") else f"{timeout_status}\n"
+            result = prefix + saved
+        elif proc.returncode != 0:
+            result = f"{saved}\nExit code: {proc.returncode}"
+        else:
+            result = saved
 
     return result
 

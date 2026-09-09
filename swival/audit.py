@@ -29,6 +29,7 @@ from .worktree import (
     git as _git,
     git_bytes as _git_bytes,
     git_command as _git_command,
+    git_raw as _git_raw,
     make_isolated_loop_kwargs as _make_isolated_loop_kwargs,
     match_path_glob as _match_path_glob,
 )
@@ -526,8 +527,8 @@ class AuditRunState:
 def _resolve_scope(base_dir: str, focus: list[str]) -> AuditScope:
     branch = _git(["branch", "--show-current"], base_dir) or "HEAD"
     commit = _git(["rev-parse", "HEAD"], base_dir)
-    raw = _git(["ls-tree", "-r", "--name-only", "HEAD"], base_dir)
-    tracked = raw.splitlines() if raw else []
+    raw = _git_raw(["ls-tree", "-r", "--name-only", "-z", "HEAD"], base_dir)
+    tracked = [p for p in raw.split("\0") if p]
 
     focus = _normalize_focus(focus)
     if focus:
@@ -2914,6 +2915,7 @@ def _phase2_triage_one(
             relevant_symbols=[],
             suspicious_flows=[],
             needs_followup=False,
+            triage_failure_mode="file_not_readable",
         )
 
     imports_summary = ", ".join(state.import_index.get(path, [])[:20]) or "(none)"
@@ -3493,10 +3495,7 @@ def _phase3_deep_review(
     ui: AuditUI | None = None,
 ) -> list[FindingRecord]:
     """Deep review a single escalated file using inventory + expansion."""
-    try:
-        content = _git_show(path, ctx.base_dir)
-    except RuntimeError:
-        return []
+    content = _git_show(path, ctx.base_dir)
 
     # Computed once per file: 3a and every 3b expansion share the same
     # primary content, so the callee section is identical across them.
@@ -3816,17 +3815,15 @@ def _phase5_patch(
                     error="turn budget exhausted",
                 )
 
-            patch_text = (
-                _git_bytes(["diff"], str(work_dir), timeout=10)
-                .decode(errors="replace")
-                .strip()
+            patch_text = _git_bytes(["diff"], str(work_dir), timeout=10).decode(
+                errors="replace"
             )
             if not patch_text:
                 _ui_info(ui, "    patch: no changes produced")
                 return PatchGenerationResult(
                     error_code="patch_no_diff", error="no changes produced"
                 )
-            return PatchGenerationResult(patch_text=patch_text + "\n")
+            return PatchGenerationResult(patch_text=patch_text)
     except RuntimeError as e:
         _ui_info(ui, f"    patch: worktree failed: {e}")
         return PatchGenerationResult(

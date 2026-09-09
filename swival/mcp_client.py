@@ -909,7 +909,7 @@ def _normalize_result(result) -> tuple[str, bool]:
                 error_msg = "MCP tool returned an error"
             return (f"error: {error_msg}", True)
 
-        if payload.get("ok") is True and "result" in payload:
+        if payload.get("ok") is True and "result" in payload and not result.is_error:
             return (json.dumps(payload["result"], ensure_ascii=False), False)
 
     parts = []

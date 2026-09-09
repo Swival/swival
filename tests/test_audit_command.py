@@ -161,6 +161,26 @@ class TestAuditOneshotDispatch:
 
 
 class TestScope:
+    @pytest.mark.parametrize(
+        "path",
+        ["café.py", "tab\tname.py", "line\nbreak.py", 'quote".py', " leading.py"],
+    )
+    def test_scope_preserves_git_pathnames(self, tmp_path, path):
+        from swival.audit import _resolve_scope
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, path, "committed source\n")
+        _commit_file(tmp_path, "plain.py", "plain source\n")
+
+        scope = _resolve_scope(str(tmp_path), [])
+        assert set(scope.mandatory_files) == {path, "plain.py"}
+        assert _load_file_contents(scope.mandatory_files, str(tmp_path)) == {
+            path: "committed source\n",
+            "plain.py": "plain source\n",
+        }
+        focused = _resolve_scope(str(tmp_path), [path])
+        assert focused.mandatory_files == [path]
+
     def test_auditable_extensions(self):
         assert _is_auditable("foo.py")
         assert _is_auditable("bar.js")
@@ -3670,6 +3690,68 @@ class TestVerificationGates:
 
         assert captured["max_turns"] == 75
         assert result.patch_text is not None
+
+    @pytest.mark.parametrize("ending", ["\n", "\n\n", "\n \t\n"])
+    def test_phase5_patch_applies_with_trailing_context(
+        self, monkeypatch, tmp_path, ending
+    ):
+        from swival.audit import _phase5_patch
+
+        vf = self._make_verified()
+        state, _ = self._phase5_state(tmp_path, [vf])
+        original = "unsafe\ncontext" + ending
+        expected = "safe\ncontext" + ending
+        _commit_file(tmp_path, "main.c", original)
+
+        def edit_source(messages, tools, **kwargs):
+            (Path(kwargs["base_dir"]) / "main.c").write_text(expected)
+            return "done", False
+
+        monkeypatch.setattr("swival.agent.run_agent_loop", edit_source)
+        monkeypatch.setattr(
+            "swival.audit._make_isolated_loop_kwargs",
+            lambda ctx, work_dir, **kwargs: {"base_dir": str(work_dir)},
+        )
+        result = _phase5_patch(vf, self._ctx(tmp_path), state)
+        assert result.patch_text is not None, result
+        applied = subprocess.run(
+            ["git", "apply", "-"],
+            input=result.patch_text,
+            text=True,
+            cwd=tmp_path,
+            capture_output=True,
+        )
+        assert applied.returncode == 0, applied.stderr
+        assert (tmp_path / "main.c").read_text() == expected
+
+    @pytest.mark.parametrize("path", ["main.c", "missing.c"])
+    def test_deep_review_requires_readable_evidence(self, monkeypatch, tmp_path, path):
+        from swival.audit import _deep_review_one
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "main.c", "int main(void) { return 0; }\n")
+        state = self._make_state(tmp_path)
+        monkeypatch.setattr("swival.audit._phase3a_inventory", lambda *a, **kw: [])
+        result = _deep_review_one(path, state, self._ctx(tmp_path))
+        if path == "missing.c":
+            assert result.error is not None
+            assert result.findings is None
+        else:
+            assert result.error is None
+            assert result.findings == []
+
+    def test_unreadable_triage_evidence_is_promoted(self, tmp_path):
+        from swival.audit import _apply_promotions, _phase2_triage_one
+
+        _init_git(tmp_path)
+        _commit_file(tmp_path, "main.c", "int main(void) { return 0; }\n")
+        state = self._make_state(tmp_path)
+        state.queued_files = ["missing.c"]
+        rec = _phase2_triage_one("missing.c", state, self._ctx(tmp_path))
+        state.triage_records[rec.path] = rec
+        _apply_promotions(state, {})
+        assert rec.priority == "ESCALATE_MEDIUM"
+        assert rec.triage_failure_mode is not None
 
     def test_no_reproduction_discards(self, monkeypatch, tmp_path):
         state = self._make_state(tmp_path)

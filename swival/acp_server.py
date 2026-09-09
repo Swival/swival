@@ -168,15 +168,31 @@ class AcpServer:
         finally:
             await self._shutdown_all_sessions()
 
+    async def _drain_and_close(self, sess) -> None:
+        """Stop one session's in-flight prompt, then release its resources."""
+        sess.cancel_flag.set()
+        task = sess.in_flight
+        if task is not None and not task.done():
+            try:
+                await asyncio.wait_for(task, timeout=5.0)
+            except TimeoutError:
+                task.cancel()
+            except Exception:
+                logger.exception(
+                    "ACP prompt failed during shutdown: %s", sess.session_id
+                )
+        try:
+            await asyncio.to_thread(sess.session.close)
+        except Exception:
+            logger.exception("failed to close ACP session %s", sess.session_id)
+
     async def _shutdown_all_sessions(self) -> None:
-        for sess in list(self._sessions.values()):
-            sess.cancel_flag.set()
-            task = sess.in_flight
-            if task is not None and not task.done():
-                try:
-                    await asyncio.wait_for(task, timeout=5.0)
-                except (asyncio.TimeoutError, Exception):
-                    task.cancel()
+        # Closing a session can block for seconds on its hooks and MCP teardown.
+        # The sessions are independent, so shutdown waits for the slowest one.
+        await asyncio.gather(
+            *(self._drain_and_close(s) for s in list(self._sessions.values())),
+            return_exceptions=True,
+        )
         self._sessions.clear()
 
     async def _handle_line(self, line: bytes) -> None:

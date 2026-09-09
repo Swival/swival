@@ -195,6 +195,42 @@ def test_storm_breaker_suppresses_third_identical_call(tmp_path, monkeypatch):
     assert "repeat-loop guard tripped" in content
 
 
+def test_storm_breaker_allows_verification_after_python_write(tmp_path, monkeypatch):
+    from swival._msg import _msg_content, _msg_role
+
+    target = tmp_path / "value.txt"
+    target.write_text("before\n")
+    args = _base_args(
+        tmp_path, provider="generic", max_context_tokens=128_000, subagents=False
+    )
+    read_args = json.dumps({"file_path": "value.txt"})
+    calls = [
+        _make_tool_call("read_file", read_args, "r1"),
+        _make_tool_call("read_file", read_args, "r2"),
+        _make_tool_call(
+            "run_python",
+            json.dumps(
+                {
+                    "code": "from pathlib import Path\nPath('value.txt').write_text('after\\n')"
+                }
+            ),
+            "w1",
+        ),
+        _make_tool_call("read_file", read_args, "r3"),
+    ]
+    responses = [
+        (_make_message(tool_calls=[call]), "tool_calls", [], 0, (0, 0))
+        for call in calls
+    ]
+    responses.append((_make_message(content="done"), "stop", [], 0, (0, 0)))
+    captured = _drive_agent(tmp_path, monkeypatch, args, responses)
+
+    assert target.read_text() == "after\n"
+    results = [_msg_content(m) for m in captured[-1] if _msg_role(m) == "tool"]
+    assert "repeat-loop guard tripped" not in results[-1]
+    assert "after" in results[-1]
+
+
 def test_storm_breaker_off_dispatches_normally(tmp_path, monkeypatch):
     """With the storm breaker disabled, repeat calls all dispatch."""
     args = _base_args(tmp_path, storm_breaker=False)

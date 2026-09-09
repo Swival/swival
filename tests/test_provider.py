@@ -1653,6 +1653,60 @@ class TestAppleFoundationModelsToolSanitizer:
         _, dropped = sanitize_tools_for_applefm([tool])
         assert dropped == ["todo"]
 
+    @pytest.mark.parametrize("provider", ["applefm", "generic"])
+    @pytest.mark.parametrize("array", [False, True])
+    def test_nullable_tool_does_not_abort_request(self, provider, array):
+        import copy
+
+        from litellm import ModelResponse
+
+        prop = {"type": ["string", "null"]}
+        if array:
+            prop = {"type": "array", "items": prop}
+        nullable = self._tool(
+            "nullable",
+            {"type": "object", "properties": {"value": prop}, "required": ["value"]},
+        )
+        supported = self._tool(
+            "supported", {"type": "object", "properties": {}, "required": []}
+        )
+        tools = [nullable, supported]
+        original = copy.deepcopy(tools)
+        response = ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": "ok"}}]
+        )
+        if provider == "applefm":
+            response = iter(
+                [
+                    ModelResponse(
+                        stream=True,
+                        choices=[
+                            {
+                                "index": 0,
+                                "delta": {"role": "assistant", "content": "ok"},
+                                "finish_reason": "stop",
+                            }
+                        ],
+                    )
+                ]
+            )
+        with patch("litellm.completion", return_value=response) as completion:
+            call_llm(
+                "http://localhost:1976/v1",
+                "pcc",
+                [{"role": "user", "content": "hello"}],
+                100,
+                None,
+                None,
+                None,
+                tools,
+                False,
+                provider=provider,
+            )
+        sent = completion.call_args.kwargs["tools"]
+        assert sent == ([supported] if provider == "applefm" else original)
+        assert tools == original
+
     def test_missing_parameters_gets_empty_object(self):
         tool = {"type": "function", "function": {"name": "bare"}}
         kept, dropped = sanitize_tools_for_applefm([tool])

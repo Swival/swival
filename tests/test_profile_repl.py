@@ -294,22 +294,21 @@ class TestProfileRevert:
         call_kw = mock_rp.call_args
         assert call_kw.kwargs["api_key"] == "sk-top-level"
 
-    def test_reasoning_effort_not_carried_across_profiles(self):
-        """Switching from a profile with reasoning_effort to one without must drop it."""
+    @pytest.mark.parametrize("setting", ["reasoning_effort", "user_agent"])
+    def test_setting_not_carried_across_profiles(self, setting):
+        """Profile-only settings must not leak into the next profile."""
         profiles = {
             "high": {
                 "provider": "chatgpt",
                 "model": "gpt-5.4",
-                "reasoning_effort": "high",
+                setting: "high",
             },
             "local": {"provider": "lmstudio"},
         }
         kw = _make_repl_kwargs()
         baseline = dict(BASELINE)
-        # pre-profile baseline has no reasoning_effort (it came from the profile)
-        pre_profile = {
-            k: v for k, v in BASELINE.items() if k not in ("model", "reasoning_effort")
-        }
+        # The setting came from the profile, not top-level config.
+        pre_profile = {k: v for k, v in BASELINE.items() if k not in ("model", setting)}
 
         ret_high = (
             "gpt-5.4",
@@ -328,7 +327,7 @@ class TestProfileRevert:
                 pre_profile_baseline=pre_profile,
                 repl_kwargs=kw,
             )
-        assert kw["llm_kwargs"].get("reasoning_effort") == "high"
+        assert kw["llm_kwargs"].get(setting) == "high"
 
         ret_local = (
             "discovered",
@@ -347,7 +346,7 @@ class TestProfileRevert:
                 pre_profile_baseline=pre_profile,
                 repl_kwargs=kw,
             )
-        assert "reasoning_effort" not in kw["llm_kwargs"]
+        assert setting not in kw["llm_kwargs"]
 
     def test_double_switch(self):
         """A -> B -> C: each switch resolves from baseline, not previous profile."""

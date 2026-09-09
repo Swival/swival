@@ -252,6 +252,38 @@ class TestLoadConfig:
 
 
 class TestGenerateConfigExisting:
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            'user_agent = "custom-client"\nmetaskills = "off"\ntrace_dir = "traces"\n',
+            'serve_skills = [{id = "ask"}]\n[profiles.fast]\nprovider = "generic"\n',
+            'extra_body = {"literal.key" = 1, "space key" = "value"}\n',
+            'system_prompt = "carriage\\rreturn and escape\\u001b"\n',
+            '[profiles.fast] # keep this profile\nprovider = "generic"\n',
+            '["profiles".fast]\nprovider = "generic"\n',
+            '[profiles.fast]\nprovider = "generic"\n[mcp_servers.search] # server\ncommand = "probe"\n',
+            '"custom.key" = "preserve"\n',
+        ],
+        ids=[
+            "missing-template-keys",
+            "mixed-tables",
+            "quoted-keys",
+            "controls",
+            "header-comment",
+            "quoted-root",
+            "mixed-header-comments",
+            "quoted-setting",
+        ],
+    )
+    def test_preserves_settings_round_trip(self, raw):
+        existing = tomllib.loads(raw)
+        content = generate_config(existing=existing, existing_raw=raw)
+        assert tomllib.loads(content) == existing
+
+    def test_preserves_nested_settings_without_raw_text(self):
+        existing = {"profiles": {"fast": {"provider": "generic"}}}
+        assert tomllib.loads(generate_config(existing=existing)) == existing
+
     def test_preserves_existing_scalars(self):
         existing = {
             "provider": "openrouter",

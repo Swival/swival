@@ -7,6 +7,7 @@ from .tokens import count_tokens, truncate_to_tokens
 
 # Regex for ATX headings: 1-6 '#' chars followed by a space
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
+_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 _BOOTSTRAP_TAG = "<!-- bootstrap -->"
 
@@ -44,7 +45,7 @@ def parse_memory(text: str) -> list[MemoryEntry]:
     current_lines: list[str] = []
     current_heading: str | None = None
     current_bootstrap = False
-    in_fence = False
+    fence = None
     pending_bootstrap = False
 
     def _flush():
@@ -66,11 +67,20 @@ def parse_memory(text: str) -> list[MemoryEntry]:
     for line in lines:
         stripped = line.rstrip("\n\r")
 
-        # Track fenced code blocks
-        if stripped.startswith("```"):
-            in_fence = not in_fence
-
-        if in_fence:
+        marker = _FENCE_RE.match(stripped)
+        if fence is not None:
+            if (
+                marker
+                and marker[1][0] == fence[0]
+                and len(marker[1]) >= len(fence)
+                and not marker[2].strip()
+            ):
+                fence = None
+            current_lines.append(line)
+            pending_bootstrap = False
+            continue
+        if marker and not (marker[1][0] == "`" and "`" in marker[2]):
+            fence = marker[1]
             current_lines.append(line)
             pending_bootstrap = False
             continue

@@ -24,6 +24,15 @@ class FileAccessTracker:
     def record_write(self, path: str) -> None:
         self.written_files.add(path)
 
+    def absorb(self, other: "FileAccessTracker") -> None:
+        """Adopt another tracker's records.
+
+        A batch read stages its accesses, and absorbs them only once the
+        content really reaches the model.
+        """
+        self.read_files |= other.read_files
+        self.written_files |= other.written_files
+
     def check_write_allowed(self, path: str, exists: bool) -> str | None:
         """Return an error string if the write should be blocked, None if OK."""
         if not exists or path in self.read_files or path in self.written_files:

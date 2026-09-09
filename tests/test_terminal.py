@@ -2,6 +2,7 @@
 
 import pytest
 
+from swival import terminal
 from swival.terminal import (
     MAX_COMMITTED_BYTES,
     TerminalSink,
@@ -65,6 +66,30 @@ def test_cursor_up_shorter_without_erase_leaves_tail():
     # Without erase, a real terminal keeps the stale tail; we match that.
     stream = "100%done\n\x1b[1A\r50%\n"
     assert sanitize_terminal_output(stream) == "50%%done"
+
+
+@pytest.mark.parametrize("command, last_line", [("B", "bottomX"), ("E", "Xottom")])
+@pytest.mark.parametrize("count", [1, 2000])
+def test_cursor_down_stops_at_bottom(monkeypatch, command, last_line, count):
+    monkeypatch.setattr(terminal, "MAX_ROWS", 3)
+    stream = f"top\nmiddle\nbottom\x1b[{count}{command}X"
+    assert sanitize_terminal_output(stream) == f"top\nmiddle\n{last_line}"
+
+
+@pytest.mark.parametrize("command", ["B", "E"])
+def test_large_cursor_down_never_allocates_past_screen(command):
+    class BoundedScreen(list):
+        def append(self, row):
+            assert len(self) < terminal.MAX_ROWS, "screen allocation exceeded its cap"
+            super().append(row)
+
+    sink = TerminalSink()
+    sink._screen = BoundedScreen([[]])
+    sink.feed(f"top\x1b[1000000000000{command}X".encode())
+    lines = sink.finalize().splitlines()
+    assert len(lines) == terminal.MAX_ROWS
+    assert lines[0] == "top"
+    assert lines[-1].strip() == "X"
 
 
 def test_sgr_color_stripped():

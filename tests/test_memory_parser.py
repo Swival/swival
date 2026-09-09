@@ -1,5 +1,7 @@
 """Tests for memory entry parsing and BM25 retrieval (swival.memory)."""
 
+import pytest
+
 from swival.memory import MemoryEntry, parse_memory, retrieve_bm25
 
 
@@ -9,6 +11,26 @@ from swival.memory import MemoryEntry, parse_memory, retrieve_bm25
 
 
 class TestParseMemory:
+    @pytest.mark.parametrize(
+        "opening,inner,closing",
+        [
+            ("~~~python", "", "~~~"),
+            ("   ```python", "", " ```"),
+            ("````", "```", "````"),
+            ("```", "~~~", "```"),
+            ("~~~", "```", "~~~~"),
+            ("```", "```not a closing fence", "```"),
+            ("```", "    ```", "```"),
+        ],
+    )
+    def test_fenced_code_stays_in_its_memory_entry(self, opening, inner, closing):
+        code = f"{opening}\n{inner}\n<!-- bootstrap -->\n## Example\n{closing}"
+        text = f"## Real\n{code}\n\n## Next\nA fact.\n"
+        entries = parse_memory(text)
+        assert [entry.heading for entry in entries] == ["Real", "Next"]
+        assert entries[0].content == f"## Real\n{code}"
+        assert not any(entry.is_bootstrap for entry in entries)
+
     def test_empty_string(self):
         assert parse_memory("") == []
 

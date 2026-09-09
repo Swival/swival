@@ -260,7 +260,7 @@ def _coerce_scalar(value: Any, expected: str) -> Any:
     return _SKIP
 
 
-_GLOB_META_RE = re.compile(r"[*?\[\]]")
+_PATH_GLOB_RE = re.compile(r"(?:^\.?\*{1,2}|/\*{1,2})/?$")
 
 _PATH_FIELDS = frozenset(
     {
@@ -278,7 +278,7 @@ def _repair_path_globs(
     properties: dict[str, Any],
     repairs: list[dict[str, Any]],
 ) -> None:
-    """Strip glob metacharacters from path/directory fields.
+    """Trim wildcard-only directory suffixes from path/directory fields.
 
     Models frequently pass ``".**"`` or ``"**"`` as a path, mashing together
     ``.`` (current directory) and ``**`` (recursive glob).  The intent is
@@ -290,7 +290,8 @@ def _repair_path_globs(
         value = result[field]
         if not isinstance(value, str):
             continue
-        if not _GLOB_META_RE.search(value):
+        match = _PATH_GLOB_RE.search(value)
+        if match is None:
             continue
         # Only touch fields that are clearly file/directory paths, not
         # pattern or include fields.
@@ -299,9 +300,8 @@ def _repair_path_globs(
             continue
         if "pattern" in desc or "regex" in desc or "glob" in desc:
             continue
-        cleaned = _GLOB_META_RE.sub("", value).rstrip("/")
-        if not cleaned:
-            cleaned = "."
+        # Metacharacters inside a filename may be literal, e.g. [slug].tsx.
+        cleaned = value[: match.start()] or ("/" if value.startswith("/") else ".")
         if cleaned != value:
             result[field] = cleaned
             repairs.append(

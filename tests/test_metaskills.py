@@ -65,6 +65,28 @@ def _make_metaskill(
 
 
 class TestDiscovery:
+    @pytest.mark.parametrize("explicit", [False, True])
+    @pytest.mark.parametrize("outside", [False, True])
+    def test_metaskill_symlink_stays_inside_skill(self, tmp_path, explicit, outside):
+        skill_dir = _make_metaskill(
+            tmp_path / ".swival" / "skills",
+            "linked-ms",
+            'def run(input):\n    return "ok"',
+            metaskill_field="SKILL.star" if explicit else None,
+        )
+        program = skill_dir / "SKILL.star"
+        target = (tmp_path if outside else skill_dir) / "program.star"
+        program.rename(target)
+        program.symlink_to(target)
+
+        skill = discover_skills(str(tmp_path))["linked-ms"]
+        if outside:
+            assert skill.metaskill_path is None
+            assert skill.metaskill_language is None
+        else:
+            assert skill.metaskill_path == target.resolve()
+            assert skill.metaskill_language == "starlark"
+
     def test_static_skill_unchanged(self, tmp_path):
         skills_dir = tmp_path / ".swival" / "skills"
         _make_skill(skills_dir, "my-skill", "Does things.")

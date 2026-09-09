@@ -1343,7 +1343,11 @@ _KNOWN_SPECIAL_KEYS = _NESTED_KEYS | {"active_profile", "_active_profile_source"
 
 def _toml_escape(s: str) -> str:
     """Escape a string for TOML double-quoted values."""
-    return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    return json.dumps(s, ensure_ascii=False)[1:-1].replace("\x7f", "\\u007f")
+
+
+def _toml_key(key: str) -> str:
+    return key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else f'"{_toml_escape(key)}"'
 
 
 def _toml_format(val) -> str:
@@ -1358,7 +1362,7 @@ def _toml_format(val) -> str:
         items = ", ".join(_toml_format(v) for v in val)
         return f"[{items}]"
     if isinstance(val, dict):
-        pairs = ", ".join(f"{k} = {_toml_format(v)}" for k, v in val.items())
+        pairs = ", ".join(f"{_toml_key(k)} = {_toml_format(v)}" for k, v in val.items())
         return f"{{ {pairs} }}"
     return f'"{_toml_escape(str(val))}"'
 
@@ -1566,6 +1570,7 @@ def generate_config(
     ]
 
     lines: list[str] = []
+    emitted_keys: set[str] = set()
     in_example_section = False
     for tl in template_lines:
         if tl.startswith("# --- ") and "examples" in tl.lower():
@@ -1578,34 +1583,42 @@ def generate_config(
                 key = m.group(1)
                 if key in existing and key not in _NESTED_KEYS:
                     lines.append(_uncomment_line(tl, key, existing[key]))
+                    emitted_keys.add(key)
                     continue
         lines.append(tl)
 
     if existing is not None:
-        unknown = [
+        remaining = [
             k
             for k in existing
-            if k not in CONFIG_KEYS
+            if k not in emitted_keys
             and k not in _KNOWN_SPECIAL_KEYS
             and not k.startswith("_")
         ]
-        if unknown:
+        if remaining:
             lines.append("# --- Other settings ---")
-            for k in unknown:
-                lines.append(f"{k} = {_toml_format(existing[k])}")
+            for k in remaining:
+                lines.append(f"{_toml_key(k)} = {_toml_format(existing[k])}")
             lines.append("")
 
-    if existing_raw is not None and existing is not None:
         keys_present = set(existing) & _NESTED_KEYS
         if keys_present:
-            raw_tables, found_roots = _extract_raw_tables(existing_raw, keys_present)
-            if raw_tables:
-                lines.append(raw_tables)
-                lines.append("")
+            raw_tables, found_roots = _extract_raw_tables(
+                existing_raw or "", keys_present
+            )
+            try:
+                preserved = tomllib.loads(raw_tables)
+            except tomllib.TOMLDecodeError:
+                preserved = None
+            if preserved != {k: existing[k] for k in found_roots}:
+                raw_tables, found_roots = "", set()
             inline_keys = sorted(keys_present - found_roots)
             if inline_keys:
                 for k in inline_keys:
                     lines.append(f"{k} = {_toml_format(existing[k])}")
+                lines.append("")
+            if raw_tables:
+                lines.append(raw_tables)
                 lines.append("")
 
     return "\n".join(lines)

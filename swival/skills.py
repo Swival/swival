@@ -240,22 +240,18 @@ def _try_load_skill(
     metaskill_path: Path | None = None
     metaskill_language: str | None = None
     metaskill_field = parsed.get("metaskill")
-    if metaskill_field:
-        ms_path = resolved_path / metaskill_field
-        if not ms_path.resolve().is_relative_to(resolved_path):
-            if verbose:
-                fmt.warning(
-                    f"skill {name!r}: metaskill path escapes skill directory, skipping metaskill"
-                )
-        elif not ms_path.is_file():
-            if verbose:
-                fmt.warning(
-                    f"skill {name!r}: metaskill file {metaskill_field!r} not found"
-                )
-        else:
-            metaskill_path = ms_path.resolve()
-    elif (resolved_path / "SKILL.star").is_file():
-        metaskill_path = (resolved_path / "SKILL.star").resolve()
+    ms_path = resolved_path / (metaskill_field or "SKILL.star")
+    if not ms_path.resolve().is_relative_to(resolved_path):
+        if verbose:
+            fmt.warning(
+                f"skill {name!r}: metaskill path escapes skill directory, skipping metaskill"
+            )
+    elif not ms_path.is_file():
+        # An implicit SKILL.star is optional, so only a declared name warns.
+        if verbose and metaskill_field:
+            fmt.warning(f"skill {name!r}: metaskill file {metaskill_field!r} not found")
+    else:
+        metaskill_path = ms_path.resolve()
 
     if metaskill_path is not None:
         lang = parsed.get("metaskill_language", "starlark")

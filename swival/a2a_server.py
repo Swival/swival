@@ -126,10 +126,12 @@ class _RateLimiter:
         if len(q) >= self._max:
             return False
         q.append(now)
-        # Periodically prune empty keys to prevent unbounded dict growth
+        # Periodically prune expired keys to prevent unbounded dict growth
         if len(self._hits) > self._max * 10:
-            empty = [k for k, v in self._hits.items() if not v]
-            for k in empty:
+            expired = [
+                k for k, v in self._hits.items() if not v or v[-1] <= now - self._window
+            ]
+            for k in expired:
                 del self._hits[k]
         return True
 
@@ -517,7 +519,7 @@ class A2aServer:
     def _rate_limit_key(self, request: Request) -> str:
         """Derive the rate-limit key from the request."""
         auth = request.headers.get("authorization", "")
-        if auth.startswith("Bearer "):
+        if self.auth_token and auth.startswith("Bearer "):
             return f"token:{auth[7:20]}"
         return f"ip:{request.client.host}" if request.client else "ip:unknown"
 
@@ -790,8 +792,6 @@ class A2aServer:
                 context_id=context_id,
                 state=STATE_WORKING,
             )
-            yield _sse_frame("TaskStatusUpdateEvent", status_evt.to_wire())
-
             last_event_time = time.monotonic()
             # Track the last text delivered via text_chunk so we can
             # deduplicate the post-loop final artifact (only suppress if
@@ -801,6 +801,7 @@ class A2aServer:
             finalized = False
 
             try:
+                yield _sse_frame("TaskStatusUpdateEvent", status_evt.to_wire())
                 while not ask_future.done():
                     try:
                         kind, data = await asyncio.wait_for(
@@ -1016,7 +1017,8 @@ class A2aServer:
                 _jsonrpc_error(None, INVALID_REQUEST, "Invalid Content-Length header"),
                 status_code=400,
             )
-        if cl_int > self._max_request_size:
+
+        def _too_large() -> JSONResponse:
             return JSONResponse(
                 _jsonrpc_error(
                     None,
@@ -1026,18 +1028,18 @@ class A2aServer:
                 status_code=413,
             )
 
+        # A client can understate or omit Content-Length.
+        # The streaming read below enforces the same cap chunk by chunk.
+        if cl_int > self._max_request_size:
+            return _too_large()
+
         # Parse body
         try:
-            raw = await request.body()
-            if len(raw) > self._max_request_size:
-                return JSONResponse(
-                    _jsonrpc_error(
-                        None,
-                        INVALID_REQUEST,
-                        f"Request body too large (max {self._max_request_size} bytes)",
-                    ),
-                    status_code=413,
-                )
+            raw = bytearray()
+            async for chunk in request.stream():
+                if len(raw) + len(chunk) > self._max_request_size:
+                    return _too_large()
+                raw.extend(chunk)
             body = json.loads(raw)
         except Exception:
             return JSONResponse(

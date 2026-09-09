@@ -391,6 +391,22 @@ class TestRealSdkObjects:
     genuine SDK objects instead.
     """
 
+    @pytest.mark.parametrize("is_error", [False, True])
+    def test_error_flag_takes_precedence_over_success_envelope(self, is_error):
+        import mcp.types
+
+        payload = json.dumps({"ok": True, "result": "partial result"})
+        result = mcp.types.CallToolResult(
+            content=[mcp.types.TextContent(type="text", text=payload)],
+            isError=is_error,
+        )
+        text, failed = _normalize_result(result)
+        assert failed is is_error
+        if is_error:
+            assert text == f"error: {payload}"
+        else:
+            assert text == json.dumps("partial result")
+
     def test_tool_conversion_uses_sdk_field_names(self):
         import mcp.types
 

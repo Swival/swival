@@ -1163,6 +1163,41 @@ class TestSendStreamingMessage:
 
 
 class TestRateLimiting:
+    def test_unverified_bearer_header_cannot_bypass_ip_limit(self, tmp_path):
+        from starlette.testclient import TestClient
+
+        srv = A2aServer(
+            session_kwargs={"base_dir": str(tmp_path)},
+            max_requests_per_minute=2,
+        )
+        with TestClient(srv.app) as client:
+            statuses = [
+                client.post(
+                    "/", json=_jsonrpc("ListTasks", {}), headers=headers
+                ).status_code
+                for headers in (
+                    {},
+                    {"Authorization": "Bearer unverified-one"},
+                    {"Authorization": "Bearer unverified-two"},
+                )
+            ]
+        assert statuses == [200, 200, 429]
+
+    def test_expired_client_keys_are_pruned(self, monkeypatch):
+        from swival.a2a_server import _RateLimiter
+
+        now = 0.0
+        monkeypatch.setattr("swival.a2a_server.time.monotonic", lambda: now)
+        limiter = _RateLimiter(max_requests=1, window=10)
+        for i in range(12):
+            assert limiter.allow(f"old-{i}")
+        now = 9.0
+        assert limiter.allow("recent")
+        now = 11.0
+        assert limiter.allow("current")
+        assert set(limiter._hits) == {"recent", "current"}
+        assert not limiter.allow("recent")
+
     def test_rate_limit_rejects_excess_requests(self, _patch_session):
         """Requests over the rate limit get a 429 response."""
         srv = A2aServer(
@@ -1192,6 +1227,35 @@ class TestRateLimiting:
 
 
 class TestRequestSizeValidation:
+    @pytest.mark.parametrize("oversized", [False, True])
+    def test_chunked_body_stops_at_size_limit(self, oversized):
+        import asyncio
+
+        from starlette.requests import Request
+
+        raw = json.dumps(_jsonrpc("ListTasks", {})).encode()
+        srv = A2aServer(
+            session_kwargs={"provider": "lmstudio", "base_dir": "/tmp"},
+            max_request_size=len(raw),
+        )
+        chunks = [raw, b" "] if oversized else [raw[:10], raw[10:]]
+        received = 0
+
+        async def receive():
+            nonlocal received
+            received += 1
+            assert received <= len(chunks), "read past oversized body"
+            return {
+                "type": "http.request",
+                "body": chunks[received - 1],
+                "more_body": oversized or received < len(chunks),
+            }
+
+        request = Request({"type": "http", "headers": []}, receive=receive)
+        response = asyncio.run(srv._handle_jsonrpc(request))
+        assert response.status_code == (413 if oversized else 200)
+        assert received == 2
+
     def test_oversized_body_rejected(self, _patch_session):
         """Request body larger than max_request_size gets 413."""
         srv = A2aServer(
@@ -1575,6 +1639,58 @@ class TestStatusUpdateMetadata:
 
 class TestDisconnectFinalizesTask:
     """_streaming_cleanup must finalize the task after the future completes."""
+
+    def test_disconnect_after_initial_status_releases_resources(
+        self, tmp_path, monkeypatch, _patch_session
+    ):
+        import asyncio
+
+        srv = A2aServer(session_kwargs={"base_dir": str(tmp_path)})
+
+        async def run():
+            started = asyncio.Event()
+            finish = asyncio.Event()
+            cleaned = asyncio.Event()
+            cleanup = srv._streaming_cleanup
+
+            async def controlled_ask(*args, **kwargs):
+                started.set()
+                await finish.wait()
+                return _make_result("done")
+
+            async def observed_cleanup(*args):
+                await cleanup(*args)
+                cleaned.set()
+
+            monkeypatch.setattr(asyncio, "to_thread", controlled_ask)
+            monkeypatch.setattr(srv, "_streaming_cleanup", observed_cleanup)
+            srv._concurrency_sem = asyncio.Semaphore(0)
+            response = await srv._handle_send_streaming_message(
+                {"message": {"parts": [{"text": "hello"}], "contextId": "ctx"}},
+                1,
+            )
+            stream = response.body_iterator
+            initial = await anext(stream)
+            assert '"state": "working"' in initial
+            await started.wait()
+            task = next(iter(srv._tasks.values()))
+            lock = srv._context_locks["ctx"]
+            try:
+                await stream.aclose()
+                assert task.cancel_flag.is_set()
+                assert lock.locked()
+                assert srv._concurrency_sem.locked()
+            finally:
+                finish.set()
+            await asyncio.wait_for(cleaned.wait(), timeout=1)
+            assert task.status == "canceled"
+            assert not lock.locked()
+            assert not srv._active_contexts
+            assert srv._concurrency_sem._value == 1
+            assert srv._sessions["ctx"].event_callback is None
+            assert srv._sessions["ctx"].cancel_flag is None
+
+        asyncio.run(run())
 
     def test_cleanup_finalizes_successful_task(self, _patch_session):
         """_streaming_cleanup calls _finalize_task on success."""

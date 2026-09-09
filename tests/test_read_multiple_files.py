@@ -3,6 +3,7 @@
 import pytest
 
 from swival.tools import _read_files, dispatch
+from swival.tracker import FileAccessTracker
 
 
 class TestReadMultipleFilesBasic:
@@ -332,26 +333,55 @@ class TestReadMultipleFilesDirectories:
 class TestReadMultipleFilesTracker:
     """Read-before-write tracking."""
 
+    @pytest.mark.parametrize("previous", [None, "read", "written"])
+    def test_omitted_file_does_not_gain_write_access(
+        self, tmp_path, monkeypatch, previous
+    ):
+        from swival import tools
+
+        monkeypatch.setattr(tools, "MAX_OUTPUT_BYTES", 250)
+        shown = tmp_path / "shown.txt"
+        hidden = tmp_path / "hidden.txt"
+        shown.write_text("shown " * 10)
+        hidden.write_text("unseen " * 20)
+        tracker = FileAccessTracker()
+        if previous == "read":
+            tracker.record_read(str(hidden.resolve()))
+        elif previous == "written":
+            tracker.record_write(str(hidden.resolve()))
+
+        result = _read_files(
+            ["shown.txt", "hidden.txt"], str(tmp_path), tracker=tracker
+        )
+        assert "=== FILE: shown.txt ===" in result
+        assert "=== FILE: hidden.txt ===" not in result
+        assert "unseen" not in result
+        assert "batch_truncated: true" in result
+        assert str(shown.resolve()) in tracker.read_files
+
+        write = tools._write_file(
+            "hidden.txt", "replacement", str(tmp_path), tracker=tracker
+        )
+        if previous is None:
+            assert write.startswith("error:")
+            assert hidden.read_text() == "unseen " * 20
+        else:
+            assert not write.startswith("error:")
+            assert hidden.read_text() == "replacement"
+
     def test_tracker_records_reads(self, tmp_path):
         (tmp_path / "a.txt").write_text("x\n")
         (tmp_path / "b.txt").write_text("y\n")
 
-        class FakeTracker:
-            def __init__(self):
-                self.reads = []
-
-            def record_read(self, path):
-                self.reads.append(path)
-
-        tracker = FakeTracker()
+        tracker = FileAccessTracker()
         _read_files(
             [{"file_path": "a.txt"}, {"file_path": "b.txt"}],
             str(tmp_path),
             tracker=tracker,
         )
-        assert len(tracker.reads) == 2
-        assert any("a.txt" in r for r in tracker.reads)
-        assert any("b.txt" in r for r in tracker.reads)
+        assert len(tracker.read_files) == 2
+        assert any("a.txt" in r for r in tracker.read_files)
+        assert any("b.txt" in r for r in tracker.read_files)
 
 
 class TestReadMultipleFilesDispatch:

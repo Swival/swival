@@ -1220,6 +1220,62 @@ class TestExpandTilde:
             _expand_tilde("~\\foo")
 
 
+@pytest.mark.parametrize("operation", ["delete_file", "write_file"])
+@pytest.mark.parametrize("symlink", [False, True])
+@pytest.mark.parametrize("allowed", [False, True])
+def test_tilde_mutation_uses_authorized_path(
+    tmp_path, monkeypatch, operation, symlink, allowed
+):
+    from swival.tracker import FileAccessTracker
+
+    base = tmp_path / "project"
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    source = home / "item.txt"
+    target = home / "target.txt"
+    if symlink:
+        target.write_text("intended content")
+        source.symlink_to(target)
+    else:
+        source.write_text("intended content")
+    decoy = base / "~" / "item.txt"
+    decoy.parent.mkdir(parents=True)
+    decoy.write_text("unrelated content")
+    tracker = FileAccessTracker()
+    tracker.record_read(str(source.resolve()))
+    args = (
+        {"file_path": "~/item.txt"}
+        if operation == "delete_file"
+        else {"file_path": "moved.txt", "move_from": "~/item.txt"}
+    )
+
+    result = dispatch(
+        operation,
+        args,
+        str(base),
+        file_tracker=tracker,
+        extra_write_roots=[home] if allowed else [],
+    )
+
+    assert decoy.read_text() == "unrelated content"
+    if not allowed:
+        assert result.startswith("error:")
+        assert source.read_text() == "intended content"
+        assert not (base / "moved.txt").exists()
+        return
+    assert not result.startswith("error:")
+    assert not source.exists() and not source.is_symlink()
+    if operation == "delete_file":
+        destination = next((base / ".swival" / "trash").glob("*/item.txt"))
+    else:
+        destination = base / "moved.txt"
+    assert destination.read_text() == "intended content"
+    assert destination.is_symlink() == symlink
+    if symlink:
+        assert target.read_text() == "intended content"
+
+
 class TestOutlineDispatch:
     """Dispatch tests for the outline tool."""
 

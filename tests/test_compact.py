@@ -195,6 +195,36 @@ class TestGroupIntoTurns:
 
 
 class TestCompactMessages:
+    @pytest.mark.parametrize(
+        "name,args",
+        [
+            ("read_file", ["x" * 1500]),
+            (
+                "read_multiple_files",
+                {"files": [{"file_path": 0}, {"file_path": "x" * 1500}]},
+            ),
+            (
+                "outline",
+                {"files": [{"file_path": 0}, {"file_path": "x" * 1500}]},
+            ),
+        ],
+    )
+    def test_compact_rejected_arguments(self, tmp_path, name, args):
+        from swival.agent import handle_tool_call
+        from swival.thinking import ThinkingState
+
+        assistant = _assistant_tc([("invalid", name, json.dumps(args))])
+        tool_msg, _ = handle_tool_call(
+            assistant.tool_calls[0], str(tmp_path), ThinkingState(), False
+        )
+        assert "error:" in tool_msg["content"]
+        assert len(tool_msg["content"]) > 1000
+        messages = [assistant, tool_msg, _user("next"), _assistant("okay")]
+        compacted = compact_messages(messages)
+        assert compacted[0] is assistant
+        assert compacted[1]["tool_call_id"] == "invalid"
+        assert isinstance(compacted[1]["content"], str)
+
     def test_truncates_large_results(self):
         tc = _assistant_tc([("tc1", "read_file", "{}")])
         big_content = "x" * 2000

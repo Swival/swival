@@ -145,6 +145,80 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+def test_shutdown_closes_session_and_runs_exit_hook(tmp_path):
+    import shlex
+    import sys
+
+    hook = tmp_path / "hook.py"
+    hook.write_text(
+        "import sys\nfrom pathlib import Path\n"
+        "with (Path(sys.argv[2]) / 'events').open('a') as out:\n"
+        "    out.write(sys.argv[1] + '\\n')\n"
+    )
+    server = AcpServer(
+        session_kwargs={
+            "provider": "command",
+            "model": shlex.join([sys.executable, "-c", "print('done')"]),
+            "lifecycle_command": shlex.join([sys.executable, str(hook)]),
+            "cache": True,
+            "history": False,
+            "memory": False,
+            "no_instructions": True,
+            "no_skills": True,
+            "continue_here": False,
+        }
+    )
+    captured = _attach_capture(server)
+
+    async def drive():
+        server._initialized = True
+        await server._handle_session_new(1, {"cwd": str(tmp_path), "mcpServers": []})
+        sid = captured[0]["result"]["sessionId"]
+        sess = server._sessions[sid]
+        try:
+            await server._handle_session_prompt(
+                2, {"sessionId": sid, "prompt": [{"type": "text", "text": "hi"}]}
+            )
+            await asyncio.wait_for(sess.in_flight, timeout=30)
+            cache = sess.session._llm_cache
+            assert cache._conn is not None
+            assert (tmp_path / "events").read_text() == "startup\n"
+            await server._shutdown_all_sessions()
+            assert (tmp_path / "events").read_text() == "startup\nexit\n"
+            assert cache._conn is None
+            assert not server._sessions
+            await server._shutdown_all_sessions()
+            assert (tmp_path / "events").read_text() == "startup\nexit\n"
+        finally:
+            sess.session.close()
+
+    _run(drive())
+
+
+def test_shutdown_logs_prompt_failure_and_still_closes_session(caplog):
+    from unittest.mock import Mock
+
+    server = AcpServer(session_kwargs={})
+    session = Mock()
+
+    async def fail():
+        raise RuntimeError("prompt failed during shutdown")
+
+    async def drive():
+        server._sessions["test"] = types.SimpleNamespace(
+            session_id="test",
+            session=session,
+            cancel_flag=threading.Event(),
+            in_flight=asyncio.create_task(fail()),
+        )
+        await server._shutdown_all_sessions()
+        assert not server._sessions
+
+    _run(drive())
+    session.close.assert_called_once_with()
+    assert "prompt failed during shutdown" in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # Initialize handshake
 # ---------------------------------------------------------------------------

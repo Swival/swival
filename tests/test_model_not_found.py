@@ -29,9 +29,11 @@ def _not_found_exc():
     )
 
 
-def _call(model_id="sQwopus3.6-27B-Coder-4bit.mlx"):
+def _call(
+    model_id="sQwopus3.6-27B-Coder-4bit.mlx", base_url="http://localhost:8080/v1"
+):
     return call_llm(
-        "http://localhost:8080/v1",
+        base_url,
         model_id,
         [{"role": "user", "content": "hi"}],
         100,
@@ -76,6 +78,49 @@ class TestFormatModelNotFound:
 
 
 class TestCallLlmModelNotFound:
+    def test_substitution_does_not_change_another_servers_model(self):
+        with (
+            patch(
+                "litellm.completion",
+                side_effect=[_not_found_exc(), _make_response(), _make_response()],
+            ) as completion,
+            patch("swival.agent._list_server_models", return_value=["replacement"]),
+        ):
+            _call("requested")
+            _call("requested", base_url="http://localhost:9090/v1")
+        assert [call.kwargs["model"] for call in completion.call_args_list] == [
+            "openai/requested",
+            "openai/replacement",
+            "openai/requested",
+        ]
+
+    def test_updated_substitution_is_used_on_next_call(self):
+        with (
+            patch(
+                "litellm.completion",
+                side_effect=[
+                    _not_found_exc(),
+                    _make_response(),
+                    _not_found_exc(),
+                    _make_response(),
+                    _make_response(),
+                ],
+            ) as completion,
+            patch(
+                "swival.agent._list_server_models", side_effect=[["first"], ["second"]]
+            ),
+        ):
+            _call("requested")
+            _call("requested")
+            _call("requested")
+        assert [call.kwargs["model"] for call in completion.call_args_list] == [
+            "openai/requested",
+            "openai/first",
+            "openai/first",
+            "openai/second",
+            "openai/second",
+        ]
+
     def test_multiple_models_raises_formatted_error(self):
         exc = _not_found_exc()
         available = [

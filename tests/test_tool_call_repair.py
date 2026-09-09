@@ -405,11 +405,14 @@ def test_storm_breaker_suppresses_second_explicit_non_idempotent_call():
     assert second.count == 2
 
 
-def test_storm_breaker_edit_clears_read_only():
+@pytest.mark.parametrize(
+    "name", ["edit_file", "run_command", "run_python", "run_metaskill"]
+)
+def test_storm_breaker_edit_clears_read_only(name):
     sb = StormBreaker()
     sb.inspect("read_file", '{"file_path": "x"}', mutating=False)
     sb.inspect("read_file", '{"file_path": "x"}', mutating=False)
-    sb.inspect("edit_file", '{"file_path": "x"}', mutating=True)
+    sb.inspect(name, '{"file_path": "x"}', mutating=is_mutating(name))
     v = sb.inspect("read_file", '{"file_path": "x"}', mutating=False)
     assert v.suppress is False
 

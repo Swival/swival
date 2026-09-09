@@ -538,7 +538,9 @@ class _StormEntry:
 
 
 _FILESYSTEM_MUTATING = frozenset({"write_file", "edit_file", "delete_file"})
-_COMMAND_EXECUTING = frozenset({"run_command", "run_shell_command"})
+_COMMAND_EXECUTING = frozenset(
+    {"run_command", "run_shell_command", "run_python", "run_metaskill"}
+)
 _STORM_EXEMPT = frozenset(
     {"think", "todo", "snapshot", "complete_goal", "check_subagents"}
 )

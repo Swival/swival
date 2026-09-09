@@ -28,8 +28,6 @@ import warnings
 from importlib import metadata
 from pathlib import Path
 
-import tiktoken
-
 from . import fmt
 from ._env import child_env
 from ._msg import (
@@ -75,6 +73,7 @@ from .goal import (
     GoalStatus,
 )
 from .thinking import ThinkingState
+from .tokens import count_tokens, truncate_to_tokens
 from .todo import TodoState
 from .tracker import FileAccessTracker
 from .terminal import sanitize_terminal_output
@@ -139,22 +138,10 @@ warnings.filterwarnings(
 )
 
 
-class _FallbackEncoder:
-    """Rudimentary fallback when tiktoken can't load cl100k_base offline."""
-
-    def encode(self, text: str, **kwargs) -> list[int]:
-        return list(text.encode("utf-8"))
-
-
 DEFAULT_SYSTEM_PROMPT_FILE = Path(__file__).parent / "system_prompt.txt"
 MAX_ARG_LOG = 1000
 MAX_INSTRUCTIONS_CHARS = 10_000
 
-
-try:
-    _encoder = tiktoken.get_encoding("cl100k_base")
-except Exception:
-    _encoder = _FallbackEncoder()
 
 MAX_HISTORY_SIZE = 500 * 1024  # 500KB
 TODO_REMINDER_INTERVAL = 3  # remind after N turns of no todo usage
@@ -517,10 +504,10 @@ _TOOLS_NOT_SUPPORTED_RE = re.compile(
 
 _HF_NOT_CHAT_MODEL_RE = re.compile(r"not a chat model", re.IGNORECASE)
 
-# Resolved model string the server rejected -> the single model it serves.
+# (Endpoint, requested model string) -> the single model the server serves.
 # Lets later call_llm() invocations skip the failing round-trip after an
 # automatic substitution.
-_MODEL_AUTOFIX: dict[str, str] = {}
+_MODEL_AUTOFIX: dict[tuple[str | None, str], str] = {}
 
 _MODEL_LIST_LIMIT = 20
 
@@ -1886,7 +1873,7 @@ def estimate_tokens(messages: list, tools: list | None = None) -> int:
         reasoning_content = _msg_get(m, "reasoning_content")
         if reasoning_content:
             content += str(reasoning_content)
-        total += len(_encoder.encode(content))
+        total += count_tokens(content)
     total += _estimate_tool_tokens(tools)
     # Per-message overhead (role, separators) — ~4 tokens each
     total += 4 * len(messages)
@@ -1897,7 +1884,7 @@ def _estimate_tool_tokens(tools: list) -> int:
     """Estimate token cost of the tool schemas alone."""
     if not tools:
         return 0
-    return len(_encoder.encode(json.dumps(tools)))
+    return count_tokens(json.dumps(tools))
 
 
 def enforce_mcp_token_budget(
@@ -2026,6 +2013,28 @@ def group_into_turns(messages: list) -> list[list]:
     return turns
 
 
+def _compacted_file_paths(files) -> list[str] | None:
+    """Display paths for a ``files`` argument, or None when it names none.
+
+    The argument comes from a call the server already rejected, so any
+    shape is possible.
+    Anything unexpected becomes a placeholder instead of raising.
+    """
+    if isinstance(files, str):
+        files = [files]
+    if not files or not isinstance(files, list):
+        return None
+    paths = []
+    for f in files:
+        if isinstance(f, dict):
+            paths.append(str(f.get("file_path", "?")))
+        elif isinstance(f, str):
+            paths.append(f)
+        else:
+            paths.append("?")
+    return paths
+
+
 def compact_tool_result(name: str, args: dict | None, content: str) -> str:
     """Produce a structured summary for a large tool result.
 
@@ -2036,7 +2045,7 @@ def compact_tool_result(name: str, args: dict | None, content: str) -> str:
     if len(content) <= 1000:
         return content
 
-    args = args or {}
+    args = args if isinstance(args, dict) else {}
 
     if name == "read_file":
         path = args.get("file_path", "?")
@@ -2044,39 +2053,13 @@ def compact_tool_result(name: str, args: dict | None, content: str) -> str:
         return f"[read_file: {path}, {lines} lines — content compacted]"
 
     if name == "read_multiple_files":
-        files = args.get("files", [])
-        if isinstance(files, str):
-            files = [files]
-        if files and isinstance(files, list):
-            paths = []
-            for f in files:
-                if isinstance(f, dict):
-                    paths.append(f.get("file_path", "?"))
-                elif isinstance(f, str):
-                    paths.append(f)
-                else:
-                    paths.append("?")
-        else:
-            paths = ["?"]
+        paths = _compacted_file_paths(args.get("files", [])) or ["?"]
         return f"[read_multiple_files: {', '.join(paths)}, {len(content)} chars — compacted]"
 
     if name == "outline":
-        files = args.get("files")
-        if files:
-            if isinstance(files, str):
-                files = [files]
-            if isinstance(files, list):
-                paths = []
-                for f in files:
-                    if isinstance(f, dict):
-                        paths.append(f.get("file_path", "?"))
-                    elif isinstance(f, str):
-                        paths.append(f)
-                    else:
-                        paths.append("?")
-                return (
-                    f"[outline: {', '.join(paths)}, {len(content)} chars — compacted]"
-                )
+        paths = _compacted_file_paths(args.get("files"))
+        if paths:
+            return f"[outline: {', '.join(paths)}, {len(content)} chars — compacted]"
         path = args.get("file_path", "?")
         return f"[outline: {path} — compacted]"
 
@@ -3795,7 +3778,6 @@ def load_memory(
     Otherwise, uses budgeted two-part injection: bootstrap entries first,
     then BM25-retrieved entries keyed from *user_query*.
     """
-    from .tokens import count_tokens, truncate_to_tokens
     from .memory import parse_memory, retrieve_bm25
 
     try:
@@ -4914,8 +4896,6 @@ def _call_command(command_str, messages, verbose, max_output_tokens=None):
     response_text = _run_command_once(parts, transcript, verbose, command_str)
 
     if max_output_tokens and max_output_tokens > 0:
-        from .tokens import truncate_to_tokens
-
         response_text = truncate_to_tokens(response_text, max_output_tokens)
 
     msg = _make_synthetic_message(response_text)
@@ -5132,8 +5112,6 @@ def _call_command_with_tools(
             )
 
     if max_output_tokens and max_output_tokens > 0:
-        from .tokens import truncate_to_tokens
-
         response_text = truncate_to_tokens(response_text, max_output_tokens)
 
     return _make_synthetic_message(response_text), "stop", tool_activity
@@ -5799,7 +5777,8 @@ def call_llm(
     _skip_tool_choice = False
 
     model_str = _resolve_model_str(provider, model_id)
-    model_str = _MODEL_AUTOFIX.get(model_str, model_str)
+    model_key = (base_url, model_str)
+    model_str = _MODEL_AUTOFIX.get(model_key, model_str)
     if provider == "chatgpt":
         _ensure_chatgpt_responses_model_registered(litellm, model_str)
 
@@ -6068,7 +6047,7 @@ def call_llm(
             _raise_with_retries(ae)
         replacement = available[0]
         new_model_str = _resolve_model_str(provider, replacement)
-        _MODEL_AUTOFIX[model_str] = new_model_str
+        _MODEL_AUTOFIX[model_key] = new_model_str
         fmt.warning(
             f"Model {model_id!r} not found; the server only serves "
             f"{replacement!r}, using it instead"
@@ -11574,7 +11553,6 @@ def _truncate_for_context(
     context_length: int | None,
 ) -> str | None:
     """Truncate *text* to fit in remaining context, or return None to skip."""
-    from .tokens import count_tokens, truncate_to_tokens
 
     if context_length is None:
         encoded = text.encode()
@@ -11856,6 +11834,7 @@ def _repl_profile(
     _PROFILE_LLM_KEYS = {
         "provider",
         "api_key",
+        "user_agent",
         "aws_profile",
         "vertex_project",
         "vertex_location",
