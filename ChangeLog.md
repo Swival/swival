@@ -2,10 +2,24 @@
 
 All notable user-facing changes to Swival.
 
-## 1.0.44 (unreleased)
+## 1.0.44
 
+- Added `/reasoning` to inspect or change the reasoning effort during a REPL session.
+  `/reasoning LEVEL` applies to the next turn and subsequently spawned subagents, `/reasoning -` restores the previous level, and selecting a profile restores that profile's setting.
+- If a model rejects a prompt containing an image, Swival now removes the image and retries the request as text-only.
+  A model-wide vision rejection also withdraws `view_image` for that endpoint and model for the rest of the process, while a rejection specific to one image leaves the tool available.
+- The `generic` provider now sends stable `x-opencode-session` and `x-opencode-client` headers to `opencode.ai`, allowing the OpenCode Go service to keep related turns, retries, compactions, and worktree calls in one session.
+  `/clear`, `/new`, and subagents start independent sessions.
 - Automatic Git metadata collection and `/audit` now ignore repository-configured hooks, filesystem monitors, filters, diff helpers, text conversion, and alternate attribute sources.
   This prevents a received directory with a preserved malicious `.git/config` from running code before a prompt or during an audit.
+- `grep` include globs now honor their directory components, and recursive searches skip FIFOs and other special files instead of risking a hang.
+  Token counting also accepts text containing reserved-token spellings such as `<|endoftext|>` and falls back to conservative byte counting when the tokenizer data is unavailable offline.
+- Regenerating an existing config with `--init-config` now preserves all recognized settings, inline nested tables, quoted keys, and escaped control characters instead of silently dropping or corrupting values that are absent from the current template.
+  Relative command-provider model paths inside profiles are now resolved relative to the config file, and switching profiles correctly replaces a profile-specific `user_agent`.
+- A2A request bodies are now size-limited while they stream, so clients cannot bypass the configured limit by omitting or understating `Content-Length`.
+- Automatic correction for a single-model server is now scoped to the endpoint as well as the requested model, preventing a correction learned from one server from changing requests sent to another.
+- `--no-subagents` is now honored even when the context window would otherwise auto-enable subagents, and an outer Ctrl-C is reported to lifecycle exit hooks as an interruption with status 130.
+- `/audit` now preserves tracked Git pathnames containing newlines and treats unreadable files as failed evidence instead of silently omitting them from deep review.
 
 ## 1.0.43
 
