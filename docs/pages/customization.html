@@ -144,7 +144,6 @@ cache = true
 # no_mcp = false           # disable MCP server connections
 # no_a2a = false           # disable A2A agent connections
 # no_instructions = false  # skip CLAUDE.md and AGENTS.md loading
-# instructions_full = false # load all instruction files whatever their size
 # no_skills = false        # disable skill discovery
 # metaskills = &quot;local&quot;     # &quot;local&quot;, &quot;all&quot;, or &quot;off&quot;
 # no_memory = false        # skip auto-memory loading
@@ -274,34 +273,10 @@ swival&gt; /model --fav ID       # toggle a favorite for a specific model
 Always run `go test ./...` after making changes.
 Don't add dependencies without asking.
 </code></pre>
-<h3 id="how-much-room-instruction-files-get">How much room instruction files get</h3>
-<p>Instruction files hold mandatory rules, so swival loads every applicable file
-whole or it loads none of them. It never cuts one in half. At startup it renders
-the complete set, measures it once against what the model's window has left, and
-either takes all of it or stops with a message naming the files.</p>
-<p>The check needs a known context window. When the provider does not report one,
-the size is advisory: swival loads the files and relies on the usual
-context-overflow recovery.</p>
-<p>If the set does not fit, you have three cheap exits. Shorten the listed files.
-Pick a model with a larger window. Or run again with one of the flags below.
-None of them needs the model to rewrite anything.</p>
 <h3 id="disabling-instructions">Disabling instructions</h3>
 <p>Use <code>--no-instructions</code> to skip all instruction files (CLAUDE.md and AGENTS.md at all levels, including <code>~/.agents/AGENTS.md</code>).</p>
 <pre><code class="language-sh">swival --no-instructions &quot;task&quot;
 </code></pre>
-<p>Use <code>--instructions-full</code> to load every instruction file whatever its size. This
-may crowd out room for the work itself, or make the request fail at the provider.
-It never permits truncation, and it does not lift read limits, path guards, or
-the model's real context limit. A file larger than the read caps still stops the
-run: the override spends more of the window, it does not proceed on a partial
-set. A file that cannot be opened is reported and skipped instead.</p>
-<pre><code class="language-sh">swival --instructions-full &quot;task&quot;
-</code></pre>
-<p>An explicit <code>--no-instructions</code> wins over an inherited full-loading setting;
-reject contradictory explicit CLI flags. Passing both on the command line is an
-error. The rule works the other way too: an explicit <code>--instructions-full</code> wins
-over an inherited <code>no_instructions</code>, so a flag you typed is never silently
-dropped for a setting you did not.</p>
 <p>Use <code>--no-memory</code> to skip loading auto-memory from <code>.swival/memory/</code>.</p>
 <pre><code class="language-sh">swival --no-memory &quot;task&quot;
 </code></pre>

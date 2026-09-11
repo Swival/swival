@@ -258,7 +258,6 @@ swival --provider chatgpt --model gpt-5.5 \
 <p><code>--system-prompt</code> replaces the built-in prompt with your own prompt text.</p>
 <p><code>--no-system-prompt</code> omits the system message entirely.</p>
 <p><code>--no-instructions</code> prevents loading <code>CLAUDE.md</code> and <code>AGENTS.md</code> from the base directory, user config directory, and <code>~/.agents/</code>.</p>
-<p><code>--instructions-full</code> loads every instruction file whatever its size. The request may then crowd out room for the work, or fail at the provider. An explicit <code>--no-instructions</code> wins over an inherited full-loading setting; reject contradictory explicit CLI flags.</p>
 <p><code>--no-memory</code> prevents loading auto-memory from <code>.swival/memory/</code>.</p>
 <p><code>--memory-full</code> injects the entire <code>MEMORY.md</code> into the prompt instead of the default budgeted retrieval. Useful as a fallback if retrieval misses entries.</p>
 <p><code>--system-prompt</code> and <code>--no-system-prompt</code> are mutually exclusive.</p>

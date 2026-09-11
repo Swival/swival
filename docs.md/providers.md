@@ -203,7 +203,7 @@ swival --provider generic \
 export DEEPSEEK_API_KEY=sk-...
 swival --provider generic \
     --base-url https://api.deepseek.com \
-    --model deepseek-v4-pro \
+    --model deepseek-flash \
     --api-key "$DEEPSEEK_API_KEY" \
     "task"
 ```
