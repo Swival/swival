@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from stat import S_ISREG
 from typing import NamedTuple
 
 from . import fmt
@@ -119,6 +120,21 @@ def global_agents_md_path() -> Path:
     return Path.home() / ".agents" / "AGENTS.md"
 
 
+def _is_file_or_unreadable(path: Path) -> bool:
+    """True when *path* is a regular file, or when we could not find out.
+
+    A path we cannot stat stays in, so the read step reports the failure
+    instead of the rule set quietly getting smaller. ``Path.is_file`` folds
+    that case into its False, so it cannot be used here.
+    """
+    try:
+        return S_ISREG(path.stat().st_mode)
+    except (FileNotFoundError, NotADirectoryError, ValueError):
+        return False
+    except OSError:
+        return True
+
+
 def discover(
     base_dir: str,
     config_dir: "Path | None" = None,
@@ -136,16 +152,16 @@ def discover(
     found: list[tuple[Path, str, str]] = []
 
     claude_path = root / "CLAUDE.md"
-    if claude_path.is_file():
+    if _is_file_or_unreadable(claude_path):
         found.append((claude_path, "project", "claude"))
 
     if config_dir is not None:
         user_path = Path(config_dir) / "AGENTS.md"
-        if user_path.is_file():
+        if _is_file_or_unreadable(user_path):
             found.append((user_path, "user", "agents"))
 
     global_path = global_agents_md_path()
-    if global_path.is_file():
+    if _is_file_or_unreadable(global_path):
         found.append((global_path, "global", "agents"))
 
     proj_dirs = (
@@ -153,7 +169,7 @@ def discover(
     )
     for proj_dir in proj_dirs:
         proj_path = proj_dir / "AGENTS.md"
-        if proj_path.is_file():
+        if _is_file_or_unreadable(proj_path):
             found.append((proj_path, "project", "agents"))
 
     return found

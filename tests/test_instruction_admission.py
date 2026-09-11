@@ -1,5 +1,6 @@
 """Tests for the one instruction loading decision and what depends on it."""
 
+import os
 import types
 from pathlib import Path
 
@@ -1630,23 +1631,29 @@ class TestTheReportRecordsWhatWasDropped:
 
 
 def _deny_paths(monkeypatch, denied, *, on="open"):
-    """Make specific paths fail, by full path rather than by filename."""
+    """Make specific paths fail, by full path rather than by filename.
+
+    The stat denial goes in at ``os.stat``, below pathlib, so it reaches the
+    loader whichever call ``Path.is_file`` makes on a given Python release.
+    """
     denied = {str(p) for p in denied}
     real_open = Path.open
-    real_stat = Path.stat
+    real_stat = os.stat
 
     def bad_open(self, *args, **kwargs):
         if str(self) in denied:
             raise OSError("Permission denied")
         return real_open(self, *args, **kwargs)
 
-    def bad_stat(self, *args, **kwargs):
-        if str(self) in denied:
+    def bad_stat(path, *args, **kwargs):
+        if str(path) in denied:
             raise OSError("Input/output error")
-        return real_stat(self, *args, **kwargs)
+        return real_stat(path, *args, **kwargs)
 
-    monkeypatch.setattr("pathlib.Path.open", bad_open if on == "open" else real_open)
-    monkeypatch.setattr("pathlib.Path.stat", bad_stat if on == "stat" else real_stat)
+    if on == "open":
+        monkeypatch.setattr("pathlib.Path.open", bad_open)
+    else:
+        monkeypatch.setattr("os.stat", bad_stat)
 
 
 def _mentions(messages, path):
