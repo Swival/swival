@@ -466,9 +466,16 @@ class AcpServer:
                     make_result(request_id, {"stopReason": STOP_CANCELLED})
                 )
             else:
-                await self._send(
-                    make_error(request_id, ERROR_INTERNAL, f"agent loop failed: {err}")
+                from .instructions import InstructionLoadError
+
+                # An oversized instruction set is an expected, actionable
+                # refusal, not a crash. Send what the user can act on.
+                text = (
+                    str(err)
+                    if isinstance(err, InstructionLoadError)
+                    else f"agent loop failed: {err}"
                 )
+                await self._send(make_error(request_id, ERROR_INTERNAL, text))
             return
 
         result = result_holder.get("result")

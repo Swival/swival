@@ -141,6 +141,19 @@ class _RateLimiter:
 # ---------------------------------------------------------------------------
 
 
+def _failure_text(exc: BaseException) -> str:
+    """Text for a failed task.
+
+    An instruction set that does not fit is an expected refusal with a remedy
+    in it. Labelling that "internal error" would hide the one useful part.
+    """
+    from .instructions import InstructionLoadError
+
+    if isinstance(exc, InstructionLoadError):
+        return str(exc)
+    return f"Internal error: {exc}"
+
+
 def _build_skills_list(skills: list[dict] | None) -> list[dict]:
     """Convert skill dicts to A2A AgentSkill wire format (camelCase keys)."""
     if not skills:
@@ -718,7 +731,7 @@ class A2aServer:
                 self._session_access[context_id] = task.updated_at
                 agent_msg = {
                     "role": "agent",
-                    "parts": [{"type": "text", "text": f"Internal error: {exc}"}],
+                    "parts": [{"type": "text", "text": _failure_text(exc)}],
                     "contextId": context_id,
                     "taskId": task.id,
                 }
@@ -856,7 +869,7 @@ class A2aServer:
                     task.updated_at = time.monotonic()
                     agent_msg = {
                         "role": "agent",
-                        "parts": [{"type": "text", "text": f"Internal error: {exc}"}],
+                        "parts": [{"type": "text", "text": _failure_text(exc)}],
                         "contextId": context_id,
                         "taskId": task.id,
                     }

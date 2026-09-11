@@ -4,7 +4,7 @@ import contextlib
 import contextvars
 from contextlib import nullcontext
 import copy
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 import functools
 import json
@@ -63,6 +63,9 @@ from .snapshot import (
     SnapshotState,
     READ_ONLY_TOOLS,
 )
+from .instructions import InstructionLoadError
+from . import instructions as instructions_mod
+from . import prompt_spans
 from .goal import (
     GOAL_BUDGET_LIMIT_PREFIX,
     GOAL_CONTINUATION_PREFIX,
@@ -73,7 +76,12 @@ from .goal import (
     GoalStatus,
 )
 from .thinking import ThinkingState
-from .tokens import count_tokens, truncate_to_tokens
+from .tokens import (
+    count_tokens,
+    encoder_is_fallback,
+    truncate_to_tokens,
+    warn_fallback_once,
+)
 from .todo import TodoState
 from .tracker import FileAccessTracker
 from .terminal import sanitize_terminal_output
@@ -140,7 +148,6 @@ warnings.filterwarnings(
 
 DEFAULT_SYSTEM_PROMPT_FILE = Path(__file__).parent / "system_prompt.txt"
 MAX_ARG_LOG = 1000
-MAX_INSTRUCTIONS_CHARS = 10_000
 
 
 MAX_HISTORY_SIZE = 500 * 1024  # 500KB
@@ -273,14 +280,15 @@ INIT_ENRICH_PROMPT = (
     "format, type-check, debug, after-every-edit). These are always actionable. "
     "Never cut commit & PR style findings — they are always actionable.\n"
     "\n"
-    "For conventions, cut anything that: (1) only appears in one file or module, "
+    "For conventions, drop anything that: (1) only appears in one file or module, "
     "(2) is standard practice any competent agent already knows, or (3) would not "
     "cause an agent to produce incorrect code or miss a required step. Keep only "
     "conventions that cross module boundaries and would surprise a capable agent "
     "new to this project. Check tests, docs, and config for anything missed."
 )
 
-_INIT_AGENTS_MD_BUDGET = 3000
+# A writing target, not a limit. Nothing is ever cut to reach it.
+_INIT_AGENTS_MD_TARGET = 3000
 
 INIT_WRITE_PROMPT = (
     "Write findings to AGENTS.md. Use exactly this structure:\n"
@@ -311,13 +319,14 @@ INIT_WRITE_PROMPT = (
     "should cover, whether to link issues, include examples, etc.\n"
     "\n"
     "Rules:\n"
-    f"- Total output must not exceed {_INIT_AGENTS_MD_BUDGET} characters. "
-    "Workflow section takes priority. Cut convention bullets before workflow "
-    "lines, and cut commit/PR guidelines before conventions.\n"
+    f"- Aim for about {_INIT_AGENTS_MD_TARGET} characters. This is a preference, "
+    "not a limit. Keep every exact command, every requirement and every "
+    "exception. Shorten the explanation around them instead. Never drop a rule "
+    "to reach the target.\n"
     "- ## Workflow must be the first section.\n"
     "- Every command must be exact and copy-pasteable. No descriptions of what "
     "commands do.\n"
-    "- The file is injected into every future agent context, so brevity is essential."
+    "- The file is injected into every future agent context, so write it tight."
 )
 
 INIT_RETRY_PROMPT = (
@@ -828,7 +837,17 @@ def _escape_special_tokens_in_messages(messages: list) -> None:
             continue
         content = _msg_get(msg, "content")
         if isinstance(content, str) and "<|" in content:
-            _set_msg_content(msg, _escape_special_tokens(content))
+            spans = prompt_spans.get_spans(msg)
+            if spans and prompt_spans.spans_valid(content, spans):
+                # Escaping changes the length of what it rewrites, so each
+                # recorded region is escaped on its own and the offsets follow.
+                escaped, spans = prompt_spans.map_segments(
+                    content, spans, _escape_special_tokens
+                )
+                _set_msg_content(msg, escaped)
+                prompt_spans.set_spans(msg, spans)
+            else:
+                _set_msg_content(msg, _escape_special_tokens(content))
         elif isinstance(content, list):
             for part in content:
                 if isinstance(part, dict) and part.get("type") == "text":
@@ -1397,6 +1416,9 @@ def _raise_if_truncated_tool_call(
         )
     coe = ContextOverflowError(f"truncated tool-call response ({reason})")
     coe._provider_retries = provider_retries
+    # The answer ran out of room, so recovery must free output budget by
+    # trimming the prompt. Trading answer room away would make it worse.
+    coe._output_truncation = True
     raise coe
 
 
@@ -1726,8 +1748,6 @@ def remember_agents_fact(base_dir: str, text: str) -> tuple[str, bool, bool]:
         )
         agents_path.write_text(content, encoding="utf-8")
         msg = f"Created AGENTS.md with: {text}"
-        if len(content) > _INIT_AGENTS_MD_BUDGET:
-            msg += f"\nwarning: AGENTS.md now exceeds {_INIT_AGENTS_MD_BUDGET} character target"
         return msg + "\ntip: run /init to populate the Workflow section", True, False
 
     if reason:
@@ -1756,10 +1776,7 @@ def remember_agents_fact(base_dir: str, text: str) -> tuple[str, bool, bool]:
     new_content = content[:insert_pos] + bullet + content[insert_pos:]
     agents_path.write_text(new_content, encoding="utf-8")
 
-    msg = f"Added to AGENTS.md: {text}"
-    if len(new_content) > _INIT_AGENTS_MD_BUDGET:
-        msg += f"\nwarning: AGENTS.md now exceeds {_INIT_AGENTS_MD_BUDGET} character target"
-    return msg, True, False
+    return f"Added to AGENTS.md: {text}", True, False
 
 
 _HISTORY_ENTRY_HEADER_RE = re.compile(
@@ -2580,9 +2597,23 @@ def _emergency_truncate(messages: list, context_length: int) -> list:
         shrank = False
         for msg in messages:
             content = _msg_content(msg) or ""
-            if len(content) > per_msg_chars:
+            if len(content) <= per_msg_chars:
+                continue
+            spans = prompt_spans.get_spans(msg)
+            if spans and prompt_spans.spans_valid(content, spans):
+                # Only the text around a protected region may be cut here.
+                # Loaded instructions are mandatory rules, and half of one
+                # still reads like a whole one.
+                shrunk, spans = prompt_spans.truncate_outside_spans(
+                    content, spans, per_msg_chars
+                )
+                if shrunk == content:
+                    continue
+                _set_msg_content(msg, shrunk)
+                prompt_spans.set_spans(msg, spans)
+            else:
                 _set_msg_content(msg, content[:per_msg_chars])
-                shrank = True
+            shrank = True
         if not shrank:
             break
 
@@ -2617,6 +2648,184 @@ PROACTIVE_COMPACTION_HYSTERESIS = 0.90
 REACTIVE_BUDGET_BACKOFF = 0.85
 
 
+OUTPUT_RESERVE_CEILING = 4096
+
+
+def output_reserve(context_length: int, max_output_tokens: int | None) -> int:
+    """Tokens held back from the prompt budget so the answer has somewhere to go.
+
+    This is a reservation, not a generation cap. A request that leaves more room
+    than the reservation may still produce a longer answer, up to whatever the
+    user asked for; :func:`clamp_output_tokens` decides that at call time.
+
+    Reserving the whole requested output was too expensive. A 16K window with
+    the default 32,768-token request kept half the window empty, which put a
+    session close to its compaction threshold before it read a single file. The
+    reserve now follows the window instead of the request, so a large window
+    keeps a large prompt allowance and a small one still answers.
+    """
+    if not max_output_tokens:
+        return MIN_OUTPUT_TOKENS
+    return min(
+        max_output_tokens,
+        OUTPUT_RESERVE_CEILING,
+        max(MIN_OUTPUT_TOKENS, context_length // 8),
+    )
+
+
+# How many rounds may go on the answer allowance alone, before the prompt is
+# touched. The search halves its bracket or doubles its floor each time, so it
+# closes well inside this; the cap is for a provider that answers erratically.
+# Spending it stops the free rounds, not the search: a better allowance is
+# still applied on the rounds that follow.
+_MAX_OUTPUT_ONLY_ATTEMPTS = 6
+
+
+class OutputAllowanceSearch:
+    """The search for an answer allowance that both the window and the answer accept.
+
+    A provider counts the prompt and the answer against one window, so an
+    oversized answer allowance is refused in exactly the same words as an
+    oversized prompt. Only one of the two fixes costs the user their context,
+    so this goes first.
+
+    Two bounds close in on the answer. *floor* is the largest allowance an
+    answer outgrew; *ceiling* the smallest the window refused. They are not
+    equally durable, and that asymmetry is the whole reason this is a class
+    rather than a pure function: an answer that outgrew an allowance outgrows
+    it whatever else changes, while a refusal was about that allowance beside
+    the prompt of the moment. :meth:`payload_changed` drops the ceiling alone.
+
+    Every bound recorded here is the value that was actually sent. The clamp
+    may cut a request down before it goes out, and the provider judges the
+    number it received.
+    """
+
+    def __init__(
+        self,
+        *,
+        requested: int | None,
+        window: int | None,
+        enabled: bool,
+        attempts: int,
+    ) -> None:
+        self.requested = requested
+        self.window = window
+        # Off wherever the clamp already fits the allowance to the window: a
+        # refusal there means the prompt is bigger than we measured, and
+        # shrinking it is the right move.
+        self.enabled = enabled
+        self.attempts_left = attempts
+        self.floor: int | None = None
+        self.ceiling: int | None = None
+        self.request = requested
+        self.current: int | None = None
+
+    def opened_with(self, sent: int | None, *, truncated: bool) -> None:
+        """Record the failure that started recovery."""
+        if truncated:
+            self.floor = sent
+        else:
+            self.ceiling = sent
+        self._recompute()
+
+    def record_truncation(self, sent: int) -> None:
+        """Small enough for the window, too small to finish in."""
+        self.floor = max(self.floor or 0, sent)
+        self._recompute()
+
+    def record_refusal(self, sent: int) -> None:
+        """The window refused it, so nothing larger will do beside this payload."""
+        self.ceiling = sent if self.ceiling is None else min(self.ceiling, sent)
+        self._recompute()
+
+    def payload_changed(self) -> None:
+        """The prompt shrank, so the refusal no longer describes anything.
+
+        This lands mid-round, after compaction and before the request goes
+        out, so the room just freed is spent on this attempt rather than the
+        next one.
+        """
+        self.ceiling = None
+        self._recompute()
+        if self.current is not None:
+            self.request = self.current
+
+    def take_free_round(self) -> bool:
+        """Spend a round on the allowance alone, if one is left.
+
+        Returns whether this round leaves the prompt untouched. Running out
+        stops the free rounds, not the search: the best known allowance is
+        applied on the rounds that follow.
+        """
+        free = self.current is not None and self.attempts_left > 0
+        if free:
+            self.attempts_left -= 1
+        if self.current is not None:
+            self.request = self.current
+        return free
+
+    def _recompute(self) -> None:
+        """Work out the next step from both bounds, after either one moves.
+
+        Recomputing beats queueing: a step chosen before a bound moved can
+        contradict what we now know.
+        """
+        self.current = (
+            self._step(self.floor, self.ceiling, self.requested, self.window)
+            if self.enabled
+            else None
+        )
+
+    @staticmethod
+    def _step(
+        floor: int | None,
+        ceiling: int | None,
+        requested: int | None,
+        window: int | None,
+    ) -> int | None:
+        """The next allowance worth trying, or ``None`` when none is left.
+
+        ``None`` is the signal to stop trading answer room and start freeing
+        it from the prompt.
+        """
+        if not requested:
+            return None
+        upper = requested if ceiling is None else min(requested, ceiling - 1)
+        if window is not None:
+            # The window is the one bound that outlives everything. No prompt
+            # is empty, so an answer can never have all of it, and dropping a
+            # payload-specific ceiling must not licence asking for more than
+            # exists.
+            upper = min(upper, window)
+        lower = floor or 0
+        if upper <= lower or upper < MIN_OUTPUT_TOKENS:
+            return None
+
+        if floor is None:
+            # Only a refusal so far, so go well below it. The opening step
+            # comes from the reservation policy, which is derived from the
+            # window alone and so needs no estimate of the prompt.
+            if ceiling is not None and ceiling < requested:
+                candidate = ceiling // 2
+            elif window is not None:
+                candidate = output_reserve(window, requested)
+            else:
+                candidate = requested // 2
+        else:
+            # The answer outgrew *floor*, so climb from it, and settle for the
+            # middle of the bracket once climbing would overshoot. The middle
+            # rounds up, because *floor* is excluded and the ceiling's
+            # neighbour is not: with one value left between them, that value
+            # is the answer.
+            candidate = floor * 2
+            if candidate > upper:
+                candidate = (lower + upper + 1) // 2
+
+        candidate = max(MIN_OUTPUT_TOKENS, min(candidate, upper))
+        return candidate if candidate > lower else None
+
+
 def _prompt_budget(
     context_length: int | None,
     max_output_tokens: int | None,
@@ -2626,17 +2835,18 @@ def _prompt_budget(
 
     Returns ``None`` when the context window is unknown — there is no budget to
     target, so the proactive path stays idle and the reactive net falls back to
-    ratio-based shrinking. ``reserve_output`` is clamped to
-    ``[MIN_OUTPUT_TOKENS, context // 2]`` so a large ``max_output_tokens`` can
-    never starve the prompt and the prompt can never starve the answer. The
-    ``safety_ratio`` margin absorbs the residual error in our tiktoken estimate
-    on non-OpenAI tokenizers.
+    ratio-based shrinking. The ``safety_ratio`` margin absorbs the residual
+    error in our tiktoken estimate on non-OpenAI tokenizers.
+
+    Every consumer shares this number: instruction admission, proactive
+    compaction, and the reactive retry targets. They must agree, or one of them
+    admits a prompt another one immediately compacts away.
     """
     if context_length is None:
         return None
-    reserve = max_output_tokens if max_output_tokens else MIN_OUTPUT_TOKENS
-    reserve = max(MIN_OUTPUT_TOKENS, min(reserve, context_length // 2))
-    budget = int(context_length * safety_ratio) - reserve
+    budget = int(context_length * safety_ratio) - output_reserve(
+        context_length, max_output_tokens
+    )
     return max(budget, MIN_OUTPUT_TOKENS)
 
 
@@ -3549,9 +3759,17 @@ def clamp_output_tokens(
 
     Raises ContextOverflowError if there isn't enough room for even the
     minimum output budget — the caller should compact and retry.
+
+    Without tokenizer data the prompt size is a byte count, so subtracting it
+    from the window would cut the answer for a reason we cannot defend. In that
+    case the request stands, save for the window itself: no prompt is empty, so
+    an answer can never have all of it, and holding it to that costs a guess
+    about nothing. Anything finer is left to the provider to object to.
     """
     if requested_max_output is None or context_length is None:
         return requested_max_output
+    if encoder_is_fallback():
+        return min(requested_max_output, context_length)
     prompt_tokens = estimate_tokens(messages, tools)
     available = context_length - prompt_tokens
     if available < MIN_OUTPUT_TOKENS:
@@ -3560,157 +3778,6 @@ def clamp_output_tokens(
             f"for output (need >= {MIN_OUTPUT_TOKENS}); context_length={context_length}"
         )
     return min(requested_max_output, available)
-
-
-def _global_agents_md_path() -> Path:
-    """Return the cross-agent global AGENTS.md path (testable seam)."""
-    return Path.home() / ".agents" / "AGENTS.md"
-
-
-def load_instructions(
-    base_dir: str,
-    config_dir: "Path | None" = None,
-    *,
-    start_dir: "Path | None" = None,
-    verbose: bool = False,
-) -> tuple[str, list[str]]:
-    """Load CLAUDE.md and/or AGENTS.md, if present.
-
-    AGENTS.md is loaded from up to three locations (user-level from
-    *config_dir*, global cross-agent from ``~/.agents/``, and project-level
-    from *base_dir*) inside a single ``<agent-instructions>`` block.  All
-    three share a combined budget of ``MAX_INSTRUCTIONS_CHARS``.
-
-    When *start_dir* is provided and is a subdirectory of *base_dir*, project-
-    level AGENTS.md files are loaded from each directory on the path from
-    *base_dir* down to *start_dir* (general-to-specific order).
-
-    Returns (combined_text, filenames_loaded) where combined_text is
-    XML-tagged sections (or "" if none found) and filenames_loaded lists
-    the absolute paths of files that were actually loaded.
-    """
-    from .skills import strip_markdown_comments
-
-    # Read up to 10x the output budget so comment stripping has room to work,
-    # while still bounding memory for pathologically large files.
-    read_cap = MAX_INSTRUCTIONS_CHARS * 10
-
-    sections: list[str] = []
-    loaded: list[str] = []
-
-    # --- CLAUDE.md (project-level only) ---
-    claude_path = Path(base_dir).resolve() / "CLAUDE.md"
-    if claude_path.is_file():
-        try:
-            file_size = claude_path.stat().st_size
-            with claude_path.open(encoding="utf-8", errors="replace") as f:
-                content = strip_markdown_comments(f.read(read_cap))
-        except OSError:
-            content = None
-        else:
-            if len(content) > MAX_INSTRUCTIONS_CHARS:
-                content = (
-                    content[:MAX_INSTRUCTIONS_CHARS]
-                    + f"\n[truncated — CLAUDE.md exceeds {MAX_INSTRUCTIONS_CHARS} character limit]"
-                )
-            if verbose:
-                fmt.info(
-                    f"Loaded CLAUDE.md ({file_size} bytes) from {claude_path.parent}"
-                )
-            sections.append(
-                f"<project-instructions>\n{content}\n</project-instructions>"
-            )
-            loaded.append(str(claude_path))
-
-    # --- AGENTS.md (user-level + project-level, shared budget) ---
-    agent_parts: list[str] = []
-    budget = MAX_INSTRUCTIONS_CHARS
-
-    # User-level AGENTS.md
-    if config_dir is not None:
-        user_agents_path = Path(config_dir) / "AGENTS.md"
-        if user_agents_path.is_file():
-            try:
-                file_size = user_agents_path.stat().st_size
-                with user_agents_path.open(encoding="utf-8", errors="replace") as f:
-                    user_content = strip_markdown_comments(f.read(read_cap))
-            except OSError:
-                if verbose:
-                    fmt.info(f"Skipped unreadable {user_agents_path}")
-            else:
-                if len(user_content) > budget:
-                    user_content = (
-                        user_content[:budget]
-                        + f"\n[truncated — user AGENTS.md exceeds {budget} character limit]"
-                    )
-                budget -= len(user_content)
-                if verbose:
-                    fmt.info(
-                        f"Loaded AGENTS.md ({file_size} bytes) from {user_agents_path.parent}"
-                    )
-                agent_parts.append(f"<!-- user: {user_agents_path} -->\n{user_content}")
-                loaded.append(str(user_agents_path))
-
-    # Global cross-agent AGENTS.md (~/.agents/AGENTS.md)
-    global_agents_path = _global_agents_md_path()
-    if global_agents_path.is_file() and budget > 0:
-        try:
-            file_size = global_agents_path.stat().st_size
-            with global_agents_path.open(encoding="utf-8", errors="replace") as f:
-                global_content = strip_markdown_comments(f.read(read_cap))
-        except OSError:
-            if verbose:
-                fmt.info(f"Skipped unreadable {global_agents_path}")
-        else:
-            if len(global_content) > budget:
-                global_content = (
-                    global_content[:budget]
-                    + f"\n[truncated — global AGENTS.md exceeds {budget} character limit]"
-                )
-            budget -= len(global_content)
-            if verbose:
-                fmt.info(
-                    f"Loaded AGENTS.md ({file_size} bytes) from {global_agents_path.parent}"
-                )
-            agent_parts.append(
-                f"<!-- global: {global_agents_path} -->\n{global_content}"
-            )
-            loaded.append(str(global_agents_path))
-
-    # Project-level AGENTS.md: walk from base_dir down to start_dir
-    proj_dirs = (
-        _collect_project_dirs(Path(base_dir).resolve(), start_dir)
-        if start_dir is not None
-        else [Path(base_dir).resolve()]
-    )
-    for proj_dir in proj_dirs:
-        if budget <= 0:
-            break
-        proj_agents_path = proj_dir / "AGENTS.md"
-        if not proj_agents_path.is_file():
-            continue
-        try:
-            file_size = proj_agents_path.stat().st_size
-            with proj_agents_path.open(encoding="utf-8", errors="replace") as f:
-                proj_content = strip_markdown_comments(f.read(read_cap))
-        except OSError:
-            continue
-        if len(proj_content) > budget:
-            proj_content = (
-                proj_content[:budget]
-                + f"\n[truncated — AGENTS.md exceeds {budget} character limit]"
-            )
-        budget -= len(proj_content)
-        if verbose:
-            fmt.info(f"Loaded AGENTS.md ({file_size} bytes) from {proj_dir}")
-        agent_parts.append(f"<!-- project: {proj_agents_path} -->\n{proj_content}")
-        loaded.append(str(proj_agents_path))
-
-    if agent_parts:
-        inner = "\n\n".join(agent_parts)
-        sections.append(f"<agent-instructions>\n{inner}\n</agent-instructions>")
-
-    return "\n\n".join(sections), loaded
 
 
 MAX_MEMORY_LINES = 200
@@ -6686,6 +6753,16 @@ def build_parser():
         default=_UNSET,
         help="Don't load CLAUDE.md or AGENTS.md from the base directory, user config directory, or ~/.agents/.",
     )
+    prompt_group.add_argument(
+        "--instructions-full",
+        action="store_true",
+        default=_UNSET,
+        help=(
+            "Load all instruction files whatever their size; this may crowd out "
+            "work or fail. An explicit --no-instructions wins over an inherited "
+            "full-loading setting; reject contradictory explicit CLI flags."
+        ),
+    )
     integrations_group.add_argument(
         "--no-mcp",
         action="store_true",
@@ -7073,27 +7150,19 @@ def build_parser():
     return parser
 
 
-def _collect_project_dirs(base_dir: Path, start_dir: Path) -> list[Path]:
-    """Return directories from base_dir down to start_dir, inclusive.
+def _resolve_instruction_flags(
+    args, *, no_instructions_cli: bool, instructions_full_cli: bool
+) -> None:
+    """Settle the two instruction flags once the config has been merged in.
 
-    base_dir must be an ancestor of start_dir (or equal to it). If start_dir
-    is not under base_dir, returns [base_dir] — safe fallback to today's behavior.
+    An explicit flag wins over an inherited setting, in both directions. Typing
+    one and silently getting the other is worse than either. Typing both is a
+    contradiction, and the caller has already refused it.
     """
-    base = base_dir.resolve()
-    start = start_dir.resolve()
-    try:
-        start.relative_to(base)
-    except ValueError:
-        return [base]
-    dirs: list[Path] = []
-    current = start
-    while True:
-        dirs.append(current)
-        if current == base:
-            break
-        current = current.parent
-    dirs.reverse()
-    return dirs
+    if no_instructions_cli:
+        args.instructions_full = False
+    elif instructions_full_cli:
+        args.no_instructions = False
 
 
 def _should_try_onboarding(args, base_dir: Path) -> bool:
@@ -7392,7 +7461,19 @@ def main():
     _commands_explicit = args.commands is not _UNSET
     _network_cli = getattr(args, "network", _UNSET) is not _UNSET
     _sandbox_cli = getattr(args, "sandbox", _UNSET) is not _UNSET
+    # Both flags are store_true over _UNSET, so True means the user typed it.
+    _no_instructions_cli = getattr(args, "no_instructions", _UNSET) is True
+    _instructions_full_cli = getattr(args, "instructions_full", _UNSET) is True
+    if _no_instructions_cli and _instructions_full_cli:
+        parser.error(
+            "--no-instructions and --instructions-full cannot be used together"
+        )
     apply_config_to_args(args, file_config)
+    _resolve_instruction_flags(
+        args,
+        no_instructions_cli=_no_instructions_cli,
+        instructions_full_cli=_instructions_full_cli,
+    )
     # Config may have set them explicitly too
     args._files_explicit = _files_explicit or "files" in file_config
     args._commands_explicit = _commands_explicit or "commands" in file_config
@@ -7705,7 +7786,17 @@ def main():
             ),
             "max_review_rounds": args.max_review_rounds,
             "skills_discovered": sorted(skills_catalog or {}),
+            # Files whose complete content went into the prompt at the loading
+            # event. Not a claim that they were followed, or that they have not
+            # changed since.
             "instructions_loaded": instructions_loaded or [],
+            # Found, unreadable, and left out. The status still describes the
+            # admission decision, which a skipped file does not change.
+            "instructions_skipped": getattr(args, "_instructions_skipped", None) or [],
+            "instructions_status": getattr(args, "_instructions_status", "disabled"),
+            "instructions_full": bool(getattr(args, "instructions_full", False)),
+            "token_estimates_exact": not encoder_is_fallback(),
+            "prompt_cost_estimate": getattr(args, "_prompt_breakdown", None) or {},
         }
 
     def _write_report(
@@ -8533,7 +8624,59 @@ def _apply_capability_substitutions(
     )
 
 
-def build_system_prompt(
+@dataclass
+class SystemPromptResult:
+    """One assembled system prompt and the loading decision behind it."""
+
+    content: str | None
+    instruction_set: "instructions_mod.InstructionSet | None" = None
+    admission: "instructions_mod.InstructionAdmission | None" = None
+    spans: list = field(default_factory=list)
+    breakdown: dict = field(default_factory=dict)
+    continuation_base_dir: str | None = None
+
+    def consume_continuation(self) -> None:
+        """Delete the continuation file, now that this request was accepted.
+
+        Reading it during assembly used to delete it, which lost the previous
+        session's state whenever admission then refused the run. The file is
+        read without deleting and only cleared once the request is going out.
+        """
+        if self.continuation_base_dir is None:
+            return
+        from .continue_here import clear_continue_file
+
+        clear_continue_file(self.continuation_base_dir)
+        self.continuation_base_dir = None
+
+    @property
+    def instructions_loaded(self) -> list[str]:
+        """Files whose complete content went into this prompt.
+
+        A file is listed only when all of it was included at this loading
+        event. The list says what the model received, not what it later did
+        with it, and not that the file has stayed the same since.
+        """
+        if self.instruction_set is None or self.admission is None:
+            return []
+        if not self.admission.admitted:
+            return []
+        return self.instruction_set.paths
+
+    @property
+    def instructions_skipped(self) -> list[str]:
+        """Files that were found and could not be read at all.
+
+        They are reported once on stderr and then treated as absent, which
+        leaves them missing from ``instructions_loaded`` with nothing to say
+        why. A report read afterwards has no stderr to fall back on.
+        """
+        if self.instruction_set is None:
+            return []
+        return list(self.instruction_set.skipped)
+
+
+def assemble_system_prompt(
     base_dir: str,
     system_prompt: str | None,
     no_system_prompt: bool,
@@ -8554,23 +8697,39 @@ def build_system_prompt(
     start_dir: "Path | None" = None,
     metaskill_names: list[str] | None = None,
     subagents: bool = False,
-) -> tuple[str | None, list[str]]:
-    """Assemble full system prompt with instructions, date, skills, memory.
+    policy: "_InteractionPolicy | None" = None,
+    context_length: int | None = None,
+    max_output_tokens: int | None = None,
+    tools: list | None = None,
+    instructions_full: bool = False,
+    instruction_set: "instructions_mod.InstructionSet | None" = None,
+) -> SystemPromptResult:
+    """Assemble the system prompt and take the instruction loading decision.
 
-    Returns (system_prompt_text, instructions_loaded).
-    system_prompt_text is None if no_system_prompt is True.
+    Everything the request will carry is rendered first: the built-in prompt
+    with its placeholders resolved, the complete instruction set, memory, the
+    skill catalog, external tool notes and any continuation file. Only then is
+    the instruction set measured, once, against what the window has left. The
+    allowance is never spent file by file, so a personal preferences file can no
+    longer eat the project's rules before they are read.
+
+    *policy* is applied here rather than afterwards. It changes the length of
+    the text in front of the instruction block, so substituting it later would
+    leave every recorded offset one delta out of date.
     """
     if no_system_prompt:
-        return None, []
+        return SystemPromptResult(content=None)
 
-    instructions_loaded: list[str] = []
+    breakdown: dict = {}
+    templated = not system_prompt and provider != "command"
+
     if system_prompt:
-        system_content = system_prompt
+        base = system_prompt
     elif provider == "command":
-        system_content = _COMMAND_PROVIDER_SYSTEM_PROMPT
+        base = _COMMAND_PROVIDER_SYSTEM_PROMPT
         if command_tool_schemas:
             catalog = _render_swival_tool_catalog(command_tool_schemas)
-            system_content += (
+            base += (
                 "\n\n"
                 "In addition to your own tools, you have access to external tools "
                 "provided by the orchestrator. To call one, emit a block in your "
@@ -8587,75 +8746,233 @@ def build_system_prompt(
                 "Available external tools:\n\n" + catalog
             )
     else:
-        system_content = DEFAULT_SYSTEM_PROMPT_FILE.read_text(encoding="utf-8")
-        system_content = _apply_capability_substitutions(
-            system_content,
+        base = DEFAULT_SYSTEM_PROMPT_FILE.read_text(encoding="utf-8")
+        base = _apply_capability_substitutions(
+            base,
             no_memory=no_memory,
             files_mode=files_mode,
             subagents=subagents,
         )
-        if not no_instructions:
-            instructions, instructions_loaded = load_instructions(
+
+    if policy is not None:
+        base = _apply_interaction_policy(base, policy)
+    breakdown["builtin"] = count_tokens(base)
+
+    loaded_set: "instructions_mod.InstructionSet | None" = None
+    if templated and not no_instructions:
+        loaded_set = (
+            instruction_set
+            if instruction_set is not None
+            else instructions_mod.load(
                 base_dir,
                 config_dir,
                 start_dir=start_dir,
                 verbose=verbose,
             )
-            if instructions:
-                system_content += "\n\n" + instructions
+        )
 
-        if not no_memory:
-            memory_text = load_memory(
-                base_dir,
-                verbose=verbose,
-                memory_full=memory_full,
-                user_query=user_query,
-                report=report,
-            )
-            if memory_text:
-                system_content += "\n\n" + memory_text
+    suffix_parts: list[str] = []
+    pending_continuation: str | None = None
+
+    if templated and not no_memory:
+        memory_text = load_memory(
+            base_dir,
+            verbose=verbose,
+            memory_full=memory_full,
+            user_query=user_query,
+            report=report,
+        )
+        if memory_text:
+            suffix_parts.append("\n\n" + memory_text)
+            breakdown["memory"] = count_tokens(memory_text)
 
     now = datetime.now().astimezone()
-    system_content += f"\n\nCurrent date and time: {now.strftime('%Y-%m-%d %H:%M %Z')}"
+    suffix_parts.append(
+        f"\n\nCurrent date and time: {now.strftime('%Y-%m-%d %H:%M %Z')}"
+    )
 
     # Normal tool-info sections are skipped for the command provider; its XML
     # tool-call catalog is injected above in command-provider format.
     if provider != "command":
         if files_mode == "none":
-            system_content += (
+            suffix_parts.append(
                 "\n\nFilesystem access is restricted to .swival/ only. "
                 "You cannot read or write project files."
             )
         elif files_mode == "all":
-            system_content += (
+            suffix_parts.append(
                 "\n\nFilesystem access is unrestricted. "
                 "You can read and write any file on the system."
             )
-        if skills_catalog and not system_prompt:
+        if skills_catalog and templated:
             from .skills import format_skill_catalog
 
             catalog_text = format_skill_catalog(
                 skills_catalog, metaskill_names=metaskill_names
             )
             if catalog_text:
-                system_content += "\n\n" + catalog_text
-        if mcp_tool_info and not system_prompt:
-            system_content += "\n\n" + _format_mcp_tool_info(mcp_tool_info)
-
-        if a2a_tool_info and not system_prompt:
-            system_content += "\n\n" + _format_a2a_tool_info(a2a_tool_info)
+                suffix_parts.append("\n\n" + catalog_text)
+                breakdown["skills"] = count_tokens(catalog_text)
+        for info, render_info in (
+            (mcp_tool_info, _format_mcp_tool_info),
+            (a2a_tool_info, _format_a2a_tool_info),
+        ):
+            if not info or not templated:
+                continue
+            external = render_info(info)
+            suffix_parts.append("\n\n" + external)
+            breakdown["external_tool_notes"] = breakdown.get(
+                "external_tool_notes", 0
+            ) + count_tokens(external)
 
     # Load continue-here file from a previous interrupted session
     if not no_continue:
         from .continue_here import load_continue_file, format_continue_prompt
 
-        continue_content = load_continue_file(base_dir)
+        continue_content = load_continue_file(base_dir, delete=False)
         if continue_content:
-            system_content += "\n\n" + format_continue_prompt(continue_content)
+            continuation = format_continue_prompt(continue_content)
+            suffix_parts.append("\n\n" + continuation)
+            breakdown["continuation"] = count_tokens(continuation)
+            pending_continuation = base_dir
             if verbose:
                 fmt.info("Loaded continue file from previous session")
 
-    return system_content, instructions_loaded
+    suffix = "".join(suffix_parts)
+
+    rendered = loaded_set.text if loaded_set is not None else ""
+    breakdown["tools"] = _estimate_tool_tokens(tools)
+    if user_query:
+        breakdown["task"] = count_tokens(user_query)
+    if context_length is not None:
+        breakdown["output_reserve"] = output_reserve(context_length, max_output_tokens)
+        breakdown["working_reserve"] = instructions_mod.working_reserve(context_length)
+
+    fixed_cost = count_tokens(base + suffix) + breakdown["tools"]
+    admission = None
+    if loaded_set is not None:
+        breakdown["instructions"] = count_tokens(rendered) if rendered else 0
+        admission = _admit_instructions(
+            rendered,
+            fixed_cost=fixed_cost,
+            context_length=context_length,
+            max_output_tokens=max_output_tokens,
+            sources=loaded_set.paths,
+            instructions_full=instructions_full,
+            read_errors=loaded_set.errors,
+            breakdown=breakdown,
+            cost=breakdown["instructions"],
+        )
+        if report is not None or not admission.admitted:
+            # Only the failure diagnostic and the report read this, and each
+            # source costs a tokenizer pass over its whole text.
+            admission.breakdown["instructions_by_source"] = {
+                source.path: count_tokens(source.text) for source in loaded_set.sources
+            }
+            breakdown["instructions_by_source"] = admission.breakdown[
+                "instructions_by_source"
+            ]
+
+    spans: list = []
+    pieces = [base]
+    if loaded_set is not None:
+        # The span is recorded even when nothing was found, so a file created
+        # later in the session has a place to land. It carries its own leading
+        # separator, which keeps replacement a single splice.
+        block = ""
+        if rendered and (admission is None or admission.admitted):
+            block = "\n\n" + rendered
+        spans.append(
+            prompt_spans.make_span(prompt_spans.KIND_INSTRUCTIONS, len(base), block)
+        )
+        pieces.append(block)
+    pieces.append(suffix)
+
+    return SystemPromptResult(
+        content="".join(pieces),
+        instruction_set=loaded_set,
+        admission=admission,
+        spans=spans,
+        breakdown=breakdown,
+        continuation_base_dir=pending_continuation,
+    )
+
+
+def _admit_instructions(
+    rendered: str,
+    *,
+    fixed_cost: int,
+    context_length: int | None,
+    max_output_tokens: int | None,
+    sources: list[str],
+    instructions_full: bool,
+    read_errors: "list[str] | None" = None,
+    breakdown: dict | None = None,
+    cost: int | None = None,
+) -> "instructions_mod.InstructionAdmission":
+    """Take the loading decision, wherever it is taken from.
+
+    Startup and a mid-session refresh must reach the same verdict for the same
+    files, so they ask the same question here rather than each assembling the
+    budget arithmetic themselves.
+    """
+    return instructions_mod.admit(
+        rendered,
+        context_length=context_length,
+        prompt_budget=_prompt_budget(context_length, max_output_tokens),
+        fixed_cost=fixed_cost,
+        sources=sources,
+        breakdown=breakdown,
+        instructions_full=instructions_full,
+        read_errors=read_errors,
+        cost=cost,
+    )
+
+
+def _instruction_status(result: SystemPromptResult) -> str:
+    """Loading status for reports: loaded, forced, failed or disabled."""
+    if result.admission is None:
+        return "disabled"
+    return result.admission.status
+
+
+def _warn_instruction_admission(
+    result: SystemPromptResult, *, verbose: bool, flag: str
+) -> None:
+    """Say something only when the set was admitted against our own advice."""
+    admission = result.admission
+    if admission is None or admission.fits:
+        return
+    if admission.override:
+        fmt.warning(
+            "instruction files exceed the usual allowance; loading them all "
+            f"because {flag} is set"
+        )
+    elif verbose and admission.advisory:
+        fmt.info(
+            f"instruction files are ~{admission.cost} tokens against an advisory "
+            f"{admission.budget}-token allowance; loading them anyway because "
+            "this setup cannot measure the window"
+        )
+
+
+def _raise_if_instructions_rejected(
+    result: SystemPromptResult, *, verbose: bool = False
+) -> None:
+    """Stop before the first model call when the instruction set does not fit.
+
+    The failure is deliberate and it is terminal for this run. Half a rule set
+    is worse than none, and the user has cheaper exits than an LLM rewrite.
+    """
+    admission = result.admission
+    if admission is None or admission.admitted:
+        return
+    raise InstructionLoadError(
+        instructions_mod.failure_diagnostic(admission, verbose=verbose),
+        sources=admission.sources,
+        breakdown=admission.breakdown,
+        read_errors=admission.read_errors,
+    )
 
 
 def _format_external_tool_info(
@@ -9235,7 +9552,9 @@ def _run_main(args, report, _write_report, parser):
         else None
     )
 
-    system_content, instructions_loaded = build_system_prompt(
+    policy: _InteractionPolicy = "interactive" if args.repl else "autonomous"
+    _instructions_full = bool(getattr(args, "instructions_full", False))
+    _prompt = assemble_system_prompt(
         base_dir=base_dir,
         system_prompt=args.system_prompt,
         no_system_prompt=args.no_system_prompt,
@@ -9256,15 +9575,34 @@ def _run_main(args, report, _write_report, parser):
         start_dir=start_dir,
         metaskill_names=_metaskill_names,
         subagents=_subagents,
+        policy=policy,
+        context_length=context_length,
+        max_output_tokens=args.max_output_tokens,
+        tools=tools,
+        instructions_full=_instructions_full,
     )
-    policy: _InteractionPolicy = "interactive" if args.repl else "autonomous"
-    if system_content is not None:
-        system_content = _apply_interaction_policy(system_content, policy)
+    system_content = _prompt.content
+    instructions_loaded = _prompt.instructions_loaded
+    args._resolved_instructions = instructions_loaded
+    args._instructions_skipped = _prompt.instructions_skipped
+    args._resolved_context_length = context_length
+    args._prompt_breakdown = _prompt.breakdown
+    args._instructions_status = _instruction_status(_prompt)
+    # Enablement is owned assembly data, not something to read back out of the
+    # prompt text: an admission decision exists only when this session loads
+    # instruction files at all.
+    _instructions_enabled = _prompt.admission is not None
+    _raise_if_instructions_rejected(_prompt, verbose=args.verbose)
+    _prompt.consume_continuation()
+    _warn_instruction_admission(
+        _prompt, verbose=args.verbose, flag="--instructions-full"
+    )
+
     messages = []
     if system_content is not None:
-        messages.append({"role": "system", "content": system_content})
-    args._resolved_instructions = instructions_loaded
-    args._resolved_context_length = context_length
+        sys_msg = {"role": "system", "content": system_content}
+        prompt_spans.set_spans(sys_msg, _prompt.spans)
+        messages.append(sys_msg)
 
     # Clean up stale cmd_output files from previous sessions
     removed = cleanup_old_cmd_outputs(base_dir)
@@ -9315,6 +9653,7 @@ def _run_main(args, report, _write_report, parser):
         metaskills_policy=_metaskills_policy_val,
         enabled_metaskills=set(_metaskill_names or []),
         storm_breaker_enabled=getattr(args, "storm_breaker", True),
+        instructions_full=_instructions_full,
         network_mode=_network_mode,
         net_jail=net_jail,
         session_cost=SessionCost(),
@@ -9345,6 +9684,7 @@ def _run_main(args, report, _write_report, parser):
             loop_kwargs_template=sa_template,
             tools=tools,
             resolved_system_content=system_content,
+            resolved_system_spans=_prompt.spans,
             parent_cancel_flag=threading.Event(),
             verbose=args.verbose,
             notify_user=fmt.info,
@@ -9441,6 +9781,8 @@ def _run_main(args, report, _write_report, parser):
                     skill_read_roots=loop_kwargs.get("skill_read_roots", []),
                     skills_catalog=skills_catalog,
                     trace_dir=getattr(args, "trace_dir", None),
+                    instructions_enabled=_instructions_enabled,
+                    instructions_full=_instructions_full,
                 )
                 result = run_input_script(args.question, ctx, mode="oneshot")
                 answer = result.text
@@ -9700,6 +10042,7 @@ def _run_main(args, report, _write_report, parser):
             on_exit=_on_repl_exit if report else None,
             start_dir=start_dir,
             trace_dir=getattr(args, "trace_dir", None),
+            instructions_enabled=_instructions_enabled,
         )
     finally:
         _shutdown_and_reconcile(
@@ -9780,6 +10123,7 @@ def _run_agent_loop(
     net_jail: list | None = None,
     session_cost: SessionCost | None = None,
     tool_policy=None,
+    instructions_full: bool = False,
 ) -> tuple[str | None, bool]:
     """Run the tool-calling loop until a final answer or max turns.
 
@@ -9945,6 +10289,13 @@ def _run_agent_loop(
     # pass a ceiling to aim at even with context_length unknown.
     _adaptive_budget = AdaptiveContextBudget()
 
+    # Without tokenizer data every size here is a UTF-8 byte count. Such a
+    # number is advisory: it can compare two prompts, never a prompt with a
+    # budget. Recovery then depends on the provider actually reporting overflow.
+    _offline_estimates = encoder_is_fallback()
+    if _offline_estimates:
+        warn_fallback_once()
+
     def _commit_terminal_floor(terminal, *, retry_reason="terminal_floor"):
         """Commit a successful terminal-floor attempt: truncated history plus
         bookkeeping. Returns the (msg, finish_reason, cmd_activity,
@@ -10005,15 +10356,25 @@ def _run_agent_loop(
             report.record_recovered_response(
                 turns + turn_offset, reason=_CONTEXT_EXHAUSTED_REASON
             )
+        # Full loading kept the instruction files intact through every rung,
+        # so it is part of why nothing else could be removed. Say so, and say
+        # it only for a context failure: other errors keep their own causes.
+        notice = _CONTEXT_EXHAUSTED_FALLBACK
+        if instructions_full:
+            notice = (
+                instructions_mod.FULL_LOADING_OVERFLOW_MESSAGE
+                + "\nThe conversation state is preserved for /continue, and no "
+                "further tools were run."
+            )
         messages.append(
             {
                 "role": "assistant",
-                "content": _CONTEXT_EXHAUSTED_FALLBACK,
+                "content": notice,
                 "_swival_synthetic": True,
             }
         )
         _write_turns()
-        return _CONTEXT_EXHAUSTED_FALLBACK
+        return notice
 
     # A new user message is a scope boundary. Skip on /continue where the
     # last message is an assistant or tool message from the previous run.
@@ -10231,15 +10592,44 @@ def _run_agent_loop(
         if snapshot_state is not None and messages:
             sys_msg = messages[0] if _msg_role(messages[0]) == "system" else None
             if sys_msg is not None and isinstance(sys_msg, dict):
-                base = sys_msg["content"]
-                idx = base.find(_snapshot_strip_marker)
-                if idx != -1:
-                    base = base[:idx]
                 history_text = snapshot_state.inject_into_prompt()
-                if history_text:
-                    sys_msg["content"] = base + "\n\n" + history_text
+                suffix = ("\n\n" + history_text) if history_text else ""
+                content = sys_msg["content"]
+                spans = prompt_spans.get_spans(sys_msg)
+                if prompt_spans.is_tracked(sys_msg) and prompt_spans.spans_valid(
+                    content, spans
+                ):
+                    # Replace the previous injection by its recorded boundary.
+                    # Searching for the sentinel would search the user's own
+                    # instruction files, which may contain anything.
+                    previous = prompt_spans.find_span(spans, prompt_spans.KIND_SNAPSHOT)
+                    if previous is not None:
+                        content, spans = prompt_spans.splice(
+                            content,
+                            spans,
+                            previous["start"],
+                            previous["end"],
+                            suffix,
+                            target=previous,
+                        )
+                    elif suffix:
+                        start = len(content)
+                        content, spans = prompt_spans.splice(
+                            content, spans, start, start, suffix
+                        )
+                        spans.append(
+                            prompt_spans.make_span(
+                                prompt_spans.KIND_SNAPSHOT, start, suffix
+                            )
+                        )
+                    sys_msg["content"] = content
+                    prompt_spans.set_spans(sys_msg, spans)
                 else:
-                    sys_msg["content"] = base
+                    base = content
+                    idx = base.find(_snapshot_strip_marker)
+                    if idx != -1:
+                        base = base[:idx]
+                    sys_msg["content"] = base + suffix
 
         _canonicalize_tool_calls(messages)
 
@@ -10270,6 +10660,10 @@ def _run_agent_loop(
         _proactive_budget = (
             _budget if _budget is not None else _adaptive_budget.target()
         )
+        # A learned window does not turn byte counts into token counts, so the
+        # preventive pass stays idle while the fallback encoder is in use.
+        if _offline_estimates:
+            _proactive_budget = None
         if _proactive_budget is not None and token_est > _proactive_budget:
             _pc = compact_to_budget(
                 messages,
@@ -10303,6 +10697,9 @@ def _run_agent_loop(
             fmt.turn_header(turns, max_turns, token_est, context_length)
 
         t0 = time.monotonic()
+        # The clamp itself can refuse, so this holds a value either way: the
+        # recovery below records what was sent, not what was wanted.
+        effective_max_output = max_output_tokens
         try:
             effective_max_output = clamp_output_tokens(
                 messages, effective_tools, context_length, max_output_tokens
@@ -10420,8 +10817,32 @@ def _run_agent_loop(
             # and retry once; if it overflows again, tighten the budget by a
             # fixed ratio and repeat. Each step shrinks the transcript by
             # construction, so the loop converges on the deterministic floor.
-            _safe_budget = _prompt_budget(context_length, max_output_tokens)
+            # Byte counts can measure whether a retry got smaller. They cannot
+            # be weighed against a token budget, so the absolute target is
+            # dropped and each round only shrinks relative to the last one.
+            _safe_budget = (
+                None
+                if _offline_estimates
+                else _prompt_budget(context_length, max_output_tokens)
+            )
             _last_after = None
+            # Output clamping is off whenever the prompt estimate cannot be
+            # trusted, so in that regime the answer allowance was never fitted
+            # to the window and is the first thing worth trading. Where the
+            # clamp did run, a rejection means the prompt is bigger than we
+            # measured, and shrinking it is the right move. A response cut
+            # short for length is the opposite case: it needed more answer
+            # room, so only trimming the prompt can give it any.
+            _search = OutputAllowanceSearch(
+                requested=max_output_tokens,
+                window=context_length,
+                enabled=_offline_estimates or context_length is None,
+                attempts=_MAX_OUTPUT_ONLY_ATTEMPTS,
+            )
+            _search.opened_with(
+                effective_max_output or max_output_tokens,
+                truncated=getattr(_coe, "_output_truncation", False),
+            )
             # Carry the tools the previous retry actually used forward. Once a
             # round drops tools and the no-tools prompt still overflows, the
             # next budget must be measured against that no-tools prompt so we
@@ -10431,30 +10852,58 @@ def _run_agent_loop(
 
             for _ in range(_MAX_CONTEXT_COMPACTION_ATTEMPTS):
                 _cur_est = estimate_tokens(messages, _active_tools)
-                _retry_budget = int(_cur_est * REACTIVE_BUDGET_BACKOFF)
-                if _safe_budget is not None:
-                    _retry_budget = min(_retry_budget, _safe_budget)
+                # A round that only changes the answer allowance asks compaction
+                # for the size the transcript already is, so nothing is taken out.
+                _previous_output = _search.request
+                _trying_output = _search.take_free_round()
+                if _trying_output:
+                    _retry_budget = _cur_est
+                else:
+                    _retry_budget = int(_cur_est * REACTIVE_BUDGET_BACKOFF)
+                    if _safe_budget is not None:
+                        _retry_budget = min(_retry_budget, _safe_budget)
 
                 compaction = compact_to_budget(
                     messages,
                     _active_tools,
                     budget=_retry_budget,
                     context_length=context_length,
-                    max_output_tokens=max_output_tokens,
+                    max_output_tokens=_search.request,
                     goal_state=goal_state,
                     **_summary_kwargs,
                 )
                 retry_tools = compaction.tools
                 _active_tools = retry_tools
 
+                if compaction.history_mutated or compaction.dropped_tools:
+                    _search.payload_changed()
+
+                if _trying_output:
+                    _growing = _search.request > (_previous_output or 0)
+                    _retry_reason = "output_regrowth" if _growing else "output_backoff"
+                else:
+                    _retry_reason = compaction.strategy
+
                 # Always attempt at least one retry; bail out only once a later
-                # round can no longer shrink the transcript any further.
-                if _last_after is not None and compaction.tokens_after >= _last_after:
-                    break
-                _last_after = compaction.tokens_after
+                # round can no longer shrink the transcript any further. Rounds
+                # that only shorten the answer are exempt: they are not meant
+                # to shrink it.
+                if not _trying_output:
+                    if (
+                        _last_after is not None
+                        and compaction.tokens_after >= _last_after
+                    ):
+                        break
+                    _last_after = compaction.tokens_after
 
                 if verbose:
-                    if compaction.dropped_tools:
+                    if _trying_output:
+                        fmt.warning(
+                            f"asking for a {'longer' if _growing else 'shorter'} "
+                            f"answer ({_search.request} tokens) before "
+                            "dropping context..."
+                        )
+                    elif compaction.dropped_tools:
                         fmt.warning(
                             "context window exceeded after message compaction, "
                             "dropping tools for this retry"
@@ -10483,7 +10932,7 @@ def _run_agent_loop(
 
                 try:
                     effective_max_output = clamp_output_tokens(
-                        messages, retry_tools, context_length, max_output_tokens
+                        messages, retry_tools, context_length, _search.request
                     )
                 except ContextOverflowError:
                     continue
@@ -10539,9 +10988,16 @@ def _run_agent_loop(
                             turn=turns + turn_offset,
                             report=report,
                             verbose=verbose,
-                            where=f"post-{compaction.strategy}",
+                            where=f"post-{_retry_reason}",
                         )
                 except ContextOverflowError as _coe:
+                    _sent_output = effective_max_output or _search.request
+                    if getattr(_coe, "_output_truncation", False):
+                        _search.record_truncation(_sent_output)
+                    else:
+                        # A round that compacted chose this allowance too, so
+                        # its refusal counts the same.
+                        _search.record_refusal(_sent_output)
                     elapsed = time.monotonic() - t0
                     if report:
                         report.record_llm_call(
@@ -10550,7 +11006,7 @@ def _run_agent_loop(
                             compaction.tokens_after,
                             "context_overflow",
                             is_retry=True,
-                            retry_reason=compaction.strategy,
+                            retry_reason=_retry_reason,
                             provider_retries=getattr(_coe, "_provider_retries", 0),
                         )
                     continue
@@ -10566,7 +11022,7 @@ def _run_agent_loop(
                             compaction.tokens_after,
                             "error",
                             is_retry=True,
-                            retry_reason=compaction.strategy,
+                            retry_reason=_retry_reason,
                             provider_retries=getattr(_ae, "_provider_retries", 0),
                         )
                     raise
@@ -10583,7 +11039,7 @@ def _run_agent_loop(
                             compaction.tokens_after,
                             finish_reason,
                             is_retry=True,
-                            retry_reason=compaction.strategy,
+                            retry_reason=_retry_reason,
                             provider_retries=_provider_retries,
                             cached_tokens=_cache_stats[0],
                             cache_write_tokens=_cache_stats[1],
@@ -12346,6 +12802,21 @@ class GoalCommandResult:
     history_label: str | None = None
 
 
+# /goal sub-commands that only read or move goal state. Anything else names an
+# objective, and naming one runs it, which is why _goal_arg_launches can read
+# these names instead of guessing.
+_GOAL_CLEAR_ALIASES = frozenset({"clear", "remove", "drop"})
+_GOAL_LOCAL_SUBCOMMANDS = _GOAL_CLEAR_ALIASES | {"pause", "resume"}
+
+
+def _goal_arg_launches(cmd_arg: str) -> bool:
+    """True when this ``/goal`` argument would start an agent turn."""
+    arg = (cmd_arg or "").strip()
+    if not arg:
+        return False
+    return arg.split(None, 1)[0].lower() not in _GOAL_LOCAL_SUBCOMMANDS
+
+
 def _repl_goal(
     cmd_arg: str,
     goal_state: GoalState | None,
@@ -12381,7 +12852,7 @@ def _repl_goal(
     sub = parts[0].lower()
     rest = parts[1].strip() if len(parts) > 1 else ""
 
-    if sub in ("clear", "remove", "drop"):
+    if sub in _GOAL_CLEAR_ALIASES:
         if rest:
             return GoalCommandResult(
                 text="/goal clear takes no argument", is_error=True
@@ -12728,38 +13199,103 @@ def _repl_snapshot_unsave(snapshot_state: "SnapshotState | None") -> tuple[str, 
         return result, False
 
 
-def _patch_system_instructions(
-    messages: list, base_dir: str, start_dir: "Path | None" = None
-) -> None:
-    """Re-read AGENTS.md from disk and replace the live <agent-instructions> block.
+@dataclass
+class InstructionRefresh:
+    """Outcome of putting a changed instruction set into the live prompt.
 
-    Only acts when the system message already contains the block — sessions
-    started with --system-prompt, --no-instructions, or the command provider
-    intentionally omit it and must not gain one mid-session.
+    ``blocking`` separates the two ways this can fail. A session that never
+    loads instruction files has nothing to activate, and a convention saved
+    there is simply for next time. A session that does load them and could not
+    take this update leaves the user something to fix, and the next ordinary
+    turn waits for them to fix it.
     """
-    if not messages or _msg_role(messages[0]) != "system":
-        return
-    old = _msg_content(messages[0]) or ""
-    import re
 
-    tag_re = r"<agent-instructions>.*?</agent-instructions>"
-    if not re.search(tag_re, old, re.DOTALL):
-        return
+    reason: str | None = None
+    blocking: bool = False
+
+    @property
+    def ok(self) -> bool:
+        return self.reason is None
+
+
+def refresh_system_instructions(ctx: "InputContext") -> InstructionRefresh:
+    """Re-read the instruction files and put the new set into the live prompt.
+
+    Called after ``/remember`` and ``/init``, including the first time either
+    creates a file.
+
+    The block is replaced through the offset the assembly recorded. A session
+    that never loaded instructions carries no such offset and does not gain one
+    here: ``--system-prompt``, ``--no-instructions`` and the command provider
+    all mean to run without them, and saying so is not a failure.
+
+    Any outcome other than success leaves the live prompt exactly as it was.
+    A file that has become unreadable does not get to replace a complete set
+    with a partial one.
+    """
+    if not ctx.instructions_enabled:
+        return InstructionRefresh("instruction loading is off for this session")
+    messages = ctx.messages
+    if not messages or _msg_role(messages[0]) != "system":
+        return InstructionRefresh("this session has no system prompt")
+    sys_msg = messages[0]
+    if not isinstance(sys_msg, dict) or not prompt_spans.is_tracked(sys_msg):
+        return InstructionRefresh("this session did not assemble its own system prompt")
+
+    content = _msg_content(sys_msg) or ""
+    spans = prompt_spans.get_spans(sys_msg)
+    slot = prompt_spans.find_span(spans, prompt_spans.KIND_INSTRUCTIONS)
+    if slot is None:
+        return InstructionRefresh("instruction loading is off for this session")
+    if not prompt_spans.spans_valid(content, spans):
+        # Not something the user can fix by editing a file, so it does not hold
+        # the session up. The update is on disk for the next one.
+        return InstructionRefresh(
+            "the system prompt changed in a way we cannot edit by offset"
+        )
+
     from .config import global_config_dir
 
-    new_instructions, _ = load_instructions(
-        base_dir,
+    loaded = instructions_mod.load(
+        ctx.base_dir,
         config_dir=global_config_dir(),
-        start_dir=start_dir,
+        start_dir=ctx.start_dir,
         verbose=False,
     )
-    new_tag = (
-        re.search(tag_re, new_instructions, re.DOTALL) if new_instructions else None
+    if loaded.errors:
+        return InstructionRefresh(
+            f"some instruction files could not be read ({loaded.errors[0]})",
+            blocking=True,
+        )
+    block = ("\n\n" + loaded.text) if loaded.text else ""
+
+    admission = _admit_instructions(
+        block,
+        fixed_cost=count_tokens(content[: slot["start"]] + content[slot["end"] :])
+        + _estimate_tool_tokens(ctx.tools),
+        context_length=ctx.loop_kwargs.get("context_length"),
+        max_output_tokens=ctx.loop_kwargs.get("max_output_tokens"),
+        sources=loaded.paths,
+        instructions_full=ctx.instructions_full,
     )
-    replacement = new_tag.group(0) if new_tag else ""
-    # Callable replacement: AGENTS.md may contain backslashes.
-    updated = re.sub(tag_re, lambda _m: replacement, old, count=1, flags=re.DOTALL)
-    _set_msg_content(messages[0], updated)
+    if not admission.admitted:
+        return InstructionRefresh(
+            "the instruction files would no longer fit this session",
+            blocking=True,
+        )
+
+    content, spans = prompt_spans.splice(
+        content, spans, slot["start"], slot["end"], block, target=slot
+    )
+    if not block:
+        # An empty slot keeps the place a later file will land in.
+        spans.append(
+            prompt_spans.make_span(prompt_spans.KIND_INSTRUCTIONS, slot["start"], "")
+        )
+        spans.sort(key=lambda span: span["start"])
+    _set_msg_content(sys_msg, content)
+    prompt_spans.set_spans(sys_msg, spans)
+    return InstructionRefresh()
 
 
 def _repl_reasoning(
@@ -12802,22 +13338,64 @@ def _repl_reasoning(
     return current, f"reasoning effort: {new_effort} (was {current})", False
 
 
-def _repl_remember(
-    text: str, base_dir: str, messages: list, start_dir: "Path | None" = None
-) -> tuple[str, bool]:
+def _saved_not_active(text: str, path: "Path", *, created: bool, reason: str) -> str:
+    """Explain a saved convention that could not join the live prompt.
+
+    The file keeps the change. The user gets the exact line and the exact file,
+    and the cheapest way back: remove what was just added. Nothing is undone
+    automatically, and no restart is asked for.
+    """
+    lines = [
+        f"Saved, but not active in this session: {reason}.",
+        f"Added to {path}:",
+        f"  - {text}",
+    ]
+    if created:
+        lines.append(f"Removing {path} undoes this addition.")
+    else:
+        lines.append(
+            "Removing that line restores the previous fit, if nothing else changed."
+        )
+    return "\n".join(lines)
+
+
+def _repl_remember(text: str, ctx: "InputContext") -> tuple[str, bool]:
     """Handle /remember command: add a convention to project AGENTS.md.
 
     Returns ``(message, is_error)``.
     """
-    if not text.strip():
+    text = text.strip()
+    if not text:
         return "/remember requires text. Usage: /remember <fact>", True
     try:
-        msg, changed, is_error = remember_agents_fact(base_dir, text)
+        agents_path = _safe_agents_md_path(ctx.base_dir)
     except ValueError as exc:
         return str(exc), True
-    if changed:
-        _patch_system_instructions(messages, base_dir, start_dir=start_dir)
-    return msg, is_error
+    existed = agents_path.is_file()
+    try:
+        msg, changed, is_error = remember_agents_fact(ctx.base_dir, text)
+    except ValueError as exc:
+        return str(exc), True
+    if not changed:
+        return msg, is_error
+
+    refresh = refresh_system_instructions(ctx)
+    if refresh.ok:
+        ctx.pending_instruction_failure = None
+        return msg, is_error
+    if not refresh.blocking:
+        # This session never had a live block to update. Saving it was still
+        # the right thing to do, and nothing here needs the user's attention.
+        ctx.pending_instruction_failure = None
+        return f"{msg}\nSaved for future sessions: {refresh.reason}.", is_error
+    ctx.pending_instruction_failure = refresh.reason
+    detail = _saved_not_active(
+        text.lstrip("-").strip(),
+        agents_path,
+        created=not existed,
+        reason=refresh.reason,
+    )
+    return msg + "\n" + detail, True
 
 
 def _invoke_agent_turn(
@@ -12829,7 +13407,14 @@ def _invoke_agent_turn(
     """Append content and run the agent loop.
 
     Returns ``(answer, exhausted, interrupted)``.
+
+    Raises:
+        _InstructionsPending: a saved instruction update is not active, so this
+            turn would run under rules the user believes they changed.
     """
+    blocked = _revalidate_pending_instructions(ctx)
+    if blocked is not None:
+        raise _InstructionsPending(blocked)
     if content is not None:
         ctx.messages.append({"role": "user", "content": content})
     try:
@@ -12910,9 +13495,12 @@ def _run_agent_step(
     goal_launch: bool = False,
 ) -> StepResult:
     """Invoke the agent loop and return its normalized result."""
-    answer, exhausted, interrupted = _invoke_agent_turn(
-        content, ctx, goal_launch=goal_launch
-    )
+    try:
+        answer, exhausted, interrupted = _invoke_agent_turn(
+            content, ctx, goal_launch=goal_launch
+        )
+    except _InstructionsPending as pending:
+        return pending.step
     if interrupted:
         ctx.last_answer = _last_assistant_text(ctx.messages)
         fmt.warning(interruption_message or f"interrupted, {interrupt_label} aborted.")
@@ -13035,6 +13623,9 @@ def execute_input(
 
     # Custom bang command.
     if parsed.is_custom_command:
+        blocked = _revalidate_pending_instructions(ctx)
+        if blocked is not None:
+            return blocked
         result = _repl_run_custom_command(
             parsed.raw, ctx.base_dir, model_id=ctx.loop_kwargs["model_id"]
         )
@@ -13167,6 +13758,12 @@ def execute_input(
             return StepResult(kind="state_change", text=msg, is_error=err)
 
         if cmd == "/goal":
+            # Setting an objective runs it. Check before _repl_goal, so a
+            # refused launch does not leave a goal recorded but never started.
+            if _goal_arg_launches(cmd_arg):
+                blocked = _revalidate_pending_instructions(ctx)
+                if blocked is not None:
+                    return blocked
             result = _repl_goal(
                 cmd_arg,
                 ctx.goal_state,
@@ -13251,9 +13848,7 @@ def execute_input(
             return StepResult(kind="state_change", text=msg, is_error=err)
 
         if cmd == "/remember":
-            msg, err = _repl_remember(
-                cmd_arg, ctx.base_dir, ctx.messages, start_dir=ctx.start_dir
-            )
+            msg, err = _repl_remember(cmd_arg, ctx)
             return StepResult(kind="state_change", text=msg, is_error=err)
 
         if cmd == "/restore":
@@ -13359,13 +13954,75 @@ def execute_input(
             is_error=True,
         )
 
-    # Plain text.
+    # Plain text. _run_agent_step holds it back if an update is still pending.
     return _run_agent_step(parsed.raw, parsed.raw, ctx, interrupt_label="question")
 
 
-def _execute_init(cmd_arg: str, ctx: InputContext) -> StepResult:
-    """Handle the multi-pass /init command."""
+class _InstructionsPending(Exception):
+    """A turn refused because a saved instruction update is not active.
 
+    Carries the ``StepResult`` its catcher should return. It is raised from
+    :func:`_invoke_agent_turn`, which every turn on the shared machinery passes
+    through, so a command added later cannot reach the model by not knowing
+    the check exists. Commands that run their own loop, or that would destroy
+    something before getting here, check first as well.
+    """
+
+    def __init__(self, step: "StepResult") -> None:
+        super().__init__("instruction update pending")
+        self.step = step
+
+
+def _revalidate_pending_instructions(ctx: InputContext) -> "StepResult | None":
+    """Retry a saved-but-inactive instruction update before an ordinary turn.
+
+    This is a narrow check on one pending failure, not a file watcher. It says
+    nothing about files that changed elsewhere. When the user has removed what
+    blocked the fit, the session picks the update up and carries on. When they
+    have not, the turn stops here, without a model call.
+    """
+    if ctx.pending_instruction_failure is None:
+        return None
+    refresh = refresh_system_instructions(ctx)
+    if refresh.ok:
+        ctx.pending_instruction_failure = None
+        fmt.info("instruction files now fit; the saved update is active.")
+        return None
+    if not refresh.blocking:
+        # Nothing left for the user to fix here, so stop holding the session up.
+        ctx.pending_instruction_failure = None
+        fmt.warning(
+            f"the saved instruction update stays inactive in this session: "
+            f"{refresh.reason}."
+        )
+        return None
+    ctx.pending_instruction_failure = refresh.reason
+    return StepResult(
+        kind="info",
+        text=(
+            f"error: instruction files are still not active: {refresh.reason}. "
+            "Remove what you added, or restart with --no-instructions."
+        ),
+        is_error=True,
+    )
+
+
+def _execute_init(cmd_arg: str, ctx: InputContext) -> StepResult:
+    """Handle the multi-pass /init command.
+
+    The check runs before the body, which clears the conversation: refusing
+    afterwards would cost the user their context for a turn we never ran.
+    """
+    blocked = _revalidate_pending_instructions(ctx)
+    if blocked is not None:
+        return blocked
+    try:
+        return _run_init_passes(cmd_arg, ctx)
+    except _InstructionsPending as pending:
+        return pending.step
+
+
+def _run_init_passes(cmd_arg: str, ctx: InputContext) -> StepResult:
     def _run_init_pass(
         history_label: str,
         interrupt_message: str,
@@ -13419,7 +14076,7 @@ def _execute_init(cmd_arg: str, ctx: InputContext) -> StepResult:
 
     # Post-write validation and retry.
     agents_path = Path(ctx.base_dir).resolve() / "AGENTS.md"
-    reason, content = validate_agents_md(agents_path)
+    reason, _content = validate_agents_md(agents_path)
     if reason is not None:
         retry_prompt = INIT_RETRY_PROMPT.format(reason=reason)
         ctx.messages.append({"role": "user", "content": retry_prompt})
@@ -13431,14 +14088,16 @@ def _execute_init(cmd_arg: str, ctx: InputContext) -> StepResult:
         last_answer, exhausted = result
         if exhausted:
             any_exhausted = True
-        retry_reason, content = validate_agents_md(agents_path)
+        retry_reason, _content = validate_agents_md(agents_path)
         if retry_reason is not None:
             fmt.warning(f"AGENTS.md still invalid after retry: {retry_reason}")
 
-    if content is not None and len(content) > _INIT_AGENTS_MD_BUDGET:
+    refresh = refresh_system_instructions(ctx)
+    if not refresh.ok:
+        if refresh.blocking:
+            ctx.pending_instruction_failure = refresh.reason
         fmt.warning(
-            f"AGENTS.md is {len(content)} chars, "
-            f"exceeds {_INIT_AGENTS_MD_BUDGET} target."
+            f"AGENTS.md written, but not active in this session: {refresh.reason}."
         )
 
     return StepResult(kind="agent_turn", text=last_answer, exhausted=any_exhausted)
@@ -13490,6 +14149,9 @@ def _execute_audit(cmd_arg: str, ctx: InputContext) -> StepResult:
     """Handle the /audit command by delegating to swival.audit."""
     from .audit import run_audit_command
 
+    blocked = _revalidate_pending_instructions(ctx)
+    if blocked is not None:
+        return blocked
     return _execute_delegated_command(cmd_arg, ctx, "/audit", run_audit_command)
 
 
@@ -14344,6 +15006,8 @@ def repl_loop(
     network_mode: str = "full",
     net_jail: list | None = None,
     session_cost: SessionCost | None = None,
+    instructions_enabled: bool = True,
+    instructions_full: bool = False,
 ):
     """Interactive read-eval-print loop.
 
@@ -14528,6 +15192,7 @@ def repl_loop(
         net_jail=net_jail,
         session_cost=session_cost,
         continue_here=continue_here,
+        instructions_full=instructions_full,
     )
 
     ctx = InputContext(
@@ -14560,6 +15225,8 @@ def repl_loop(
         is_subagent=is_subagent,
         trace_dir=trace_dir,
         loop_registry=loop_registry,
+        instructions_enabled=instructions_enabled,
+        instructions_full=instructions_full,
     )
 
     completer.model_candidates = lambda: _model_completion_candidates(ctx)

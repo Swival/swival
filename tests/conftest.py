@@ -166,7 +166,7 @@ def _isolate_global_skills(monkeypatch):
 def _isolate_global_agents_md(monkeypatch):
     """Prevent all tests from picking up real ~/.agents/AGENTS.md."""
     monkeypatch.setattr(
-        "swival.agent._global_agents_md_path",
+        "swival.instructions.global_agents_md_path",
         lambda: Path("/nonexistent/.agents/AGENTS.md"),
     )
 

@@ -107,7 +107,7 @@
 <p>Swival's context management operates as four concentric layers of defense.</p>
 <p><strong>Layer 1 — Prevention.</strong> Tool output is capped before it enters the conversation. A file read that returns 200KB of content is truncated to 50KB. A grep that matches thousands of lines returns the first 100. Command output over 10KB is saved to a file and replaced with a pointer. MCP tool schemas that would consume too much of the window are dropped at startup. These limits keep junk out of the context so compaction rarely needs to fire.</p>
 <p><strong>Layer 2 — Proactive collapse.</strong> The agent can actively manage its own context using the <code>snapshot</code> tool. After reading several files to understand a problem, the agent calls <code>snapshot restore</code> with a summary of what it learned. The file reads — often 10K+ tokens of dead weight — are replaced with a ~200 token summary. The agent keeps the knowledge; the context gets the space back.</p>
-<p><strong>Layer 3 — Automatic compaction.</strong> Swival keeps the transcript under a safe token budget for you, through one budget-targeted entrypoint that both of its modes share. The common case is <em>proactive</em>: before each LLM call, if the prompt is over budget, Swival runs only the cheap, near-lossless rungs of its compaction ladder — garbage-collecting spent scaffolding, shrinking old tool results, and stripping replayed reasoning — so the request rarely reaches the provider's wall at all. A <em>reactive</em> net catches the rare overflow that still slips through when a provider's tokenizer counts more than Swival's estimate: it re-compacts below the current size with the full escalating ladder — dropping low-importance turns (the last few protected), dropping tools for a single retry, and finally a deterministic truncation floor — then retries. Temporary tool removal is request-local, so later turns get their tools back.</p>
+<p><strong>Layer 3 — Automatic compaction.</strong> Swival keeps the transcript under a safe token budget for you, through one budget-targeted entrypoint that both of its modes share. The common case is <em>proactive</em>: before each LLM call, if the prompt is over budget, Swival runs only the cheap, near-lossless rungs of its compaction ladder — garbage-collecting spent scaffolding, shrinking old tool results, and stripping replayed reasoning — so the request rarely reaches the provider's wall at all. A <em>reactive</em> net catches the rare overflow that still slips through when a provider's tokenizer counts more than Swival's estimate. Where output clamping is off, because no estimate is trustworthy, it first asks for a shorter answer with the prompt untouched: an oversized answer allowance is refused in the same words as an oversized prompt, and only one of the two fixes costs you context. If that shorter answer is itself cut off, the two failures have bracketed the workable range, and recovery searches inside it before spending any context. Each failure moves one end of the bracket, and the next allowance is worked out from both, so a range that narrows is searched rather than abandoned. Once Swival does start removing context, the refusal is no longer about the prompt that caused it, so the upper end is dropped and the answer may grow again. Then it re-compacts below the current size with the full escalating ladder — dropping low-importance turns (the last few protected), dropping tools for a single retry, and finally a deterministic truncation floor — then retries. Temporary tool removal is request-local, so later turns get their tools back.</p>
 <p><strong>Layer 4 — Knowledge survival.</strong> Thinking notes, todo lists, and snapshot summaries live outside the message history in independent channels that compaction cannot touch. Even after the most aggressive compaction wipes nearly everything, the agent still knows its reasoning, its task list, and what it learned during investigation.</p>
 <h2 id="prevention-output-size-guards">Prevention: Output Size Guards</h2>
 <p>Every tool that returns content has a hard cap on how much it can put into the conversation.</p>
@@ -118,10 +118,36 @@
 <li><strong>Command output</strong> is returned inline up to 10KB. Anything larger is written to a temporary file and the conversation receives a short pointer with instructions to paginate.</li>
 <li><strong>MCP tool results</strong> follow the same pattern: inline up to 20KB, saved to file above that.</li>
 <li><strong>URL fetches</strong> are capped at 5MB for the raw download and 50KB for the converted output.</li>
-<li><strong>Instruction files</strong> are capped at 10,000 characters: <code>CLAUDE.md</code> gets its own cap, and all <code>AGENTS.md</code> files (user-level, global, project-level) share one combined 10,000-character budget.</li>
+<li><strong>Instruction files</strong> are not capped and never truncated. They hold mandatory rules, and half a rule reads like a whole one. Swival renders the complete set once, measures it, and either admits all of it or stops with a message naming the files. See <a href="#the-instruction-allowance">The instruction allowance</a> below. Individual files are still bounded for memory: 1 MiB each, 4 MiB combined, and a file over either bound is a read error that refuses the run, never a prefix loaded as if it were the whole file.</li>
 <li><strong>Auto-memory</strong> (<code>.swival/memory/MEMORY.md</code>) is injected through a budgeted two-part pipeline. Entries tagged with <code>&lt;!-- bootstrap --&gt;</code> are always included (up to 400 tokens). Remaining entries are ranked by BM25 relevance against the user's question and the top results are injected (up to 400 tokens). Total memory cost stays within 800 tokens even for large memory files. Use <code>--memory-full</code> to inject everything (legacy behavior).</li>
 </ul>
 <p>These limits are deliberately conservative. They prevent a single tool call from consuming a significant fraction of a small context window.</p>
+<h3 id="the-instruction-allowance">The Instruction Allowance</h3>
+<p><code>CLAUDE.md</code> and <code>AGENTS.md</code> are loaded whole or not at all. The allowance for the
+complete set is the smallest of three numbers: 8,192 tokens, a tenth of the
+context window, and whatever the rest of the request leaves after the built-in
+prompt, tool schemas, memory, the skill catalog and a working reserve.</p>
+<p>The set is measured once per request, after query-dependent memory is in place,
+so it is never admitted against a prompt that is about to grow. A set that does
+not fit stops the run before the first model call. The message names the files
+and, when it is relevant, names what else is filling the window: a small
+<code>AGENTS.md</code> is not the problem when tool schemas are three times its size.</p>
+<p>A file that is larger than the read caps stops the run in the same way, and
+nothing overrides that. Running on the part that was read would be running on
+half a rule set, and no allowance makes that safe.</p>
+<p>A file that cannot be opened at all is different. Permissions and failing disks
+say nothing about what the file contains, so that one is reported and skipped,
+like a file that is not there, and the run continues on the rest.</p>
+<p>A refused run changes nothing on disk. In particular it leaves
+<code>.swival/continue.md</code> where it is, so shortening the files and running again
+still resumes the interrupted work.</p>
+<p>Two situations make the number advisory instead of binding. A provider that
+never reports its window gives us nothing to measure against, and a session with
+no tokenizer data counts UTF-8 bytes rather than tokens. In both, Swival loads
+the complete set and leans on the usual overflow recovery.</p>
+<p>Loaded instruction files are recorded during assembly and protected from every
+level of compaction below, including emergency truncation. Everything around
+them can shrink; they cannot.</p>
 <h3 id="mcp-schema-budget">MCP Schema Budget</h3>
 <p>MCP servers expose external tools, but their schemas can be large. On a 16K context window, tool schemas alone could eat half the budget before the agent does anything.</p>
 <p>At startup, Swival estimates the total token cost of all tool schemas. If they exceed 30% of the context window, it warns. If they exceed 50%, it starts dropping the most expensive MCP server's tools until the budget fits. This happens automatically — you don't need to manually curate which MCP tools are available.</p>
@@ -174,7 +200,7 @@
 <h3 id="level-6-drop-tools-for-one-retry">Level 6: Drop Tools For One Retry</h3>
 <p>If message compaction fails and tool schemas are still attached, Swival drops all tool schemas from that retry request. This is deliberately request-local: the durable tool list is not mutated, so a later turn can restore tools immediately. Permanent no-tools mode is reserved for providers that actually raise <code>ToolsNotSupportedError</code>.</p>
 <h3 id="level-7-emergency-truncation">Level 7: Emergency Truncation</h3>
-<p>If the provider still rejects the request, Swival progressively emergency-truncates the remaining prompt at bounded ratios. It preserves the system prompt when possible and only truncates it in the final "make anything fit" stage. If even the smallest bounded request fails, the run writes a continue-here file and ends the turn with an operational notice instead of an answer, so an overflow never crashes the loop.</p>
+<p>If the provider still rejects the request, Swival progressively emergency-truncates the remaining prompt at bounded ratios. It preserves the system prompt when possible and only truncates it in the final "make anything fit" stage. Even then it cuts around loaded instruction files rather than through them: the assembly recorded where they sit, so the text on either side shrinks and the rules stay whole. When nothing removable is left, Swival reports that it could not reach the budget and stops retrying. If even the smallest bounded request fails, the run writes a continue-here file and ends the turn with an operational notice instead of an answer, so an overflow never crashes the loop.</p>
 <h2 id="knowledge-survival">Knowledge Survival</h2>
 <p>The most important design principle: critical state must survive compaction. Three mechanisms ensure this.</p>
 <h3 id="thinking-state">Thinking State</h3>
@@ -205,6 +231,9 @@
 <p><code>--max-context-tokens</code> tells Swival how large the context window is.</p>
 <p><code>--proactive-summaries</code> enables the periodic checkpoint summarization described above. Recommended for long-running sessions where the agent will go through many investigation and implementation cycles.</p>
 <p><code>--max-output-tokens</code> controls the maximum generation budget per LLM call. Before every call, Swival dynamically shrinks this to fit the remaining context space, so you don't need to tune it carefully — but setting it to a reasonable value (the default is 32,768) helps Swival estimate budgets accurately.</p>
+<p>The prompt budget holds back room for the answer, but that reserve follows the window rather than the request: at most 4,096 tokens, and never more than an eighth of the window. Reserving the whole requested output used to keep half of a 16K window empty before the agent read a single file. The reserve is a floor for the answer, not a cap on it. When a request leaves more room than the reserve, the answer may use it, up to whatever you asked for.</p>
+<p><code>--instructions-full</code> loads every instruction file whatever its size. It bypasses the instruction allowance, including the residual-space check, and warns once. It does not bypass read limits, path guards, or the provider's real context limit, and it never permits truncation.</p>
+<p>When a request still overflows after everything removable is gone and full loading is on, the notice at the end of the turn names the override, because keeping the files intact is part of why nothing else could go. Only context failures are attributed that way. Authentication, transport and unrelated model errors keep their own causes.</p>
 <p>These can be set via CLI flags, project config (<code>swival.toml</code>), or global config (<code>~/.config/swival/config.toml</code>). See <a href="usage.html">Usage</a> for the full flag reference.</p>
             <nav class="page-nav" aria-label="Page navigation"><a class="nav-prev" href="goal.html"><span class="nav-label">&larr; Previous</span><span class="nav-title">Goals</span></a><a class="nav-next" href="open-models.html"><span class="nav-label">Next &rarr;</span><span class="nav-title">Not Just for Frontier Models</span></a></nav>
         </article>

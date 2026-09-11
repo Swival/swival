@@ -8,7 +8,7 @@ import pytest
 
 from swival.report import AgentError, ReportCollector
 from swival.config import _UNSET
-from swival import agent
+from swival import agent, instructions
 
 
 # ---------------------------------------------------------------------------
@@ -271,27 +271,32 @@ class TestHandleToolCallTuple:
 
 
 # ---------------------------------------------------------------------------
-# load_instructions tuple return
+# instruction loading in reports
 # ---------------------------------------------------------------------------
 
 
-class TestLoadInstructionsTuple:
+class TestInstructionPathsForReports:
+    """What `instructions_loaded` is built from."""
+
     def test_no_files(self, tmp_path):
-        text, loaded = agent.load_instructions(str(tmp_path), verbose=False)
-        assert text == ""
-        assert loaded == []
+        loaded = instructions.load(str(tmp_path), verbose=False)
+        assert loaded.text == ""
+        assert loaded.paths == []
 
     def test_claude_md_only(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("rules")
-        text, loaded = agent.load_instructions(str(tmp_path), verbose=False)
-        assert "rules" in text
-        assert loaded == [str(tmp_path / "CLAUDE.md")]
+        loaded = instructions.load(str(tmp_path), verbose=False)
+        assert "rules" in loaded.text
+        assert loaded.paths == [str(tmp_path / "CLAUDE.md")]
 
     def test_both_files(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("a")
         (tmp_path / "AGENTS.md").write_text("b")
-        text, loaded = agent.load_instructions(str(tmp_path), verbose=False)
-        assert loaded == [str(tmp_path / "CLAUDE.md"), str(tmp_path / "AGENTS.md")]
+        loaded = instructions.load(str(tmp_path), verbose=False)
+        assert loaded.paths == [
+            str(tmp_path / "CLAUDE.md"),
+            str(tmp_path / "AGENTS.md"),
+        ]
 
 
 # ---------------------------------------------------------------------------

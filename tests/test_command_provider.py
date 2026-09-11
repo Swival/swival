@@ -10,7 +10,7 @@ from swival.agent import (
     _parse_swival_calls,
     _render_swival_tool_catalog,
     _COMMAND_TOOL_CONTEXT_PREFIX,
-    build_system_prompt,
+    assemble_system_prompt,
     call_llm,
     is_pinned,
     resolve_provider,
@@ -396,14 +396,14 @@ class TestConfigResolution:
 
 
 # ---------------------------------------------------------------------------
-# build_system_prompt (command provider)
+# assemble_system_prompt (command provider)
 # ---------------------------------------------------------------------------
 
 
 class TestCommandSystemPrompt:
     def test_command_provider_excludes_tool_instructions(self, tmp_path):
         """Command provider should not mention tools like read_file, write_file."""
-        content, _ = build_system_prompt(
+        content = assemble_system_prompt(
             base_dir=str(tmp_path),
             system_prompt=None,
             no_system_prompt=False,
@@ -412,14 +412,14 @@ class TestCommandSystemPrompt:
             skills_catalog={},
             verbose=False,
             provider="command",
-        )
+        ).content
         assert "read_file" not in content
         assert "write_file" not in content
         assert "think" not in content
 
     def test_command_provider_custom_prompt_preserved(self, tmp_path):
         """Explicit --system-prompt overrides the command default too."""
-        content, _ = build_system_prompt(
+        content = assemble_system_prompt(
             base_dir=str(tmp_path),
             system_prompt="Custom prompt.",
             no_system_prompt=False,
@@ -428,12 +428,12 @@ class TestCommandSystemPrompt:
             skills_catalog={},
             verbose=False,
             provider="command",
-        )
+        ).content
         assert "Custom prompt." in content
 
     def test_non_command_provider_includes_tools(self, tmp_path):
         """Non-command providers get the default tool-oriented prompt."""
-        content, _ = build_system_prompt(
+        content = assemble_system_prompt(
             base_dir=str(tmp_path),
             system_prompt=None,
             no_system_prompt=False,
@@ -442,12 +442,12 @@ class TestCommandSystemPrompt:
             skills_catalog={},
             verbose=False,
             provider="lmstudio",
-        )
+        ).content
         assert "read_file" in content
 
     def test_command_provider_excludes_yolo(self, tmp_path):
         """Command provider should not include run_command help even with yolo."""
-        content, _ = build_system_prompt(
+        content = assemble_system_prompt(
             base_dir=str(tmp_path),
             system_prompt=None,
             no_system_prompt=False,
@@ -456,11 +456,11 @@ class TestCommandSystemPrompt:
             skills_catalog={},
             verbose=False,
             provider="command",
-        )
+        ).content
         assert "run_command" not in content
 
     def test_command_provider_excludes_whitelisted_commands(self, tmp_path):
-        content, _ = build_system_prompt(
+        content = assemble_system_prompt(
             base_dir=str(tmp_path),
             system_prompt=None,
             no_system_prompt=False,
@@ -469,11 +469,11 @@ class TestCommandSystemPrompt:
             skills_catalog={},
             verbose=False,
             provider="command",
-        )
+        ).content
         assert "run_command" not in content
 
     def test_command_provider_excludes_skills(self, tmp_path):
-        content, _ = build_system_prompt(
+        content = assemble_system_prompt(
             base_dir=str(tmp_path),
             system_prompt=None,
             no_system_prompt=False,
@@ -482,12 +482,12 @@ class TestCommandSystemPrompt:
             skills_catalog={"my-skill": {"name": "my-skill", "description": "test"}},
             verbose=False,
             provider="command",
-        )
+        ).content
         assert "use_skill" not in content
         assert "my-skill" not in content
 
     def test_command_provider_excludes_mcp(self, tmp_path):
-        content, _ = build_system_prompt(
+        content = assemble_system_prompt(
             base_dir=str(tmp_path),
             system_prompt=None,
             no_system_prompt=False,
@@ -497,7 +497,7 @@ class TestCommandSystemPrompt:
             verbose=False,
             mcp_tool_info={"server1": [{"name": "mcp_tool", "description": "test"}]},
             provider="command",
-        )
+        ).content
         assert "mcp_tool" not in content
 
 
@@ -902,7 +902,7 @@ class TestCommandToolContextPrefix:
 
 
 # ---------------------------------------------------------------------------
-# build_system_prompt with command_tool_schemas
+# assemble_system_prompt with command_tool_schemas
 # ---------------------------------------------------------------------------
 
 
@@ -993,7 +993,7 @@ class TestCommandProviderToolCatalog:
                 },
             }
         ]
-        content, _ = build_system_prompt(
+        content = assemble_system_prompt(
             base_dir=str(tmp_path),
             system_prompt=None,
             no_system_prompt=False,
@@ -1003,14 +1003,14 @@ class TestCommandProviderToolCatalog:
             verbose=False,
             provider="command",
             command_tool_schemas=schemas,
-        )
+        ).content
         assert "swival:call" in content
         assert "mcp__db__query" in content
         assert "Run SQL." in content
         assert "UNIQUE_ID" in content
 
     def test_no_catalog_when_no_schemas(self, tmp_path):
-        content, _ = build_system_prompt(
+        content = assemble_system_prompt(
             base_dir=str(tmp_path),
             system_prompt=None,
             no_system_prompt=False,
@@ -1020,7 +1020,7 @@ class TestCommandProviderToolCatalog:
             verbose=False,
             provider="command",
             command_tool_schemas=None,
-        )
+        ).content
         assert "swival:call" not in content
 
 

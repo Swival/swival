@@ -10,7 +10,7 @@ from swival.agent import (
     MAX_MEMORY_CHARS,
     MAX_MEMORY_LINES,
     _safe_memory_path,
-    build_system_prompt,
+    assemble_system_prompt,
     load_memory,
 )
 
@@ -262,7 +262,7 @@ class TestLoadMemoryFull:
 
 
 # ---------------------------------------------------------------------------
-# build_system_prompt integration
+# assemble_system_prompt integration
 # ---------------------------------------------------------------------------
 
 
@@ -278,28 +278,28 @@ class TestBuildSystemPrompt:
             verbose=False,
         )
         defaults.update(kwargs)
-        return build_system_prompt(**defaults)
+        return assemble_system_prompt(**defaults).content
 
     def test_memory_in_system_prompt(self, tmp_path):
         _write_memory(tmp_path, "- uses pytest\n")
-        content, _ = self._build(tmp_path)
+        content = self._build(tmp_path)
         assert "<memory>" in content
         assert "uses pytest" in content
 
     def test_no_memory_flag(self, tmp_path):
         _write_memory(tmp_path, "- uses pytest\n")
-        content, _ = self._build(tmp_path, no_memory=True)
+        content = self._build(tmp_path, no_memory=True)
         assert "<memory>" not in content
 
     def test_custom_system_prompt_skips_memory(self, tmp_path):
         _write_memory(tmp_path, "- uses pytest\n")
-        content, _ = self._build(tmp_path, system_prompt="Custom prompt.")
+        content = self._build(tmp_path, system_prompt="Custom prompt.")
         assert "<memory>" not in content
 
     def test_memory_after_instructions(self, tmp_path):
         (tmp_path / "AGENTS.md").write_text("Do this.", encoding="utf-8")
         _write_memory(tmp_path, "- fact\n")
-        content, _ = self._build(tmp_path, no_instructions=False)
+        content = self._build(tmp_path, no_instructions=False)
         instr_pos = content.find("</agent-instructions>")
         memory_pos = content.find("<memory>")
         assert instr_pos < memory_pos
@@ -307,7 +307,7 @@ class TestBuildSystemPrompt:
     def test_memory_full_flag(self, tmp_path):
         lines = [f"- line {i}\n" for i in range(300)]
         _write_memory(tmp_path, "".join(lines))
-        content, _ = self._build(tmp_path, memory_full=True)
+        content = self._build(tmp_path, memory_full=True)
         assert f"truncated at {MAX_MEMORY_LINES} lines" in content
 
 

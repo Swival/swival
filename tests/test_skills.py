@@ -1143,7 +1143,7 @@ class TestIntegration:
 
 
 # =========================================================================
-# Metaskill gating: activate_skill, build_system_prompt, inject_skill_mentions
+# Metaskill gating: activate_skill, assemble_system_prompt, inject_skill_mentions
 # =========================================================================
 
 
@@ -1190,9 +1190,11 @@ class TestMetaskillGating:
         result_ext = activate_skill("ext-ms", catalog, [], enabled_metaskills=enabled)
         assert "run_metaskill" not in result_ext
 
-    def test_build_system_prompt_metaskill_section_when_names_provided(self, tmp_path):
-        """build_system_prompt forwards metaskill_names to format_skill_catalog."""
-        from swival.agent import build_system_prompt
+    def test_assemble_system_prompt_metaskill_section_when_names_provided(
+        self, tmp_path
+    ):
+        """assemble_system_prompt forwards metaskill_names to format_skill_catalog."""
+        from swival.agent import assemble_system_prompt
 
         catalog = {
             "ms": SkillInfo(
@@ -1203,7 +1205,7 @@ class TestMetaskillGating:
                 metaskill_path=tmp_path / "SKILL.star",
             )
         }
-        prompt, _ = build_system_prompt(
+        prompt = assemble_system_prompt(
             base_dir=str(tmp_path),
             system_prompt=None,
             no_system_prompt=False,
@@ -1212,13 +1214,15 @@ class TestMetaskillGating:
             skills_catalog=catalog,
             verbose=False,
             metaskill_names=["ms"],
-        )
+        ).content
         assert "### Metaskills" in prompt
         assert "(metaskill: starlark)" in prompt
 
-    def test_build_system_prompt_no_metaskill_section_when_empty_names(self, tmp_path):
-        """build_system_prompt with metaskill_names=[] suppresses metaskill content."""
-        from swival.agent import build_system_prompt
+    def test_assemble_system_prompt_no_metaskill_section_when_empty_names(
+        self, tmp_path
+    ):
+        """assemble_system_prompt with metaskill_names=[] suppresses metaskill content."""
+        from swival.agent import assemble_system_prompt
 
         catalog = {
             "ms": SkillInfo(
@@ -1229,7 +1233,7 @@ class TestMetaskillGating:
                 metaskill_path=tmp_path / "SKILL.star",
             )
         }
-        prompt, _ = build_system_prompt(
+        prompt = assemble_system_prompt(
             base_dir=str(tmp_path),
             system_prompt=None,
             no_system_prompt=False,
@@ -1238,7 +1242,7 @@ class TestMetaskillGating:
             skills_catalog=catalog,
             verbose=False,
             metaskill_names=[],
-        )
+        ).content
         assert "### Metaskills" not in prompt
         assert "(metaskill:" not in prompt
         assert "ms: A metaskill." in prompt

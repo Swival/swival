@@ -16,7 +16,7 @@ from swival.agent import (
     _init_prompt,
     INIT_ENRICH_PROMPT,
     INIT_WRITE_PROMPT,
-    _INIT_AGENTS_MD_BUDGET,
+    _INIT_AGENTS_MD_TARGET,
     validate_agents_md,
     LEARN_PROMPT,
     _repl_help,
@@ -1919,8 +1919,8 @@ class TestInitCommand:
         captured = capsys.readouterr()
         assert "still invalid" not in captured.err
 
-    def test_init_budget_warning_on_initial_write(self, tmp_path, capsys):
-        """Valid but oversized AGENTS.md -> no retry, budget warning."""
+    def test_init_stays_quiet_about_size_on_initial_write(self, tmp_path, capsys):
+        """A valid AGENTS.md over the writing target draws no warning."""
         messages = [_sys("system")]
         call_count = [0]
 
@@ -1928,7 +1928,7 @@ class TestInitCommand:
             call_count[0] += 1
             if call_count[0] == 3:
                 content = "## Workflow\n\n- install: `x`\n\n## Conventions\n\n"
-                content += "- " + "x" * (_INIT_AGENTS_MD_BUDGET + 100) + "\n"
+                content += "- " + "x" * (_INIT_AGENTS_MD_TARGET + 100) + "\n"
                 Path(tmp_path, "AGENTS.md").write_text(content)
             return ("done", False)
 
@@ -1943,10 +1943,10 @@ class TestInitCommand:
 
         assert mock_loop.call_count == 3
         captured = capsys.readouterr()
-        assert "exceeds" in captured.err
+        assert "exceeds" not in captured.err
 
-    def test_init_budget_warning_after_retry(self, tmp_path, capsys):
-        """Retry produces valid but oversized file -> budget warning."""
+    def test_init_stays_quiet_about_size_after_retry(self, tmp_path, capsys):
+        """A retry that lands over the writing target draws no warning."""
         messages = [_sys("system")]
         call_count = [0]
 
@@ -1956,7 +1956,7 @@ class TestInitCommand:
                 Path(tmp_path, "AGENTS.md").write_text("bad content\n")
             elif call_count[0] == 4:
                 content = "## Workflow\n\n- install: `x`\n\n## Conventions\n\n"
-                content += "- " + "x" * (_INIT_AGENTS_MD_BUDGET + 100) + "\n"
+                content += "- " + "x" * (_INIT_AGENTS_MD_TARGET + 100) + "\n"
                 Path(tmp_path, "AGENTS.md").write_text(content)
             return ("done", False)
 
@@ -1971,7 +1971,7 @@ class TestInitCommand:
 
         assert mock_loop.call_count == 4
         captured = capsys.readouterr()
-        assert "exceeds" in captured.err
+        assert "exceeds" not in captured.err
 
     def test_init_retry_interrupt_writes_continue(self, tmp_path, capsys):
         """KeyboardInterrupt during retry writes continuation state."""
@@ -2049,8 +2049,9 @@ class TestInitPromptContract:
     def test_commit_pr_section_in_write_prompt(self):
         assert "## Commit & Pull Request Guidelines" in INIT_WRITE_PROMPT
 
-    def test_budget_target_in_write_prompt(self):
-        assert str(_INIT_AGENTS_MD_BUDGET) in INIT_WRITE_PROMPT
+    def test_writing_target_in_write_prompt(self):
+        assert str(_INIT_AGENTS_MD_TARGET) in INIT_WRITE_PROMPT
+        assert "not a limit" in INIT_WRITE_PROMPT
 
     def test_section_ordering_in_write_prompt(self):
         wf_idx = INIT_WRITE_PROMPT.index("Workflow")
@@ -2356,7 +2357,11 @@ class TestSnapshotReplIntegration:
         assert "invalidated" in captured.err
 
     def test_save_then_autocompact_then_restore_error(self, tmp_path, capsys):
-        """Auto-compaction (ContextOverflowError path) invalidates index checkpoint."""
+        """Auto-compaction (ContextOverflowError path) invalidates index checkpoint.
+
+        A known window with a real tokenizer means output clamping already
+        fitted the answer to it, so recovery goes straight to compaction.
+        """
         state = SnapshotState()
         messages = [
             _sys("system"),
@@ -2381,7 +2386,11 @@ class TestSnapshotReplIntegration:
         messages.append(_user("trigger"))
 
         with patch("swival.agent.call_llm", side_effect=fake_call_llm):
-            run_agent_loop(messages, [], **_loop_kwargs(tmp_path, snapshot_state=state))
+            run_agent_loop(
+                messages,
+                [],
+                **_loop_kwargs(tmp_path, snapshot_state=state, context_length=8192),
+            )
 
         # The auto-compaction path should have called invalidate_index_checkpoint
         assert state._generation > 0
@@ -2638,13 +2647,14 @@ class TestRemember:
         with pytest.raises(ValueError, match="escapes"):
             _safe_agents_md_path(str(inside))
 
-    def test_oversize_warning(self, tmp_path):
+    def test_no_oversize_warning(self, tmp_path):
+        """A long AGENTS.md is normal. Only a real bad fit is worth saying."""
         agents = tmp_path / "AGENTS.md"
         big = "## Workflow\n\n## Conventions\n\n" + "- x" * 2000 + "\n"
         agents.write_text(big)
         msg, changed, _err = remember_agents_fact(str(tmp_path), "one more")
         assert changed is True
-        assert "exceeds" in msg
+        assert "exceeds" not in msg
 
     def test_repeated_remember_no_duplicate(self, tmp_path):
         remember_agents_fact(str(tmp_path), "fact A")
@@ -2670,7 +2680,17 @@ class TestRemember:
         assert "Some notes." in content
 
     def test_repl_remember_empty_warns(self):
-        msg, is_error = _repl_remember("", "/tmp", [])
+        ctx = SimpleNamespace(
+            base_dir="/tmp",
+            messages=[],
+            start_dir=None,
+            tools=[],
+            loop_kwargs={},
+            instructions_enabled=True,
+            instructions_full=False,
+            pending_instruction_failure=None,
+        )
+        msg, is_error = _repl_remember("", ctx)
         assert is_error is True
         assert "requires text" in msg
 

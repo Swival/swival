@@ -68,22 +68,25 @@ class TestCompositeCancelFlag:
 
 class TestBuildSubagentSystem:
     def test_preamble_only(self):
-        result = _build_subagent_system(None, None)
+        result, offset = _build_subagent_system(None, None)
         assert "subagent" in result.lower()
         assert "autonomously" in result.lower()
+        assert offset == len(result)
 
     def test_with_parent_system(self):
-        result = _build_subagent_system("You are a Python expert.", None)
+        result, offset = _build_subagent_system("You are a Python expert.", None)
         assert "Python expert" in result
+        assert result[offset:] == "You are a Python expert."
 
     def test_with_system_hint(self):
-        result = _build_subagent_system(None, "Focus on security.")
+        result, _offset = _build_subagent_system(None, "Focus on security.")
         assert "Focus on security" in result
 
     def test_ordering(self):
-        result = _build_subagent_system("PARENT", "HINT")
+        result, offset = _build_subagent_system("PARENT", "HINT")
         # preamble first, then hint, then parent
         assert result.index("HINT") < result.index("PARENT")
+        assert result[offset:] == "PARENT"
 
 
 class TestSubagentHandle:
@@ -173,7 +176,7 @@ class TestSubagentManager:
         mgr = self._make_manager()
         captured = []
 
-        def mock_thread_fn(handle, *args):
+        def mock_thread_fn(handle, *args, **kwargs):
             captured.append(args[3])
             handle.done.set()
             args[-2].release()
@@ -210,7 +213,7 @@ class TestSubagentManager:
         mgr = self._make_manager(parent_cancel_flag=parent_flag)
         barrier = threading.Event()
 
-        def mock_thread_fn(handle, *args):
+        def mock_thread_fn(handle, *args, **kwargs):
             barrier.wait(timeout=10)
             handle.done.set()
             args[-2].release()  # slot is second-to-last positional arg
@@ -234,7 +237,7 @@ class TestSubagentManager:
         mgr = self._make_manager()
         barrier = threading.Event()
 
-        def mock_thread_fn(handle, *args):
+        def mock_thread_fn(handle, *args, **kwargs):
             barrier.wait(timeout=10)
             handle.done.set()
             args[-2].release()
@@ -295,6 +298,7 @@ class TestSubagentManager:
             composite_cancel,
             slot,
             proactive_summaries=False,
+            **kwargs,
         ):
             while not composite_cancel.is_set():
                 time.sleep(0.01)
@@ -318,7 +322,7 @@ class TestSubagentManager:
         )
         barrier = threading.Event()
 
-        def mock_thread_fn(handle, *args):
+        def mock_thread_fn(handle, *args, **kwargs):
             barrier.wait(timeout=10)
             handle.done.set()
             args[-2].release()
@@ -342,7 +346,7 @@ class TestSubagentManager:
         mgr = self._make_manager()
         release_first = threading.Event()
 
-        def mock_thread_fn(handle, *args):
+        def mock_thread_fn(handle, *args, **kwargs):
             release_first.wait(timeout=10)
             handle.done.set()
             args[-2].release()
@@ -368,7 +372,7 @@ class TestSubagentManager:
         """Slot is released after a thread finishes so subsequent spawns succeed."""
         mgr = self._make_manager()
 
-        def mock_thread_fn(handle, *args):
+        def mock_thread_fn(handle, *args, **kwargs):
             handle.result = "done"
             handle.done.set()
             args[-2].release()
@@ -389,7 +393,7 @@ class TestSubagentManager:
         mgr = self._make_manager()
         barrier = threading.Event()
 
-        def mock_thread_fn(handle, *args):
+        def mock_thread_fn(handle, *args, **kwargs):
             barrier.wait(timeout=10)
             handle.done.set()
             args[-2].release()

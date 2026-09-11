@@ -103,7 +103,13 @@
             <h1 id="python-api">Python API</h1>
 <p>Swival exposes a small public API for embedding the agent loop in your own programs. Everything you need is importable from the top-level <code>swival</code> package.</p>
 <pre><code class="language-python">from swival import Session, Result, run
-from swival import AgentError, ConfigError, ContextOverflowError, LifecycleError
+from swival import (
+    AgentError,
+    ConfigError,
+    ContextOverflowError,
+    InstructionLoadError,
+    LifecycleError,
+)
 </code></pre>
 <h2 id="runquestion-base_dir-kwargs-str"><code>run(question, *, base_dir=".", **kwargs) -&gt; str</code></h2>
 <p>One-call convenience function. Creates a <code>Session</code>, runs the question, and returns the answer string. Raises <code>AgentError</code> if the agent exhausts its turns or returns no answer. All keyword arguments are forwarded to <code>Session</code>.</p>
@@ -138,6 +144,7 @@ print(answer)
     system_prompt: str | None = None,
     no_system_prompt: bool = False,
     no_instructions: bool = False,
+    instructions_full: bool = False,
     no_skills: bool = False,
     skills_dir: list[str] | None = None,
     allowed_dirs: list[str] | None = None,
@@ -436,7 +443,7 @@ session.close(outcome=&quot;success&quot;, exit_code=0)
 <p>On success, the assistant's reply is appended to the shared history so subsequent calls build on prior context.</p>
 <p>Set <code>parse_commands=True</code> to let an input that begins with a slash command (<code>/help</code>), a custom bang command (<code>!name</code>), or the quick shell prefix (<code>!! cmd</code>) run through the shared command executor instead of being sent to the model verbatim. This is what lets editors speaking ACP reuse the same commands as the REPL. Plain prompts are unaffected.</p>
 <p>On failure, the message list is rolled back to its state before the call — including any in-place mutations from compaction — so the session stays usable. State objects (thinking notes, todo items, file tracker) are not rolled back; partial progress from the failed turn is preserved.</p>
-<p>Raises <code>AgentError</code> (or one of its subclasses) on LLM, tool, or infrastructure failures. In particular, <code>ContextOverflowError</code> is raised when the context window is exhausted even after all compaction strategies have been tried. The first <code>ask()</code> call triggers setup, so <code>LifecycleError</code> can also be raised if a fail-closed startup hook fails.</p>
+<p>Raises <code>AgentError</code> (or one of its subclasses) on LLM, tool, or infrastructure failures. In particular, <code>ContextOverflowError</code> is raised when the context window is exhausted even after all compaction strategies have been tried. The first <code>ask()</code> call triggers setup, so <code>LifecycleError</code> can also be raised if a fail-closed startup hook fails, and <code>InstructionLoadError</code> if the instruction files do not fit.</p>
 <h3 id="sessionreset"><code>Session.reset()</code></h3>
 <p>Clear the conversation state. The next <code>ask()</code> starts with a fresh message history. Setup (provider validation, MCP connections, etc.) is preserved.</p>
 <h3 id="sessionclose-outcomenone-exit_codenone"><code>Session.close(*, outcome=None, exit_code=None)</code></h3>
@@ -491,6 +498,7 @@ class Result:
 <p>The constructor itself may raise standard Python exceptions for argument validation errors (e.g. <code>ValueError</code> for <code>retries &lt; 1</code>). Unexpected runtime failures from underlying libraries can also escape as their original types — <code>AgentError</code> covers swival's own error paths, not every possible exception.</p>
 <pre><code class="language-text">AgentError
 ├── ConfigError
+│   └── InstructionLoadError
 ├── ContextOverflowError
 └── LifecycleError
 </code></pre>
@@ -499,6 +507,30 @@ class Result:
 <h3 id="configerror"><code>ConfigError</code></h3>
 <p>Invalid configuration before the agent loop starts: missing model, missing API key, malformed MCP server config, non-existent directories in <code>allowed_dirs</code>, conflicting options.</p>
 <p><code>ConfigError</code> is a subclass of <code>AgentError</code>, so <code>except AgentError</code> catches it too.</p>
+<h3 id="instructionloaderror"><code>InstructionLoadError</code></h3>
+<p>The project and personal instruction files do not fit this setup. <code>Session(...)</code>
+never raises it: construction stays lazy and reads nothing. <code>run()</code> and <code>ask()</code>
+raise it at admission, before the first model call and before any task tool runs.</p>
+<p>There are two ways to earn it: the set is too large for the window, or a file
+could not be read whole. The second is not overridable, because a partial set is
+not the set you wrote.</p>
+<p>The message is the one a CLI user would see, with the files named and the exits
+listed. Four attributes carry the detail: <code>sources</code> lists the files that were
+read, <code>read_errors</code> names the ones that could not be, <code>breakdown</code> maps each
+prompt component to its token estimate, and <code>report</code> holds the failure report
+when the call was <code>run(question, report=True)</code>.</p>
+<p><code>ask()</code> rolls the transcript back on this failure, so the session stays usable.
+Correcting a file and calling again on the same object re-reads the rejected set.</p>
+<pre><code class="language-python">from swival import Session, InstructionLoadError
+
+session = Session(base_dir=&quot;/repo&quot;)
+try:
+    result = session.run(&quot;refactor the parser&quot;)
+except InstructionLoadError as exc:
+    print(exc)
+    print(exc.sources)
+    print(exc.breakdown[&quot;tools&quot;])
+</code></pre>
 <h3 id="contextoverflowerror"><code>ContextOverflowError</code></h3>
 <p>The context window is full and all compaction strategies (message shrinking, turn dropping, tool schema pruning, system prompt truncation) have been exhausted. This means the conversation grew too large for the model's context window and could not be recovered.</p>
 <p>Callers that want to handle context exhaustion differently — retry with a larger-context model, split the task, or save partial progress — can catch this specifically:</p>

@@ -178,6 +178,7 @@ class SubagentManager:
         verbose: bool,
         notify_user: Callable[[str], None] | None = None,
         proactive_summaries: bool = False,
+        resolved_system_spans: list | None = None,
     ):
         self._template = loop_kwargs_template
         self._tools = [
@@ -186,6 +187,7 @@ class SubagentManager:
             if t.get("function", {}).get("name") not in _SUBAGENT_OMITTED_TOOLS
         ]
         self._system_content = resolved_system_content
+        self._system_spans = resolved_system_spans or []
         self._parent_cancel_flag = parent_cancel_flag
         self._handles: dict[str, SubagentHandle] = {}
         self._counter = 0
@@ -269,6 +271,7 @@ class SubagentManager:
                 self._slots,
                 self._proactive_summaries,
             ),
+            kwargs={"system_spans": self._system_spans},
             name=f"swival-subagent-{sid}",
             daemon=True,
         )
@@ -363,10 +366,19 @@ class SubagentManager:
             verbose=self._verbose,
             notify_user=self._notify_user,
             proactive_summaries=self._proactive_summaries,
+            resolved_system_spans=self._system_spans,
         )
 
 
-def _build_subagent_system(parent_system: str | None, system_hint: str | None) -> str:
+def _build_subagent_system(
+    parent_system: str | None, system_hint: str | None
+) -> tuple[str, int]:
+    """Prefix the parent prompt for a child agent.
+
+    Returns the text and the offset where the parent prompt starts, so the
+    parent's recorded regions can be moved with it instead of being looked for
+    again in the child.
+    """
     preamble = (
         "You are a subagent working on a specific task within a larger project. "
         "Complete the task and provide your final answer. Be concise and focused. "
@@ -375,9 +387,10 @@ def _build_subagent_system(parent_system: str | None, system_hint: str | None) -
     parts = [preamble]
     if system_hint:
         parts.append(system_hint)
-    if parent_system:
-        parts.append(parent_system)
-    return "\n\n".join(parts)
+    prefix = "\n\n".join(parts)
+    if not parent_system:
+        return prefix, len(prefix)
+    return prefix + "\n\n" + parent_system, len(prefix) + 2
 
 
 def _subagent_thread_fn(
@@ -391,6 +404,8 @@ def _subagent_thread_fn(
     composite_cancel: _CompositeCancelFlag,
     slot: threading.Semaphore,
     proactive_summaries: bool = False,
+    *,
+    system_spans: list | None = None,
 ):
     try:
         from .agent import run_agent_loop, CompactionState
@@ -401,8 +416,14 @@ def _subagent_thread_fn(
         snapshot_state = SnapshotState(verbose=False)
         file_tracker = FileAccessTracker()
 
-        full_system = _build_subagent_system(system_content, system_hint)
-        messages: list[dict] = [{"role": "system", "content": full_system}]
+        full_system, parent_offset = _build_subagent_system(system_content, system_hint)
+        from . import prompt_spans
+
+        sys_msg: dict = {"role": "system", "content": full_system}
+        prompt_spans.set_spans(
+            sys_msg, prompt_spans.shift(system_spans or [], parent_offset)
+        )
+        messages: list[dict] = [sys_msg]
         messages.append({"role": "user", "content": task})
 
         kwargs = {**template}

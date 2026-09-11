@@ -5,11 +5,19 @@ import types
 
 import pytest
 
-from swival.agent import (
-    _collect_project_dirs,
-    load_instructions,
-    MAX_INSTRUCTIONS_CHARS,
-)
+from swival.instructions import _collect_project_dirs, load as _load_instruction_set
+
+
+def load_instructions(base_dir, config_dir=None, *, start_dir=None, verbose=False):
+    """The rendered block and the files behind it, as these tests read them."""
+    result = _load_instruction_set(
+        base_dir, config_dir, start_dir=start_dir, verbose=verbose
+    )
+    return result.text, result.paths
+
+
+# Bigger than the old 10,000-character slice, so a starving loader would show.
+BIG = 10_100
 
 
 # ---------------------------------------------------------------------------
@@ -60,21 +68,17 @@ class TestFileDiscovery:
 
 
 class TestContentHandling:
-    def test_truncation(self, tmp_path):
+    def test_large_file_loaded_whole(self, tmp_path):
+        """A long file is never sliced. It loads whole or it fails admission."""
         content = "x" * 15_000
         (tmp_path / "CLAUDE.md").write_text(content, encoding="utf-8")
         result, loaded = load_instructions(str(tmp_path), verbose=False)
-        # Should be truncated
-        assert f"exceeds {MAX_INSTRUCTIONS_CHARS} character limit" in result
-        # Extract content between tags
+        assert "truncated" not in result
         inner = result.split("<project-instructions>\n", 1)[1].rsplit(
             "\n</project-instructions>", 1
         )[0]
-        # Inner should be exactly MAX_INSTRUCTIONS_CHARS x's + truncation notice
-        x_part, notice = inner.rsplit("\n", 1)
-        assert len(x_part) == MAX_INSTRUCTIONS_CHARS
-        assert x_part == "x" * MAX_INSTRUCTIONS_CHARS
-        assert "truncated" in notice
+        assert inner == content
+        assert loaded == [str(tmp_path / "CLAUDE.md")]
 
     def test_unreadable_file_skipped(self, tmp_path, monkeypatch):
         (tmp_path / "CLAUDE.md").write_text("readable", encoding="utf-8")
@@ -373,52 +377,51 @@ class TestUserLevelAgentsMd:
         assert result == ""
         assert loaded == []
 
-    def test_user_level_exhausts_budget(self, tmp_path):
-        """A large user-level file starves project-level content."""
+    def test_large_user_file_does_not_starve_project(self, tmp_path):
+        """A personal file can no longer spend the project rules' allowance."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
-        (config_dir / "AGENTS.md").write_text(
-            "U" * (MAX_INSTRUCTIONS_CHARS + 100), encoding="utf-8"
-        )
+        (config_dir / "AGENTS.md").write_text("U" * BIG, encoding="utf-8")
 
         project_dir = tmp_path / "project"
         project_dir.mkdir()
         (project_dir / "AGENTS.md").write_text("Project content.", encoding="utf-8")
 
         result, loaded = load_instructions(str(project_dir), config_dir, verbose=False)
-        assert "truncated" in result
-        # Project content is not present (budget exhausted)
-        assert "Project content." not in result
-        assert loaded == [str(config_dir / "AGENTS.md")]
+        assert "truncated" not in result
+        assert "Project content." in result
+        assert loaded == [
+            str(config_dir / "AGENTS.md"),
+            str(project_dir / "AGENTS.md"),
+        ]
 
-    def test_combined_exceeds_budget(self, tmp_path):
-        """User-level fits, project-level gets truncated."""
+    def test_large_combined_set_loads_whole(self, tmp_path):
         config_dir = tmp_path / "config"
         config_dir.mkdir()
-        user_content = "U" * (MAX_INSTRUCTIONS_CHARS - 100)
+        user_content = "U" * BIG
         (config_dir / "AGENTS.md").write_text(user_content, encoding="utf-8")
 
         project_dir = tmp_path / "project"
         project_dir.mkdir()
-        (project_dir / "AGENTS.md").write_text("P" * 500, encoding="utf-8")
+        project_content = "P" * 500
+        (project_dir / "AGENTS.md").write_text(project_content, encoding="utf-8")
 
         result, loaded = load_instructions(str(project_dir), config_dir, verbose=False)
-        # Both loaded, but project is truncated
         assert len(loaded) == 2
-        assert "truncated" in result
-        # User content intact
+        assert "truncated" not in result
         assert user_content in result
+        assert project_content in result
 
     def test_no_instructions_skips_both(self, tmp_path):
-        """build_system_prompt with no_instructions=True skips everything."""
-        from swival.agent import build_system_prompt
+        """assemble_system_prompt with no_instructions=True skips everything."""
+        from swival.agent import assemble_system_prompt
 
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         (config_dir / "AGENTS.md").write_text("User rules.", encoding="utf-8")
         (tmp_path / "AGENTS.md").write_text("Project rules.", encoding="utf-8")
 
-        content, loaded = build_system_prompt(
+        result = assemble_system_prompt(
             base_dir=str(tmp_path),
             system_prompt=None,
             no_system_prompt=False,
@@ -428,8 +431,8 @@ class TestUserLevelAgentsMd:
             verbose=False,
             config_dir=config_dir,
         )
-        assert "agent-instructions" not in content
-        assert loaded == []
+        assert "agent-instructions" not in result.content
+        assert result.instructions_loaded == []
 
     def test_unreadable_user_agents_skipped(self, tmp_path, monkeypatch):
         """Unreadable user-level AGENTS.md is skipped; project-level still loads."""
@@ -506,7 +509,7 @@ class TestGlobalAgentsMd:
     """Tests for loading ~/.agents/AGENTS.md."""
 
     def _set_global_path(self, monkeypatch, path):
-        monkeypatch.setattr("swival.agent._global_agents_md_path", lambda: path)
+        monkeypatch.setattr("swival.instructions.global_agents_md_path", lambda: path)
 
     def test_global_only(self, tmp_path, monkeypatch):
         global_dir = tmp_path / ".agents"
@@ -566,12 +569,10 @@ class TestGlobalAgentsMd:
         assert result.index("Global stuff.") < result.index("Project stuff.")
         assert "<!-- user:" not in result
 
-    def test_user_exhausts_budget_starves_global(self, tmp_path, monkeypatch):
+    def test_large_user_file_does_not_starve_global(self, tmp_path, monkeypatch):
         config_dir = tmp_path / "config"
         config_dir.mkdir()
-        (config_dir / "AGENTS.md").write_text(
-            "U" * (MAX_INSTRUCTIONS_CHARS + 100), encoding="utf-8"
-        )
+        (config_dir / "AGENTS.md").write_text("U" * BIG, encoding="utf-8")
 
         global_dir = tmp_path / ".agents"
         global_dir.mkdir()
@@ -583,17 +584,15 @@ class TestGlobalAgentsMd:
         (project_dir / "AGENTS.md").write_text("Project content.", encoding="utf-8")
 
         result, loaded = load_instructions(str(project_dir), config_dir, verbose=False)
-        assert "truncated" in result
-        assert "Global content." not in result
-        assert "Project content." not in result
-        assert loaded == [str(config_dir / "AGENTS.md")]
+        assert "truncated" not in result
+        assert "Global content." in result
+        assert "Project content." in result
+        assert len(loaded) == 3
 
-    def test_user_and_global_exhaust_budget(self, tmp_path, monkeypatch):
+    def test_all_three_scopes_load_whole(self, tmp_path, monkeypatch):
         config_dir = tmp_path / "config"
         config_dir.mkdir()
-        (config_dir / "AGENTS.md").write_text(
-            "U" * (MAX_INSTRUCTIONS_CHARS - 100), encoding="utf-8"
-        )
+        (config_dir / "AGENTS.md").write_text("U" * BIG, encoding="utf-8")
 
         global_dir = tmp_path / ".agents"
         global_dir.mkdir()
@@ -605,9 +604,8 @@ class TestGlobalAgentsMd:
         (project_dir / "AGENTS.md").write_text("Project content.", encoding="utf-8")
 
         result, loaded = load_instructions(str(project_dir), config_dir, verbose=False)
-        # User and global loaded, project starved
-        assert len(loaded) == 2
-        assert "Project content." not in result
+        assert len(loaded) == 3
+        assert "Project content." in result
 
     def test_global_unreadable_skipped(self, tmp_path, monkeypatch):
         global_dir = tmp_path / ".agents"
@@ -646,14 +644,14 @@ class TestGlobalAgentsMd:
         assert len(loaded) == 2
 
     def test_no_instructions_skips_global(self, tmp_path, monkeypatch):
-        from swival.agent import build_system_prompt
+        from swival.agent import assemble_system_prompt
 
         global_dir = tmp_path / ".agents"
         global_dir.mkdir()
         (global_dir / "AGENTS.md").write_text("Global rules.", encoding="utf-8")
         self._set_global_path(monkeypatch, global_dir / "AGENTS.md")
 
-        content, loaded = build_system_prompt(
+        result = assemble_system_prompt(
             base_dir=str(tmp_path),
             system_prompt=None,
             no_system_prompt=False,
@@ -663,8 +661,8 @@ class TestGlobalAgentsMd:
             verbose=False,
             config_dir=None,
         )
-        assert "agent-instructions" not in content
-        assert loaded == []
+        assert "agent-instructions" not in result.content
+        assert result.instructions_loaded == []
 
 
 # ---------------------------------------------------------------------------
@@ -786,13 +784,11 @@ class TestMultiLevelLoadInstructions:
         assert "leaf" in result
         assert len(loaded) == 2
 
-    def test_budget_exhausted_skips_later(self, tmp_path, monkeypatch):
-        import swival.agent as agent_mod
-
-        monkeypatch.setattr(agent_mod, "MAX_INSTRUCTIONS_CHARS", 10)
+    def test_later_scope_is_never_starved(self, tmp_path):
         start = tmp_path / "sub"
         start.mkdir()
-        (tmp_path / "AGENTS.md").write_text("x" * 20)
+        (tmp_path / "AGENTS.md").write_text("x" * BIG)
         (start / "AGENTS.md").write_text("sub content")
         result, loaded = load_instructions(str(tmp_path), start_dir=start)
-        assert len(loaded) == 1
+        assert len(loaded) == 2
+        assert "sub content" in result

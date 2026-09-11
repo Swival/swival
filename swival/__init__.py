@@ -9,6 +9,7 @@ from .report import AgentError as AgentError
 from .report import ConfigError as ConfigError
 from .report import ContextOverflowError as ContextOverflowError
 from .report import LifecycleError as LifecycleError
+from .instructions import InstructionLoadError as InstructionLoadError
 
 try:
     __version__ = _metadata.version("swival")

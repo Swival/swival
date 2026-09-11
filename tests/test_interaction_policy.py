@@ -7,7 +7,7 @@ import pytest
 from swival.agent import (
     _apply_interaction_policy,
     _COMMAND_PROVIDER_SYSTEM_PROMPT,
-    build_system_prompt,
+    assemble_system_prompt,
 )
 from swival import Session, agent
 
@@ -18,7 +18,7 @@ from swival import Session, agent
 
 
 def _build(tmp_path, **kwargs):
-    """Call build_system_prompt with sensible defaults (placeholders unsubstituted)."""
+    """Call assemble_system_prompt with sensible defaults (placeholders unsubstituted)."""
     defaults = dict(
         base_dir=str(tmp_path),
         system_prompt=None,
@@ -29,7 +29,7 @@ def _build(tmp_path, **kwargs):
         verbose=False,
     )
     defaults.update(kwargs)
-    return build_system_prompt(**defaults)
+    return assemble_system_prompt(**defaults).content
 
 
 def _make_message(content=None, tool_calls=None):
@@ -51,14 +51,14 @@ def _simple_llm(*args, **kwargs):
 
 class TestAutonomousMode:
     def test_renders_autonomous_directives(self, tmp_path):
-        content, _ = _build(tmp_path)
+        content = _build(tmp_path)
         result = _apply_interaction_policy(content, "autonomous")
         assert "autonomously" in result
         assert "pick the most likely intent" in result
         assert "optimal" in result
 
     def test_no_interactive_phrases(self, tmp_path):
-        content, _ = _build(tmp_path)
+        content = _build(tmp_path)
         result = _apply_interaction_policy(content, "autonomous")
         assert "ask the user to clarify" not in result
         assert "ask the user a brief clarifying question" not in result
@@ -66,13 +66,13 @@ class TestAutonomousMode:
 
 class TestInteractiveMode:
     def test_renders_interactive_directives(self, tmp_path):
-        content, _ = _build(tmp_path)
+        content = _build(tmp_path)
         result = _apply_interaction_policy(content, "interactive")
         assert "ask the user to clarify" in result
         assert "ask the user a brief clarifying question" in result
 
     def test_no_autonomous_phrases(self, tmp_path):
-        content, _ = _build(tmp_path)
+        content = _build(tmp_path)
         result = _apply_interaction_policy(content, "interactive")
         assert "autonomously" not in result
 
@@ -80,7 +80,7 @@ class TestInteractiveMode:
 class TestNoPlaceholdersRemain:
     @pytest.mark.parametrize("policy", ["autonomous", "interactive"])
     def test_no_placeholders(self, tmp_path, policy):
-        content, _ = _build(tmp_path)
+        content = _build(tmp_path)
         result = _apply_interaction_policy(content, policy)
         assert "{{AUTONOMY_DIRECTIVE}}" not in result
         assert "{{AMBIGUITY_DIRECTIVE}}" not in result
@@ -94,7 +94,7 @@ class TestNoPlaceholdersRemain:
 class TestCustomSystemPrompt:
     @pytest.mark.parametrize("policy", ["autonomous", "interactive"])
     def test_custom_prompt_unchanged(self, tmp_path, policy):
-        content, _ = _build(tmp_path, system_prompt="My custom prompt.")
+        content = _build(tmp_path, system_prompt="My custom prompt.")
         result = _apply_interaction_policy(content, policy)
         assert result.startswith("My custom prompt.")
         assert "autonomously" not in result
@@ -109,7 +109,7 @@ class TestCustomSystemPrompt:
 class TestCommandProvider:
     @pytest.mark.parametrize("policy", ["autonomous", "interactive"])
     def test_command_provider_unchanged(self, tmp_path, policy):
-        content, _ = _build(tmp_path, provider="command")
+        content = _build(tmp_path, provider="command")
         result = _apply_interaction_policy(content, policy)
         assert result.startswith(_COMMAND_PROVIDER_SYSTEM_PROMPT)
         assert "{{AUTONOMY_DIRECTIVE}}" not in result

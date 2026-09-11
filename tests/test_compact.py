@@ -30,6 +30,7 @@ from swival.agent import (
     _gc_scaffolding,
     _has_spent_scaffolding,
     _prompt_budget,
+    output_reserve,
     GOAL_RECAP_PREFIX,
     MIN_OUTPUT_TOKENS,
     _emergency_truncate,
@@ -2634,10 +2635,22 @@ class TestPromptBudget:
         # budget = floor(context * 0.90) - reserve(output)
         assert _prompt_budget(10_000, 1000) == 9000 - 1000
 
-    def test_reserve_clamped_to_half_context(self):
-        # A huge max_output cannot starve the prompt: reserve caps at ctx // 2.
+    def test_reserve_capped_by_window_share(self):
+        # A huge max_output cannot starve the prompt: the reserve follows the
+        # window (ctx // 8), never the request.
         budget = _prompt_budget(10_000, 999_999)
-        assert budget == 9000 - 5000
+        assert budget == 9000 - 1250
+
+    def test_reserve_capped_by_ceiling(self):
+        # On a large window the absolute ceiling binds instead of ctx // 8.
+        assert output_reserve(131_072, 32_768) == 4096
+        assert _prompt_budget(131_072, 32_768) == 117_964 - 4096
+
+    def test_reserve_never_exceeds_request(self):
+        assert output_reserve(131_072, 512) == 512
+
+    def test_reserve_floor_on_tiny_window(self):
+        assert output_reserve(64, 32_768) == MIN_OUTPUT_TOKENS
 
     def test_reserve_floor(self):
         # No requested output budget still reserves the minimum.

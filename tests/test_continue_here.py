@@ -379,20 +379,20 @@ class TestFormatContinuePrompt:
 
 
 # ---------------------------------------------------------------------------
-# Integration: build_system_prompt
+# Integration: assemble_system_prompt
 # ---------------------------------------------------------------------------
 
 
-class TestBuildSystemPrompt:
+class TestAssembleSystemPrompt:
     def test_continue_file_injected(self, tmp_path):
-        from swival.agent import build_system_prompt
+        from swival.agent import assemble_system_prompt
 
         # Write a continue file
         path = tmp_path / ".swival" / "continue.md"
         path.parent.mkdir(parents=True)
         path.write_text("# Continue\n\nResume the auth fix")
 
-        prompt, _ = build_system_prompt(
+        result = assemble_system_prompt(
             base_dir=str(tmp_path),
             system_prompt=None,
             no_system_prompt=False,
@@ -401,13 +401,16 @@ class TestBuildSystemPrompt:
             skills_catalog={},
             verbose=False,
         )
-        assert "Resume the auth fix" in prompt
-        assert "<continue-here>" in prompt
-        # File should be consumed
+        assert "Resume the auth fix" in result.content
+        assert "<continue-here>" in result.content
+        # Reading it does not spend it: the caller decides, once the request
+        # it was read for is actually going out.
+        assert path.exists()
+        result.consume_continuation()
         assert not path.exists()
 
     def test_continue_file_consumed_not_loaded_twice(self, tmp_path):
-        from swival.agent import build_system_prompt
+        from swival.agent import assemble_system_prompt
 
         path = tmp_path / ".swival" / "continue.md"
         path.parent.mkdir(parents=True)
@@ -423,21 +426,22 @@ class TestBuildSystemPrompt:
             verbose=False,
         )
 
-        prompt1, _ = build_system_prompt(**common_kwargs)
-        assert "Resume work" in prompt1
+        first = assemble_system_prompt(**common_kwargs)
+        assert "Resume work" in first.content
+        first.consume_continuation()
         assert not path.exists()
 
-        prompt2, _ = build_system_prompt(**common_kwargs)
-        assert "Resume work" not in prompt2
+        second = assemble_system_prompt(**common_kwargs)
+        assert "Resume work" not in second.content
 
     def test_continue_file_with_custom_system_prompt(self, tmp_path):
-        from swival.agent import build_system_prompt
+        from swival.agent import assemble_system_prompt
 
         path = tmp_path / ".swival" / "continue.md"
         path.parent.mkdir(parents=True)
         path.write_text("# Continue\n\nResume work")
 
-        prompt, _ = build_system_prompt(
+        prompt = assemble_system_prompt(
             base_dir=str(tmp_path),
             system_prompt="You are a custom bot.",
             no_system_prompt=False,
@@ -445,18 +449,18 @@ class TestBuildSystemPrompt:
             no_memory=True,
             skills_catalog={},
             verbose=False,
-        )
+        ).content
         assert "custom bot" in prompt
         assert "Resume work" in prompt
 
     def test_no_continue_flag_skips_loading(self, tmp_path):
-        from swival.agent import build_system_prompt
+        from swival.agent import assemble_system_prompt
 
         path = tmp_path / ".swival" / "continue.md"
         path.parent.mkdir(parents=True)
         path.write_text("# Continue\n\nResume work")
 
-        prompt, _ = build_system_prompt(
+        prompt = assemble_system_prompt(
             base_dir=str(tmp_path),
             system_prompt=None,
             no_system_prompt=False,
@@ -465,7 +469,7 @@ class TestBuildSystemPrompt:
             skills_catalog={},
             verbose=False,
             no_continue=True,
-        )
+        ).content
         assert "Resume work" not in prompt
         # File should still exist (not consumed)
         assert path.exists()

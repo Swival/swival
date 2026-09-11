@@ -126,7 +126,12 @@
     &quot;commands&quot;: &quot;all&quot;,
     &quot;max_review_rounds&quot;: 15,
     &quot;skills_discovered&quot;: [],
-    &quot;instructions_loaded&quot;: []
+    &quot;instructions_loaded&quot;: [],
+    &quot;instructions_skipped&quot;: [],
+    &quot;instructions_status&quot;: &quot;disabled&quot;,
+    &quot;instructions_full&quot;: false,
+    &quot;token_estimates_exact&quot;: true,
+    &quot;prompt_cost_estimate&quot;: {}
   },
   &quot;sandbox&quot;: {
     &quot;mode&quot;: &quot;builtin&quot;
@@ -167,7 +172,12 @@
 <p><code>temperature</code> stores the sampling temperature or <code>null</code> when omitted. <code>top_p</code> stores nucleus sampling. <code>seed</code> stores the random seed or <code>null</code>. <code>max_turns</code> and <code>max_output_tokens</code> store turn and output-token limits.</p>
 <p><code>context_length</code> stores effective context length after provider resolution. <code>files</code> records the filesystem access policy: <code>"some"</code> (workspace only, the default), <code>"all"</code> (unrestricted), or <code>"none"</code> (<code>.swival/</code> only).</p>
 <p><code>commands</code> records the configured command policy: <code>"all"</code> (unrestricted, the default), <code>"none"</code> (disabled), <code>"ask"</code> (interactive approval per bucket), or a sorted list of whitelisted basenames. <code>max_review_rounds</code> records the reviewer retry limit.</p>
-<p><code>skills_discovered</code> records skill names discovered at startup. <code>instructions_loaded</code> records loaded instruction files as absolute paths (e.g. the user-level <code>AGENTS.md</code> from <code>~/.config/swival/</code>, the cross-agent <code>~/.agents/AGENTS.md</code>, and the project-level files).</p>
+<p><code>skills_discovered</code> records skill names discovered at startup.</p>
+<p><code>instructions_loaded</code> records instruction files as absolute paths (e.g. the user-level <code>AGENTS.md</code> from <code>~/.config/swival/</code>, the cross-agent <code>~/.agents/AGENTS.md</code>, and the project-level files). A file is listed only when all of its content went into the prompt at the loading event. It is not a claim that the model followed the file, or that the file has stayed the same since. Before this release a file could appear here after being cut at 10,000 characters; now a file that does not fit is not listed at all, and the run stops.</p>
+<p><code>instructions_status</code> says what happened: <code>loaded</code> (the set was admitted), <code>forced</code> (admitted over the allowance because full loading is on), <code>failed</code> (the set did not fit, or a file was larger than the read caps, and the run stopped before the first model call), or <code>disabled</code> (this session does not load instruction files). A file that could not be opened is left out of <code>instructions_loaded</code> and named in <code>instructions_skipped</code>; it does not change the status.</p>
+<p><code>instructions_skipped</code> records files that were found and could not be read at all, each with the reason. They are warned about once on stderr and then treated as absent, so without this field a report would show a shorter <code>instructions_loaded</code> with nothing to explain it. An oversized file is not listed here: that stops the run instead, and the status becomes <code>failed</code>.</p>
+<p><code>instructions_full</code> records whether the full-loading override was in force. <code>token_estimates_exact</code> is false when no tokenizer data was available and every size in the report is a UTF-8 byte count instead of a token count.</p>
+<p><code>prompt_cost_estimate</code> breaks the initial request into components, each counted once: <code>builtin</code>, <code>instructions</code>, <code>instructions_by_source</code>, <code>memory</code>, <code>skills</code>, <code>tools</code>, <code>external_tool_notes</code>, <code>continuation</code>, <code>task</code>, <code>output_reserve</code> and <code>working_reserve</code>. Absent components are omitted. Use it to tell an oversized <code>AGENTS.md</code> from a window filled by tool schemas.</p>
 <h3 id="sandbox"><code>sandbox</code></h3>
 <p><code>mode</code> is always present and is <code>builtin</code> (application-layer path guards), <code>agentfs</code> (OS-enforced write isolation via AgentFS), or <code>nono</code> (OS-enforced isolation via nono). <code>session</code> appears when an AgentFS session ID is active. When <code>mode</code> is <code>agentfs</code>, <code>strict_read</code> is always present (whether strict read isolation is enabled), and <code>agentfs_version</code> (the AgentFS binary version) and <code>diff_hint</code> (a hint for reviewing changes) may also appear. When <code>mode</code> is <code>nono</code>, <code>rollback</code> is always present (whether atomic rollback snapshots are enabled), and <code>nono_version</code> (the nono binary version) and <code>nono_profile</code> (the named profile applied) may also appear.</p>
 <h3 id="result"><code>result</code></h3>

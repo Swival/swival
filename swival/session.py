@@ -13,12 +13,12 @@ from pathlib import Path
 from . import tools
 from .agent import (
     _InteractionPolicy,
-    _apply_interaction_policy,
     _shutdown_and_reconcile,
 )
 from .config import _UNSET, NETWORK_MODES, first_remote_integration
 from .cost import SessionCost
 from .goal import GoalState
+from .instructions import InstructionLoadError
 from .report import ConfigError, ReportCollector
 from .snapshot import SnapshotState
 from .thinking import ThinkingState
@@ -80,6 +80,7 @@ class Session:
         system_prompt: str | None = None,
         no_system_prompt: bool = False,
         no_instructions: bool = False,
+        instructions_full: bool = False,
         no_skills: bool = False,
         skills_dir: list[str] | None = None,
         allowed_dirs: list[str] | None = None,
@@ -168,6 +169,7 @@ class Session:
         self.system_prompt = system_prompt
         self.no_system_prompt = no_system_prompt
         self.no_instructions = no_instructions
+        self.instructions_full = instructions_full
         self.no_skills = no_skills
         self.skills_dir = skills_dir or []
         self.allowed_dirs = allowed_dirs or []
@@ -250,6 +252,9 @@ class Session:
         self._tools: list = []
         self._system_content: str | None = None
         self._instructions_loaded: list[str] = []
+        self._instructions_skipped: list[str] = []
+        self._instructions_status: str = "disabled"
+        self._instruction_set = None
         self._allowed_dir_paths: list[Path] = []
         self._allowed_dir_ro_paths: list[Path] = []
 
@@ -350,7 +355,6 @@ class Session:
             resolve_provider,
             resolve_commands,
             build_tools,
-            build_system_prompt,
             cleanup_old_cmd_outputs,
             _filter_command_tool_schemas,
         )
@@ -550,84 +554,148 @@ class Session:
 
             _validate_external_command(self.command_middleware, "command_middleware")
 
-        # Build system prompt (without memory — memory is injected per-call
-        # in run()/ask() so it can be keyed from the user's question).
-        mcp_tool_info = self._mcp_manager.get_tool_info() if self._mcp_manager else None
-        a2a_tool_info = self._a2a_manager.get_tool_info() if self._a2a_manager else None
+        # Prompt sources are prepared here; the prompt itself is assembled per
+        # call. The interaction policy and the user's question both change it,
+        # and both arrive with run() or ask(). Assembling early would freeze the
+        # policy and force a second whole-message rewrite afterwards.
+        self._mcp_tool_info = (
+            self._mcp_manager.get_tool_info() if self._mcp_manager else None
+        )
+        self._a2a_tool_info = (
+            self._a2a_manager.get_tool_info() if self._a2a_manager else None
+        )
         # Build list of tool schemas exposable to command provider (MCP/A2A/skills).
-        _command_tool_schemas = (
+        self._command_tool_schemas = (
             _filter_command_tool_schemas(self._tools) or None
             if self.provider == "command"
             else None
         )
-
-        self._system_content, self._instructions_loaded = build_system_prompt(
-            base_dir=self.base_dir,
-            system_prompt=self.system_prompt,
-            no_system_prompt=self.no_system_prompt,
-            no_instructions=self.no_instructions,
-            no_memory=True,
-            skills_catalog=self._skills_catalog,
-            verbose=self.verbose,
-            config_dir=self.config_dir,
-            mcp_tool_info=mcp_tool_info,
-            a2a_tool_info=a2a_tool_info,
-            no_continue=not self.continue_here,
-            provider=self.provider,
-            command_tool_schemas=_command_tool_schemas,
-            files_mode=self.files,
-            metaskill_names=self._metaskill_names,
-            subagents=self.subagents,
-        )
+        self._ensure_instruction_set()
 
         # Clean up stale cmd_output files
         cleanup_old_cmd_outputs(self.base_dir)
 
         self._setup_done = True
 
-    def _system_with_memory(
+    @property
+    def instructions_enabled(self) -> bool:
+        """Whether this session loads instruction files at all.
+
+        A property of the configuration, never of whether a set is currently
+        cached: the cache is dropped whenever a file may have changed.
+        """
+        return not (
+            self.no_system_prompt
+            or self.system_prompt
+            or self.provider == "command"
+            or self.no_instructions
+        )
+
+    def _ensure_instruction_set(self):
+        """Read the instruction files once, and again after a rejected set.
+
+        A run rejected for size clears the cache, so correcting a file and
+        calling again on the same object picks the correction up.
+        """
+        if self._instruction_set is not None:
+            return self._instruction_set
+        if not self.instructions_enabled:
+            return None
+        from . import instructions as instructions_mod
+
+        self._instruction_set = instructions_mod.load(
+            self.base_dir,
+            self.config_dir,
+            verbose=self.verbose,
+        )
+        return self._instruction_set
+
+    def _assemble_prompt(
         self,
         question: str,
         report: "ReportCollector | None" = None,
         policy: "_InteractionPolicy" = "autonomous",
-    ) -> str | None:
-        """Return system content with memory and interaction policy applied."""
-        if self._system_content is None:
-            return None
+    ):
+        """Assemble the initial request and take the loading decision, once.
 
-        result = self._system_content
+        Memory depends on the question and the interaction policy depends on the
+        entry point, so both arrive here. The instruction set is measured after
+        they are in place, so it is never admitted against a prompt that is
+        about to grow.
 
-        # Inject memory (skipped for custom prompts and when memory is disabled)
-        if self.memory and not self.system_prompt:
-            from .agent import load_memory
+        Raises:
+            InstructionLoadError: the instruction files do not fit this setup.
+        """
+        from .agent import (
+            assemble_system_prompt,
+            _instruction_status,
+            _raise_if_instructions_rejected,
+            _warn_instruction_admission,
+        )
 
-            memory_text = load_memory(
-                self.base_dir,
-                verbose=self.verbose,
-                memory_full=self.memory_full,
-                user_query=question,
-                report=report,
-            )
-            if memory_text:
-                result = result + "\n\n" + memory_text
-
-        # Substitute interaction-policy placeholders
-        result = _apply_interaction_policy(result, policy)
-
+        result = assemble_system_prompt(
+            base_dir=self.base_dir,
+            system_prompt=self.system_prompt,
+            no_system_prompt=self.no_system_prompt,
+            no_instructions=self.no_instructions,
+            no_memory=not self.memory,
+            memory_full=self.memory_full,
+            skills_catalog=self._skills_catalog,
+            verbose=self.verbose,
+            config_dir=self.config_dir,
+            mcp_tool_info=self._mcp_tool_info,
+            a2a_tool_info=self._a2a_tool_info,
+            no_continue=not self.continue_here,
+            user_query=question,
+            report=report,
+            provider=self.provider,
+            command_tool_schemas=self._command_tool_schemas,
+            files_mode=self.files,
+            metaskill_names=self._metaskill_names,
+            subagents=self.subagents,
+            policy=policy,
+            context_length=self._context_length,
+            max_output_tokens=self.max_output_tokens,
+            tools=self._tools,
+            instructions_full=self.instructions_full,
+            instruction_set=self._ensure_instruction_set(),
+        )
+        self._system_content = result.content
+        self._instructions_loaded = result.instructions_loaded
+        self._instructions_skipped = result.instructions_skipped
+        self._instructions_status = _instruction_status(result)
+        if result.admission is not None and not result.admission.admitted:
+            self._instruction_set = None
+        _raise_if_instructions_rejected(result, verbose=self.verbose)
+        result.consume_continuation()
+        _warn_instruction_admission(
+            result, verbose=self.verbose, flag="instructions_full"
+        )
         return result
 
     def _make_initial_messages(
         self,
         system_content: str | None = None,
+        spans: list | None = None,
     ) -> list[dict]:
         """Create the initial messages list with system prompt if configured."""
         content = system_content if system_content is not None else self._system_content
         messages: list[dict] = []
         if content is not None:
-            messages.append({"role": "system", "content": content})
+            from . import prompt_spans
+
+            message = {"role": "system", "content": content}
+            # Unconditionally: the key's presence is what marks a message as
+            # one we assembled, so an empty list still has to be written.
+            prompt_spans.set_spans(message, spans or [])
+            messages.append(message)
         return messages
 
-    def _make_per_run_state(self, system_content: str | None = None) -> dict:
+    def _make_per_run_state(
+        self,
+        system_content: str | None = None,
+        spans: list | None = None,
+    ) -> dict:
         """Create fresh per-run state: thinking, tracker, skill roots, messages."""
         from .agent import CompactionState
 
@@ -638,14 +706,19 @@ class Session:
             "goal_state": GoalState(verbose=self.verbose),
             "file_tracker": FileAccessTracker() if self.read_guard else None,
             "skill_read_roots": list(self._allowed_dir_ro_paths),
-            "messages": self._make_initial_messages(system_content),
+            "messages": self._make_initial_messages(system_content, spans),
             "compaction_state": CompactionState() if self.proactive_summaries else None,
             "session_cost": SessionCost(),
             "llm_kwargs": {**self._llm_kwargs, "session_id": str(uuid.uuid4())},
             "resolved_system_content": system_content,
+            "resolved_system_spans": list(spans or []),
             # Shared turn budget so a /extend issued via parse_commands persists
             # across subsequent ask() calls, mirroring the REPL.
             "turn_state": {"max_turns": self.max_turns, "turns_used": 0},
+            # A saved instruction update that could not be activated. It lives
+            # on the conversation, not on the per-call command context, or the
+            # next call would send the old rules to the model.
+            "pending_instruction_failure": None,
         }
 
     def _build_loop_kwargs(self, state: dict) -> dict:
@@ -682,6 +755,7 @@ class Session:
             metaskills_policy=self._metaskills_policy,
             enabled_metaskills=set(self._metaskill_names or []),
             storm_breaker_enabled=self.storm_breaker,
+            instructions_full=self.instructions_full,
             session=self,
             network_mode=self.network,
             net_jail=self._net_jail,
@@ -720,6 +794,7 @@ class Session:
                 loop_kwargs_template=sa_template,
                 tools=self._tools,
                 resolved_system_content=state.get("resolved_system_content"),
+                resolved_system_spans=state.get("resolved_system_spans"),
                 parent_cancel_flag=self.cancel_flag,
                 verbose=self.verbose,
                 notify_user=notify,
@@ -734,8 +809,18 @@ class Session:
         from .agent import run_agent_loop, append_history
 
         collector = ReportCollector() if report else None
-        system_content = self._system_with_memory(question, collector)
-        state = self._make_per_run_state(system_content=system_content)
+        try:
+            prompt = self._assemble_prompt(question, collector)
+        except InstructionLoadError as exc:
+            # The run never reached the model, and a caller that asked for a
+            # report still gets one. It travels on the exception, because a
+            # successful-looking Result would be a lie.
+            if collector is not None:
+                exc.report = self._failure_report(collector, question)
+            raise
+        state = self._make_per_run_state(
+            system_content=prompt.content, spans=prompt.spans
+        )
         messages = state["messages"]
         messages.append({"role": "user", "content": question})
         loop_kwargs = self._build_loop_kwargs(state)
@@ -784,14 +869,7 @@ class Session:
                 task=question,
                 model=self._model_id or "unknown",
                 provider=self.provider,
-                settings={
-                    "max_turns": self.max_turns,
-                    "max_output_tokens": self.max_output_tokens,
-                    "temperature": self.temperature,
-                    "top_p": self.top_p,
-                    "seed": self.seed,
-                    "files": self.files,
-                },
+                settings=self._report_settings(),
                 outcome=outcome,
                 answer=answer,
                 exit_code=exit_code,
@@ -812,6 +890,33 @@ class Session:
             exhausted=exhausted,
             messages=copy.deepcopy(messages),
             report=report_dict,
+        )
+
+    def _report_settings(self) -> dict:
+        return {
+            "max_turns": self.max_turns,
+            "max_output_tokens": self.max_output_tokens,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "seed": self.seed,
+            "files": self.files,
+            "instructions_loaded": list(self._instructions_loaded),
+            "instructions_skipped": list(self._instructions_skipped),
+            "instructions_status": self._instructions_status,
+            "instructions_full": self.instructions_full,
+        }
+
+    def _failure_report(self, collector: "ReportCollector", question: str) -> dict:
+        """Build the report for a run that stopped before the first model call."""
+        return collector.build_report(
+            task=question,
+            model=self._model_id or "unknown",
+            provider=self.provider,
+            settings=self._report_settings(),
+            outcome="error",
+            answer=None,
+            exit_code=1,
+            turns=0,
         )
 
     def _make_input_context(self, state: dict) -> "object":
@@ -853,6 +958,9 @@ class Session:
             skill_read_roots=state["skill_read_roots"],
             skills_catalog=self._skills_catalog,
             trace_dir=self.trace_dir,
+            instructions_enabled=self.instructions_enabled,
+            instructions_full=self.instructions_full,
+            pending_instruction_failure=state.get("pending_instruction_failure"),
         )
 
     @staticmethod
@@ -883,6 +991,17 @@ class Session:
             try:
                 step = execute_input(parsed, ctx, mode="repl")
             finally:
+                # Carry any saved-but-inactive update back onto the
+                # conversation, so the next call sees it too.
+                state["pending_instruction_failure"] = ctx.pending_instruction_failure
+                # Drop the cache after *every* command, not just the two that
+                # write instruction files themselves. This looks like a missed
+                # optimisation and is not one: an agent turn can write
+                # AGENTS.md through the write tool, so narrowing this to
+                # /remember and /init would assemble the next run() from a
+                # copy the model has already replaced. The cost is re-reading
+                # a handful of small files.
+                self._instruction_set = None
                 _shutdown_and_reconcile(
                     ctx.subagent_manager, state["session_cost"], self.verbose
                 )
@@ -912,6 +1031,25 @@ class Session:
             messages=copy.deepcopy(messages),
             report=None,
         )
+
+    def _raise_if_instructions_pending(self, state: dict) -> None:
+        """Refuse a model turn while a saved instruction update is inactive.
+
+        A ``/remember`` that could not reach the live prompt leaves the session
+        running with the previous rules. Sending the next question anyway would
+        answer it under rules the user believes they changed. This revalidates
+        first: if they have fixed it, the turn goes ahead.
+        """
+        if state.get("pending_instruction_failure") is None:
+            return
+        from .agent import _revalidate_pending_instructions
+
+        ctx = self._make_input_context(state)
+        blocked = _revalidate_pending_instructions(ctx)
+        state["pending_instruction_failure"] = ctx.pending_instruction_failure
+        if blocked is None:
+            return
+        raise InstructionLoadError(blocked.text)
 
     def ask(self, question: str, *, parse_commands: bool = False) -> Result:
         """Conversational: share context across questions (like the REPL).
@@ -946,8 +1084,10 @@ class Session:
         from .agent import run_agent_loop, append_history
 
         if self._conv_state is None:
-            system_content = self._system_with_memory(question, policy="interactive")
-            self._conv_state = self._make_per_run_state(system_content=system_content)
+            prompt = self._assemble_prompt(question, policy="interactive")
+            self._conv_state = self._make_per_run_state(
+                system_content=prompt.content, spans=prompt.spans
+            )
 
         state = self._conv_state
 
@@ -957,6 +1097,8 @@ class Session:
             parsed = parse_input_line(question)
             if parsed.is_command or parsed.is_custom_command:
                 return self._run_command(parsed, state)
+
+        self._raise_if_instructions_pending(state)
 
         messages = state["messages"]
         with self._transcript_rollback(messages):

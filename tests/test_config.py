@@ -1390,7 +1390,6 @@ class TestExtraBody:
             patch("swival.agent.resolve_provider", mock_provider),
             patch("swival.agent.resolve_commands", return_value={}),
             patch("swival.agent.build_tools", return_value=[]),
-            patch("swival.agent.build_system_prompt", return_value=(None, [])),
             patch("swival.skills.discover_skills", return_value={}),
             patch("swival.agent.cleanup_old_cmd_outputs"),
         ):
@@ -1419,7 +1418,6 @@ class TestExtraBody:
             patch("swival.agent.resolve_provider", mock_provider),
             patch("swival.agent.resolve_commands", return_value={}),
             patch("swival.agent.build_tools", return_value=[]),
-            patch("swival.agent.build_system_prompt", return_value=(None, [])),
             patch("swival.skills.discover_skills", return_value={}),
             patch("swival.agent.cleanup_old_cmd_outputs"),
         ):
