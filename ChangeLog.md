@@ -4,6 +4,11 @@ All notable user-facing changes to Swival.
 
 ## 1.0.44
 
+- `CLAUDE.md` and `AGENTS.md` are loaded in full: if they do not fit, Swival stops with a message naming the files instead of trimming them.
+  `--instructions-full` loads them regardless, an unreadable file is reported and skipped, and loaded rules now survive context compaction.
+- `/remember` and `/init` now take effect in the running session, not just the next one.
+  If the change cannot be applied, Swival prints the exact line and file and holds back model turns until you fix it.
+- Without tokenizer data, context sizes are now treated as estimates: Swival warns once, and no longer compacts or clamps output on a guess.
 - Added `/reasoning` to inspect or change the reasoning effort during a REPL session.
   `/reasoning LEVEL` applies to the next turn and subsequently spawned subagents, `/reasoning -` restores the previous level, and selecting a profile restores that profile's setting.
 - If a model rejects a prompt containing an image, Swival now removes the image and retries the request as text-only.
