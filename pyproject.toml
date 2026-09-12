@@ -33,7 +33,7 @@ dependencies = [
     "starlette>=1.6.0",
     "uvicorn>=0.52.4",
     "fast-cipher>=0.2.2",
-    "boto3>=1.43.92",
+    "boto3>=1.43.93",
     "google-cloud-aiplatform>=2.1.0,<3",
 ]
 
