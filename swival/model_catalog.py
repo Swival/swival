@@ -631,7 +631,12 @@ def _fetch_google(base_url: str | None, api_key: str | None, timeout: float):
     return Catalog(entries, source="Google Gemini")
 
 
-_EXTRA_CHATGPT_MODELS = ("gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol")
+_EXTRA_CHATGPT_MODELS = (
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.6-sol",
+    "gpt-6-astra",
+)
 
 
 def _fetch_chatgpt(base_url: str | None, api_key: str | None, timeout: float):
