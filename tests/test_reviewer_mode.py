@@ -45,6 +45,7 @@ def _reviewer_args(base_dir, **overrides):
         base_url="http://fake",
         max_output_tokens=1024,
         max_context_tokens=None,
+        provider_timeout=900,
         temperature=0.5,
         top_p=None,
         seed=None,
@@ -154,6 +155,33 @@ class TestResolvePath:
 
 
 class TestRunAsReviewer:
+    def test_provider_timeout_forwarded(self, tmp_path, monkeypatch):
+        args = _reviewer_args(str(tmp_path), provider_timeout=23)
+        monkeypatch.setenv("SWIVAL_TASK", "Fix the bug")
+        monkeypatch.setattr("sys.stdin", types.SimpleNamespace(read=lambda: "Done"))
+        captured = {}
+
+        def mock_call_llm(*a, **kw):
+            captured.update(kw)
+            return _make_message(content="VERDICT: ACCEPT"), "stop"
+
+        with (
+            patch("swival.agent.call_llm", mock_call_llm),
+            patch(
+                "swival.agent.resolve_provider",
+                return_value=(
+                    "test-model",
+                    "http://fake",
+                    None,
+                    None,
+                    {"provider": "lmstudio", "api_key": None},
+                ),
+            ),
+        ):
+            assert run_as_reviewer(args, str(tmp_path)) == 0
+
+        assert captured["provider_timeout"] == 23
+
     def test_accept_verdict_returns_0(self, tmp_path, capsys, monkeypatch):
         args = _reviewer_args(str(tmp_path))
         monkeypatch.setenv("SWIVAL_TASK", "Fix the bug")

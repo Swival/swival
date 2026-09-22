@@ -423,6 +423,18 @@ class TestTypeValidation:
         ):
             load_config(tmp_path)
 
+    def test_provider_timeout_must_be_positive(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(tmp_path / "swival.toml", "provider_timeout = 0\n")
+        with pytest.raises(ConfigError, match="provider_timeout.*must be > 0"):
+            load_config(tmp_path)
+
+    def test_initial_tool_choice_must_be_known(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+        _write_toml(tmp_path / "swival.toml", 'initial_tool_choice = "always"\n')
+        with pytest.raises(ConfigError, match="initial_tool_choice.*must be one of"):
+            load_config(tmp_path)
+
     def test_mixed_type_list(self, tmp_path, monkeypatch):
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
         _write_toml(tmp_path / "swival.toml", 'commands = ["ls", 42]\n')
@@ -777,6 +789,28 @@ class TestConfigToSessionKwargs:
     def test_identity_keys(self):
         kwargs = config_to_session_kwargs({"provider": "openrouter", "max_turns": 50})
         assert kwargs == {"provider": "openrouter", "max_turns": 50}
+
+    def test_provider_timeout(self):
+        kwargs = config_to_session_kwargs({"provider_timeout": 45})
+        assert kwargs == {"provider_timeout": 45}
+
+        from swival.session import Session
+
+        session = Session(provider_timeout=45)
+        assert session.provider_timeout == 45
+        with pytest.raises(ValueError, match="provider_timeout must be > 0"):
+            Session(provider_timeout=0)
+
+    def test_initial_tool_choice(self):
+        kwargs = config_to_session_kwargs({"initial_tool_choice": "required"})
+        assert kwargs == {"initial_tool_choice": "required"}
+
+        from swival.session import Session
+
+        session = Session(initial_tool_choice="required")
+        assert session.initial_tool_choice == "required"
+        with pytest.raises(ValueError, match="initial_tool_choice must be one of"):
+            Session(initial_tool_choice="always")
 
     def test_inverted_keys(self):
         kwargs = config_to_session_kwargs(

@@ -25,6 +25,7 @@ _UNSET = object()  # Sentinel for "not set by CLI"
 SANDBOX_MODES = ("builtin", "agentfs", "nono")
 NETWORK_MODES = ("full", "provider-only", "none")
 REASONING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "default")
+INITIAL_TOOL_CHOICES = ("auto", "required")
 
 PROFILE_KEYS: set[str] = {
     "description",
@@ -67,6 +68,8 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "seed": int,
     "max_turns": int,
     "retries": int,
+    "provider_timeout": int,
+    "initial_tool_choice": str,
     "system_prompt": str,
     "no_system_prompt": bool,
     "files": str,
@@ -177,6 +180,8 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "seed": None,
     "max_turns": 100,
     "retries": 5,
+    "provider_timeout": 900,
+    "initial_tool_choice": "auto",
     "system_prompt": None,
     "no_system_prompt": False,
     "files": "some",
@@ -326,6 +331,9 @@ def _validate_config(config: dict, source: str) -> None:
                             f"{source}: commands[{i}]: expected string, got {type(elem).__name__}"
                         )
 
+        if key == "provider_timeout" and value <= 0:
+            raise ConfigError(f"{source}: 'provider_timeout' must be > 0")
+
         # Validate list element types
         if key in _LIST_OF_STR_KEYS:
             for i, elem in enumerate(value):
@@ -356,6 +364,15 @@ def _validate_config(config: dict, source: str) -> None:
         raise ConfigError(
             f"{source}: 'reasoning_effort' must be one of {REASONING_LEVELS!r}, "
             f"got {config['reasoning_effort']!r}"
+        )
+
+    if (
+        "initial_tool_choice" in config
+        and config["initial_tool_choice"] not in INITIAL_TOOL_CHOICES
+    ):
+        raise ConfigError(
+            f"{source}: 'initial_tool_choice' must be one of "
+            f"{INITIAL_TOOL_CHOICES!r}, got {config['initial_tool_choice']!r}"
         )
 
     # Mutual exclusion: system_prompt + no_system_prompt
@@ -1216,6 +1233,8 @@ def args_to_session_kwargs(args, base_dir: str) -> dict:
         "cache",
         "cache_dir",
         "retries",
+        "provider_timeout",
+        "initial_tool_choice",
         "llm_filter",
         "encrypt_secrets_key",
         "encrypt_secrets_tweak",
@@ -1467,6 +1486,8 @@ def generate_config(
         "# max_output_lines = 2000         # default line count for file reads",
         "# max_output_kb = 50              # tool output size cap in KB (reads, grep, listings, outline, fetch)",
         "# retries = 5                     # max provider retries on transient network errors (1 = no retry)",
+        "# provider_timeout = 900          # provider request timeout in seconds",
+        '# initial_tool_choice = "auto"    # "auto" | "required" for the first request',
         "# storm_breaker = true            # suppress a model looping on an identical tool call",
         '# system_prompt = "You are a helpful assistant."',
         "# no_system_prompt = false",

@@ -38,6 +38,8 @@ def _make_args(**overrides):
         reviewer=None,
         encrypt_secrets=False,
         retries=5,
+        provider_timeout=900,
+        initial_tool_choice="auto",
     )
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -162,6 +164,26 @@ class TestBuildSelfReviewCmd:
         args = _make_args(max_output_tokens=32768)
         cmd = agent._build_self_review_cmd(args)
         assert "--max-output-tokens" not in cmd
+
+    def test_provider_timeout_mirrored_when_non_default(self):
+        cmd = agent._build_self_review_cmd(_make_args(provider_timeout=45))
+        parts = shlex.split(cmd)
+        idx = parts.index("--provider-timeout")
+        assert parts[idx + 1] == "45"
+
+    def test_default_provider_timeout_not_mirrored(self):
+        cmd = agent._build_self_review_cmd(_make_args())
+        assert "--provider-timeout" not in cmd
+
+    def test_initial_tool_choice_mirrored_when_required(self):
+        cmd = agent._build_self_review_cmd(_make_args(initial_tool_choice="required"))
+        parts = shlex.split(cmd)
+        idx = parts.index("--initial-tool-choice")
+        assert parts[idx + 1] == "required"
+
+    def test_default_initial_tool_choice_not_mirrored(self):
+        cmd = agent._build_self_review_cmd(_make_args())
+        assert "--initial-tool-choice" not in cmd
 
     def test_lmstudio_provider_not_mirrored(self):
         args = _make_args(provider="lmstudio")

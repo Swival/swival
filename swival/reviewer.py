@@ -184,6 +184,7 @@ def run_as_reviewer(args, base_dir: str) -> int:
             api_key=api_key,
             user_agent=llm_kwargs.get("user_agent"),
             max_retries=getattr(args, "retries", 5),
+            provider_timeout=getattr(args, "provider_timeout", 900),
             session_cost=session_cost,
             **_provider_extra_kwargs(llm_kwargs),
             **extra_kwargs,

@@ -192,6 +192,12 @@ def test_classify_returns_correct_index_at_first_sentinel():
     assert content[idx:].startswith("</tool_call>")
 
 
+def test_classify_whole_xml_element_for_allowed_tool():
+    content = "  <read_file><file_path>needle.txt</file_path></read_file>\n"
+    result = _classify_textual_tool_call_leak(content, {"read_file"})
+    assert result == (TRUNCATED_REASON_TEXTUAL_TOOL_CALL, 2)
+
+
 # ---------------------------------------------------------------------------
 # _classify_textual_tool_call_leak: negative cases
 # ---------------------------------------------------------------------------
@@ -271,6 +277,39 @@ def test_classify_allows_xml_without_tool_call_sentinels():
     assert _classify_textual_tool_call_leak(content) is None
 
 
+@pytest.mark.parametrize(
+    "content, allowed",
+    [
+        (
+            "<read_file><file_path>needle.txt</file_path></read_file>",
+            {"write_file"},
+        ),
+        (
+            "<document><read_file>needle.txt</read_file></document>",
+            {"read_file"},
+        ),
+        (
+            "Use this: <read_file><file_path>needle.txt</file_path></read_file>",
+            {"read_file"},
+        ),
+        (
+            "<read_file><file_path>needle.txt</read_file>",
+            {"read_file"},
+        ),
+        (
+            "```xml\n<read_file><file_path>needle.txt</file_path></read_file>\n```",
+            {"read_file"},
+        ),
+        (
+            "`<read_file><file_path>needle.txt</file_path></read_file>`",
+            {"read_file"},
+        ),
+    ],
+)
+def test_classify_ignores_non_matching_or_non_whole_xml(content, allowed):
+    assert _classify_textual_tool_call_leak(content, allowed) is None
+
+
 def test_classify_allows_single_weak_function_tag():
     content = "Math <function>f(x)=x^2</function> rendered."
     assert _classify_textual_tool_call_leak(content) is None
@@ -335,6 +374,104 @@ def test_loop_recovers_from_textual_tool_call_leak(tmp_path, monkeypatch):
             assert "</tool_call>" not in content
             assert "</parameter>" not in content
     assert found_trim, "trimmed assistant message should be in history"
+
+
+def test_xml_tool_leak_repair_requires_one_native_call(tmp_path, monkeypatch):
+    (tmp_path / "needle.txt").write_text("found\n", encoding="utf-8")
+    read_file_tool = next(
+        tool for tool in TOOLS if tool["function"]["name"] == "read_file"
+    )
+    responses = iter(
+        [
+            _make_message(
+                content=("<read_file><file_path>needle.txt</file_path></read_file>")
+            ),
+            _make_message(
+                tool_calls=[
+                    _make_tool_call(
+                        name="read_file",
+                        arguments='{"file_path":"needle.txt"}',
+                    )
+                ]
+            ),
+            _make_message(content="done"),
+        ]
+    )
+    choices = []
+
+    def fake_call_llm(*args, **kwargs):
+        choices.append(kwargs.get("tool_choice", "auto"))
+        return next(responses), "stop", [], 0, (0, 0)
+
+    monkeypatch.setattr(agent, "call_llm", fake_call_llm)
+    answer, exhausted = agent.run_agent_loop(
+        [{"role": "user", "content": "Read the file"}],
+        [read_file_tool],
+        api_base="http://x",
+        model_id="m",
+        max_turns=6,
+        max_output_tokens=None,
+        temperature=None,
+        top_p=None,
+        seed=None,
+        context_length=128000,
+        base_dir=str(tmp_path),
+        thinking_state=ThinkingState(),
+        todo_state=TodoState(),
+        snapshot_state=SnapshotState(),
+        resolved_commands={},
+        skills_catalog={},
+        skill_read_roots=[],
+        extra_write_roots=[],
+        files_mode="all",
+        verbose=False,
+        llm_kwargs={"provider": "generic"},
+        continue_here=False,
+    )
+
+    assert answer == "done"
+    assert exhausted is False
+    assert choices == ["auto", "required", "auto"]
+
+
+def test_xml_root_not_sent_as_tool_is_plain_text(tmp_path, monkeypatch):
+    think_tool = next(tool for tool in TOOLS if tool["function"]["name"] == "think")
+    content = "<read_file><file_path>needle.txt</file_path></read_file>"
+    calls = []
+
+    def fake_call_llm(*args, **kwargs):
+        calls.append(kwargs)
+        return _make_message(content=content), "stop", [], 0, (0, 0)
+
+    monkeypatch.setattr(agent, "call_llm", fake_call_llm)
+    answer, exhausted = agent.run_agent_loop(
+        [{"role": "user", "content": "Explain the XML"}],
+        [think_tool],
+        api_base="http://x",
+        model_id="m",
+        max_turns=3,
+        max_output_tokens=None,
+        temperature=None,
+        top_p=None,
+        seed=None,
+        context_length=128000,
+        base_dir=str(tmp_path),
+        thinking_state=ThinkingState(),
+        todo_state=TodoState(),
+        snapshot_state=SnapshotState(),
+        resolved_commands={},
+        skills_catalog={},
+        skill_read_roots=[],
+        extra_write_roots=[],
+        files_mode="all",
+        verbose=False,
+        llm_kwargs={"provider": "generic"},
+        continue_here=False,
+    )
+
+    assert answer == content
+    assert exhausted is False
+    assert len(calls) == 1
 
 
 def test_loop_recovers_from_truncated_textual_tool_call(tmp_path, monkeypatch):

@@ -58,6 +58,41 @@ class TestSessionRun:
         assert result.exhausted is False
         assert len(result.messages) >= 2  # system + user + assistant
 
+    def test_initial_required_tool_choice_reaches_loop(self, tmp_path, monkeypatch):
+        responses = iter(
+            [
+                _make_message(
+                    tool_calls=[
+                        types.SimpleNamespace(
+                            id="tc1",
+                            type="function",
+                            function=types.SimpleNamespace(
+                                name="think", arguments='{"thought":"x"}'
+                            ),
+                        )
+                    ]
+                ),
+                _make_message(content="done"),
+            ]
+        )
+        choices = []
+
+        def recording_llm(*args, **kwargs):
+            choices.append(kwargs.get("tool_choice", "auto"))
+            return next(responses), "stop"
+
+        monkeypatch.setattr(agent, "call_llm", recording_llm)
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+        result = Session(
+            base_dir=str(tmp_path),
+            history=False,
+            initial_tool_choice="required",
+        ).run("Use a tool")
+
+        assert result.answer == "done"
+        assert choices == ["required", "auto"]
+
     def test_run_state_isolation(self, tmp_path, monkeypatch):
         """Each run() call gets fresh per-run state."""
         call_count = 0

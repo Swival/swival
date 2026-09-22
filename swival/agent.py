@@ -25,6 +25,7 @@ import urllib.request
 import urllib.error
 import uuid as _uuid
 import warnings
+import xml.etree.ElementTree as ET
 from importlib import metadata
 from pathlib import Path
 
@@ -47,7 +48,7 @@ from ._msg import (
     _set_msg_content,
     _tool_call_id,
 )
-from .config import _UNSET, REASONING_LEVELS
+from .config import _UNSET, INITIAL_TOOL_CHOICES, REASONING_LEVELS
 from .config import find_project_root as _find_project_root
 from .cost import CostObservation, SessionCost
 from .report import (
@@ -908,6 +909,9 @@ _WEAK_LEAKED_TOOL_TEXT_RE = re.compile(
 
 _FENCED_CODE_SPAN_RE = re.compile(r"```.*?```", re.DOTALL)
 _INLINE_CODE_SPAN_RE = re.compile(r"`[^`\n]*`")
+_XML_ROOT_START_RE = re.compile(
+    r"\A(?P<leading>\s*)<(?P<name>[A-Za-z_][A-Za-z0-9_.-]*)(?:\s|/?>)"
+)
 
 
 def _strip_code_spans(text: str) -> str:
@@ -925,6 +929,7 @@ def _strip_code_spans(text: str) -> str:
 
 def _classify_textual_tool_call_leak(
     content: str | None,
+    allowed_tool_names: set[str] | frozenset[str] | None = None,
 ) -> tuple[str, int] | None:
     """Detect tool-call markup emitted as plain assistant text.
 
@@ -940,6 +945,20 @@ def _classify_textual_tool_call_leak(
     masked = _strip_code_spans(content)
     if not masked.strip():
         return None
+
+    if allowed_tool_names:
+        root_match = _XML_ROOT_START_RE.match(masked)
+        if root_match and root_match.group("name") in allowed_tool_names:
+            try:
+                root = ET.fromstring(masked.strip())
+            except ET.ParseError:
+                pass
+            else:
+                if root.tag == root_match.group("name"):
+                    return (
+                        TRUNCATED_REASON_TEXTUAL_TOOL_CALL,
+                        len(root_match.group("leading")),
+                    )
 
     length = len(masked)
     tail_start = max(0, length - 200)
@@ -4498,10 +4517,11 @@ def discover_llamacpp_context_length(base_url, verbose):
 
 def configure_context(base_url, model_key, requested_context, current_context, verbose):
     """Reload the model with a different context size if needed."""
-    if requested_context == current_context:
+    if isinstance(current_context, int) and current_context >= requested_context:
         if verbose:
             fmt.model_info(
-                f"Requested context {requested_context} matches current context, no reload needed."
+                f"Current context {current_context} meets requested context "
+                f"{requested_context}, no reload needed."
             )
         return
 
@@ -5749,6 +5769,8 @@ def call_llm(
     pricing_provider=None,
     session_cost=None,
     session_id=None,
+    tool_choice="auto",
+    provider_timeout=900,
 ):
     """Call LiteLLM with the appropriate provider.
 
@@ -5936,7 +5958,7 @@ def call_llm(
         model=model_str,
         messages=messages,
         max_tokens=max_output_tokens,
-        timeout=900,
+        timeout=provider_timeout,
         **kwargs,
     )
     if tools is not None:
@@ -5950,8 +5972,8 @@ def call_llm(
                 )
         if tools:
             completion_kwargs["tools"] = tools
-            if not _skip_tool_choice:
-                completion_kwargs["tool_choice"] = "auto"
+            if not _skip_tool_choice and tool_choice is not None:
+                completion_kwargs["tool_choice"] = tool_choice
     for key, val in [("temperature", temperature), ("top_p", top_p), ("seed", seed)]:
         if val is not None and key not in _skip_params:
             completion_kwargs[key] = val
@@ -6377,6 +6399,10 @@ def _build_self_review_cmd(
         parts.append("--encrypt-secrets")
     if getattr(args, "retries", 5) != 5:
         parts.extend(["--retries", str(args.retries)])
+    if getattr(args, "provider_timeout", 900) != 900:
+        parts.extend(["--provider-timeout", str(args.provider_timeout)])
+    if getattr(args, "initial_tool_choice", "auto") != "auto":
+        parts.extend(["--initial-tool-choice", args.initial_tool_choice])
     if getattr(args, "aws_profile", None):
         parts.extend(["--aws-profile", args.aws_profile])
     if getattr(args, "gcp_project", None):
@@ -6709,6 +6735,19 @@ def build_parser():
         type=int,
         default=_UNSET,
         help="Max provider retries on transient network errors (default: 5, 1 = no retry).",
+    )
+    provider_group.add_argument(
+        "--provider-timeout",
+        type=int,
+        default=_UNSET,
+        metavar="SECONDS",
+        help="Provider request timeout in seconds (default: 900).",
+    )
+    provider_group.add_argument(
+        "--initial-tool-choice",
+        choices=INITIAL_TOOL_CHOICES,
+        default=_UNSET,
+        help="Tool selection for the first model request (default: auto).",
     )
     integrations_group.add_argument(
         "--mcp-config",
@@ -7605,6 +7644,12 @@ def main():
     # Validation: retries >= 1
     if args.retries < 1:
         parser.error("--retries must be >= 1")
+
+    if args.provider_timeout <= 0:
+        parser.error("--provider-timeout must be > 0")
+
+    if args.initial_tool_choice not in INITIAL_TOOL_CHOICES:
+        parser.error(f"--initial-tool-choice must be one of {INITIAL_TOOL_CHOICES!r}")
 
     # Validation: max_output_tokens <= max_context_tokens
     if (
@@ -9275,6 +9320,7 @@ def _run_main(args, report, _write_report, parser):
     if not getattr(args, "prompt_cache", True):
         llm_kwargs["prompt_cache"] = False
     llm_kwargs["max_retries"] = args.retries
+    llm_kwargs["provider_timeout"] = args.provider_timeout
 
     # Stash resolved model_id for error reporting
     args._resolved_model_id = model_id
@@ -9644,6 +9690,7 @@ def _run_main(args, report, _write_report, parser):
         shell_allowed=shell_allowed,
         verbose=args.verbose,
         llm_kwargs=llm_kwargs,
+        initial_tool_choice=args.initial_tool_choice,
         file_tracker=file_tracker,
         mcp_manager=mcp_manager,
         a2a_manager=a2a_manager,
@@ -10124,6 +10171,7 @@ def _run_agent_loop(
     session_cost: SessionCost | None = None,
     tool_policy=None,
     instructions_full: bool = False,
+    initial_tool_choice: str = "auto",
 ) -> tuple[str | None, bool]:
     """Run the tool-calling loop until a final answer or max turns.
 
@@ -10132,6 +10180,8 @@ def _run_agent_loop(
     Returns (final_answer, exhausted). final_answer is the last
     assistant text (may be None). exhausted is True if max_turns hit.
     """
+    if initial_tool_choice not in INITIAL_TOOL_CHOICES:
+        raise ValueError(f"initial_tool_choice must be one of {INITIAL_TOOL_CHOICES!r}")
     # Keep one routing ID across turns, retries, and compaction calls.
     if "session_id" not in llm_kwargs:
         llm_kwargs["session_id"] = str(_uuid.uuid4())
@@ -10210,6 +10260,7 @@ def _run_agent_loop(
         "shell_allowed": shell_allowed,
         "verbose": verbose,
         "llm_kwargs": llm_kwargs,
+        "initial_tool_choice": initial_tool_choice,
         "file_tracker": file_tracker,
         "report": report,
         "command_policy": command_policy,
@@ -10228,6 +10279,7 @@ def _run_agent_loop(
     _continuation_pending = bool(goal_launch_turn)
     _announced_action_nudge_pending = False
     _textual_tool_call_repair_pending = False
+    _initial_tool_choice_pending = initial_tool_choice == "required"
     _malformed_tool_call_repair_pending = False
     _duplicate_tool_call_repair_pending = False
     _final_attempt_injected_for_goal: str | None = None
@@ -10696,6 +10748,14 @@ def _run_agent_loop(
         if verbose:
             fmt.turn_header(turns, max_turns, token_est, context_length)
 
+        _turn_llm_kwargs = llm_kwargs
+        if (
+            _initial_tool_choice_pending
+            or _announced_action_nudge_pending
+            or _textual_tool_call_repair_pending
+        ) and effective_tools:
+            _turn_llm_kwargs = {**llm_kwargs, "tool_choice": "required"}
+
         t0 = time.monotonic()
         # The clamp itself can refuse, so this holds a value either way: the
         # recovery below records what was sent, not what was wanted.
@@ -10738,7 +10798,7 @@ def _run_agent_loop(
                     _dismiss_waiting,
                     _llm_args,
                     unknown_context_window=context_length is None,
-                    **llm_kwargs,
+                    **_turn_llm_kwargs,
                 )
                 msg, finish_reason = _llm_result[0], _llm_result[1]
                 cmd_activity = _llm_result[2] if len(_llm_result) > 2 else []
@@ -10963,7 +11023,7 @@ def _run_agent_loop(
                             _dismiss_waiting,
                             _llm_args,
                             unknown_context_window=context_length is None,
-                            **llm_kwargs,
+                            **_turn_llm_kwargs,
                         )
                         msg, finish_reason = _llm_result[0], _llm_result[1]
                         cmd_activity = _llm_result[2] if len(_llm_result) > 2 else []
@@ -11063,7 +11123,7 @@ def _run_agent_loop(
                     top_p=top_p,
                     seed=seed,
                     verbose=verbose,
-                    llm_kwargs=llm_kwargs,
+                    llm_kwargs=_turn_llm_kwargs,
                     tools=tools,
                     turn=turns + turn_offset,
                     report=report,
@@ -11139,7 +11199,7 @@ def _run_agent_loop(
                         top_p=top_p,
                         seed=seed,
                         verbose=verbose,
-                        llm_kwargs=llm_kwargs,
+                        llm_kwargs=_turn_llm_kwargs,
                         tools=tools,
                         turn=turns + turn_offset,
                         report=report,
@@ -11203,6 +11263,8 @@ def _run_agent_loop(
             # The provider accepted this prompt size; raise the learned floor so
             # the proactive pass keeps room for it when the window is unknown.
             _adaptive_budget.record_accept(token_est)
+        if _initial_tool_choice_pending and _last_request_tools:
+            _initial_tool_choice_pending = False
         # Handle empty assistant response (no content, no tool_calls).
         # Some providers return these occasionally; appending them as-is
         # would poison the history and cause BadRequestError on the next call.
@@ -11298,7 +11360,8 @@ def _run_agent_loop(
         # with no structured tool_calls; left alone, the loop would treat the
         # template fragments as a final answer.
         if not msg.tool_calls and _last_request_tools is not None:
-            leak = _classify_textual_tool_call_leak(msg.content)
+            allowed_tool_names = _allowed_tool_names_from_tools(_last_request_tools)
+            leak = _classify_textual_tool_call_leak(msg.content, allowed_tool_names)
             if leak is not None:
                 leak_reason, leak_start = leak
                 prefix = msg.content[:leak_start].rstrip()
@@ -15008,6 +15071,7 @@ def repl_loop(
     session_cost: SessionCost | None = None,
     instructions_enabled: bool = True,
     instructions_full: bool = False,
+    initial_tool_choice: str = "auto",
 ):
     """Interactive read-eval-print loop.
 
@@ -15171,6 +15235,7 @@ def repl_loop(
         shell_allowed=shell_allowed,
         verbose=verbose,
         llm_kwargs=llm_kwargs,
+        initial_tool_choice=initial_tool_choice,
         file_tracker=file_tracker,
         compaction_state=compaction_state,
         mcp_manager=mcp_manager,

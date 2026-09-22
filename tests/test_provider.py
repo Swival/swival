@@ -1089,6 +1089,22 @@ class TestAPIKeyResolution:
 # ---------------------------------------------------------------------------
 
 
+class TestConfigureContext:
+    def test_larger_loaded_context_does_not_reload(self, monkeypatch):
+        def unexpected_reload(*args, **kwargs):
+            raise AssertionError("LM Studio should not reload a sufficient context")
+
+        monkeypatch.setattr(agent.urllib.request, "urlopen", unexpected_reload)
+
+        agent.configure_context(
+            "http://127.0.0.1:1234",
+            "test-model",
+            requested_context=100000,
+            current_context=100096,
+            verbose=False,
+        )
+
+
 class TestProviderPathIsolation:
     def test_huggingface_never_calls_discover_or_configure(self, monkeypatch, tmp_path):
         from swival import agent
@@ -3194,6 +3210,25 @@ class TestLlamacppProviderRouting:
             assert kwargs["model"] == "openai/test-model"
             assert kwargs["api_base"] == "http://127.0.0.1:8080/v1"
             assert kwargs["api_key"] == "none"
+            assert kwargs["timeout"] == 900
+
+    def test_custom_provider_timeout(self):
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = self._mock_response()
+            call_llm(
+                "http://127.0.0.1:8080/v1",
+                "test-model",
+                [],
+                100,
+                None,
+                None,
+                None,
+                None,
+                False,
+                provider="llamacpp",
+                provider_timeout=17,
+            )
+            assert mock_comp.call_args.kwargs["timeout"] == 17
 
 
 class TestLlamacppCLIParser:

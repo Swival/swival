@@ -593,6 +593,7 @@ def call_llm_text(
         provider=llm_kwargs.get("provider", "lmstudio"),
         api_key=llm_kwargs.get("api_key"),
         user_agent=llm_kwargs.get("user_agent"),
+        provider_timeout=llm_kwargs.get("provider_timeout", 900),
         prompt_cache=True,
         aws_profile=llm_kwargs.get("aws_profile"),
         vertex_project=llm_kwargs.get("vertex_project"),

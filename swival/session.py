@@ -15,7 +15,12 @@ from .agent import (
     _InteractionPolicy,
     _shutdown_and_reconcile,
 )
-from .config import _UNSET, NETWORK_MODES, first_remote_integration
+from .config import (
+    _UNSET,
+    INITIAL_TOOL_CHOICES,
+    NETWORK_MODES,
+    first_remote_integration,
+)
 from .cost import SessionCost
 from .goal import GoalState
 from .instructions import InstructionLoadError
@@ -115,6 +120,8 @@ class Session:
         cache_dir: str | None = None,
         scratch_dir: str | None = None,
         retries: int = 5,
+        provider_timeout: int = 900,
+        initial_tool_choice: str = "auto",
         encrypt_secrets: bool = False,
         encrypt_secrets_key: str | None = None,
         encrypt_secrets_tweak: str | None = None,
@@ -157,6 +164,14 @@ class Session:
         if retries < 1:
             raise ValueError("retries must be >= 1")
         self.retries = retries
+        if provider_timeout <= 0:
+            raise ValueError("provider_timeout must be > 0")
+        self.provider_timeout = provider_timeout
+        if initial_tool_choice not in INITIAL_TOOL_CHOICES:
+            raise ValueError(
+                f"initial_tool_choice must be one of {INITIAL_TOOL_CHOICES!r}"
+            )
+        self.initial_tool_choice = initial_tool_choice
         # Resolve _UNSET defaults; yolo only upgrades when the caller didn't
         # pass an explicit value (same semantics as the CLI path).
         if files is _UNSET:
@@ -391,6 +406,7 @@ class Session:
         if not self.prompt_cache:
             self._llm_kwargs["prompt_cache"] = False
         self._llm_kwargs["max_retries"] = self.retries
+        self._llm_kwargs["provider_timeout"] = self.provider_timeout
 
         # Resolve --add-dir and --add-dir-ro paths
         self._allowed_dir_paths = _resolve_dir_list(self.allowed_dirs, "allowed_dirs")
@@ -747,6 +763,7 @@ class Session:
             shell_allowed=self._shell_allowed,
             verbose=self.verbose,
             llm_kwargs=state["llm_kwargs"],
+            initial_tool_choice=self.initial_tool_choice,
             file_tracker=state["file_tracker"],
             session_cost=state["session_cost"],
             continue_here=self.continue_here,

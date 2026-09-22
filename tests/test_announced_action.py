@@ -84,6 +84,78 @@ def test_nudge_once_per_stretch_without_tools(tmp_path, monkeypatch):
     assert all(n["_swival_synthetic"] for n in nudges)
 
 
+def test_nudge_retry_requires_a_tool_call(tmp_path, monkeypatch):
+    llm = _ScriptedLLM(
+        [
+            _msg(content="Let me look."),
+            _msg(tool_calls=[_tool_call("think", '{"thought": "x"}')]),
+            _msg(content="Finished."),
+        ]
+    )
+    call_kwargs = []
+
+    def record_call(*args, **kwargs):
+        call_kwargs.append(kwargs)
+        return llm(*args, **kwargs)
+
+    monkeypatch.setattr(agent, "call_llm", record_call)
+    messages = [{"role": "user", "content": "go"}]
+    answer, exhausted = agent.run_agent_loop(
+        messages, [_THINK_TOOL], **_loop_kwargs(tmp_path, max_turns=8)
+    )
+    assert answer == "Finished."
+    assert exhausted is False
+    assert "tool_choice" not in call_kwargs[0]
+    assert call_kwargs[1]["tool_choice"] == "required"
+    assert "tool_choice" not in call_kwargs[2]
+
+
+def test_initial_required_tool_choice_returns_to_auto(tmp_path, monkeypatch):
+    llm = _ScriptedLLM(
+        [
+            _msg(tool_calls=[_tool_call("think", '{"thought": "x"}')]),
+            _msg(content="Finished."),
+        ]
+    )
+    choices = []
+
+    def record_call(*args, **kwargs):
+        choices.append(kwargs.get("tool_choice", "auto"))
+        return llm(*args, **kwargs)
+
+    monkeypatch.setattr(agent, "call_llm", record_call)
+    answer, exhausted = agent.run_agent_loop(
+        [{"role": "user", "content": "go"}],
+        [_THINK_TOOL],
+        **_loop_kwargs(tmp_path, max_turns=4),
+        initial_tool_choice="required",
+    )
+
+    assert answer == "Finished."
+    assert exhausted is False
+    assert choices == ["required", "auto"]
+
+
+def test_initial_required_is_ignored_without_effective_tools(tmp_path, monkeypatch):
+    choices = []
+
+    def record_call(*args, **kwargs):
+        choices.append(kwargs.get("tool_choice", "auto"))
+        return _msg(content="Finished."), "stop"
+
+    monkeypatch.setattr(agent, "call_llm", record_call)
+    answer, exhausted = agent.run_agent_loop(
+        [{"role": "user", "content": "go"}],
+        [],
+        **_loop_kwargs(tmp_path, max_turns=2),
+        initial_tool_choice="required",
+    )
+
+    assert answer == "Finished."
+    assert exhausted is False
+    assert choices == ["auto"]
+
+
 def test_second_announcement_is_accepted(tmp_path, monkeypatch):
     llm = _ScriptedLLM(
         [_msg(content="Let me run the probe."), _msg(content="Let me just run it.")]
