@@ -12,7 +12,10 @@ Command execution tools are included by default (commands default to `"all"`): `
 
 If output is truncated, Swival appends a continuation hint with the next offset. You can also request `tail_lines=N` to start from the end of the file, which is useful for logs. `tail_lines` is mutually exclusive with `offset`.
 
-Large responses are capped at 50 KB per call by default, and individual long lines are truncated at 2,000 characters. Directory reads return sorted entries and mark subdirectories with a trailing `/`. Both the default line count (2000) and the size cap can be tuned with `--max-output-lines` and `--max-output-kb`, or the matching `max_output_lines` and `max_output_kb` config keys.
+Large responses are capped at 50 KB per call by default, and individual long lines are truncated at 2,000 characters.
+A truncated line ends with the number of characters left out, as in `[+501 chars]`, which makes the omitted content explicit.
+Only a command can show the rest of such a line; paging with `offset` does not.
+Directory reads return sorted entries and mark subdirectories with a trailing `/`. Both the default line count (2000) and the size cap can be tuned with `--max-output-lines` and `--max-output-kb`, or the matching `max_output_lines` and `max_output_kb` config keys.
 
 Each file read ends with a `[checksum=...]` trailer that hashes the file's current contents. The model can pass that value back to `edit_file` as a guard, so an edit fails if the file changed since it was read. See [`edit_file`](#edit_file) for how that check works.
 
@@ -20,7 +23,9 @@ Each file read ends with a `[checksum=...]` trailer that hashes the file's curre
 
 `read_multiple_files` reads several files in a single call. Each entry in the `files` array can specify its own `offset`, `limit`, and `tail_lines`, just like `read_file` (`offset` and `tail_lines` remain mutually exclusive per entry). Results are grouped by file with `=== FILE: path ===` headers and the same line-numbered format as `read_file`.
 
-Per-file errors (missing files, binary files, path escapes) are reported inline without failing the batch. The total response is capped at 50 KB across all files. If the budget runs out mid-batch, the files already read are returned along with a truncation notice. A single oversized file is always included (with its own line-level truncation) so the tool never returns empty content for a valid request.
+Per-file errors (missing files, binary files, path escapes) are reported inline without failing the batch. The total response is capped at 50 KB across all files. If the budget runs out mid-batch, the files already read are returned along with a truncation notice.
+A file's `content_truncated` flag is `true` when lines are left for a later read or when at least one line was cut at 2,000 characters; only the first case comes with a `next_offset`.
+A single oversized file is always included (with its own line-level truncation) so the tool never returns empty content for a valid request.
 
 The batch is limited to 20 files per call. Directories are rejected with an inline error — use `read_file` for directory listings.
 
@@ -50,6 +55,12 @@ The optional `checksum` parameter guards against editing a file that changed sin
 
 A successful edit returns a fresh `[checksum=...]` trailer for the file's new contents, computed by hashing the bytes back from disk so it matches exactly what the next checksum check will compute. That lets the model chain several edits to the same file in one turn, feeding each edit's returned checksum into the next, without an intervening `read_file`.
 
+`edit_file` refuses an edit that looks copied from a truncated line.
+If the text being replaced ends exactly at the 2,000-character cutoff of a longer line, the model most likely copied the visible part of that line from `read_file` or `grep`, and the replacement would silently leave the hidden rest of the line in place.
+The check covers every match the edit would replace, including each `replace_all` match and a match found through a stale `line_number`, and the file is left untouched.
+Shorter edits inside a long line work as usual, as do edits that include the complete line.
+The check can also refuse a deliberate edit of exactly the first 2,000 characters; ending `old_string` one character earlier or later gets around it.
+
 ## `delete_file`
 
 `delete_file` is a soft delete. Instead of removing files permanently, Swival moves them into `.swival/trash/<trash_id>/` and appends metadata to `.swival/trash/index.jsonl`. Directories are not allowed.
@@ -64,7 +75,8 @@ Trash retention is enforced automatically. Entries older than seven days are rem
 
 `grep` searches file contents with Python regular expressions. Matches are grouped by file, include line numbers, and are sorted by file recency so the newest files are surfaced first. You can narrow by directory with `path` and by filename glob with `include` (supports `**/*.ext` patterns). Set `context_lines` to show surrounding lines around each match; when active, matching lines are marked with `<<<` to distinguish them from context.
 
-Set `case_insensitive` to `true` for case-insensitive matching. Results are capped at 100 matches and long lines are truncated to 2,000 characters.
+Set `case_insensitive` to `true` for case-insensitive matching. Results are capped at 100 matches and long lines are truncated to 2,000 characters, with the same `[+N chars]` count as `read_file`.
+The pattern is still matched against the whole line.
 
 Memory use does not depend on the size of the workspace. Files are streamed line by line rather than loaded whole, only the 100 retained matches and their context are kept, and `context_lines` is clamped to 100. When more than 20,000 files are eligible, only the 20,000 most recently modified ones are searched and the result says so. A file containing a single line longer than 8 MB is skipped and reported the same way. The match count in the `Found N matches` header still reflects every match seen in the searched files, so it remains a useful hint that the pattern needs narrowing.
 

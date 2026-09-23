@@ -2,6 +2,7 @@
 
 import pytest
 
+from swival import tools
 from swival.tools import _read_files, dispatch
 from swival.tracker import FileAccessTracker
 
@@ -92,6 +93,25 @@ class TestReadMultipleFilesOffsetLimit:
         )
         assert "content_truncated: true" in result
         assert "[next_offset=4]" in result
+
+    def test_clipped_line_sets_content_truncated(self, tmp_path):
+        width = tools.MAX_LINE_LENGTH
+        (tmp_path / "wide.txt").write_text("short\n" + "w" * (width + 12) + "\n")
+
+        result = _read_files([{"file_path": "wide.txt"}], str(tmp_path))
+        assert "content_truncated: true" in result
+        assert f"2: {'w' * width} [+12 chars]" in result
+        # Every line was returned, so there is nothing to paginate to.
+        assert "next_offset" not in result
+
+    def test_line_at_limit_is_not_truncated(self, tmp_path):
+        width = tools.MAX_LINE_LENGTH
+        (tmp_path / "edge.txt").write_text("w" * width + "\n")
+        (tmp_path / "note.txt").write_text("text that ends like a marker [+5 chars]\n")
+
+        result = _read_files(["edge.txt", "note.txt"], str(tmp_path))
+        assert result.count("content_truncated: false") == 2
+        assert "content_truncated: true" not in result
 
 
 class TestReadMultipleFilesErrors:

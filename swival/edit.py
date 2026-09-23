@@ -64,6 +64,32 @@ def _span_lines(content: str, start: int, end: int) -> tuple[int, int]:
     return first, last
 
 
+# Every character str.splitlines() breaks on, so line boundaries agree with
+# read_file and grep.
+_LINE_BREAK_RE = re.compile("[\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]")
+
+
+def _clipped_line_at(content: str, span: tuple[int, int], cap: int) -> int | None:
+    """Return the 1-based line where *span* stops at a display cutoff, else None.
+
+    read_file and grep show only the first *cap* characters of a longer line.
+    A span whose final line segment is exactly that visible prefix was most
+    likely copied from such output, and replacing it would keep the unseen
+    rest of the line.
+    """
+    start, end = span
+    line_start = end - cap
+    if line_start < start:
+        return None
+    if end >= len(content) or _LINE_BREAK_RE.match(content, end):
+        return None
+    if line_start > 0 and not _LINE_BREAK_RE.match(content, line_start - 1):
+        return None
+    if _LINE_BREAK_RE.search(content, line_start, end):
+        return None
+    return _line_at_offset(content, line_start)
+
+
 # ---------------------------------------------------------------------------
 # Line-level fuzzy matching helpers
 # ---------------------------------------------------------------------------
@@ -136,26 +162,55 @@ def _replace_span(
     return content[:start] + new_string + content[end:]
 
 
-def _replace_all_exact(content: str, old_string: str, new_string: str) -> str:
-    if old_string.endswith("\n") or not new_string.endswith("\n"):
-        return content.replace(old_string, new_string)
+def _apply_spans(
+    content: str,
+    spans: list[tuple[int, int]],
+    new_string: str,
+    old_string: str,
+) -> str:
+    """Replace sorted, non-overlapping spans of *content*, left to right."""
     parts: list[str] = []
     i = 0
-    while True:
-        idx = content.find(old_string, i)
-        if idx == -1:
-            parts.append(content[i:])
-            break
-        parts.append(content[i:idx])
+    for start, end in spans:
+        parts.append(content[i:start])
         parts.append(new_string)
-        i = _absorb_trailing_newline(
-            content, idx + len(old_string), old_string, new_string
-        )
+        i = _absorb_trailing_newline(content, end, old_string, new_string)
+    parts.append(content[i:])
     return "".join(parts)
 
 
+def _replace_all_exact_spans(
+    content: str, old_string: str, new_string: str
+) -> list[tuple[int, int]]:
+    """Return every exact match replace_all rewrites, left to right.
+
+    The search resumes after a newline absorbed by the previous match, as
+    _apply_spans will consume it.
+    """
+    spans: list[tuple[int, int]] = []
+    i = 0
+    while (idx := content.find(old_string, i)) != -1:
+        end = idx + len(old_string)
+        spans.append((idx, end))
+        i = _absorb_trailing_newline(content, end, old_string, new_string)
+    return spans
+
+
+def _non_overlapping(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    kept: list[tuple[int, int]] = []
+    last_end = -1
+    for start, end in spans:
+        if start >= last_end:
+            kept.append((start, end))
+            last_end = end
+    return kept
+
+
 def _replace_all_fuzzy(
-    content: str, old_string: str, new_string: str, normalize=None
+    content: str,
+    spans: list[tuple[int, int]],
+    new_string: str,
+    old_string: str,
 ) -> str:
     """Replace all fuzzy matches.
 
@@ -163,15 +218,8 @@ def _replace_all_fuzzy(
     replacement would loop forever when ``new_string`` fuzzy-matches
     ``old_string``.
     """
-    spans = _fuzzy_match_spans(content, old_string, normalize=normalize)
-    kept: list[tuple[int, int]] = []
-    last_end = -1
-    for start, end in spans:
-        if start >= last_end:
-            kept.append((start, end))
-            last_end = end
     result = content
-    for span in reversed(kept):
+    for span in reversed(spans):
         result = _replace_span(result, span, new_string, old_string)
     return result
 
@@ -332,58 +380,19 @@ def _format_candidate_lines(lines: list[int]) -> str:
     return ", ".join(str(n) for n in unique[:_MAX_CANDIDATE_LINES]) + ", ..."
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-
-def replace(
+def _select_spans(
     content: str,
     old_string: str,
     new_string: str,
-    replace_all: bool = False,
-    line_number: int | None = None,
-) -> str:
-    """Replace old_string with new_string in content.
+    replace_all: bool,
+    line_number: int | None,
+) -> tuple[str, list[tuple[int, int]]]:
+    """Return the matching pass and the spans the edit will replace.
 
-    Matching strategies (tried in order):
-      1. Exact — str.find spans
-      2. Line-trimmed — sliding window, comparing .strip() per line
-      3. Unicode-normalized — strip + smart quotes/dashes/ellipsis → ASCII
-
-    Parameters
-    ----------
-    line_number:
-        Optional 1-based line number from read_file.  When old_string matches
-        multiple times, only replace the match whose span includes this line.
-        Ignored when replace_all is True or when the value is not a positive
-        integer.
-
-    Raises ValueError:
-      - "old_string and new_string are identical ..." if old_string == new_string
-      - "old_string not found ..." if no match in any pass
-      - "multiple matches; add line_number ..." if >1 match and no line targeting
-      - "no match at line N; matches found at lines ..." if line targeting misses
-      - "multiple matches on line N; add more context ..." if line targeting is ambiguous
+    The pass is "stale_line" when a stale line_number fell back to the only
+    match. Spans are sorted and non-overlapping.
+    Raises the ValueErrors documented on replace().
     """
-    if old_string == new_string:
-        raise ValueError(
-            "old_string and new_string are identical, so the edit would be a no-op"
-        )
-
-    if not old_string:
-        raise ValueError("old_string must not be empty")
-
-    if (
-        isinstance(line_number, bool)
-        or not isinstance(line_number, int)
-        or line_number <= 0
-    ):
-        line_number = None
-
-    if replace_all:
-        line_number = None
-
     any_candidates_found = False
     all_candidate_lines: list[int] = []
     fallback_spans: list[tuple[int, int]] = []
@@ -406,16 +415,16 @@ def replace(
 
         if replace_all:
             if pass_name == "exact":
-                return _replace_all_exact(content, old_string, new_string)
-            return _replace_all_fuzzy(
-                content, old_string, new_string, normalize=normalize
-            )
+                return pass_name, _replace_all_exact_spans(
+                    content, old_string, new_string
+                )
+            return pass_name, _non_overlapping(spans)
 
         if line_number is not None:
             matching, cand_lines = _filter_by_line(spans, content, line_number)
             all_candidate_lines.extend(cand_lines)
             if len(matching) == 1:
-                return _replace_span(content, matching[0], new_string, old_string)
+                return pass_name, matching
             if len(matching) > 1:
                 raise ValueError(
                     f"multiple matches on line {line_number}; "
@@ -425,7 +434,7 @@ def replace(
             continue
 
         if len(spans) == 1:
-            return _replace_span(content, spans[0], new_string, old_string)
+            return pass_name, spans
 
         line_nos = [_span_lines(content, s, e)[0] for s, e in spans]
         all_candidate_lines.extend(line_nos)
@@ -445,7 +454,7 @@ def replace(
     if fallback_spans:
         target = _stale_line_fallback(fallback_spans)
         if target is not None:
-            return _replace_span(content, target, new_string, old_string)
+            return "stale_line", [target]
 
     if line_number is not None and any_candidates_found:
         raise ValueError(
@@ -469,3 +478,81 @@ def replace(
         base + " No close match was found in the file; reread it with read_file to "
         "verify the exact text."
     )
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def replace(
+    content: str,
+    old_string: str,
+    new_string: str,
+    replace_all: bool = False,
+    line_number: int | None = None,
+    display_line_cap: int | None = None,
+) -> str:
+    """Replace old_string with new_string in content.
+
+    Matching strategies (tried in order):
+      1. Exact — str.find spans
+      2. Line-trimmed — sliding window, comparing .strip() per line
+      3. Unicode-normalized — strip + smart quotes/dashes/ellipsis → ASCII
+
+    Parameters
+    ----------
+    line_number:
+        Optional 1-based line number from read_file.  When old_string matches
+        multiple times, only replace the match whose span includes this line.
+        Ignored when replace_all is True or when the value is not a positive
+        integer.
+    display_line_cap:
+        The length at which read_file and grep cut long lines. When set, a
+        replacement whose last line segment is exactly the visible prefix of
+        a longer line is refused, since the hidden rest of the line would
+        silently survive the edit.
+
+    Raises ValueError:
+      - "old_string and new_string are identical ..." if old_string == new_string
+      - "old_string not found ..." if no match in any pass
+      - "multiple matches; add line_number ..." if >1 match and no line targeting
+      - "no match at line N; matches found at lines ..." if line targeting misses
+      - "multiple matches on line N; add more context ..." if line targeting is ambiguous
+      - "old_string ends exactly at the N-character cutoff ..." if display_line_cap trips
+    """
+    if old_string == new_string:
+        raise ValueError(
+            "old_string and new_string are identical, so the edit would be a no-op"
+        )
+
+    if not old_string:
+        raise ValueError("old_string must not be empty")
+
+    if (
+        isinstance(line_number, bool)
+        or not isinstance(line_number, int)
+        or line_number <= 0
+    ):
+        line_number = None
+
+    if replace_all:
+        line_number = None
+
+    pass_name, spans = _select_spans(
+        content, old_string, new_string, replace_all, line_number
+    )
+    if display_line_cap:
+        for span in spans:
+            line = _clipped_line_at(content, span, display_line_cap)
+            if line is not None:
+                raise ValueError(
+                    f"old_string ends exactly at the {display_line_cap}-character "
+                    f"cutoff that read_file and grep apply to line {line}, so the "
+                    "hidden rest of that line would remain after new_string. End "
+                    "old_string before the cutoff, or include the complete line, "
+                    "which read_file and grep cannot display."
+                )
+    if replace_all and pass_name != "exact":
+        return _replace_all_fuzzy(content, spans, new_string, old_string)
+    return _apply_spans(content, spans, new_string, old_string)

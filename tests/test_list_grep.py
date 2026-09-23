@@ -413,15 +413,52 @@ class TestGrep:
         assert "b.py:" in result
 
     def test_line_truncation(self, sandbox):
-        """Lines longer than MAX_LINE_LENGTH should be truncated."""
+        """Lines longer than MAX_LINE_LENGTH are clipped with an omission count."""
         long_line = "x" * 3000
         (sandbox / "long.py").write_text(f"# {long_line}\n")
 
         result = _grep("x{10,}", ".", str(sandbox))
-        # The matched line should be present but truncated
+        clipped = "# " + "x" * (tools.MAX_LINE_LENGTH - 2)
+        assert f"  Line 1: {clipped} [+1002 chars]" in result.split("\n")
+
+    def test_long_match_and_context_lines_are_marked(self, sandbox):
+        width = tools.MAX_LINE_LENGTH
+        before = "b" * (width + 4)
+        match = "needle" + "m" * width
+        after = "a" * width
+        (sandbox / "wide.txt").write_text(f"{before}\n{match}\n{after}\nlast\n")
+
+        result = _grep("needle", "wide.txt", str(sandbox), context_lines=2)
         lines = result.split("\n")
-        for line in lines:
-            assert len(line) <= 2100  # 2000 + "  Line N: " prefix
+        assert f"  Line 1: {'b' * width} [+4 chars]" in lines
+        assert f"  Line 2: {match[:width]} [+6 chars]  <<<" in lines
+        assert f"  Line 3: {after}" in lines
+        assert "  Line 4: last" in lines
+
+    def test_marker_counts_against_output_budget(self, sandbox, monkeypatch):
+        width = tools.MAX_LINE_LENGTH
+        (sandbox / "wide.txt").write_text("needle" + "n" * width + "\n")
+        entry = f"  Line 1: {'needle' + 'n' * (width - 6)} [+6 chars]"
+        needed = sum(
+            len(part.encode()) + 1 for part in ("Found 1 match", "\nwide.txt:", entry)
+        )
+
+        monkeypatch.setattr(tools, "MAX_OUTPUT_BYTES", needed - 1)
+        result = _grep("needle", "wide.txt", str(sandbox))
+        assert entry not in result.split("\n")
+        assert "Results truncated" in result
+
+        monkeypatch.setattr(tools, "MAX_OUTPUT_BYTES", needed)
+        result = _grep("needle", "wide.txt", str(sandbox))
+        assert entry in result.split("\n")
+        assert "Results truncated" not in result
+
+    def test_regex_still_sees_the_whole_line(self, sandbox):
+        width = tools.MAX_LINE_LENGTH
+        (sandbox / "tail.txt").write_text("z" * width + "TAIL_ONLY\n")
+
+        result = _grep("TAIL_ONLY", "tail.txt", str(sandbox))
+        assert f"  Line 1: {'z' * width} [+9 chars]" in result.split("\n")
 
     def test_line_numbers(self, sandbox):
         result = _grep("return", ".", str(sandbox))

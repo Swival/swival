@@ -1008,15 +1008,14 @@ class TestOther:
     """Miscellaneous tests for read_file truncation and output cap."""
 
     def test_long_lines_truncated_at_2000_chars(self, tmp_path):
-        """Lines longer than MAX_LINE_LENGTH are truncated."""
+        """Lines longer than MAX_LINE_LENGTH are clipped with an omission count."""
         long_line = "x" * 5000
         (tmp_path / "wide.txt").write_text(long_line + "\n", encoding="utf-8")
 
         result = _read_file("wide.txt", str(tmp_path))
-        # The output line is "1: " + truncated content
         returned_line = result.split("\n")[0]
         content_part = returned_line[len("1: ") :]
-        assert len(content_part) == MAX_LINE_LENGTH
+        assert content_part == "x" * MAX_LINE_LENGTH + " [+3000 chars]"
 
     def test_output_capped_at_50kb(self, tmp_path):
         """Output is capped at MAX_OUTPUT_BYTES (50 KB) with a truncation marker."""
@@ -1034,6 +1033,178 @@ class TestOther:
         # slightly over, but the actual line data must be under).
         lines_before_marker = result.rsplit("\n[", 1)[0]
         assert len(lines_before_marker.encode("utf-8")) <= MAX_OUTPUT_BYTES
+
+
+def _visible_text(numbered_line: str) -> str:
+    """What a model would copy from a read_file or grep line: no prefix, no marker."""
+    text = numbered_line.split(": ", 1)[1]
+    return text.rsplit(" [+", 1)[0]
+
+
+class TestReadFileLongLines:
+    """read_file marks clipped lines and leaves every other line alone."""
+
+    def test_line_at_limit_is_byte_for_byte_unchanged(self, tmp_path):
+        line = "y" * MAX_LINE_LENGTH
+        data = f"short\n{line}\n".encode()
+        (tmp_path / "f.txt").write_bytes(data)
+
+        result = _read_file("f.txt", str(tmp_path))
+        checksum = tools_mod._hash_bytes(data)
+        assert result == f"1: short\n2: {line}\n[checksum={checksum}]"
+
+    def test_one_extra_char_is_singular(self, tmp_path):
+        (tmp_path / "f.txt").write_text("y" * (MAX_LINE_LENGTH + 1) + "\n")
+
+        first = _read_file("f.txt", str(tmp_path)).split("\n")[0]
+        assert first == f"1: {'y' * MAX_LINE_LENGTH} [+1 char]"
+
+    def test_unicode_counts_characters_not_bytes(self, tmp_path):
+        (tmp_path / "f.txt").write_text("é" * (MAX_LINE_LENGTH + 5) + "\n")
+
+        first = _read_file("f.txt", str(tmp_path)).split("\n")[0]
+        assert first == f"1: {'é' * MAX_LINE_LENGTH} [+5 chars]"
+
+    def test_crlf_terminator_is_not_counted(self, tmp_path):
+        (tmp_path / "f.txt").write_bytes(b"z" * (MAX_LINE_LENGTH + 7) + b"\r\nend\r\n")
+
+        lines = _read_file("f.txt", str(tmp_path)).split("\n")
+        assert lines[0] == f"1: {'z' * MAX_LINE_LENGTH} [+7 chars]"
+        assert lines[1] == "2: end"
+
+    def test_tail_read_marks_clipped_lines(self, tmp_path):
+        (tmp_path / "f.txt").write_text("a\n" + "w" * (MAX_LINE_LENGTH + 3) + "\n")
+
+        result = _read_file("f.txt", str(tmp_path), tail=1)
+        assert f"2: {'w' * MAX_LINE_LENGTH} [+3 chars]" in result
+
+    def test_marker_counts_against_output_budget(self, tmp_path, monkeypatch):
+        long_line = "q" * (MAX_LINE_LENGTH + 50)
+        (tmp_path / "f.txt").write_text(f"short\n{long_line}\n")
+        first = len("1: short\n")
+        clipped_without_marker = len(f"2: {'q' * MAX_LINE_LENGTH}\n")
+        clipped_with_marker = clipped_without_marker + len(" [+50 chars]")
+
+        # The clipped text alone would fit, but not once the marker is added.
+        monkeypatch.setattr(
+            tools_mod, "MAX_OUTPUT_BYTES", first + clipped_with_marker - 1
+        )
+        result = _read_file("f.txt", str(tmp_path))
+        assert "2: " not in result
+        assert "[1 more lines, use offset=2 to continue]" in result
+
+        monkeypatch.setattr(tools_mod, "MAX_OUTPUT_BYTES", first + clipped_with_marker)
+        result = _read_file("f.txt", str(tmp_path))
+        assert f"2: {'q' * MAX_LINE_LENGTH} [+50 chars]" in result
+        assert "more lines" not in result
+
+
+class TestEditClippedLine:
+    """An edit copied from a clipped line must not leave its hidden rest behind."""
+
+    def _long_line(self):
+        return "START" + "A" * (MAX_LINE_LENGTH - 5) + "HIDDEN_SUFFIX" * 20
+
+    def _prefix(self):
+        return self._long_line()[:MAX_LINE_LENGTH]
+
+    def test_prefix_copied_from_read_file_is_rejected(self, tmp_path):
+        data = f"head\n{self._long_line()}\ntail\n".encode()
+        (tmp_path / "f.txt").write_bytes(data)
+        read = _read_file("f.txt", str(tmp_path))
+        visible = _visible_text(read.split("\n")[1])
+        assert visible == self._prefix()
+
+        result = _edit_file("f.txt", visible, "REPLACED", str(tmp_path))
+        assert result.startswith("error: edit_file: ")
+        assert f"{MAX_LINE_LENGTH}-character cutoff" in result
+        assert "line 2" in result
+        assert (tmp_path / "f.txt").read_bytes() == data
+
+    def test_prefix_copied_from_grep_is_rejected(self, tmp_path):
+        data = f"head\n{self._long_line()}\n".encode()
+        (tmp_path / "f.txt").write_bytes(data)
+        found = tools_mod._grep("HIDDEN", "f.txt", str(tmp_path))
+        entry = next(ln for ln in found.split("\n") if ln.startswith("  Line 2: "))
+        visible = _visible_text(entry)
+
+        result = _edit_file("f.txt", visible, "REPLACED", str(tmp_path))
+        assert result.startswith("error: edit_file: ")
+        assert (tmp_path / "f.txt").read_bytes() == data
+
+    def test_copied_marker_does_not_match(self, tmp_path):
+        data = f"{self._long_line()}\n".encode()
+        (tmp_path / "f.txt").write_bytes(data)
+        copied = _read_file("f.txt", str(tmp_path)).split("\n")[0].split(": ", 1)[1]
+
+        result = _edit_file("f.txt", copied, "REPLACED", str(tmp_path))
+        assert result.startswith("error: edit_file: old_string not found")
+        assert (tmp_path / "f.txt").read_bytes() == data
+
+    def test_multiline_edit_ending_at_prefix_is_rejected(self, tmp_path):
+        data = f"head\n{self._long_line()}\n".encode()
+        (tmp_path / "f.txt").write_bytes(data)
+
+        result = _edit_file("f.txt", "head\n" + self._prefix(), "X", str(tmp_path))
+        assert result.startswith("error: edit_file: ")
+        assert (tmp_path / "f.txt").read_bytes() == data
+
+    def test_replace_all_is_rejected(self, tmp_path):
+        data = f"{self._long_line()}\n{self._long_line()}\n".encode()
+        (tmp_path / "f.txt").write_bytes(data)
+
+        result = _edit_file(
+            "f.txt", self._prefix(), "X", str(tmp_path), replace_all=True
+        )
+        assert result.startswith("error: edit_file: ")
+        assert (tmp_path / "f.txt").read_bytes() == data
+
+    def test_crlf_file_is_rejected_and_untouched(self, tmp_path):
+        data = f"head\r\n{self._long_line()}\r\ntail\r\n".encode()
+        (tmp_path / "f.txt").write_bytes(data)
+        visible = _visible_text(_read_file("f.txt", str(tmp_path)).split("\n")[1])
+
+        result = _edit_file("f.txt", visible, "REPLACED", str(tmp_path))
+        assert result.startswith("error: edit_file: ")
+        assert "line 2" in result
+        assert (tmp_path / "f.txt").read_bytes() == data
+
+    def test_crlf_line_at_limit_is_editable(self, tmp_path):
+        line = "B" * MAX_LINE_LENGTH
+        (tmp_path / "f.txt").write_bytes(f"head\r\n{line}\r\ntail\r\n".encode())
+
+        result = _edit_file("f.txt", line, "short", str(tmp_path))
+        assert result.startswith("Edited f.txt")
+        assert (tmp_path / "f.txt").read_bytes() == b"head\r\nshort\r\ntail\r\n"
+
+    def test_short_substring_and_whole_line_edits_still_work(self, tmp_path):
+        long_line = self._long_line()
+        (tmp_path / "f.txt").write_text(f"{long_line}\n")
+
+        result = _edit_file("f.txt", "START", "BEGIN", str(tmp_path))
+        assert result.startswith("Edited f.txt")
+        long_line = "BEGIN" + long_line[5:]
+        assert (tmp_path / "f.txt").read_text() == f"{long_line}\n"
+
+        result = _edit_file("f.txt", long_line, "whole", str(tmp_path))
+        assert result.startswith("Edited f.txt")
+        assert (tmp_path / "f.txt").read_text() == "whole\n"
+
+    def test_dispatch_rejects_too(self, tmp_path):
+        data = f"{self._long_line()}\n".encode()
+        (tmp_path / "f.txt").write_bytes(data)
+
+        result = dispatch(
+            "edit_file",
+            {
+                "file_path": "f.txt",
+                "old_string": self._prefix(),
+                "new_string": "X",
+            },
+            str(tmp_path),
+        )
+        assert result.startswith("error: edit_file: ")
+        assert (tmp_path / "f.txt").read_bytes() == data
 
 
 class TestDirectoryListingCap:

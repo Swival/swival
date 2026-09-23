@@ -2,7 +2,7 @@
 
 import pytest
 
-from swival.edit import replace, _exact_match_spans
+from swival.edit import replace, _exact_match_spans, _LINE_BREAK_RE
 
 
 # =========================================================================
@@ -521,3 +521,141 @@ class TestTrailingNewlineAbsorption:
         content = "aaa\nbbb"
         result = replace(content, "bbb", "xxx\n")
         assert result == "aaa\nxxx\n"
+
+
+class TestReplaceAllAdjacency:
+    def test_adjacent_matches_keep_both_replacements(self):
+        assert replace("abab", "ab", "\nX\n", replace_all=True) == "\nX\n\nX\n"
+
+    def test_absorbed_newline_is_consumed_once(self):
+        assert replace("ab\nab\n", "ab", "X\n", replace_all=True) == "X\nX\n"
+
+    def test_fuzzy_matches_sharing_an_empty_line_apply_from_the_end(self):
+        # Both line windows contain line 2, so one match starts where the
+        # previous one ends. A left-to-right pass would yield "\nX\n\nX\n".
+        assert replace("\n\n", " \n ", "\nX\n", replace_all=True) == "\nX\nX\n"
+
+
+class TestDisplayLineCap:
+    """display_line_cap refuses edits that stop at a clipped line's visible prefix."""
+
+    CAP = 10
+    ERROR = r"10-character cutoff that read_file and grep apply to line {}"
+
+    def test_guard_is_off_by_default(self):
+        assert replace("0123456789HIDDEN\n", "0123456789", "X") == "XHIDDEN\n"
+
+    def test_visible_prefix_of_longer_line_rejected(self):
+        content = "head\n0123456789HIDDEN\ntail\n"
+        with pytest.raises(ValueError, match=self.ERROR.format(2)):
+            replace(content, "0123456789", "X", display_line_cap=self.CAP)
+
+    def test_multiline_span_ending_at_prefix_rejected(self):
+        content = "head\n0123456789HIDDEN\n"
+        with pytest.raises(ValueError, match=self.ERROR.format(2)):
+            replace(content, "head\n0123456789", "X", display_line_cap=self.CAP)
+
+    def test_line_of_exactly_cap_is_editable(self):
+        content = "head\n0123456789\ntail"
+        result = replace(content, "0123456789", "X", display_line_cap=self.CAP)
+        assert result == "head\nX\ntail"
+
+    def test_line_of_exactly_cap_at_eof_is_editable(self):
+        result = replace("0123456789", "0123456789", "X", display_line_cap=self.CAP)
+        assert result == "X"
+
+    def test_shorter_or_longer_old_string_allowed(self):
+        content = "0123456789HIDDEN\n"
+        cap = self.CAP
+        assert replace(content, "012345678", "X", display_line_cap=cap) == (
+            "X9HIDDEN\n"
+        )
+        assert replace(content, "0123456789H", "X", display_line_cap=cap) == (
+            "XIDDEN\n"
+        )
+
+    def test_span_not_starting_at_line_start_allowed(self):
+        content = "ab0123456789HIDDEN\n"
+        result = replace(content, "0123456789", "X", display_line_cap=self.CAP)
+        assert result == "abXHIDDEN\n"
+
+    def test_short_substring_in_long_line_allowed(self):
+        content = "0123456789HIDDEN\n"
+        result = replace(content, "345", "X", display_line_cap=self.CAP)
+        assert result == "012X6789HIDDEN\n"
+
+    def test_replace_all_checks_every_selected_span(self):
+        content = "0123456789\n0123456789HIDDEN\n"
+        with pytest.raises(ValueError, match=self.ERROR.format(2)):
+            replace(
+                content,
+                "0123456789",
+                "X",
+                replace_all=True,
+                display_line_cap=self.CAP,
+            )
+
+    def test_replace_all_without_clipped_span_allowed(self):
+        content = "0123456789\n0123456789\n"
+        result = replace(
+            content, "0123456789", "X", replace_all=True, display_line_cap=self.CAP
+        )
+        assert result == "X\nX\n"
+
+    def test_unselected_clipped_candidate_is_ignored(self):
+        content = "0123456789\n0123456789HIDDEN\n"
+        result = replace(
+            content, "0123456789", "X", line_number=1, display_line_cap=self.CAP
+        )
+        assert result == "X\n0123456789HIDDEN\n"
+        with pytest.raises(ValueError, match=self.ERROR.format(2)):
+            replace(
+                content, "0123456789", "X", line_number=2, display_line_cap=self.CAP
+            )
+
+    def test_stale_line_recovery_is_checked(self):
+        content = "a\nb\n0123456789HIDDEN\n"
+        # Without the guard, the stale line_number falls back to the lone match.
+        result = replace(content, "0123456789", "X", line_number=1)
+        assert result == "a\nb\nXHIDDEN\n"
+        with pytest.raises(ValueError, match=self.ERROR.format(3)):
+            replace(
+                content, "0123456789", "X", line_number=1, display_line_cap=self.CAP
+            )
+
+    def test_unicode_counts_characters(self):
+        content = "ab" + "é" * 8 + "日本\n"
+        with pytest.raises(ValueError, match=self.ERROR.format(1)):
+            replace(content, "ab" + "é" * 8, "X", display_line_cap=self.CAP)
+        result = replace(content, "ab" + "é" * 7, "X", display_line_cap=self.CAP)
+        assert result == "Xé日本\n"
+
+    def test_crlf_terminator_ends_the_line(self):
+        content = "0123456789\r\nnext\r\n"
+        result = replace(content, "0123456789", "X", display_line_cap=self.CAP)
+        assert result == "X\r\nnext\r\n"
+
+    def test_splitlines_separators_delimit_lines(self):
+        content = "0123456789\x0cnext\n"
+        result = replace(content, "0123456789", "X", display_line_cap=self.CAP)
+        assert result == "X\x0cnext\n"
+        content = "prev\u20280123456789HIDDEN\n"
+        with pytest.raises(ValueError, match=self.ERROR.format(2)):
+            replace(content, "0123456789", "X", display_line_cap=self.CAP)
+
+    def test_line_trimmed_match_covers_whole_line(self):
+        content = "    0123456789HIDDEN\nnext\n"
+        result = replace(
+            content, "  0123456789HIDDEN  ", "X", display_line_cap=self.CAP
+        )
+        assert result == "X\nnext\n"
+
+
+def test_line_break_pattern_matches_splitlines():
+    every_char = "".join(
+        chr(cp) for cp in range(0x110000) if not 0xD800 <= cp <= 0xDFFF
+    )
+    pieces = every_char.splitlines(keepends=True)
+    breaks = {piece[-1] for piece in pieces[:-1]}
+    assert set(_LINE_BREAK_RE.findall(every_char)) == breaks
+    assert len(breaks) == 10

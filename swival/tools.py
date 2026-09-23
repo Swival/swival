@@ -974,6 +974,18 @@ def set_output_caps(max_lines: int, max_kb: int) -> None:
     batch_limit["description"] = description
 
 
+def _clip_line(line: str) -> str:
+    """Cut a displayed line to MAX_LINE_LENGTH characters and say how many are missing.
+
+    Without the marker, a model could take the visible prefix for the whole
+    line and copy it into an edit.
+    """
+    omitted = len(line) - MAX_LINE_LENGTH
+    if omitted <= 0:
+        return line
+    return f"{line[:MAX_LINE_LENGTH]} [+{omitted} char{'s' if omitted != 1 else ''}]"
+
+
 CHECKSUM_HEX_LEN = 8
 CHECKSUM_VALUE_RE = re.compile(rf"^[0-9a-f]{{{CHECKSUM_HEX_LEN}}}$")
 CHECKSUM_TRAILER_RE = re.compile(rf"^\[checksum=([0-9a-f]{{{CHECKSUM_HEX_LEN}}})\]$")
@@ -1421,8 +1433,8 @@ def _grep_file(
     the first `keep` matches only.
     Each block is a list of (line_no, text, is_match) entries, with
     overlapping or adjacent windows merged into one block.
-    Retained text is clipped to MAX_LINE_LENGTH so a pathological file
-    cannot pin a huge line in memory.
+    Retained text is clipped by _clip_line so a pathological file cannot
+    pin a huge line in memory.
     """
     blocks: list[list[tuple[int, str, bool]]] = []
     before: deque[tuple[int, str, bool]] = deque(maxlen=context_lines)
@@ -1432,7 +1444,8 @@ def _grep_file(
         matched = regex.search(line) is not None
         if matched:
             count += 1
-        line = line[:MAX_LINE_LENGTH]
+        if len(line) > MAX_LINE_LENGTH:
+            line = _clip_line(line)
         if matched and count <= keep:
             entry = (line_no, line, True)
             if blocks and line_no - context_lines <= blocks[-1][-1][0] + 1:
@@ -1785,7 +1798,7 @@ def _read_file(
 
     for i, line in enumerate(selected, start=start + 1):
         if len(line) > MAX_LINE_LENGTH:
-            line = line[:MAX_LINE_LENGTH]
+            line = _clip_line(line)
         numbered = f"{i}: {line}"
         encoded_len = len(numbered.encode("utf-8")) + 1  # +1 for newline
         if total_bytes + encoded_len > MAX_OUTPUT_BYTES:
@@ -1853,6 +1866,12 @@ def _split_read_result(result: str) -> tuple[str, bool, str | None, str | None]:
             if match:
                 next_offset = match.group(1)
             lines = lines[:-1]
+    # Only a clipped line, which ends with its omission marker, shows more
+    # than MAX_LINE_LENGTH characters after the "N: " prefix.
+    if not content_truncated:
+        content_truncated = any(
+            len(line.partition(": ")[2]) > MAX_LINE_LENGTH for line in lines
+        )
     content = "\n".join(lines)
     return content, content_truncated, next_offset, checksum
 
@@ -2376,6 +2395,7 @@ def _edit_file(
             new_string,
             replace_all=replace_all,
             line_number=line_number,
+            display_line_cap=MAX_LINE_LENGTH,
         )
     except ValueError as exc:
         return f"error: edit_file: {exc} (in {file_path})"
