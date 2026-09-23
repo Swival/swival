@@ -2,6 +2,23 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.45
+
+- Large MCP tool catalogs now load schemas on demand through `tool_search`, leaving more context available for the conversation.
+  Loaded schemas remain available in later turns; set `defer_mcp_schemas = false` in config to send all schemas from the start.
+- JSON reports now include an `exposure` breakdown showing how much input comes from tool results, tool schemas, conversation history, and summaries across requests.
+  These estimates account for content sent repeatedly and help identify what is consuming context; they are separate from provider usage and billing figures.
+- Added `--provider-timeout` to set the provider request timeout in seconds and `--initial-tool-choice required` to request a tool call on the first model request.
+  Both options are also available in config and the Python `Session` API.
+- Recovery now recognizes XML calls named after an available tool when a model emits them as plain text.
+  Follow-up requests after leaked tool calls or announced actions now require tool use when tools are available and the provider supports it.
+- File reads and `grep` now mark clipped lines with the number of omitted characters.
+  `edit_file` refuses replacements that end exactly at the display cutoff of a longer line, preventing edits copied from truncated output from silently leaving the hidden suffix behind.
+- Concurrent `edit_file` calls within a Swival session now serialize edits to the same file, preventing agents and subagents from silently overwriting each other's changes.
+- `outline` line numbers now agree with the file-reading and editing tools even when a file contains form feeds or Unicode line separators.
+- The ChatGPT model picker now includes `gpt-6-astra`, `gpt-6-luna`, and `gpt-6-sol`.
+- LM Studio no longer reloads a model when its loaded context window already meets or exceeds the requested size.
+
 ## 1.0.44
 
 - `CLAUDE.md` and `AGENTS.md` are loaded in full: if they do not fit, Swival stops with a message naming the files instead of trimming them.
