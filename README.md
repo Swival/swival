@@ -4,25 +4,29 @@
 
 A coding agent for any model.
 
-Tell Swival what you want to do, whether that's fixing a bug, cleaning up some code, or building something new.
-It reads your files, makes changes, and runs tests, all from your terminal.
-You can work with it one step at a time, or give it a task and let it get on with it.
+Swival makes it easy to work with local models and online services in the same tool.
+Smaller models get the same attention as the largest ones, with careful use of the space available for conversation and working notes.
+A short setup guide helps connect the model, and switching models doesn't mean changing agents.
 
-You can use a model running on your own computer or connect to an online service.
-Swival is built to work well with smaller models too, so you don't need the biggest model to get useful work done.
+For online services, secret encryption can be enabled with a single option to hide supported API keys and tokens before they're sent to the model.
+Filters can also be added to remove private details, such as customer names and internal URLs.
 
-As it works, Swival keeps notes on what it's learned and what's left to do, which helps it stay on track during longer jobs.
-If you need to stop, you can pick up the session later.
-And when you have a bigger task in mind, you can give it a goal and ask it to keep working toward it.
+Longer jobs don't need constant reminders: Swival keeps notes on what it's learned and what's left to do.
+An interrupted session can pick up where it left off, and setting a goal keeps Swival working toward it.
 
-You can also have another model review its changes or ask Swival to check your code for security bugs.
-If your work calls for other tools, you can connect those too.
+Checking the work is built in too.
+A single option adds a review step, so Swival can check its work and try again when the review finds problems.
+Another model can handle the review instead, and a built-in security audit checks existing code for bugs.
 
-[Learn more at swival.dev](https://swival.dev/).
+Swival is free, open source, and written in Python, so the code is available to read and change.
+It also connects to other tools and agents and can run as part of a Python program.
 
-## Try it
+The [introduction article](https://00f.net/2026/04/13/swival-ai-agent/) explains the ideas behind Swival.
+The full documentation is at [swival.dev](https://swival.dev/).
 
-Install with [uv](https://docs.astral.sh/uv/):
+## Quick start
+
+With [uv](https://docs.astral.sh/uv/), one command installs Swival:
 
 ```sh
 uv tool install --python 3.14 swival
@@ -35,20 +39,19 @@ brew trust swival/tap
 brew install swival/tap/swival
 ```
 
-Run it from your project directory:
+Then, from the project directory:
 
 ```sh
 swival
 ```
 
-On your first run, Swival offers to help you choose and set up a model.
-Then just tell it what you need.
+On the first run, Swival offers a short setup guide.
 
-You can also give it a task straight from the command line:
+For a single task, one command is enough:
 
 ```sh
 swival "Find the cause of the failing tests and fix it"
 ```
 
-If you need help getting started, follow the [setup guide](https://swival.dev/pages/getting-started.html).
-You'll find the rest of the documentation at [swival.dev](https://swival.dev/).
+The [setup guide](https://swival.dev/pages/getting-started.html) covers installation and the first run in more detail.
+The rest of the documentation is at [swival.dev](https://swival.dev/).
