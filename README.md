@@ -2,377 +2,53 @@
 
 # Swival
 
-A coding agent for any model. [Documentation](https://swival.dev/)
+A coding agent for any model.
 
-Swival is a CLI coding agent built to be practical, reliable, and easy to use.
-It works with frontier models, but its main goal is to be as reliable as
-possible with smaller models, including local ones. It is designed from the
-ground up to handle tight context windows and limited resources without falling
-apart.
+Tell Swival what you want to do, whether that's fixing a bug, cleaning up some code, or building something new.
+It reads your files, makes changes, and runs tests, all from your terminal.
+You can work with it one step at a time, or give it a task and let it get on with it.
 
-It connects to [LM Studio](https://lmstudio.ai/),
-[llama.cpp](https://github.com/ggml-org/llama.cpp),
-[HuggingFace Inference API](https://huggingface.co/inference-api),
-[OpenRouter](https://openrouter.ai/),
-[Google Gemini](https://ai.google.dev/),
-[Gemini Enterprise Agent Platform](https://cloud.google.com/vertex-ai) (formerly Vertex AI),
-[ChatGPT Plus/Pro](https://chatgpt.com/),
-[AWS Bedrock](https://aws.amazon.com/bedrock/), Apple Foundation Models
-(experimental), any OpenAI-compatible server (ollama,
-mlx_lm.server, vLLM, etc.), or any external command
-(`codex exec`, custom wrappers, etc.), sends your task, and runs an autonomous tool loop until
-it produces an answer. With LM Studio and llama.cpp it auto-discovers your
-loaded model, so there's nothing to configure. Pure Python, no framework.
+You can use a model running on your own computer or connect to an online service.
+Swival is built to work well with smaller models too, so you don't need the biggest model to get useful work done.
 
-## Quickstart
+As it works, Swival keeps notes on what it's learned and what's left to do, which helps it stay on track during longer jobs.
+If you need to stop, you can pick up the session later.
+And when you have a bigger task in mind, you can give it a goal and ask it to keep working toward it.
 
-Pick the provider that matches how you want to run models:
+You can also have another model review its changes or ask Swival to check your code for security bugs.
+If your work calls for other tools, you can connect those too.
 
-| Provider         | Auth                                                 | Required flags                                                     | First command                                                                                       |
-| ---------------- | ---------------------------------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| LM Studio        | none                                                 | none                                                               | `swival "Refactor src/api.py"`                                                                      |
-| llama.cpp        | none                                                 | `--provider llamacpp`                                              | `swival --provider llamacpp "Refactor src/api.py"`                                                  |
-| HuggingFace      | `HF_TOKEN` or `--api-key`                            | `--provider huggingface --model ORG/MODEL`                         | `swival --provider huggingface --model zai-org/GLM-5.2 "task"`                                      |
-| OpenRouter       | `OPENROUTER_API_KEY` or `--api-key`                  | `--provider openrouter --model MODEL`                              | `swival --provider openrouter --model z-ai/glm-5.2 "task"`                                          |
-| Google Gemini    | `GEMINI_API_KEY`, `OPENAI_API_KEY`, or `--api-key`   | `--provider google --model MODEL`                                  | `swival --provider google --model gemini-2.5-flash "task"`                                          |
-| GEAP (Vertex AI) | Google Cloud ADC or `GOOGLE_APPLICATION_CREDENTIALS` | `--provider geap --gcp-project ID --location REGION --model MODEL` | `swival --provider geap --gcp-project my-proj --location us-central1 --model gemini-3.1-pro "task"` |
-| ChatGPT Plus/Pro | browser auth on first run or `CHATGPT_API_KEY`       | `--provider chatgpt --model MODEL`                                 | `swival --provider chatgpt --model gpt-5.5 "task"`                                                  |
-| Generic          | optional `OPENAI_API_KEY`                            | `--provider generic --base-url URL --model MODEL`                  | `swival --provider generic --base-url http://127.0.0.1:8080 --model my-model "task"`                |
-| Apple FM (exp.)  | none (local server)                                  | `--provider applefm`                                               | `swival --provider applefm "task"`                                                                  |
-| AWS Bedrock      | AWS credential chain (`AWS_PROFILE`, env vars, IAM)  | `--provider bedrock --model MODEL`                                 | `swival --provider bedrock --model global.anthropic.claude-opus-4-6-v1 "task"`                      |
-| Command          | none                                                 | `--provider command --model "COMMAND"`                             | `swival --provider command --model "codex exec --full-auto" "task"`                                 |
+[Learn more at swival.dev](https://swival.dev/).
 
-Run `swival --help` for the grouped CLI reference and copy-paste examples.
+## Try it
 
-First time? Run `swival` with no arguments on a terminal: if you have no
-config yet, a short setup wizard walks you through picking a provider and
-writes a starter config to `~/.config/swival/config.toml`.
-
-### LM Studio
-
-1. Install [LM Studio](https://lmstudio.ai/) and load a model with tool-calling
-   support. Recommended first model:
-   [qwen3-coder-next](https://huggingface.co/unsloth/Qwen3-Coder-Next-GGUF)
-   (great quality/speed tradeoff on local hardware).
-   Crank the context size as high as your hardware allows.
-2. Start the LM Studio server.
-3. Install Swival (requires Python 3.13+):
+Install with [uv](https://docs.astral.sh/uv/):
 
 ```sh
 uv tool install --python 3.14 swival
 ```
 
-On macOS you can also use Homebrew. Trust the tap first, then install:
+Or with Homebrew on macOS:
 
 ```sh
 brew trust swival/tap
 brew install swival/tap/swival
 ```
 
-4. Run:
-
-```sh
-swival "Refactor the error handling in src/api.py"
-```
-
-That's it. Swival finds the model, connects, and goes to work.
-
-### llama.cpp
-
-1. Start `llama-server` with a model (use `--fit on` to auto-size context to
-   available memory):
-   ```sh
-   llama-server --reasoning auto --fit on \
-       -hf unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL
-   ```
-2. Install Swival:
-   ```sh
-   uv tool install --python 3.14 swival
-   ```
-3. Run (model is auto-discovered from the server):
-   ```sh
-   swival --provider llamacpp "Refactor the error handling in src/api.py"
-   ```
-
-The default base URL is `http://127.0.0.1:8080`. Override with `--base-url`.
-
-### HuggingFace
-
-```sh
-export HF_TOKEN=hf_...
-uv tool install --python 3.14 swival
-swival "Refactor the error handling in src/api.py" \
-    --provider huggingface --model zai-org/GLM-5.2
-```
-
-You can also point it at a dedicated endpoint with `--base-url` and `--api-key`.
-
-### OpenRouter
-
-```sh
-export OPENROUTER_API_KEY=sk_or_...
-uv tool install --python 3.14 swival
-swival "Refactor the error handling in src/api.py" \
-    --provider openrouter --model z-ai/glm-5.2
-```
-
-### Google Gemini
-
-```sh
-export GEMINI_API_KEY=...
-uv tool install --python 3.14 swival
-swival "Refactor the error handling in src/api.py" \
-    --provider google --model gemini-2.5-flash
-```
-
-### GEAP (Gemini Enterprise Agent Platform / Vertex AI)
-
-For enterprise Google Cloud setups, use the `geap` provider. It routes through
-Vertex AI using Application Default Credentials, so there is no API key to
-manage. `--provider vertexai` is accepted as an alias.
-
-```sh
-gcloud auth application-default login
-uv tool install --python 3.14 swival
-swival "Refactor the error handling in src/api.py" \
-    --provider geap \
-    --gcp-project my-gcp-project \
-    --location us-central1 \
-    --model gemini-3.1-pro
-```
-
-Service accounts work too: set `GOOGLE_APPLICATION_CREDENTIALS` to the JSON key
-path instead of running `gcloud auth`.
-
-### ChatGPT Plus/Pro
-
-Use OpenAI models through your existing ChatGPT Plus or Pro subscription -- no
-API key needed.
-
-```sh
-uv tool install --python 3.14 swival
-swival "Refactor the error handling in src/api.py" \
-    --provider chatgpt --model gpt-5.5
-```
-
-On first use, a device code and URL are printed to your terminal. Open the URL,
-enter the code, and authorize with your ChatGPT account. Tokens are cached
-locally for subsequent runs.
-
-### Generic (OpenAI-compatible)
-
-```sh
-swival "Refactor the error handling in src/api.py" \
-    --provider generic \
-    --base-url http://127.0.0.1:8080 \
-    --model my-model
-```
-
-Works with ollama, mlx_lm.server, vLLM, DeepSeek API, and anything else that
-speaks the OpenAI chat completions protocol. No API key required for local
-servers.
-
-### Interactive sessions
+Run it from your project directory:
 
 ```sh
 swival
 ```
 
-The REPL carries conversation history across questions, which makes it good for
-exploratory work and longer tasks. The input box stays live while the model
-works: type the next message during a turn and Enter queues it, Ctrl-C
-interrupts. `/model` opens an interactive picker over
-whatever your provider can serve right now (for HuggingFace, the models
-currently backed by inference providers, with context and pricing shown), and
-favorites tagged with `*` stay pinned across sessions for quick switching.
+On your first run, Swival offers to help you choose and set up a model.
+Then just tell it what you need.
 
-### Task Input From Stdin
-
-If you omit the positional task and pipe stdin, Swival reads the task from
-stdin.
+You can also give it a task straight from the command line:
 
 ```sh
-swival -q < objective.md
-
-cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5.2
+swival "Find the cause of the failing tests and fix it"
 ```
 
-Useful for long prompts, shell-quoting avoidance, and scripted workflows.
-
-### Updates and uninstall
-
-```sh
-uv tool upgrade swival    # update (uv)
-uv tool uninstall swival  # remove (uv)
-brew upgrade swival       # update (Homebrew)
-brew uninstall swival     # remove (Homebrew)
-```
-
-## What makes it different
-
-**Reliable with small models.** Context management is one of Swival's strengths.
-It keeps things clean and focused, which is especially important when you are
-working with models that have tight context windows. Graduated compaction,
-persistent thinking notes, and a todo checklist all survive context resets, so
-the agent doesn't lose track of multi-step plans even under pressure.
-
-**Your models, your way.** Works with LM Studio, llama.cpp, HuggingFace
-Inference API, OpenRouter, Google Gemini, the Gemini Enterprise Agent Platform
-(formerly Vertex AI), ChatGPT Plus/Pro, AWS Bedrock, any OpenAI-compatible server,
-and any external command. With LM Studio and llama.cpp,
-it auto-discovers whatever model you have loaded, so there is nothing to configure. With
-HuggingFace or OpenRouter, point it at any supported model. With Google Gemini,
-use Gemini models through Google's native API. For Google Cloud enterprise
-setups, the `geap` provider authenticates via Application Default Credentials
-and routes through Vertex AI. With ChatGPT Plus/Pro,
-authenticate through your browser and use OpenAI's models through your existing
-subscription. With AWS Bedrock, pick up the AWS credential chain and call any
-Bedrock-hosted model. The experimental `applefm` provider talks to a local Apple
-Foundation Models server. With the generic provider, connect to ollama, mlx_lm.server,
-vLLM, or any other compatible server. With the command provider, shell out to any
-program that reads a prompt on stdin and writes a response on stdout. You pick
-the model and the infrastructure.
-
-**Review loop and LLM-as-a-judge.** Swival has a configurable review loop that
-can run external reviewer scripts or use a built-in LLM-as-judge to
-automatically evaluate and retry agent output. Good for quality assurance on
-tasks that matter.
-
-**Built for benchmarking.** Pass `--report report.json` and Swival writes a
-machine-readable evaluation report with per-call LLM timing, tool
-success/failure counts, context compaction events, and guardrail interventions.
-Useful for comparing models, settings, skills, and MCP servers systematically
-on real coding tasks.
-
-**Secrets stay on your machine.** Swival transparently detects API keys and
-credential tokens in LLM messages and encrypts them before they leave your
-machine when you enable secret encryption with `--encrypt-secrets`. The LLM
-never sees the real values. Decryption happens locally when the response comes
-back, so tools still work normally. See [Secret Encryption](docs.md/secrets.md)
-for details.
-
-**Cross-session memory.** The agent remembers things across sessions. It stores
-notes in a local memory file and retrieves the most relevant entries for each
-new conversation using BM25 ranking, so context from past work carries forward
-without bloating the prompt. Use `/learn` in the REPL to teach it something
-on the spot.
-
-**Pick up where you left off.** When a session is interrupted by Ctrl+C, max
-turns, or context overflow, Swival saves its state to disk. Next time you run it
-in the same directory, it picks up where it left off: what it was doing, what
-it had figured out, and what was left.
-
-**Stick with a goal until it's done.** Set an objective with `/goal <objective>`
-in the REPL and Swival keeps the agent on task across turns. It's a structured
-spin on the Ralph-style "keep prompting until it's done" loop. The agent
-doesn't get to declare victory and walk away after one turn: the original
-objective is fed back to the model after every answer, and the loop only ends
-when the agent itself signals the goal is complete after a real evidence-based
-audit, declares a blocker, or hits the optional token budget. This makes it
-practical to point Swival at ambitious, long-running tasks like refactors,
-audits, or end-to-end fixes, and let it grind for hours without giving up
-halfway. Pause, resume, replace, or clear the goal at any time. See
-[Goals](docs.md/goal.md) for details.
-
-**Run on a timer.** `/loop 5m check PR status and summarize` schedules a
-plain prompt to re-run every five minutes. In the REPL it registers the
-schedule, runs the first iteration immediately, then returns the prompt
-to you. Subsequent iterations fire between your commands in their own
-snapshot, so they do not pollute the live conversation. In one-shot mode
-the same command blocks and streams each iteration's answer to stdout,
-which makes it the recommended way to run Swival as a long-lived poller
-under `systemd`, `tmux`, or `nohup`. The interval is forgiving: `1h30m`,
-`5 minutes`, `every hour`, `half an hour`, and `1 minute and 30 seconds`
-all work. `/loops` lists active schedules and `/unloop <id|all>` cancels
-them.
-
-**A2A server mode.** Run `swival --serve` and your agent becomes an A2A
-endpoint that other agents can call over HTTP. Multi-turn context, streaming,
-rate limiting, and bearer auth are built in.
-
-**ACP for editors.** Run `swival --acp` and Swival speaks the Agent Client
-Protocol on stdio, so editors that act as ACP clients (Zed, the
-`agent-client-protocol.nvim` plugin, and similar) can drive a Swival agent the
-same way they drive Claude Code, Gemini CLI, or codex. See
-[ACP](docs.md/acp.md) for editor setup.
-
-**Built-in security audit.** Run `/audit` and Swival scans your codebase for
-provable security bugs. Findings go through a multi-phase pipeline (triage,
-deep review, verification in isolated worktrees) so the final report tends to
-contain real bugs with patches rather than speculative findings. Supports
-incremental resume, targeted regeneration of individual findings, and a
-calibration mode for measuring triage recall. See [Security
-Audit](docs.md/audit.md) for the full flag reference.
-
-**Skills, MetaSKILLs, MCP, ACP, and A2A.** Extend the agent with SKILL.md-based
-skills for reusable workflows, write dynamic skill programs in a safe Python
-subset with [MetaSKILLs](docs.md/metaskills.md) (optional extra, install with
-`uv tool install --python 3.14 'swival[metaskills]'`), connect to external tools via
-the Model Context Protocol, plug into editors via the Agent Client Protocol,
-and talk to remote agents via the Agent-to-Agent (A2A) protocol.
-
-**Small enough to read and hack.** A compact Python codebase with no framework
-underneath. If something doesn't work the way you want, change it.
-
-**CLI-native.** stdout is exclusively the final answer. All diagnostics go to
-stderr. Pipe Swival's output straight into another command or a file.
-
-**Extensible with [custom commands](docs.md/custom-commands.md).** Drop scripts
-or prompt templates into `~/.config/swival/commands/` and invoke them with `!name`
-in the REPL. The [swival-commands](https://github.com/Swival/swival-commands)
-community repo has ready-made commands like a security auditor and a PR reviewer.
-
-## Documentation
-
-Full documentation is available at [swival.dev](https://swival.dev/).
-
-- [Getting Started](docs.md/getting-started.md) -- installation, first run, what
-  happens under the hood
-- [Usage](docs.md/usage.md) -- one-shot mode, REPL mode, CLI flags, piping,
-  exit codes
-- [Tools](docs.md/tools.md) -- what the agent can do: file ops, search, editing,
-  web fetching, thinking, task tracking, command execution
-- [Safety and Sandboxing](docs.md/safety-and-sandboxing.md) -- path resolution,
-  symlink protection, filesystem access modes, command execution modes
-- [Security Audit](docs.md/audit.md) -- multi-phase `/audit` scan with triage,
-  deep review, verification in isolated worktrees, and patch generation
-- [Skills](docs.md/skills.md) -- creating and using SKILL.md-based agent skills
-- [Metaskills](docs.md/metaskills.md) -- portable dynamic skill workflow
-  specification for users and agent implementers
-- [Customization](docs.md/customization.md) -- config files, project instructions,
-  system prompt overrides, tuning parameters
-- [Context Management](docs.md/context-management.md) -- compaction, snapshots,
-  knowledge survival, and how Swival handles tight context windows
-- [Providers](docs.md/providers.md) -- LM Studio, HuggingFace, OpenRouter,
-  Google Gemini, Gemini Enterprise Agent Platform (Vertex AI), ChatGPT Plus/Pro,
-  AWS Bedrock, generic OpenAI-compatible server, and command (external program)
-  configuration
-- [MCP](docs.md/mcp.md) -- connecting external tool servers via the Model Context
-  Protocol
-- [A2A](docs.md/a2a.md) -- connecting to remote agents via the Agent-to-Agent
-  protocol
-- [ACP](docs.md/acp.md) -- driving Swival from ACP-aware editors like Zed and
-  agent-client-protocol.nvim via the Agent Client Protocol
-- [Reports](docs.md/reports.md) -- JSON reports for benchmarking and evaluation
-- [Web Browsing](docs.md/web-browsing.md) -- Chrome DevTools MCP, Lightpanda
-  MCP, and agent-browser for web interaction
-- [Reviews](docs.md/reviews.md) -- external reviewer scripts for automated QA
-  and LLM-as-judge evaluation
-- [Secret Encryption](docs.md/secrets.md) -- transparent encryption of
-  credentials before they reach the LLM provider
-- [Outbound LLM Filter](docs.md/llm-filter.md) -- user-defined scripts to
-  redact or block outbound LLM requests
-- [Lifecycle Hooks](docs.md/lifecycle-hooks.md) -- startup/exit hooks for
-  syncing state to remote storage
-- [Custom Commands](docs.md/custom-commands.md) -- REPL custom command setup
-  and execution (see also the [community commands repo](https://github.com/Swival/swival-commands))
-- [Command Middleware](docs.md/command-middleware.md) -- pre-execution command
-  rewriting and policy enforcement (RTK integration)
-- [Python API](docs.md/python-api.md) -- library API for embedding Swival in
-  Python applications
-- [Not Just for Frontier Models](docs.md/open-models.md) -- why Swival is
-  built to work well with small and open models too
-- [Using Swival with AgentFS](docs.md/agentfs.md) -- copy-on-write filesystem
-  sandboxing for safe agent runs
-- [Using Swival with nono](docs.md/nono.md) -- OS-enforced sandboxing with
-  network controls and atomic rollback
+If you need help getting started, follow the [setup guide](https://swival.dev/pages/getting-started.html).
+You'll find the rest of the documentation at [swival.dev](https://swival.dev/).
