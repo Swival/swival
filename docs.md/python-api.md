@@ -145,7 +145,7 @@ All parameters are keyword-only. The important ones:
 | `approved_buckets`      | Pre-approved command buckets for `commands="ask"` mode (e.g. `{"ls", "git push"}`).                                                                                                                                                                                                    |
 | `storm_breaker`         | Suppress repeated identical tool calls, returning an error that tells the model to try a different approach. Default `True`.                                                                                                                                                           |
 | `flatten_mcp_schemas`   | Flatten deeply nested MCP tool schemas to formats small models tolerate better. Default `True`.                                                                                                                                                                                        |
-| `defer_mcp_schemas`     | Send a large MCP catalog as names and let the model load schemas with `tool_search`. See [MCP](mcp.html#deferred-schemas). Default `True`.                                                                                                                                             |
+| `defer_mcp_schemas`     | When there are many MCP tools, send their names and descriptions first, then let the model load schemas as needed with `tool_search`. See [MCP](mcp.html#deferred-schemas). Default `True`. |
 
 Parameters not listed here correspond to the same-named CLI flags and config keys. See [Customization](customization.html) for the full config reference.
 

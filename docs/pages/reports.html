@@ -183,6 +183,51 @@
 <p><code>goal</code> appears only when the <code>goal</code> tool created or completed at least one objective. It includes <code>created_count</code> and <code>completed_count</code>, plus a <code>current</code> object holding the active goal payload when one is still open.</p>
 <p><code>memory</code> appears when auto-memory was loaded and includes <code>total_entries</code>, <code>bootstrap_entries</code>, <code>retrievable_entries</code>, <code>bootstrap_tokens</code>, <code>retrieval_tokens</code>, <code>retrieved_ids</code>, and <code>mode</code> (either <code>budgeted</code> or <code>full</code>).</p>
 <p><code>prompt_cache</code> appears when at least one LLM call in the run returned cache stats. It is an object with <code>cached_tokens</code> (tokens served from the provider's prompt cache across the whole run) and <code>cache_write_tokens</code> (tokens written to the cache, i.e. the first-call population cost). Both fields are integers. Absent means no cache activity was reported by the provider.</p>
+<p><code>exposure</code> appears after the run sends its first request and measures how much content it sends over the whole run.
+Each request includes the conversation history that Swival has kept, so a tool result counts again every time it is sent.
+After compaction, only the replacement content counts.
+This helps you decide which tool outputs are worth shortening: a result sent forty times can account for more input than a larger result sent only once.</p>
+<p><code>unit</code> is <code>"tokens"</code> when Swival can estimate tokens with <code>cl100k_base</code>, or <code>"bytes"</code> when tokenizer data is unavailable offline.
+Meanwhile, <code>coverage</code> describes gaps in the counts, such as retries made inside the provider SDK.
+Use these estimates to compare where input accumulates during a run.
+Your actual bill also depends on the provider's tokenizer, cache discounts, and cache writes.</p>
+<p><code>requests</code> records how often Swival contacted the model:</p>
+<ul>
+<li><code>sent</code> counts every request sent.</li>
+<li><code>resent</code> counts attempts after the first attempt of a call, including retries after temporary failures, history fixes, or a model switch.
+  These requests also count toward <code>sent</code>.</li>
+<li><code>failed</code> counts sent requests that received no response.</li>
+<li><code>response_cache_hits</code> counts answers served from the local response cache.
+  These do not count toward <code>sent</code>.</li>
+</ul>
+<p><code>input</code> breaks down the content sent, with the sum in <code>total</code>:</p>
+<ul>
+<li><code>system</code>, <code>user</code>, <code>assistant</code>, and <code>reasoning</code> count content from those parts of the conversation.</li>
+<li><code>tool_schemas</code> separates schemas into <code>builtin</code>, <code>mcp</code>, and <code>a2a</code> tools.</li>
+<li><code>tool_results</code> groups results by the tool that produced them.</li>
+<li><code>tool_arguments</code> counts arguments the model generated earlier and that later requests included as input.</li>
+<li><code>summaries</code> separates <code>compaction</code> and <code>snapshot</code> recaps.
+  Since these can combine many results, they are not split by tool.</li>
+<li><code>scaffolding</code> counts Swival's own nudges and reminders, while <code>unattributed</code> holds content that could not be assigned to another category.</li>
+</ul>
+<p><code>input.image_parts</code> counts images separately because they are not included in the token estimate.
+For each tool, <code>results</code> records the number of distinct results sent and their total size when first sent.
+Dividing that tool's <code>input.tool_results</code> value by its <code>results.tokens</code> value shows how often its output was sent on average, weighted by size.
+Separately, <code>output.tool_arguments</code> counts newly generated tool arguments, which are billed at the output price.</p>
+<p><code>provider_usage</code> records the provider's own usage figures.
+It includes the number of <code>responses</code>, how many <code>reported</code> usage, and a <code>usage</code> object that sums <code>input_tokens</code>, <code>output_tokens</code>, <code>cached_tokens</code>, and <code>cache_write_tokens</code>.
+If no response reported usage, <code>usage</code> is <code>null</code>.</p>
+<p><code>cost.known_usd</code> gives the cost calculated from LiteLLM pricing.
+It is <code>null</code> when no call could be priced, so you can distinguish an unknown cost from a real zero.
+The accompanying <code>priced_calls</code> and <code>unpriced_calls</code> counts show how many calls had pricing available.
+<code>not_applicable_calls</code> counts calls to local or subscription providers.</p>
+<p>The same breakdowns appear under <code>by_source</code>, so you can see which parts of the run contributed:</p>
+<ul>
+<li><code>agent</code> covers the main agent loops.</li>
+<li><code>subagent</code> covers subagents and MetaSKILL loops.</li>
+<li><code>summary</code> covers compaction summaries, checkpoints, and continue files.</li>
+<li><code>auxiliary</code> covers other model calls, such as <code>/audit</code> phases.</li>
+</ul>
 <p><code>security</code> appears when at least one security-relevant event occurred during the run. It is an object with <code>command_policy_blocks</code> (commands denied by policy or by user), <code>command_policy_approvals</code> (commands approved by user or config), and <code>untrusted_inputs</code> (external content ingested from <code>fetch_url</code>, MCP, or A2A). All fields are integers. Absent when all counters are zero.</p>
 <p><code>lifecycle</code> appears when lifecycle hooks ran and is an array mirroring the timeline's <code>lifecycle</code> events.</p>
 <h3 id="timeline"><code>timeline</code></h3>
@@ -238,6 +283,8 @@ jq '.stats.tool_calls_by_name' run1.json
 jq '[.timeline[] | select(.type == &quot;tool_call&quot; and .succeeded == false)]' run1.json
 jq '.stats.skills_used' run1.json
 jq '{compactions: .stats.compactions, turn_drops: .stats.turn_drops}' run1.json
+jq '.stats.exposure.input.tool_results' run1.json
+jq '.stats.exposure.results | map_values(.count)' run1.json
 </code></pre>
 <h2 id="comparing-two-runs">Comparing Two Runs</h2>
 <p>You can produce quick side-by-side checks with shell tools.</p>

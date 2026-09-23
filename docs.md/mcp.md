@@ -14,17 +14,26 @@ When MCP tool schemas consume more than 30% of the context window, Swival warns.
 
 ## Deferred Schemas
 
-Every request carries the tool schemas it offers, so a large MCP catalog costs its full schemas on each turn whether or not the task needs them.
-One browser automation server with 30 tools adds about 6,300 tokens per request, more than all of Swival's built-in tools together.
+Tool schemas describe each tool and the arguments it accepts.
+Sending all of them with every request can use a lot of context, even when the task needs only a few tools.
+For example, one browser automation server with 30 tools adds about 6,300 tokens per request, more than all of Swival's built-in tools together.
 
-When the MCP schemas add up to more than about 2,000 tokens, Swival defers them.
-The model then gets a `tool_search` tool whose description lists the deferred tool names by server, and the MCP section of the system prompt keeps their descriptions.
-Searching by an exact tool name loads that schema alone, and searching by keywords loads up to five matching schemas; loaded schemas join every later request of that conversation, and a tool the model calls directly by name is loaded the same way.
-Loaded schemas persist across REPL turns, reset on `/clear`, and are tracked separately for each subagent.
-Smaller catalogs, and the `command` provider, which renders its tool catalog into the prompt, keep sending the full schemas as before.
+When the MCP schemas add up to more than about 2,000 tokens, Swival waits to send each schema until the model needs it.
+Instead, the model gets a `tool_search` tool that lists the available tool names by server.
+The system prompt still includes their descriptions, so the model can decide which tools to look up.
 
-A search costs an extra model turn, and loading new schemas changes the request prefix, which misses the provider's prompt cache once.
-Set `defer_mcp_schemas = false` in `swival.toml` (or pass `defer_mcp_schemas=False` to `Session`) to always send the full schemas instead; the 30% and 50% budget rules above then apply.
+Searching for an exact tool name loads only that tool's schema, while a keyword search loads up to five matching schemas.
+Calling a tool directly by name also loads its schema.
+Once loaded, a schema is included in every later request in the conversation, including later REPL turns, until `/clear` resets the conversation.
+Each subagent keeps its own set of loaded schemas.
+
+Smaller catalogs still send all schemas with every request.
+The `command` provider also keeps its full tool catalog in the prompt.
+
+Searching takes an extra model turn.
+Also, loading a new schema changes the beginning of the request, causing a one-time miss in the provider's prompt cache.
+If you prefer to send all schemas from the start, set `defer_mcp_schemas = false` in `swival.toml` or pass `defer_mcp_schemas=False` to `Session`.
+The 30% and 50% budget rules described above then apply.
 
 ## TOML Configuration
 

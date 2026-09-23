@@ -191,6 +191,7 @@ print(answer)
     metaskills: str = &quot;local&quot;,  # &quot;local&quot;, &quot;all&quot;, or &quot;off&quot;
     storm_breaker: bool = True,
     flatten_mcp_schemas: bool = True,
+    defer_mcp_schemas: bool = True,
 )
 </code></pre>
 <p>All parameters are keyword-only. The important ones:</p>
@@ -345,6 +346,10 @@ print(answer)
 <tr>
 <td><code>flatten_mcp_schemas</code></td>
 <td>Flatten deeply nested MCP tool schemas to formats small models tolerate better. Default <code>True</code>.</td>
+</tr>
+<tr>
+<td><code>defer_mcp_schemas</code></td>
+<td>When there are many MCP tools, send their names and descriptions first, then let the model load schemas as needed with <code>tool_search</code>. See <a href="mcp.html#deferred-schemas">MCP</a>. Default <code>True</code>.</td>
 </tr>
 </tbody>
 </table>
