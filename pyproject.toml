@@ -22,19 +22,19 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "litellm>=1.100.1,<1.101",
+    "litellm>=1.102.0,<1.103",
     "tiktoken>=0.14.0",
-    "html-to-markdown>=3.12.3,<4",
+    "html-to-markdown>=3.14.3,<4",
     "rich>=15.0.0",
     "prompt-toolkit>=3.0.53",
     "mcp>=2.2.0,<3",
     "rank-bm25>=0.2.2",
-    "httpx2>=2.12.0",
+    "httpx2>=2.13.0",
     "starlette>=1.6.0",
-    "uvicorn>=0.52.4",
+    "uvicorn>=0.53.0",
     "fast-cipher>=0.2.2",
-    "boto3>=1.43.93",
-    "google-cloud-aiplatform>=2.1.0,<3",
+    "boto3>=1.43.99",
+    "google-cloud-aiplatform>=2.1.3,<3",
 ]
 
 [project.optional-dependencies]
@@ -51,7 +51,7 @@ Issues = "https://github.com/swival/swival/issues"
 swival = "swival.agent:main"
 
 [build-system]
-requires = ["hatchling>=1.32.0"]
+requires = ["hatchling>=1.32.4"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.sdist]
@@ -89,7 +89,7 @@ markers = [
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
-    "ruff>=0.16.7,<0.17",
+    "ruff>=0.16.8,<0.17",
 ]
 website = [
     "markdown>=3.10.3",
