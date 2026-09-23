@@ -134,6 +134,7 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "metaskills": str,
     "storm_breaker": bool,
     "flatten_mcp_schemas": bool,
+    "defer_mcp_schemas": bool,
 }
 
 _LIST_OF_STR_KEYS = {
@@ -252,6 +253,7 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "metaskills": "local",
     "storm_breaker": True,
     "flatten_mcp_schemas": True,
+    "defer_mcp_schemas": True,
 }
 
 
@@ -1246,6 +1248,7 @@ def args_to_session_kwargs(args, base_dir: str) -> dict:
         "trace_dir",
         "storm_breaker",
         "flatten_mcp_schemas",
+        "defer_mcp_schemas",
         "location",
     ]
 
@@ -1543,6 +1546,7 @@ def generate_config(
         "# --- MCP ---",
         "# no_mcp = false",
         "# flatten_mcp_schemas = true     # flatten deeply nested MCP tool schemas for models that choke on them",
+        "# defer_mcp_schemas = true       # send large MCP catalogs as names; the model loads schemas with tool_search",
         "",
         "# --- Profiles ---",
         "# Named LLM profiles for quick switching with --profile NAME.",

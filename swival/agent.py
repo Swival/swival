@@ -33,6 +33,7 @@ from . import fmt
 from ._env import child_env
 from ._msg import (
     IMAGE_TOKEN_ESTIMATE as _IMAGE_TOKEN_ESTIMATE,
+    COMPACTION_MARKER,
     RECAP_MARKER,
     _canonicalize_tool_calls,
     _complete_orphaned_tool_calls,
@@ -51,6 +52,8 @@ from ._msg import (
 from .config import _UNSET, INITIAL_TOOL_CHOICES, REASONING_LEVELS
 from .config import find_project_root as _find_project_root
 from .cost import CostObservation, SessionCost
+from .deferred_tools import TOOL_SEARCH_NAME, DeferredTools, defer_mcp_tools
+from .exposure import ExposureMeter, rekey_results, tag_results
 from .report import (
     AgentError,
     ConfigError,
@@ -1265,7 +1268,7 @@ def _scavenge_signal_present(msg, finish_reason, allowed_names) -> bool:
 
 
 def _maybe_scavenge_tool_calls(
-    msg, finish_reason, tools, *, turn, report, verbose
+    msg, finish_reason, tools, *, turn, report, verbose, exposure=None
 ) -> int:
     """Recover tool calls leaked into the message content channel.
 
@@ -1334,6 +1337,8 @@ def _maybe_scavenge_tool_calls(
 
     if not new_calls:
         return 0
+    if exposure is not None:
+        exposure.generated(new_calls)
 
     existing = declared
     combined = list(existing) + new_calls
@@ -2305,13 +2310,7 @@ def score_turn(turn: list) -> int:
     return score
 
 
-_STATIC_SPLICE_MARKER = {
-    "role": "user",
-    "content": (
-        "[context compacted — older tool calls and results were "
-        "removed to fit context window]"
-    ),
-}
+_STATIC_SPLICE_MARKER = {"role": "user", "content": COMPACTION_MARKER}
 
 _RECAP_PREFIX = (
     RECAP_MARKER + " — this is a factual summary "
@@ -3484,6 +3483,7 @@ def _run_terminal_floor_ladder(
                 turn=turn,
                 report=report,
                 verbose=verbose,
+                exposure=base_kwargs.get("exposure"),
             )
             _raise_if_truncated_tool_call(
                 msg,
@@ -4236,6 +4236,7 @@ def handle_tool_call(
     network_mode="full",
     net_jail=None,
     tool_policy=None,
+    deferred_tools=None,
 ):
     """Execute a single tool call and return (tool_msg, metadata).
 
@@ -4347,6 +4348,7 @@ def handle_tool_call(
                 network_mode=network_mode,
                 net_jail=net_jail,
                 tool_policy=tool_policy,
+                deferred_tools=deferred_tools,
             )
     except McpShutdownError:
         result = "error: MCP server is shutting down"
@@ -4972,7 +4974,16 @@ def _call_huggingface_text_generation(
     return _make_synthetic_message(response_text), "stop", [], 0, (0, 0)
 
 
-def _call_command(command_str, messages, verbose, max_output_tokens=None):
+def _call_command(
+    command_str,
+    messages,
+    verbose,
+    max_output_tokens=None,
+    *,
+    exposure=None,
+    synthetic=None,
+    result_keys=None,
+):
     """Run an external command as the LLM, passing the conversation on stdin."""
     parts = shlex.split(command_str)
     transcript = _render_transcript(messages)
@@ -4980,7 +4991,16 @@ def _call_command(command_str, messages, verbose, max_output_tokens=None):
     if verbose:
         fmt.model_info(f"Running command: {command_str}")
 
-    response_text = _run_command_once(parts, transcript, verbose, command_str)
+    response_text = _run_command_round(
+        parts,
+        transcript,
+        verbose,
+        command_str,
+        messages,
+        exposure,
+        synthetic,
+        result_keys,
+    )
 
     if max_output_tokens and max_output_tokens > 0:
         response_text = truncate_to_tokens(response_text, max_output_tokens)
@@ -4996,6 +5016,37 @@ _COMMAND_TOOL_MALFORMED_MAX_CONSECUTIVE = 1
 # non-zero) to declare it ran out of context, routing the failure into the same
 # overflow recovery a native provider gets instead of a hard stop.
 _COMMAND_OVERFLOW_MARKER = "SWIVAL_CONTEXT_OVERFLOW"
+
+
+def _run_command_round(
+    parts,
+    transcript,
+    verbose,
+    command_str,
+    sent,
+    exposure,
+    synthetic,
+    result_keys=None,
+):
+    """Run one command request, recording its exposure when metered.
+
+    Messages appended after *synthetic* was captured come from Swival's own
+    tool loop, so their user entries are scaffolding and their results are
+    named here.
+    """
+    if exposure is None:
+        return _run_command_once(parts, transcript, verbose, command_str)
+    flags = keys = None
+    if synthetic is not None and len(sent) >= len(synthetic):
+        flags = synthetic + [True] * (len(sent) - len(synthetic))
+    if result_keys is not None and len(sent) >= len(result_keys):
+        keys = result_keys + tag_results(sent[len(result_keys) :])
+    exposure.request(
+        sent, synthetic=flags, provider=False, transcript=True, result_keys=keys
+    )
+    response_text = _run_command_once(parts, transcript, verbose, command_str)
+    exposure.response(None, CostObservation("not_applicable"))
+    return response_text
 
 
 def _run_command_once(parts, transcript, verbose, command_str):
@@ -5055,6 +5106,9 @@ def _call_command_with_tools(
     verbose,
     _emit,
     max_output_tokens=None,
+    exposure=None,
+    synthetic=None,
+    result_keys=None,
 ):
     """Run command provider with Swival tool-calling support.
 
@@ -5079,9 +5133,26 @@ def _call_command_with_tools(
         if verbose:
             fmt.model_info(f"Running command: {command_str}")
 
-        response_text = _run_command_once(parts, transcript, verbose, command_str)
+        response_text = _run_command_round(
+            parts,
+            transcript,
+            verbose,
+            command_str,
+            transcript_messages,
+            exposure,
+            synthetic,
+            result_keys,
+        )
 
         calls = _parse_swival_calls(response_text)
+        if exposure is not None and calls:
+            exposure.generated(
+                [
+                    _make_tool_call_obj(call_id, name, args)
+                    for call_id, name, args in calls
+                    if "_parse_error" not in args
+                ]
+            )
         if not calls:
             leak = _classify_textual_tool_call_leak(response_text)
             if leak is not None:
@@ -5546,11 +5617,13 @@ def _completion_with_retry(
     stream_display=True,
     show_thinking=False,
     unknown_context_window=False,
+    on_attempt=None,
 ):
     """Call litellm.completion() with retry on transient errors.
 
     Returns (response, provider_retries) where provider_retries is the number
     of retries performed (0 = first attempt succeeded).
+    *on_attempt* runs right before every request actually sent.
 
     On failure, attaches ``_provider_retries`` to the raised exception so
     callers can record how many attempts were made before the error.
@@ -5564,6 +5637,8 @@ def _completion_with_retry(
         max_retries = 1
 
     for attempt in range(max_retries):
+        if on_attempt is not None:
+            on_attempt()
         try:
             if stream:
                 return (
@@ -5771,6 +5846,7 @@ def call_llm(
     session_id=None,
     tool_choice="auto",
     provider_timeout=900,
+    exposure=None,
 ):
     """Call LiteLLM with the appropriate provider.
 
@@ -5780,7 +5856,16 @@ def call_llm(
     provider_retries is the number of transient-error retries (0 = first attempt ok).
     cache_stats is (cached_tokens, cache_write_tokens); both 0 for command provider
     and SQLite cache-hit paths.
+    *exposure* is an ``ExposureRecorder`` that sees every request actually sent.
     """
+    # Internal keys are stripped before sending, so capture synthetic
+    # scaffolding flags and result names while they are still there.
+    synthetic = result_keys = None
+    if exposure is not None:
+        synthetic = [bool(_msg_get(m, "_swival_synthetic")) for m in messages]
+        result_keys = tag_results(messages)
+    unfiltered = messages
+
     # --- Outbound: user-defined filter ---
     if llm_filter is not None:
         from .filter import run_llm_filter, FilterError
@@ -5798,6 +5883,10 @@ def call_llm(
             raise AgentError(f"LLM filter blocked request: {e}") from e
         _sanitize_assistant_messages(messages)
         cache = None  # filter script is an external mutable dependency; cached responses may be stale
+        # The script may reorder messages, so positional flags no longer apply.
+        synthetic = None
+        if result_keys is not None:
+            result_keys = rekey_results(unfiltered, result_keys, messages)
 
     if provider == "command":
         if command_tool_kwargs is not None:
@@ -5806,11 +5895,22 @@ def call_llm(
                 messages,
                 verbose=verbose,
                 max_output_tokens=max_output_tokens,
+                exposure=exposure,
+                synthetic=synthetic,
+                result_keys=result_keys,
                 **command_tool_kwargs,
             )
             _post_process_assistant_message(cmd_msg, sanitize_thinking)
             return cmd_msg, cmd_stop, cmd_activity, 0, (0, 0)
-        msg, stop = _call_command(model_id, messages, verbose, max_output_tokens)
+        msg, stop = _call_command(
+            model_id,
+            messages,
+            verbose,
+            max_output_tokens,
+            exposure=exposure,
+            synthetic=synthetic,
+            result_keys=result_keys,
+        )
         _post_process_assistant_message(msg, sanitize_thinking)
         return msg, stop, [], 0, (0, 0)
 
@@ -6028,6 +6128,8 @@ def call_llm(
             else:
                 if verbose:
                     fmt.info("Cache hit")
+                if exposure is not None:
+                    exposure.cache_hit()
                 _post_process_assistant_message(msg, sanitize_thinking)
                 # cache is disabled when secret_shield is active, so no
                 # decrypt is needed here; guarded defensively in case the
@@ -6074,19 +6176,39 @@ def call_llm(
         provider already served (and may bill) a response even when Swival
         repairs it and continues.
         """
-        if session_cost is not None:
-            session_cost.record(
-                _response_cost_observation(
-                    response,
-                    completion_kwargs["model"],
-                    provider,
-                    pricing_provider,
-                )
+        observation = None
+        if session_cost is not None or exposure is not None:
+            observation = _response_cost_observation(
+                response,
+                completion_kwargs["model"],
+                provider,
+                pricing_provider,
             )
+        if session_cost is not None:
+            session_cost.record(observation)
+        if exposure is not None:
+            exposure.response(_msg_get(response, "usage"), observation)
         cache_stats = _log_cache_stats(response, verbose)
         choice = _pick_best_choice(response.choices)
         msg, finish_reason = _finalize_choice(choice)
+        if exposure is not None:
+            exposure.generated(_msg_tool_calls(msg))
         return msg, finish_reason, cache_stats
+
+    attempts = 0
+
+    def _record_attempt():
+        nonlocal attempts
+        attempts += 1
+        exposure.request(
+            completion_kwargs["messages"],
+            completion_kwargs.get("tools"),
+            synthetic=synthetic,
+            result_keys=result_keys,
+            resend=attempts > 1,
+        )
+
+    on_attempt = _record_attempt if exposure is not None else None
 
     _show_stream = (
         provider
@@ -6150,6 +6272,7 @@ def call_llm(
                     completion_kwargs,
                     max_retries=max_retries,
                     verbose=verbose,
+                    on_attempt=on_attempt,
                 )
         except ContextOverflowError as coe2:
             coe2._provider_retries = first_retries + getattr(
@@ -6176,6 +6299,7 @@ def call_llm(
                 stream_display=_show_stream,
                 show_thinking=show_thinking,
                 unknown_context_window=unknown_context_window,
+                on_attempt=on_attempt,
             )
     except ContextOverflowError:
         raise  # already has _provider_retries from _completion_with_retry
@@ -6195,6 +6319,8 @@ def call_llm(
                 )
                 tne._provider_retries = retries
                 raise tne
+            if on_attempt is not None:
+                on_attempt()
             msg, finish_reason, cmd_activity, _, cache_stats = (
                 _call_huggingface_text_generation(
                     base_url,
@@ -6207,9 +6333,11 @@ def call_llm(
                     api_key,
                 )
             )
+            # Remote call, but no LiteLLM completion response to price.
             if session_cost is not None:
-                # Remote call, but no LiteLLM completion response to price.
                 session_cost.record(CostObservation("unavailable"))
+            if exposure is not None:
+                exposure.response(None, CostObservation("unavailable"))
             _post_process_assistant_message(msg, sanitize_thinking)
             return msg, finish_reason, cmd_activity, retries, cache_stats
         if _EMPTY_ASSISTANT_RE.search(msg_text):
@@ -6227,6 +6355,7 @@ def call_llm(
                             max_retries=max_retries,
                             verbose=verbose,
                             unknown_context_window=unknown_context_window,
+                            on_attempt=on_attempt,
                         )
                 except ContextOverflowError as coe2:
                     coe2._provider_retries = first_retries + getattr(
@@ -6268,6 +6397,7 @@ def call_llm(
                             max_retries=max_retries,
                             verbose=verbose,
                             unknown_context_window=unknown_context_window,
+                            on_attempt=on_attempt,
                         )
                 except ContextOverflowError as coe2:
                     coe2._provider_retries = first_retries + getattr(
@@ -8858,8 +8988,15 @@ def assemble_system_prompt(
             if catalog_text:
                 suffix_parts.append("\n\n" + catalog_text)
                 breakdown["skills"] = count_tokens(catalog_text)
+        mcp_deferred = any(
+            (t.get("function") or {}).get("name") == TOOL_SEARCH_NAME
+            for t in tools or ()
+        )
         for info, render_info in (
-            (mcp_tool_info, _format_mcp_tool_info),
+            (
+                mcp_tool_info,
+                functools.partial(_format_mcp_tool_info, deferred=mcp_deferred),
+            ),
             (a2a_tool_info, _format_a2a_tool_info),
         ):
             if not info or not templated:
@@ -9034,10 +9171,17 @@ def _format_external_tool_info(
     return "\n".join(lines)
 
 
-def _format_mcp_tool_info(tool_info: dict[str, list[tuple[str, str]]]) -> str:
-    return _format_external_tool_info(
-        "MCP Tools", "Tools provided by external MCP servers:", tool_info
-    )
+def _format_mcp_tool_info(
+    tool_info: dict[str, list[tuple[str, str]]], *, deferred: bool = False
+) -> str:
+    preamble = "Tools provided by external MCP servers:"
+    if deferred:
+        preamble = (
+            "Tools provided by external MCP servers. Their schemas are not "
+            f"loaded yet: call `{TOOL_SEARCH_NAME}` with a tool name or keywords "
+            "first."
+        )
+    return _format_external_tool_info("MCP Tools", preamble, tool_info)
 
 
 def _format_a2a_tool_info(tool_info: dict[str, list[tuple[str, str]]]) -> str:
@@ -9483,6 +9627,7 @@ def _run_main(args, report, _write_report, parser):
     # Initialize MCP servers
     mcp_manager = None
     mcp_tool_info = {}
+    deferred_tools = None
     if not getattr(args, "no_mcp", False):
         from .mcp_client import McpManager, workspace_roots
 
@@ -9500,13 +9645,19 @@ def _run_main(args, report, _write_report, parser):
             # validation (bad names, collisions) propagates as fatal.
             mcp_manager.start()
             mcp_tools = mcp_manager.list_tools()
-            if mcp_tools:
-                tools.extend(mcp_tools)
-
-            # Enforce token budget (may remove tools/servers)
-            tools = enforce_mcp_token_budget(
-                tools, mcp_manager, context_length, verbose=args.verbose
+            deferred_tools = defer_mcp_tools(
+                mcp_tools,
+                provider=llm_kwargs.get("provider"),
+                enabled=getattr(args, "defer_mcp_schemas", True),
             )
+            if deferred_tools is not None:
+                tools.append(deferred_tools.search_schema)
+            else:
+                tools.extend(mcp_tools)
+                # Enforce token budget (may remove tools/servers)
+                tools = enforce_mcp_token_budget(
+                    tools, mcp_manager, context_length, verbose=args.verbose
+                )
 
             # Capture tool info AFTER pruning so prompt matches reality
             mcp_tool_info = mcp_manager.get_tool_info()
@@ -9704,6 +9855,8 @@ def _run_main(args, report, _write_report, parser):
         network_mode=_network_mode,
         net_jail=net_jail,
         session_cost=SessionCost(),
+        exposure_meter=report.exposure if report is not None else None,
+        deferred_tools=deferred_tools,
     )
 
     # Validate and thread llm_filter
@@ -10169,6 +10322,8 @@ def _run_agent_loop(
     network_mode: str = "full",
     net_jail: list | None = None,
     session_cost: SessionCost | None = None,
+    exposure_meter: ExposureMeter | None = None,
+    deferred_tools: DeferredTools | None = None,
     tool_policy=None,
     instructions_full: bool = False,
     initial_tool_choice: str = "auto",
@@ -10200,6 +10355,12 @@ def _run_agent_loop(
         llm_kwargs = {**llm_kwargs, "cache": cache}
     if session_cost is not None:
         llm_kwargs = {**llm_kwargs, "session_cost": session_cost}
+    if exposure_meter is not None:
+        llm_kwargs = {
+            **llm_kwargs,
+            "exposure": exposure_meter.recorder("subagent" if is_subagent else "agent"),
+        }
+        _summary_exposure = exposure_meter.recorder("summary")
 
     _need_secondary_wrapper = (
         cache is not None
@@ -10207,6 +10368,7 @@ def _run_agent_loop(
         or llm_filter is not None
         or _secondary_user_agent is not None
         or session_cost is not None
+        or exposure_meter is not None
     )
     if _need_secondary_wrapper:
 
@@ -10222,6 +10384,8 @@ def _run_agent_loop(
                 kwargs.setdefault("secret_shield", secret_shield)
             if session_cost is not None:
                 kwargs.setdefault("session_cost", session_cost)
+            if exposure_meter is not None:
+                kwargs.setdefault("exposure", _summary_exposure)
             return call_llm(*args, **kwargs)
 
     def _write_turns():
@@ -10271,6 +10435,7 @@ def _run_agent_loop(
         "network_mode": network_mode,
         "net_jail": net_jail,
         "session_cost": session_cost,
+        "exposure_meter": exposure_meter,
         "tool_policy": tool_policy,
     }
 
@@ -10441,6 +10606,8 @@ def _run_agent_loop(
     provider = llm_kwargs.get("provider", "lmstudio")
     if _vision_unsupported(provider, model_id, api_base):
         tools = _without_view_image(tools)
+    if deferred_tools is not None:
+        tools = deferred_tools.with_loaded(tools)
     effective_tools = None if provider == "command" else tools
     _last_request_tools = effective_tools
 
@@ -10811,6 +10978,7 @@ def _run_agent_loop(
                     turn=turns + turn_offset,
                     report=report,
                     verbose=verbose,
+                    exposure=llm_kwargs.get("exposure"),
                 )
                 _raise_if_truncated_tool_call(
                     msg,
@@ -11040,6 +11208,7 @@ def _run_agent_loop(
                             turn=turns + turn_offset,
                             report=report,
                             verbose=verbose,
+                            exposure=llm_kwargs.get("exposure"),
                         )
                         _raise_if_truncated_tool_call(
                             msg,
@@ -11643,6 +11812,7 @@ def _run_agent_loop(
                 network_mode=network_mode,
                 net_jail=net_jail,
                 tool_policy=tool_policy,
+                deferred_tools=deferred_tools,
             )
             messages.append(tool_msg)
 
@@ -11676,6 +11846,12 @@ def _run_agent_loop(
             if snapshot_state is not None:
                 if tool_name not in READ_ONLY_TOOLS:
                     all_tools_readonly = False
+        if deferred_tools is not None:
+            loaded = deferred_tools.with_loaded(tools)
+            if loaded is not tools:
+                tools = loaded
+                effective_tools = deferred_tools.with_loaded(effective_tools)
+
         # Think nudge: if model used edit_file/write_file without thinking first
         if not think_used and not think_nudge_fired:
             has_mutating = any(
@@ -12997,6 +13173,7 @@ def _repl_clear(
     goal_state: GoalState | None = None,
     loop_registry: LoopRegistry | None = None,
     continue_base_dir: str | None = None,
+    deferred_tools: DeferredTools | None = None,
 ) -> str:
     """Clear conversation history, keeping only the leading system messages."""
     leading = []
@@ -13025,6 +13202,9 @@ def _repl_clear(
 
     if goal_state is not None:
         goal_state.reset()
+
+    if deferred_tools is not None:
+        deferred_tools.reset()
 
     if loop_registry is not None:
         cancelled = loop_registry.reset()
@@ -13786,6 +13966,7 @@ def execute_input(
                 goal_state=ctx.goal_state,
                 loop_registry=ctx.loop_registry,
                 continue_base_dir=ctx.base_dir if ctx.continue_here else None,
+                deferred_tools=ctx.loop_kwargs.get("deferred_tools"),
             )
             _teardown_goal(ctx)
             ctx.last_answer = None
@@ -13918,6 +14099,10 @@ def execute_input(
             provider_kwargs = _provider_extra_kwargs(ctx.loop_kwargs["llm_kwargs"])
             if ctx.loop_kwargs.get("session_cost") is not None:
                 provider_kwargs["session_cost"] = ctx.loop_kwargs["session_cost"]
+            if ctx.loop_kwargs.get("exposure_meter") is not None:
+                provider_kwargs["exposure"] = ctx.loop_kwargs[
+                    "exposure_meter"
+                ].recorder("summary")
             msg, err = _repl_snapshot_restore(
                 ctx.messages,
                 ctx.snapshot_state,
@@ -14115,6 +14300,7 @@ def _run_init_passes(cmd_arg: str, ctx: InputContext) -> StepResult:
             snapshot_state=ctx.snapshot_state,
             goal_state=ctx.goal_state,
             loop_registry=ctx.loop_registry,
+            deferred_tools=ctx.loop_kwargs.get("deferred_tools"),
         )
     )
     _teardown_goal(ctx)
@@ -14708,6 +14894,8 @@ def _build_isolated_ctx(ctx: InputContext, kind: _IsolatedTurnKind) -> InputCont
     loop_kwargs.update(loop_overrides)
     if kind == "btw":
         loop_kwargs["compaction_state"] = None
+    if loop_kwargs.get("deferred_tools") is not None:
+        loop_kwargs["deferred_tools"] = loop_kwargs["deferred_tools"].copy()
 
     return replace(
         ctx,
@@ -15069,6 +15257,8 @@ def repl_loop(
     network_mode: str = "full",
     net_jail: list | None = None,
     session_cost: SessionCost | None = None,
+    exposure_meter: ExposureMeter | None = None,
+    deferred_tools: DeferredTools | None = None,
     instructions_enabled: bool = True,
     instructions_full: bool = False,
     initial_tool_choice: str = "auto",
@@ -15256,6 +15446,8 @@ def repl_loop(
         network_mode=network_mode,
         net_jail=net_jail,
         session_cost=session_cost,
+        exposure_meter=exposure_meter,
+        deferred_tools=deferred_tools,
         continue_here=continue_here,
         instructions_full=instructions_full,
     )

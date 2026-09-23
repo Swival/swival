@@ -548,6 +548,7 @@ def make_isolated_loop_kwargs(
     for k in (
         "compaction_state",
         "mcp_manager",
+        "deferred_tools",
         "a2a_manager",
         "subagent_manager",
         "report",
@@ -580,6 +581,7 @@ def call_llm_text(
     from .agent import call_llm
 
     llm_kwargs = loop_kwargs.get("llm_kwargs", {})
+    meter = loop_kwargs.get("exposure_meter")
     msg, _finish, _activity, _retries, cache_stats = call_llm(
         loop_kwargs["api_base"],
         loop_kwargs["model_id"],
@@ -601,6 +603,7 @@ def call_llm_text(
         pricing_provider=llm_kwargs.get("pricing_provider"),
         session_cost=loop_kwargs.get("session_cost"),
         session_id=llm_kwargs.get("session_id"),
+        exposure=meter.recorder("auxiliary") if meter is not None else None,
     )
     return _msg_content(msg) or "", cache_stats
 

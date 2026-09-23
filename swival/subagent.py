@@ -431,6 +431,8 @@ def _subagent_thread_fn(
             **template.get("llm_kwargs", {}),
             "session_id": str(uuid.uuid4()),
         }
+        if template.get("deferred_tools") is not None:
+            kwargs["deferred_tools"] = template["deferred_tools"].fresh()
         kwargs.update(
             thinking_state=thinking_state,
             todo_state=todo_state,

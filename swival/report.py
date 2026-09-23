@@ -3,6 +3,8 @@
 import json
 from datetime import datetime, timezone
 
+from .exposure import ExposureMeter
+
 
 class AgentError(Exception):
     """Raised by the agent loop or setup helpers for reportable runtime failures."""
@@ -53,6 +55,7 @@ class ReportCollector:
         self.truncation_repairs = 0
         self.scavenged_calls = 0
         self.stormed_calls = 0
+        self.exposure = ExposureMeter()
 
     def record_goal_event(self, action: str, goal_payload: dict | None) -> None:
         """Log goal lifecycle events (created, replaced, paused, resumed,
@@ -337,6 +340,7 @@ class ReportCollector:
     ) -> dict:
         tool_calls_succeeded = sum(s["succeeded"] for s in self.tool_stats.values())
         tool_calls_failed = sum(s["failed"] for s in self.tool_stats.values())
+        exposure = self.exposure.to_dict()
 
         result: dict = {
             "outcome": outcome,
@@ -401,6 +405,7 @@ class ReportCollector:
                     else {}
                 ),
                 "total_tool_time_s": round(self.total_tool_time, 3),
+                **({"exposure": exposure} if exposure else {}),
                 "skills_used": list(self.skills_used),
                 "review_rounds": review_rounds,
                 **({"todo": todo_stats} if todo_stats else {}),

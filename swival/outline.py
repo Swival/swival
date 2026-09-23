@@ -12,6 +12,71 @@ from .tools import safe_resolve
 
 _MAX_OUTLINE_FILES = 20
 
+# read_file, grep and edit_file number lines like str.splitlines(), which also
+# breaks on form feeds and a few other separators. Python's tokenizer only
+# breaks on \r\n, \r and \n, so AST line numbers drift after any of the others.
+_DISPLAY_BREAK_RE = re.compile("\r\n|[\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]")
+_PYTHON_BREAK_RE = re.compile("\r\n|[\r\n]")
+_EXTRA_BREAK_RE = re.compile("[\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]")
+
+
+class _DisplayLines:
+    """Map character offsets to the 1-based line numbers read_file shows."""
+
+    def __init__(self, text: str):
+        self._starts = [0] + [m.end() for m in _DISPLAY_BREAK_RE.finditer(text)]
+
+    def line(self, offset: int) -> int:
+        return bisect.bisect_right(self._starts, offset)
+
+
+class _AstLines:
+    """Translate AST node positions into read_file line numbers.
+
+    AST columns are UTF-8 byte offsets and end columns are exclusive.
+    A separator can sit on the declaration's own physical line, so positions
+    go through character offsets rather than a per-line correction.
+    """
+
+    def __init__(self, source: str):
+        self._source = source
+        self._identity = _EXTRA_BREAK_RE.search(source) is None
+        if not self._identity:
+            self._starts = [0] + [m.end() for m in _PYTHON_BREAK_RE.finditer(source)]
+            self._display = _DisplayLines(source)
+
+    def _offset(self, lineno: int, col: int) -> int:
+        start = self._starts[lineno - 1]
+        end = self._starts[lineno] if lineno < len(self._starts) else len(self._source)
+        head = self._source[start:end].encode("utf-8")[:col]
+        return start + len(head.decode("utf-8", errors="ignore"))
+
+    def start(self, node: ast.AST) -> int:
+        if self._identity:
+            return node.lineno
+        return self._display.line(self._offset(node.lineno, node.col_offset))
+
+    def decorator(self, node: ast.expr) -> int:
+        """Line of the ``@`` introducing a decorator, which a form feed can
+        separate from the expression the AST positions point at."""
+        if self._identity:
+            return node.lineno
+        at = self._offset(node.lineno, node.col_offset)
+        # The introducer is the first token of its line; an earlier ``@`` in
+        # a comment inside a parenthesized decorator is not.
+        while (at := self._source.rfind("@", 0, at)) > 0:
+            line_start = self._starts[bisect.bisect_right(self._starts, at) - 1]
+            if not self._source[line_start:at].strip(" \t\x0c"):
+                break
+        return self._display.line(max(at, 0))
+
+    def end(self, node: ast.AST) -> int:
+        end_lineno = node.end_lineno or node.lineno
+        if self._identity:
+            return end_lineno
+        offset = self._offset(end_lineno, node.end_col_offset or 0)
+        return max(self.start(node), self._display.line(max(offset - 1, 0)))
+
 
 def outline(
     file_path: str,
@@ -87,55 +152,59 @@ def outline(
 def _outline_python(source: str, depth: int) -> str:
     tree = ast.parse(source)
     lines: list[str] = []
-    _walk_python(tree.body, depth, 0, lines)
+    _walk_python(tree.body, depth, 0, lines, _AstLines(source))
     return "\n".join(lines) if lines else "no declarations found"
 
 
-def _walk_python(nodes: list[ast.stmt], depth: int, level: int, out: list[str]):
+def _walk_python(
+    nodes: list[ast.stmt], depth: int, level: int, out: list[str], pos: _AstLines
+):
     if level >= depth:
         return
     indent = "    " * level
     for node in nodes:
         if isinstance(node, ast.ClassDef):
             decorators = "".join(
-                f"{d.lineno:<5}{indent}@{_expr_text(d)}\n" for d in node.decorator_list
+                f"{pos.decorator(d):<5}{indent}@{_expr_text(d)}\n"
+                for d in node.decorator_list
             )
             bases = ", ".join(_expr_text(b) for b in node.bases)
             sig = f"class {node.name}({bases})" if bases else f"class {node.name}"
-            line = f"{node.lineno:<5}{indent}{sig}:"
+            line = f"{pos.start(node):<5}{indent}{sig}:"
             out.append(decorators + line if decorators else line)
-            _walk_python(node.body, depth, level + 1, out)
+            _walk_python(node.body, depth, level + 1, out, pos)
 
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             decorators = "".join(
-                f"{d.lineno:<5}{indent}@{_expr_text(d)}\n" for d in node.decorator_list
+                f"{pos.decorator(d):<5}{indent}@{_expr_text(d)}\n"
+                for d in node.decorator_list
             )
             prefix = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
             sig = _func_signature(node)
             ret = f" -> {_expr_text(node.returns)}" if node.returns else ""
-            line = f"{node.lineno:<5}{indent}{prefix} {node.name}({sig}){ret}"
+            line = f"{pos.start(node):<5}{indent}{prefix} {node.name}({sig}){ret}"
             out.append(decorators + line if decorators else line)
-            _walk_python(node.body, depth, level + 1, out)
+            _walk_python(node.body, depth, level + 1, out, pos)
 
         elif isinstance(node, ast.Assign) and level == 0:
             targets = ", ".join(_expr_text(t) for t in node.targets)
-            out.append(f"{node.lineno:<5}{indent}{targets} = ...")
+            out.append(f"{pos.start(node):<5}{indent}{targets} = ...")
 
         elif isinstance(node, ast.AnnAssign) and level == 0:
             target = _expr_text(node.target)
             ann = _expr_text(node.annotation)
             if node.value is not None:
-                out.append(f"{node.lineno:<5}{indent}{target}: {ann} = ...")
+                out.append(f"{pos.start(node):<5}{indent}{target}: {ann} = ...")
             else:
-                out.append(f"{node.lineno:<5}{indent}{target}: {ann}")
+                out.append(f"{pos.start(node):<5}{indent}{target}: {ann}")
 
         elif isinstance(node, (ast.If, ast.Try, ast.TryStar, ast.With)):
             body = node.body if hasattr(node, "body") else []
-            _walk_python(body, depth, level, out)
+            _walk_python(body, depth, level, out, pos)
             for handler in getattr(node, "handlers", []):
-                _walk_python(handler.body, depth, level, out)
-            _walk_python(getattr(node, "orelse", []), depth, level, out)
-            _walk_python(getattr(node, "finalbody", []), depth, level, out)
+                _walk_python(handler.body, depth, level, out, pos)
+            _walk_python(getattr(node, "orelse", []), depth, level, out, pos)
+            _walk_python(getattr(node, "finalbody", []), depth, level, out, pos)
 
 
 def _func_signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
@@ -328,15 +397,18 @@ def symbol_spans(content: str, file_path: str) -> dict[str, SymbolSpan]:
 
 def _python_symbol_spans(content: str) -> dict[str, SymbolSpan]:
     tree = ast.parse(content)
+    pos = _AstLines(content)
     spans: dict[str, SymbolSpan] = {}
 
     def visit(nodes: list[ast.stmt]) -> None:
         for node in nodes:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                start = node.lineno
+                start = pos.start(node)
                 if node.decorator_list:
-                    start = min(start, min(d.lineno for d in node.decorator_list))
-                end = node.end_lineno or start
+                    start = min(
+                        start, min(pos.decorator(d) for d in node.decorator_list)
+                    )
+                end = pos.end(node)
                 kind = "class" if isinstance(node, ast.ClassDef) else "function"
                 spans.setdefault(node.name, _capped_span(start, end, kind))
             elif isinstance(node, (ast.If, ast.Try, ast.TryStar, ast.With)):
@@ -366,9 +438,12 @@ def _match_span_decl(line: str) -> tuple[str, str] | None:
 
 
 def _heuristic_symbol_spans(content: str) -> dict[str, SymbolSpan]:
-    # Normalize CRLF and split on "\n" only so line offsets stay aligned
-    # with ``masked`` (mask_noncode is length-preserving).
-    masked = mask_noncode(content.replace("\r\n", "\n"))
+    # Normalize line endings and split on "\n" only so line offsets stay
+    # aligned with ``masked`` (mask_noncode is length-preserving). Spans are
+    # then numbered by offset, like read_file, which also breaks on form feeds.
+    normalized = content.replace("\r\n", "\n").replace("\r", "\n")
+    masked = mask_noncode(normalized)
+    display = _DisplayLines(normalized)
     lines = masked.split("\n")
     offsets: list[int] = []
     pos = 0
@@ -386,21 +461,22 @@ def _heuristic_symbol_spans(content: str) -> dict[str, SymbolSpan]:
         name, kind = decl
         if name in spans:
             continue
-        start = i + 1
+        start = display.line(offsets[i])
         end = _find_span_end(masked, lines, offsets, i)
         if end is None:
             # Unbalanced braces: true end unknown, stop at the cap.
-            capped = min(start + _SPAN_MAX_LINES - 1, len(lines))
+            last_line = display.line(max(len(normalized) - 1, 0))
+            capped = min(start + _SPAN_MAX_LINES - 1, last_line)
             spans[name] = SymbolSpan(start, capped, capped, kind, "span-cap")
         else:
-            spans[name] = _capped_span(start, end, kind)
+            spans[name] = _capped_span(start, display.line(end), kind)
     return spans
 
 
 def _find_span_end(
     masked: str, lines: list[str], offsets: list[int], decl_idx: int
 ) -> int | None:
-    """1-based end line of the definition opening at ``decl_idx`` (0-based).
+    """Offset of the last character of the definition opening at ``decl_idx``.
 
     Brace counting on the masked text when a ``{`` (or a top-level ``;``)
     appears within ``_BRACE_SEARCH_LINES``; indentation fallback otherwise.
@@ -421,15 +497,17 @@ def _find_span_end(
         elif c == "}" and brace_seen:
             depth -= 1
             if depth <= 0:
-                return bisect.bisect_right(offsets, i)
+                return i
         elif c == ";" and not brace_seen:
-            return bisect.bisect_right(offsets, i)
+            return i
         elif c == "\n" and not brace_seen and i >= window_end:
-            return _indent_fallback_end(lines, decl_idx)
+            break
         i += 1
-    if brace_seen:
-        return None
-    return _indent_fallback_end(lines, decl_idx)
+    else:
+        if brace_seen:
+            return None
+    last = _indent_fallback_end(lines, decl_idx) - 1
+    return offsets[last] + max(len(lines[last]) - 1, 0)
 
 
 def _indent_fallback_end(lines: list[str], decl_idx: int) -> int:

@@ -15,6 +15,7 @@ import sys
 import threading
 import uuid
 import warnings
+import weakref
 from collections import deque
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ from typing import Literal
 
 from ._env import child_env
 from .a2a_types import A2A_META_PREFIX
+from .deferred_tools import TOOL_SEARCH_NAME
 from .terminal import TerminalSink
 from .tracker import FileAccessTracker
 
@@ -1000,6 +1002,24 @@ def _compute_checksum(resolved: Path) -> str | None:
         return _hash_bytes(resolved.read_bytes())
     except OSError:
         return None
+
+
+# Weak values: a lock lives only while some writer holds a reference to it.
+_PATH_LOCKS: "weakref.WeakValueDictionary[str, threading.RLock]" = (
+    weakref.WeakValueDictionary()
+)
+_PATH_LOCKS_GUARD = threading.Lock()
+
+
+def _path_lock(resolved: Path) -> threading.RLock:
+    """Serialize edit_file calls on one file across agents and subagents."""
+    key = str(resolved)
+    with _PATH_LOCKS_GUARD:
+        lock = _PATH_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _PATH_LOCKS[key] = lock
+        return lock
 
 
 def _verify_checksum(
@@ -2334,8 +2354,6 @@ def _edit_file(
     verbose: bool = False,
 ) -> str:
     """Replace old_string with new_string in an existing file."""
-    from .edit import replace
-
     try:
         resolved = safe_resolve(
             file_path,
@@ -2360,6 +2378,34 @@ def _edit_file(
         error = tracker.check_write_allowed(str(resolved), exists=True)
         if error:
             return error
+
+    # Concurrent agents editing one file would otherwise each apply their
+    # change to a stale read and silently drop the other's.
+    with _path_lock(resolved):
+        return _edit_locked_file(
+            resolved,
+            file_path,
+            old_string,
+            new_string,
+            replace_all=replace_all,
+            line_number=line_number,
+            checksum=checksum,
+            verbose=verbose,
+        )
+
+
+def _edit_locked_file(
+    resolved: Path,
+    file_path: str,
+    old_string: str,
+    new_string: str,
+    *,
+    replace_all: bool,
+    line_number: int | None,
+    checksum: str | None,
+    verbose: bool,
+) -> str:
+    from .edit import replace
 
     checksum_error = _verify_checksum(resolved, checksum, file_path, "edit_file")
     if checksum_error is not None:
@@ -3756,6 +3802,12 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
     if name == "complete_goal":
         return _dispatch_goal_tool(name, args, kwargs)
 
+    deferred_tools = kwargs.get("deferred_tools")
+    if name == TOOL_SEARCH_NAME:
+        if deferred_tools is None:
+            return f"error: {TOOL_SEARCH_NAME} is not available in this session"
+        return deferred_tools.search(args.get("query"))
+
     # MCP / A2A tool dispatch
     for prefix, manager_key, guard_fn in (
         ("mcp__", "mcp_manager", _guard_mcp_output),
@@ -3766,6 +3818,10 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             if manager is None:
                 kind = prefix.rstrip("_").upper()
                 return f"error: {kind} tool {name!r} called but no {kind} manager is active"
+            # A deferred tool called by name joins later requests like a
+            # searched one, so its next calls are made against its schema.
+            if deferred_tools is not None:
+                deferred_tools.load(name)
             result, is_error = manager.call_tool(name, args)
             if is_error:
                 if len(result.encode("utf-8")) > MCP_INLINE_LIMIT:

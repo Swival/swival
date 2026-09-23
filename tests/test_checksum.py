@@ -336,3 +336,50 @@ class TestWriteFileEmitsHash:
         )
         assert not result.startswith("error:"), result
         assert (tmp_path / "new.txt").read_text(encoding="utf-8") == "beta\n"
+
+
+class TestConcurrentEdits:
+    def test_concurrent_edits_to_one_file_both_apply(self, tmp_path, monkeypatch):
+        import threading
+        import time
+
+        from swival import edit
+
+        p = tmp_path / "f.txt"
+        p.write_text("one\ntwo\n", encoding="utf-8")
+        real = edit.replace
+
+        def slow_replace(*args, **kwargs):
+            result = real(*args, **kwargs)
+            time.sleep(0.2)
+            return result
+
+        monkeypatch.setattr(edit, "replace", slow_replace)
+        results = []
+        threads = [
+            threading.Thread(
+                target=lambda o=old, n=new: results.append(
+                    _edit_file("f.txt", o, n, str(tmp_path))
+                )
+            )
+            for old, new in (("one", "ONE"), ("two", "TWO"))
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert all(r.startswith("Edited") for r in results)
+        assert p.read_text() == "ONE\nTWO\n"
+
+    def test_unused_path_locks_are_released(self, tmp_path):
+        import gc
+
+        from swival import tools
+
+        p = tmp_path / "f.txt"
+        p.write_text("alpha\n", encoding="utf-8")
+        lock = tools._path_lock(p.resolve())
+        assert tools._path_lock(p.resolve()) is lock
+        del lock
+        gc.collect()
+        assert str(p.resolve()) not in tools._PATH_LOCKS

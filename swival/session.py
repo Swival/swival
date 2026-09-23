@@ -141,6 +141,7 @@ class Session:
         metaskills: str = "local",
         storm_breaker: bool = True,
         flatten_mcp_schemas: bool = True,
+        defer_mcp_schemas: bool = True,
     ):
         self.base_dir = base_dir
         self.scratch_dir = scratch_dir
@@ -243,6 +244,7 @@ class Session:
         self.metaskills = metaskills
         self.storm_breaker = storm_breaker
         self.flatten_mcp_schemas = flatten_mcp_schemas
+        self.defer_mcp_schemas = defer_mcp_schemas
         self._mcp_flattened_schemas: dict[str, object] = {}
 
         # Streaming / cancellation hooks (set externally, e.g. by A2A server).
@@ -278,6 +280,7 @@ class Session:
 
         # MCP manager (created in _setup if mcp_servers is non-empty)
         self._mcp_manager = None
+        self._deferred_tools = None
 
         # A2A manager (created in _setup if a2a_servers is non-empty)
         self._a2a_manager = None
@@ -507,17 +510,23 @@ class Session:
             )
             self._mcp_manager.start()
             mcp_tools = self._mcp_manager.list_tools()
-            if mcp_tools:
-                self._tools.extend(mcp_tools)
+            from .deferred_tools import defer_mcp_tools
 
-            from .agent import enforce_mcp_token_budget
-
-            self._tools = enforce_mcp_token_budget(
-                self._tools,
-                self._mcp_manager,
-                self._context_length,
-                verbose=self.verbose,
+            self._deferred_tools = defer_mcp_tools(
+                mcp_tools, provider=self.provider, enabled=self.defer_mcp_schemas
             )
+            if self._deferred_tools is not None:
+                self._tools.append(self._deferred_tools.search_schema)
+            else:
+                self._tools.extend(mcp_tools)
+                from .agent import enforce_mcp_token_budget
+
+                self._tools = enforce_mcp_token_budget(
+                    self._tools,
+                    self._mcp_manager,
+                    self._context_length,
+                    verbose=self.verbose,
+                )
 
         # Initialize A2A agents
         if self.a2a_servers:
@@ -725,6 +734,9 @@ class Session:
             "messages": self._make_initial_messages(system_content, spans),
             "compaction_state": CompactionState() if self.proactive_summaries else None,
             "session_cost": SessionCost(),
+            "deferred_tools": (
+                self._deferred_tools.fresh() if self._deferred_tools else None
+            ),
             "llm_kwargs": {**self._llm_kwargs, "session_id": str(uuid.uuid4())},
             "resolved_system_content": system_content,
             "resolved_system_spans": list(spans or []),
@@ -766,6 +778,8 @@ class Session:
             initial_tool_choice=self.initial_tool_choice,
             file_tracker=state["file_tracker"],
             session_cost=state["session_cost"],
+            exposure_meter=state.get("exposure_meter"),
+            deferred_tools=state.get("deferred_tools"),
             continue_here=self.continue_here,
             cache=self._llm_cache,
             command_policy=self._command_policy,
@@ -838,6 +852,8 @@ class Session:
         state = self._make_per_run_state(
             system_content=prompt.content, spans=prompt.spans
         )
+        if collector is not None:
+            state["exposure_meter"] = collector.exposure
         messages = state["messages"]
         messages.append({"role": "user", "content": question})
         loop_kwargs = self._build_loop_kwargs(state)

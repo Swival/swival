@@ -83,6 +83,7 @@ Memory use does not depend on the size of the workspace. Files are streamed line
 ## `outline`
 
 `outline` shows the structural skeleton of one or more files: classes, functions, and top-level declarations with line numbers. No bodies are included. This is useful for surveying a file before reading specific sections.
+Line numbers are the ones `read_file`, `grep` and `edit_file` use, even in files where form feeds or other Unicode line separators make Python count lines differently.
 
 Pass a directory instead of a file and `outline` returns a shallow survey of the directory's source files rather than a single file's skeleton. The `depth` parameter controls nesting (`1` top-level only, `2` classes plus methods, `3` nested functions and classes); it defaults to `2` for files and `1` for directory surveys. Pass `files` for a batch of up to 20 paths, each optionally carrying its own `depth`.
 

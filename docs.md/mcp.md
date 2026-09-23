@@ -12,6 +12,20 @@ Tool name collisions across servers cause the colliding server's tools to be ski
 
 When MCP tool schemas consume more than 30% of the context window, Swival warns. At 50%, it iteratively drops the most expensive server's tools until usage is under budget.
 
+## Deferred Schemas
+
+Every request carries the tool schemas it offers, so a large MCP catalog costs its full schemas on each turn whether or not the task needs them.
+One browser automation server with 30 tools adds about 6,300 tokens per request, more than all of Swival's built-in tools together.
+
+When the MCP schemas add up to more than about 2,000 tokens, Swival defers them.
+The model then gets a `tool_search` tool whose description lists the deferred tool names by server, and the MCP section of the system prompt keeps their descriptions.
+Searching by an exact tool name loads that schema alone, and searching by keywords loads up to five matching schemas; loaded schemas join every later request of that conversation, and a tool the model calls directly by name is loaded the same way.
+Loaded schemas persist across REPL turns, reset on `/clear`, and are tracked separately for each subagent.
+Smaller catalogs, and the `command` provider, which renders its tool catalog into the prompt, keep sending the full schemas as before.
+
+A search costs an extra model turn, and loading new schemas changes the request prefix, which misses the provider's prompt cache once.
+Set `defer_mcp_schemas = false` in `swival.toml` (or pass `defer_mcp_schemas=False` to `Session`) to always send the full schemas instead; the 30% and 50% budget rules above then apply.
+
 ## TOML Configuration
 
 Add `[mcp_servers.<name>]` tables to `swival.toml`. Each server needs either `command` (for stdio transport) or `url` (for HTTP transport), but not both.

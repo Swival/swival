@@ -853,3 +853,242 @@ class TestSymbolSpansFallbackAndCap:
         assert span.render_end == 9
         assert span.kind == "function"
         assert span.truncated == ""
+
+
+# ---------------------------------------------------------------------------
+# Line numbers agree with read_file, grep and edit_file
+# ---------------------------------------------------------------------------
+
+LS = "\N{LINE SEPARATOR}"
+PS = "\N{PARAGRAPH SEPARATOR}"
+
+
+def _outline_line(text: str, needle: str) -> int:
+    for row in text.splitlines():
+        if needle in row:
+            return int(row.split()[0])
+    raise AssertionError(f"{needle!r} not in outline:\n{text}")
+
+
+def _display_line(source: str, needle: str) -> int:
+    for i, row in enumerate(source.splitlines(), 1):
+        if needle in row:
+            return i
+    raise AssertionError(needle)
+
+
+class TestDisplayLineNumbers:
+    def test_ordinary_file_keeps_ast_numbering(self, tmp_path):
+        src = "import os\n\n\n@dec\ndef f(\n    a,\n):\n    return a\n"
+        p = tmp_path / "a.py"
+        p.write_text(src)
+        result = outline(str(p), str(tmp_path))
+        assert _outline_line(result, "@dec") == 4
+        assert _outline_line(result, "def f") == 5
+        assert (
+            symbol_spans(src, "a.py")["f"].start,
+            symbol_spans(src, "a.py")["f"].end,
+        ) == (4, 8)
+
+    def test_form_feed_line_before_def(self, tmp_path):
+        src = "import os\n\x0c\ndef f():\n    return 1\n"
+        p = tmp_path / "a.py"
+        p.write_text(src)
+        result = outline(str(p), str(tmp_path))
+        assert _outline_line(result, "def f") == _display_line(src, "def f") == 4
+        span = symbol_spans(src, "a.py")["f"]
+        assert (span.start, span.end) == (4, 5)
+
+    def test_form_feed_on_the_declaration_line(self, tmp_path):
+        src = "x = 1\n\x0cdef f():\n    return 1\n"
+        p = tmp_path / "a.py"
+        p.write_text(src)
+        assert _outline_line(outline(str(p), str(tmp_path)), "def f") == 3
+        span = symbol_spans(src, "a.py")["f"]
+        assert (span.start, span.end) == (3, 4)
+
+    def test_separators_in_docstring_shift_later_declarations(self, tmp_path):
+        src = (
+            f'"""Module{LS}doc{PS}with\x85separators\x1c."""\n'
+            "class A:\n"
+            "    def m(self):\n"
+            "        return 1\n"
+        )
+        p = tmp_path / "a.py"
+        p.write_text(src)
+        result = outline(str(p), str(tmp_path))
+        assert _outline_line(result, "class A") == _display_line(src, "class A") == 6
+        assert _outline_line(result, "def m") == 7
+        span = symbol_spans(src, "a.py")["A"]
+        assert (span.start, span.end) == (6, 8)
+
+    def test_separator_inside_body_moves_only_the_end(self):
+        src = 'def f():\n    s = "a\x0bb"\n    return s\n\ndef g():\n    pass\n'
+        spans = symbol_spans(src, "a.py")
+        assert (spans["f"].start, spans["f"].end) == (1, 4)
+        assert (spans["g"].start, spans["g"].end) == (6, 7)
+
+    def test_non_ascii_before_the_column_offset(self, tmp_path):
+        src = f'x = "ééééé{LS}"; y = 2\nz = 3\n'
+        p = tmp_path / "a.py"
+        p.write_text(src)
+        result = outline(str(p), str(tmp_path))
+        assert _outline_line(result, "y = ...") == 2
+        assert _outline_line(result, "z = ...") == 3
+
+    def test_decorated_multiline_signature_nested_method(self, tmp_path):
+        src = (
+            "# intro\x0c\n"
+            "class Outer:\n"
+            "    class Inner:\n"
+            "        @staticmethod\n"
+            "        @other(\n"
+            f'            "arg{LS}"\n'
+            "        )\n"
+            "        def method(\n"
+            "            a,\n"
+            "        ):\n"
+            "            return a\n"
+        )
+        p = tmp_path / "a.py"
+        p.write_text(src)
+        result = outline(str(p), str(tmp_path), depth=3)
+        assert _outline_line(result, "class Inner") == 4
+        assert _outline_line(result, "@staticmethod") == 5
+        assert _outline_line(result, "def method") == _display_line(src, "def method")
+        span = symbol_spans(src, "a.py")["Outer"]
+        assert (span.start, span.end) == (3, 13)
+
+    def test_long_function_keeps_true_end_past_the_render_cap(self):
+        body = "".join(f"    x = {i}  # \x0c\n" for i in range(350))
+        src = "def big():\n" + body
+        span = symbol_spans(src, "a.py")["big"]
+        assert span.start == 1
+        assert "x = 349" in src.splitlines()[span.end - 1]
+        assert span.render_end == 300
+        assert span.truncated == "span-cap"
+
+    def test_spans_read_back_through_read_file(self, tmp_path):
+        from swival.tools import _read_file
+
+        src = (
+            f'"""Doc{LS}string."""\n\x0c\n'
+            "@decorator\n"
+            "def target(a,\n"
+            "           b):\n"
+            f'    note = "x{PS}y"\n'
+            "    return a + b\n"
+            "\n"
+            "def neighbour():\n"
+            "    pass\n"
+        )
+        (tmp_path / "m.py").write_text(src)
+        span = symbol_spans(src, "m.py")["target"]
+        shown = _read_file(
+            "m.py", str(tmp_path), offset=span.start, limit=span.end - span.start + 1
+        )
+        assert "@decorator" in shown
+        assert "return a + b" in shown
+        assert "neighbour" not in shown
+
+    def test_heuristic_spans_count_form_feed_lines(self):
+        src = (
+            "/* intro */\n\x0c\n"
+            "int helper(int x)\n{\n  return x;\n}\n\n"
+            "int main(void)\n{\n  return helper(1);\n}\n"
+        )
+        spans = symbol_spans(src, "a.c")
+        lines = src.splitlines()
+        assert lines[spans["helper"].start - 1] == "int helper(int x)"
+        assert lines[spans["helper"].end - 1] == "}"
+        assert (spans["main"].start, spans["main"].end) == (9, 12)
+
+    def test_heuristic_spans_follow_lone_carriage_returns(self):
+        src = "int a(void)\r{\r  return 1;\r}\rint b(void)\r{\r}\r"
+        spans = symbol_spans(src, "a.c")
+        assert (spans["a"].start, spans["a"].end) == (1, 4)
+        assert (spans["b"].start, spans["b"].end) == (5, 7)
+
+    def test_generated_sources_match_splitlines(self):
+        import ast
+        import random
+
+        from swival.outline import _AstLines
+
+        rng = random.Random(1234)
+        separators = ["\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85", LS, PS]
+        for case in range(300):
+            parts: list[str] = []
+            expected: dict[str, tuple[int, int]] = {}
+
+            def line_at(offset: int) -> int:
+                return len(("".join(parts)[:offset] + "x").splitlines())
+
+            for i in range(rng.randint(1, 6)):
+                sep = rng.choice(separators)
+                kind = rng.randrange(4)
+                if kind == 0:
+                    parts.append(f"# c{sep}é{rng.choice(separators)}\n")
+                elif kind == 1:
+                    parts.append(f'"""d{sep}ö"""\n')
+                elif kind == 2:
+                    parts.append("\x0c\n")
+                name = f"f{i}"
+                if rng.random() < 0.5:
+                    start = len("".join(parts))
+                    parts.append(f"@dec{i}\n")
+                else:
+                    start = None
+                if rng.random() < 0.3:
+                    parts.append("\x0c")
+                def_at = len("".join(parts))
+                parts.append(
+                    f"def {name}(a,{sep if rng.random() < 0.2 else ''}\n        b):\n"
+                )
+                parts.append(
+                    f'    s = "é{sep}x"\n' if rng.random() < 0.5 else "    s = 1\n"
+                )
+                parts.append("    return s")
+                end_at = len("".join(parts)) - 1
+                parts.append("\n")
+                first = line_at(def_at if start is None else start)
+                expected[name] = (first, line_at(end_at), line_at(def_at))
+            src = "".join(parts)
+            try:
+                tree = ast.parse(src)
+            except SyntaxError:
+                continue
+            spans = symbol_spans(src, "g.py")
+            pos = _AstLines(src)
+            for node in tree.body:
+                if not isinstance(node, ast.FunctionDef):
+                    continue
+                first, last, def_line = expected[node.name]
+                assert pos.start(node) == def_line, (case, src)
+                assert (spans[node.name].start, spans[node.name].end) == (
+                    first,
+                    last,
+                ), (
+                    case,
+                    src,
+                )
+
+
+def test_form_feed_between_at_and_decorator_expression(tmp_path):
+    src = "@\x0cdecorator\ndef f():\n    pass\n"
+    p = tmp_path / "a.py"
+    p.write_text(src)
+    result = outline(str(p), str(tmp_path))
+    assert _outline_line(result, "@decorator") == 1
+    assert _outline_line(result, "def f") == 3
+    span = symbol_spans(src, "a.py")["f"]
+    assert (span.start, span.end) == (1, 4)
+
+
+def test_at_sign_in_a_comment_inside_a_decorator(tmp_path):
+    src = "\x0c\n@(\n    # @ unrelated comment\n    decorator\n)\ndef f():\n    pass\n"
+    p = tmp_path / "a.py"
+    p.write_text(src)
+    result = outline(str(p), str(tmp_path))
+    assert _outline_line(result, "@decorator") == 3
+    assert symbol_spans(src, "a.py")["f"].start == 3

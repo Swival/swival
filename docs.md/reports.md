@@ -116,6 +116,20 @@ A `success` outcome means the model produced a final non-tool response. An `exha
 
 `prompt_cache` appears when at least one LLM call in the run returned cache stats. It is an object with `cached_tokens` (tokens served from the provider's prompt cache across the whole run) and `cache_write_tokens` (tokens written to the cache, i.e. the first-call population cost). Both fields are integers. Absent means no cache activity was reported by the provider.
 
+`exposure` appears once at least one request went out, and measures what the run actually resent.
+Each request carries the whole retained transcript, so a tool result counts once per request that includes it, and after compaction only the replacement actually sent is counted.
+This makes it the number to watch when deciding which tool outputs are worth shrinking: a large result read early and replayed forty times costs more than a larger one read on the last turn.
+`unit` is `"tokens"` (Swival's `cl100k_base` estimate) or `"bytes"` when tokenizer data was unavailable offline, and `coverage` lists what the counts cannot see, such as retries made inside the provider SDK.
+`requests` has `sent` (every request actually sent), `resent` (the part of `sent` beyond the first attempt of a call: transient retries and resends after a history fix or a model switch), `failed` (sent requests that got no response), and `response_cache_hits` (answers served by the local response cache, which are not counted as sent).
+`input` splits the sent content into `system`, `tool_schemas` (`builtin`, `mcp`, `a2a`), `tool_results` by originating tool, `tool_arguments` (the model's earlier tool arguments, replayed as input), `summaries` (`compaction` recaps and `snapshot` recaps, which mix many results and are never split by tool), `user`, `assistant`, `reasoning`, `scaffolding` (Swival's own nudges and reminders) and `unattributed`, with their sum in `total`.
+`image_parts` counts images sent, which are not tokenized.
+`results` gives, per tool, how many distinct results were sent and their size when first sent, so `input.tool_results` divided by `results.tokens` is how many times a tool's output was carried on average.
+`output.tool_arguments` counts the tool arguments the model generated, which are billed at the output price.
+`provider_usage` holds what the provider itself reported: `responses`, how many of them `reported` usage, and a `usage` object with `input_tokens`, `output_tokens`, `cached_tokens` and `cache_write_tokens` summed over those, or `null` when none did.
+`cost` holds `known_usd` from LiteLLM pricing (`null` when no call could be priced, which is not the same as a real zero), with `priced_calls`, `unpriced_calls` and `not_applicable_calls` for local or subscription providers.
+The same fields repeat under `by_source` for `agent` (top-level agent loops), `subagent` (subagents and MetaSKILL loops), `summary` (compaction summaries, checkpoints and continue files) and `auxiliary` (plain calls such as `/audit` phases).
+Exposure is a ranking, not a bill: provider tokenizers, cache discounts and cache writes all change what a request costs.
+
 `security` appears when at least one security-relevant event occurred during the run. It is an object with `command_policy_blocks` (commands denied by policy or by user), `command_policy_approvals` (commands approved by user or config), and `untrusted_inputs` (external content ingested from `fetch_url`, MCP, or A2A). All fields are integers. Absent when all counters are zero.
 
 `lifecycle` appears when lifecycle hooks ran and is an array mirroring the timeline's `lifecycle` events.
@@ -208,6 +222,8 @@ jq '.stats.tool_calls_by_name' run1.json
 jq '[.timeline[] | select(.type == "tool_call" and .succeeded == false)]' run1.json
 jq '.stats.skills_used' run1.json
 jq '{compactions: .stats.compactions, turn_drops: .stats.turn_drops}' run1.json
+jq '.stats.exposure.input.tool_results' run1.json
+jq '.stats.exposure.results | map_values(.count)' run1.json
 ```
 
 ## Comparing Two Runs

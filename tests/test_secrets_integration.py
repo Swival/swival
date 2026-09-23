@@ -214,7 +214,7 @@ class TestCallLlmEncryption:
 
         call_count = 0
 
-        def fake_call_command(model_id, messages, verbose, max_output_tokens):
+        def fake_call_command(model_id, messages, verbose, max_output_tokens, **_kw):
             nonlocal call_count
             call_count += 1
             # Verify messages are NOT encrypted (contain original tokens)

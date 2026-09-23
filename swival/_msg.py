@@ -5,6 +5,12 @@ IMAGE_TOKEN_ESTIMATE = 2805
 
 RECAP_MARKER = "[non-instructional context recap"
 
+# Stands in for dropped turns when no summary could be produced.
+COMPACTION_MARKER = (
+    "[context compacted \u2014 older tool calls and results were "
+    "removed to fit context window]"
+)
+
 
 def _msg_get(msg, key, default=None):
     return (
