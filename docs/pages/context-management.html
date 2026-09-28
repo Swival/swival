@@ -149,7 +149,12 @@
 <p>Two callers share this ladder. The <strong>proactive</strong> pass is the common case. Before every LLM call, if the estimated prompt is over a safe budget, Swival runs only the top three rungs — all near-lossless — to bring it back under, so the request rarely reaches the provider's wall. The <strong>reactive</strong> net handles the overflow that still slips through when a provider's tokenizer counts more tokens than Swival's estimate (detected when the provider rejects the call): it re-compacts below the current size with the full ladder enabled and retries, tightening the budget each round until the request fits.</p>
 <p>The rungs, from cheapest to most aggressive:</p>
 <h3 id="level-1-garbage-collect-spent-scaffolding">Level 1: Garbage-Collect Spent Scaffolding</h3>
-<p>The cheapest, most nearly lossless rung. As the loop runs, Swival injects synthetic nudges — tool-error guardrails, think/todo/snapshot reminders, empty-response retries — as throwaway messages. Once the model has produced a later response, those nudges have served their purpose and are dead weight. This rung drops them and nothing else. Durable synthetic context (goal recaps, image and command-output placeholders) is explicitly preserved and left for the lossy rungs. Because it only removes scaffolding the model already acted on, the proactive pass runs it freely.</p>
+<p>The cheapest, most nearly lossless rung.
+As the loop runs, Swival injects tool-error guardrails, todo and snapshot reminders, and empty-response retries as throwaway messages.
+Once the model has produced a later response, those messages have served their purpose and are dead weight.
+This rung drops them and nothing else.
+Durable synthetic context (goal recaps, image and command-output placeholders) is preserved for the later rungs.
+Because this only removes scaffolding the model already acted on, the proactive pass runs it freely.</p>
 <h3 id="level-2-shrink-tool-results">Level 2: Shrink Tool Results</h3>
 <p>The gentlest content rung. Old tool results (everything except the two most recent turns) are replaced with structured summaries.</p>
 <p>A file read becomes <code>[read_file: path, N lines — content compacted]</code>. A batched read becomes <code>[read_multiple_files: path1, path2, …, N chars — compacted]</code>. A grep becomes <code>[grep: 'pattern' in path, ~N matches — compacted]</code>. Command output keeps its first and last 200 characters.</p>

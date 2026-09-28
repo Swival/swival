@@ -78,7 +78,12 @@ The rungs, from cheapest to most aggressive:
 
 ### Level 1: Garbage-Collect Spent Scaffolding
 
-The cheapest, most nearly lossless rung. As the loop runs, Swival injects synthetic nudges — tool-error guardrails, think/todo/snapshot reminders, empty-response retries — as throwaway messages. Once the model has produced a later response, those nudges have served their purpose and are dead weight. This rung drops them and nothing else. Durable synthetic context (goal recaps, image and command-output placeholders) is explicitly preserved and left for the lossy rungs. Because it only removes scaffolding the model already acted on, the proactive pass runs it freely.
+The cheapest, most nearly lossless rung.
+As the loop runs, Swival injects tool-error guardrails, todo and snapshot reminders, and empty-response retries as throwaway messages.
+Once the model has produced a later response, those messages have served their purpose and are dead weight.
+This rung drops them and nothing else.
+Durable synthetic context (goal recaps, image and command-output placeholders) is preserved for the later rungs.
+Because this only removes scaffolding the model already acted on, the proactive pass runs it freely.
 
 ### Level 2: Shrink Tool Results
 

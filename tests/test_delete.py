@@ -3,13 +3,11 @@
 import json
 import os
 import shutil
-import sys
 import time
 from pathlib import Path
 from unittest.mock import patch
 
 
-from swival.config import _UNSET
 from swival.tools import (
     _delete_file,
     _cleanup_trash,
@@ -416,122 +414,6 @@ class TestCleanupTrash:
 
         with patch.object(Path, "stat", flaky_stat):
             _cleanup_trash(str(tmp_path))  # should not raise
-
-
-# =========================================================================
-# Agent integration: think nudge
-# =========================================================================
-
-
-class TestThinkNudge:
-    def test_think_nudge_fires_on_delete_without_think(self, tmp_path, monkeypatch):
-        """Nudge fires when delete_file is used without prior think call."""
-        import types
-        from swival import agent
-        from swival import fmt
-
-        fmt.init(no_color=True)
-
-        snapshots = []
-        call_count = 0
-
-        (tmp_path / "doomed.txt").write_text("bye\n")
-
-        def _make_msg(content=None, tool_calls=None):
-            m = types.SimpleNamespace()
-            m.content = content
-            m.tool_calls = tool_calls
-            m.role = "assistant"
-            m.get = lambda key, default=None: getattr(m, key, default)
-            return m
-
-        def _make_tc(name, arguments, call_id):
-            tc = types.SimpleNamespace()
-            tc.id = call_id
-            tc.function = types.SimpleNamespace()
-            tc.function.name = name
-            tc.function.arguments = arguments
-            return tc
-
-        def fake_call_llm(*args, **kwargs):
-            nonlocal call_count
-            snapshots.append(list(args[2]))
-            call_count += 1
-            if call_count == 1:
-                tc = _make_tc(
-                    "delete_file",
-                    json.dumps({"file_path": "doomed.txt"}),
-                    call_id="call_del",
-                )
-                return _make_msg(tool_calls=[tc]), "tool_calls"
-            return _make_msg(content="done"), "stop"
-
-        monkeypatch.setattr(agent, "call_llm", fake_call_llm)
-        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
-
-        defaults = dict(
-            base_url="http://fake",
-            model="test-model",
-            max_output_tokens=1024,
-            temperature=0.55,
-            top_p=None,
-            seed=None,
-            quiet=False,
-            max_turns=10,
-            base_dir=str(tmp_path),
-            no_system_prompt=True,
-            no_instructions=True,
-            no_skills=True,
-            skills_dir=[],
-            system_prompt=None,
-            question="test nudge",
-            repl=False,
-            max_context_tokens=None,
-            commands=None,
-            add_dir=[],
-            add_dir_ro=[],
-            provider="lmstudio",
-            api_key=None,
-            color=False,
-            no_color=False,
-            yolo=False,
-            files=_UNSET,
-            report=None,
-            reviewer=None,
-            version=False,
-            no_read_guard=True,
-            no_history=True,
-            init_config=False,
-            project=False,
-            reviewer_mode=False,
-            review_prompt=None,
-            objective=None,
-            verify=None,
-        )
-        args = types.SimpleNamespace(**defaults)
-        monkeypatch.setattr(sys, "argv", ["agent", "test nudge"])
-        monkeypatch.setattr("argparse.ArgumentParser.parse_args", lambda self: args)
-
-        agent.main()
-
-        # The second LLM call should see the nudge.
-        assert len(snapshots) == 2
-        tips = []
-        for msg in snapshots[1]:
-            role = (
-                msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
-            )
-            if role != "user":
-                continue
-            content = (
-                msg.get("content")
-                if isinstance(msg, dict)
-                else getattr(msg, "content", "")
-            )
-            if content and content.startswith("Tip:"):
-                tips.append(content)
-        assert len(tips) == 1
-        assert "think" in tips[0].lower()
 
 
 # =========================================================================

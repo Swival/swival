@@ -24,7 +24,7 @@ class TestCurrentTurnBoundary:
         assert _find_current_turn_boundary(messages) == 3
 
     def test_skips_swival_synthetic_nudges(self):
-        """Synthetic user nudges (think, todo, guardrail) must not become
+        """Synthetic user nudges (todo, guardrail) must not become
         the turn boundary — they are injected mid-turn by the agent loop."""
         messages = [
             {"role": "user", "content": "real question"},

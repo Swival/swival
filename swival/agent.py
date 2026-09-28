@@ -3018,7 +3018,7 @@ def _is_spent_scaffolding(msg, *, before_index: int, last_assistant: int) -> boo
 
     A synthetic message earns its keep only until the model has responded to it.
     Once a later assistant turn exists, loop scaffolding (tool-error guardrails,
-    think/todo/snapshot nudges, empty/cut-off retries, reviewer feedback) is
+    todo/snapshot nudges, empty/cut-off retries, reviewer feedback) is
     dead weight. Durable synthetic context — goal recaps, image and command-tool
     placeholders, listed in :data:`_DROPPABLE_USER_PREFIXES` — is preserved here
     and left for the destructive rungs to handle.
@@ -10397,8 +10397,6 @@ def _run_agent_loop(
         StormBreaker() if storm_breaker_enabled else None
     )
     turns = 0
-    think_used = False
-    think_nudge_fired = False
     todo_last_used = 0
     snapshot_read_streak = 0
     snapshot_nudge_fired = False
@@ -11838,8 +11836,6 @@ def _run_agent_loop(
                 and goal_state.get().status == GoalStatus.COMPLETE
             ):
                 _goal_completed_by_tool = True
-            if tool_name == "think":
-                think_used = True
             if tool_name == "todo":
                 todo_last_used = turns
 
@@ -11851,19 +11847,6 @@ def _run_agent_loop(
             if loaded is not tools:
                 tools = loaded
                 effective_tools = deferred_tools.with_loaded(effective_tools)
-
-        # Think nudge: if model used edit_file/write_file without thinking first
-        if not think_used and not think_nudge_fired:
-            has_mutating = any(
-                tc.function.name in ("edit_file", "write_file", "delete_file")
-                for tc in msg.tool_calls
-            )
-            if has_mutating:
-                think_nudge_fired = True
-                interventions.append(
-                    "Tip: Consider using the `think` tool before making edits. "
-                    "Planning your approach first leads to better outcomes."
-                )
 
         # Todo reminder: nudge when items remain and todo hasn't been used recently.
         if todo_state is not None:
