@@ -216,7 +216,12 @@ When `--profile` is combined with explicit flags like `--provider` or `--model`,
 swival --extra-body '{"chat_template_kwargs": {"enable_thinking": false}}' "task"
 ```
 
-`--retries N` sets the maximum number of provider retries on transient network errors and defaults to `5`. Set to `1` to disable retries entirely.
+`--retries N` sets how many times Swival tries each provider call.
+It defaults to `5`, and `1` disables retries.
+
+Network errors are retried, and so are prompts the provider flags as "potentially violating our usage policy".
+Some OpenAI models return that for perfectly harmless requests, and sending the same request again often works.
+If it keeps failing, try another model.
 
 `--reasoning-effort LEVEL` sets the reasoning effort for models that support tunable reasoning (e.g. gpt-5.5). Valid levels are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `default`.
 

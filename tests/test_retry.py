@@ -1,13 +1,16 @@
 """Tests for transient-error retry logic in call_llm / _completion_with_retry."""
 
+import copy
 import types
 from unittest.mock import patch, MagicMock
 
 import pytest
+from conftest import PROMPT_REJECTION, policy_violation, responses_rejection
 
 from swival.agent import (
     call_llm,
     _completion_with_retry,
+    _is_prompt_rejection,
     _is_transient,
     AgentError,
     ContextOverflowError,
@@ -819,7 +822,10 @@ class _FakeChannels:
             def _update(reasoning="", answer="", activity=""):
                 self.events.append(("update", (reasoning, answer, activity)))
 
-            yield _update
+            try:
+                yield _update
+            finally:
+                self.events.append(("exit", None))
 
         return _fake
 
@@ -1176,3 +1182,288 @@ class TestStreamedResponseCost:
         snap = sc.snapshot()
         assert snap.priced_calls == 1
         assert snap.known_usd == 0.007
+
+
+_REJECTION_HINT = (
+    "The provider rejected the prompt. Try another model with /model in the "
+    "REPL or --model on the next run."
+)
+
+
+def _connection_reset():
+    import litellm
+
+    return litellm.APIConnectionError(
+        message="Connection reset", llm_provider="openai", model="x"
+    )
+
+
+# Each rejection shape with the provider path that produces it.
+_BOTH_SHAPES = pytest.mark.parametrize(
+    "rejection, provider",
+    [(responses_rejection, "chatgpt"), (policy_violation, "generic")],
+    ids=["responses", "chat"],
+)
+
+
+@pytest.fixture
+def stub_provider():
+    with patch("litellm.completion") as completion, patch("time.sleep") as sleep:
+        yield types.SimpleNamespace(completion=completion, sleep=sleep)
+
+
+def _endpoint(provider):
+    if provider == "generic":
+        return {"base_url": "http://localhost:8080/v1", "api_key": "test"}
+    return {"base_url": None, "api_key": None}
+
+
+def _call(provider="chatgpt", **kwargs):
+    defaults = dict(
+        model_id="gpt-6-sol",
+        messages=[{"role": "user", "content": "hi"}],
+        max_output_tokens=100,
+        temperature=None,
+        top_p=None,
+        seed=None,
+        tools=None,
+        verbose=False,
+        provider=provider,
+        **_endpoint(provider),
+    )
+    return call_llm(**(defaults | kwargs))
+
+
+def _retry(**kwargs):
+    options = {"max_retries": 5, "verbose": False, **kwargs}
+    return _completion_with_retry({"model": "x", "messages": []}, **options)
+
+
+class TestPromptRejectionMatcher:
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            responses_rejection(),
+            policy_violation(),
+            responses_rejection(
+                "INVALID PROMPT :\n  Your prompt was flagged as potentially\t"
+                "violating our Usage Policy."
+            ),
+        ],
+        ids=["responses", "chat", "loose-spacing"],
+    )
+    def test_matches(self, exc):
+        assert _is_prompt_rejection(exc)
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            responses_rejection("Invalid prompt: messages must not be empty"),
+            policy_violation(
+                "Your prompt was flagged as potentially violating our usage policy."
+            ),
+            policy_violation("Your request was rejected by our safety system."),
+            policy_violation(PROMPT_REJECTION + " The attached image was flagged."),
+            RuntimeError(PROMPT_REJECTION),
+        ],
+        ids=["other-400", "no-prefix", "other-policy", "blames-image", "not-litellm"],
+    )
+    def test_near_misses(self, exc):
+        assert not _is_prompt_rejection(exc)
+
+
+class TestPromptRejectionRetry:
+    @_BOTH_SHAPES
+    def test_resent_unchanged_then_succeeds(self, stub_provider, rejection, provider):
+        outcomes = iter([rejection(), _make_response("recovered")])
+        sent = []
+
+        def completion(**kwargs):
+            sent.append(copy.deepcopy(kwargs))
+            outcome = next(outcomes)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        stub_provider.completion.side_effect = completion
+        tools = [{"type": "function", "function": {"name": "read_file"}}]
+        msg, _finish, _activity, retries, _stats = _call(
+            provider, tools=tools, reasoning_effort="high"
+        )
+        assert (msg.content, retries) == ("recovered", 1)
+        assert len(sent) == 2
+        assert sent[0] == sent[1]
+
+    def test_exhaustion_raises_original_with_count(self, stub_provider):
+        from swival import fmt
+
+        stub_provider.completion.side_effect = [responses_rejection()] * 3
+        with (
+            patch("random.random", return_value=0.5),
+            patch.object(fmt, "warning") as warning,
+            pytest.raises(type(responses_rejection())) as exc_info,
+        ):
+            _retry(max_retries=3, verbose=True)
+        assert exc_info.value._provider_retries == 2
+        assert [c.args[0] for c in warning.call_args_list] == [
+            "Prompt rejected; retrying in 2s (attempt 2/3)",
+            "Prompt rejected; retrying in 4s (attempt 3/3)",
+        ]
+
+    def test_network_errors_and_rejections_share_the_attempt_limit(self, stub_provider):
+        stub_provider.completion.side_effect = [
+            _connection_reset(),
+            responses_rejection(),
+            _connection_reset(),
+        ]
+        with pytest.raises(type(_connection_reset())):
+            _retry(max_retries=3)
+        assert stub_provider.completion.call_count == 3
+
+
+class TestPromptRejectionCallLlm:
+    @_BOTH_SHAPES
+    def test_exhaustion_guidance(self, stub_provider, rejection, provider):
+        original = rejection()
+        stub_provider.completion.side_effect = [original, rejection(), original]
+        with pytest.raises(AgentError) as exc_info:
+            _call(provider, max_retries=3)
+        err = exc_info.value
+        assert "Invalid prompt: your prompt was flagged" in str(err)
+        assert str(err).endswith(_REJECTION_HINT)
+        assert err.__context__ is original
+        assert err._provider_retries == 2
+        assert not getattr(err, "_request_shaped", False)
+
+    @pytest.mark.parametrize(
+        "broken_history, repair_error, where",
+        [
+            (
+                {"role": "assistant"},
+                "must have either content or tool_calls",
+                "after message sanitization",
+            ),
+            (
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "read_file", "arguments": "{}"},
+                        }
+                    ],
+                },
+                "No tool output found for function call call_1",
+                "after orphaned-tool-call fix",
+            ),
+        ],
+        ids=["empty-assistant", "orphaned-tool-call"],
+    )
+    def test_guidance_after_history_repair(
+        self, stub_provider, broken_history, repair_error, where
+    ):
+        import litellm
+
+        repairable = litellm.BadRequestError(
+            message=repair_error, llm_provider="openai", model="x"
+        )
+        stub_provider.completion.side_effect = [repairable] + [policy_violation()] * 3
+        messages = [
+            {"role": "user", "content": "hi"},
+            broken_history,
+            {"role": "user", "content": "continue"},
+        ]
+        with pytest.raises(AgentError) as exc_info:
+            _call("generic", messages=messages, max_retries=3)
+        assert where in str(exc_info.value)
+        assert str(exc_info.value).endswith(_REJECTION_HINT)
+        assert stub_provider.completion.call_count == 4
+
+    def test_mid_stream_rejection_discards_partial_tool_call(
+        self, stub_provider, monkeypatch
+    ):
+        """Nothing streamed before the rejection, including a half-sent tool
+        call, ends up in the final response."""
+        from conftest import plain_console
+
+        from swival import fmt
+
+        rec = _FakeChannels()
+        monkeypatch.setattr(fmt, "stream_channels", rec.cm())
+        monkeypatch.setattr("sys.stderr", types.SimpleNamespace(isatty=lambda: True))
+
+        def rejected_stream():
+            yield _delta_chunk(content="p" * 100)
+            yield _tool_delta(name="write_file", args='{"path": "a.txt", "con')
+            raise responses_rejection()
+
+        retry_chunks = [_delta_chunk(content="done")]
+        stub_provider.completion.side_effect = [rejected_stream(), iter(retry_chunks)]
+        built = []
+
+        def fake_builder(chunks, messages=None):
+            built.append(list(chunks))
+            return _make_response("done")
+
+        with (
+            plain_console(width=80),
+            patch("litellm.stream_chunk_builder", fake_builder),
+        ):
+            msg, _finish, _activity, retries, _stats = _call("generic", verbose=True)
+
+        assert (msg.content, msg.tool_calls, retries) == ("done", None, 1)
+        assert built == [retry_chunks]
+        assert rec.kinds[0] == "enter" and rec.kinds[-1] == "exit"
+
+
+class TestPromptRejectionFallbackCalls:
+    @_BOTH_SHAPES
+    def test_summary_retries_network_errors_only(
+        self, stub_provider, rejection, provider
+    ):
+        from swival.agent import _call_summarize_llm
+
+        stub_provider.completion.side_effect = [
+            _connection_reset(),
+            rejection(),
+            _make_response(),
+        ]
+        endpoint = _endpoint(provider)
+        result = _call_summarize_llm(
+            "text",
+            "summarize",
+            call_llm,
+            "gpt-6-sol",
+            endpoint["base_url"],
+            endpoint["api_key"],
+            None,
+            None,
+            provider,
+        )
+        assert result is None
+        assert stub_provider.completion.call_count == 2
+
+    def test_continue_file_keeps_deterministic_version(self, stub_provider, tmp_path):
+        from swival.continue_here import write_continue_file
+
+        stub_provider.completion.side_effect = [
+            policy_violation(),
+            _make_response("LLM"),
+        ]
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "fix the parser"},
+        ]
+        assert write_continue_file(
+            str(tmp_path),
+            messages,
+            call_llm_fn=call_llm,
+            model_id="m",
+            provider="generic",
+            **_endpoint("generic"),
+        )
+        assert stub_provider.completion.call_count == 1
+        content = (tmp_path / ".swival" / "continue.md").read_text()
+        assert "fix the parser" in content

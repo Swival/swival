@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from conftest import fake_tool_result
+from conftest import fake_tool_result, policy_violation
 
 from swival.agent import (
     estimate_tokens,
@@ -3664,6 +3664,55 @@ class TestUnknownWindowOverflowLoop:
                     _DUMMY_TOOLS,
                     **_loop_kwargs(tmp_path, context_length=8192),
                 )
+
+    @pytest.mark.parametrize(
+        "rejection, attempts",
+        [
+            (policy_violation, 2),
+            (lambda: policy_violation("Rejected by our safety system."), 1),
+        ],
+        ids=["prompt-rejection", "other-policy-error"],
+    )
+    def test_policy_rejection_never_probes_or_truncates(
+        self, tmp_path, rejection, attempts
+    ):
+        """A policy rejection is not an overflow, so the history must stay
+        intact even though a smaller prompt would get through here."""
+        from swival.agent import run_agent_loop
+        from swival.report import ReportCollector
+
+        sizes = []
+
+        def fake_completion(**kwargs):
+            sizes.append(estimate_tokens(kwargs["messages"], None))
+            if sizes[-1] > 4090:
+                raise rejection()
+            return _completion_ok("probe answered")
+
+        messages = [_sys("system"), _user("question " + "z" * 30000)]
+        before = copy.deepcopy(messages)
+        report = ReportCollector()
+        with (
+            patch("litellm.completion", side_effect=fake_completion),
+            patch("time.sleep"),
+        ):
+            with pytest.raises(AgentError):
+                run_agent_loop(
+                    messages,
+                    _DUMMY_TOOLS,
+                    **_loop_kwargs(
+                        tmp_path,
+                        llm_kwargs={"provider": "generic", "max_retries": 2},
+                        report=report,
+                    ),
+                )
+
+        assert len(sizes) == attempts
+        assert min(sizes) > 4090
+        assert messages == before
+        llm_events = [e for e in report.events if e["type"] == "llm_call"]
+        assert [e["finish_reason"] for e in llm_events] == ["error"]
+        assert llm_events[0].get("provider_retries", 0) == attempts - 1
 
 
 # ---------------------------------------------------------------------------

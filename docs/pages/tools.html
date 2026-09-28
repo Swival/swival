@@ -240,6 +240,10 @@ swival --commands ask &quot;Run the tests&quot;
 <p><code>check_subagents</code> monitors and manages spawned subagents. It supports three actions:</p>
 <p><code>poll</code> returns the status of all subagents: running, done, failed, or cancelled. Done subagents include a preview of their result (first 500 characters). Failed subagents include the error message.</p>
 <p><code>collect</code> blocks until a specific subagent finishes and returns its full result. Requires <code>subagent_id</code>. The default timeout is 300 seconds.</p>
+<p>While it waits, Swival prints a short note on stderr saying which subagent it is waiting for.
+After that, it prints a reminder every 15 seconds with the time spent so far and how many background agents are still working.
+<code>--quiet</code> turns these notes off.
+In the Python API, they are sent as <code>status_update</code> events when an <code>event_callback</code> is set.</p>
 <p><code>cancel</code> sends a cancellation signal to a specific subagent. Requires <code>subagent_id</code>. The subagent will stop at its next cancellation check point (start of turn or between tool calls).</p>
 <p>This tool is only available when subagent support is enabled.</p>
 <h2 id="mcp-tools">MCP Tools</h2>

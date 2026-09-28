@@ -135,7 +135,7 @@ extra_body = { chat_template_kwargs = { enable_thinking = false } }
 reasoning_effort = &quot;high&quot;
 cache = true
 # cache_dir = &quot;.swival&quot;
-# retries = 5              # max provider retries on transient network errors
+# retries = 5              # max attempts per provider call (1 = no retry)
 # color = true             # true = force color, false = force no-color, absent = auto
 # files = &quot;some&quot;           # filesystem access: &quot;some&quot; (workspace) | &quot;all&quot; (unrestricted) | &quot;none&quot; (.swival/ only)
 # yolo = false             # shorthand for files = &quot;all&quot; + commands = &quot;all&quot;

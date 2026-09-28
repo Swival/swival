@@ -235,3 +235,28 @@ def build_loop_kwargs(tmp_path, goal_state=None, *, max_turns=4):
         file_tracker=None,
         continue_here=False,
     )
+
+
+PROMPT_REJECTION = (
+    "Invalid prompt: your prompt was flagged as potentially violating our usage "
+    "policy. Please try again with a different prompt: "
+    "https://platform.openai.com/docs/guides/reasoning#advice-on-prompting"
+)
+
+
+def policy_violation(message=PROMPT_REJECTION):
+    """What LiteLLM raises for a policy rejection on Chat Completions."""
+    import litellm
+
+    return litellm.ContentPolicyViolationError(
+        message=message, llm_provider="openai", model="gpt-6-sol"
+    )
+
+
+def responses_rejection(message=PROMPT_REJECTION):
+    """What LiteLLM raises for an invalid_prompt event on the Responses stream."""
+    import litellm
+
+    return litellm.APIError(
+        status_code=400, message=message, llm_provider="chatgpt", model="gpt-6-sol"
+    )

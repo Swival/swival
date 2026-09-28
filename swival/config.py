@@ -1488,7 +1488,7 @@ def generate_config(
         "# max_turns = 50",
         "# max_output_lines = 2000         # default line count for file reads",
         "# max_output_kb = 50              # tool output size cap in KB (reads, grep, listings, outline, fetch)",
-        "# retries = 5                     # max provider retries on transient network errors (1 = no retry)",
+        "# retries = 5                     # max attempts per provider call (1 = no retry)",
         "# provider_timeout = 900          # provider request timeout in seconds",
         '# initial_tool_choice = "auto"    # "auto" | "required" for the first request',
         "# storm_breaker = true            # suppress a model looping on an identical tool call",

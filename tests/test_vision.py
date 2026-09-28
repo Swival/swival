@@ -4,6 +4,7 @@ import base64
 import copy
 import struct
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -33,7 +34,12 @@ from swival.tools import (
     _view_image,
     dispatch,
 )
-from tests.conftest import build_loop_kwargs, make_message
+from tests.conftest import (
+    PROMPT_REJECTION,
+    build_loop_kwargs,
+    make_message,
+    policy_violation,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -800,14 +806,16 @@ class TestImageRejectionRecovery:
     def _final(text="done"):
         return make_message(text), "stop", [], 0, (0, 0)
 
-    def _run(self, tmp_path, messages, fake_call_llm, **overrides):
+    def _run(
+        self, tmp_path, messages, fake, target="swival.agent.call_llm", **overrides
+    ):
         kwargs = build_loop_kwargs(tmp_path, max_turns=3) | {
             "api_base": "http://127.0.0.1:1234",
             "model_id": "text-only-model",
             "context_length": None,
             **overrides,
         }
-        with patch("swival.agent.call_llm", side_effect=fake_call_llm):
+        with patch(target, side_effect=fake):
             return agent.run_agent_loop(messages, self._tools(), **kwargs)
 
     def _record(self, reject_first=None):
@@ -891,6 +899,71 @@ class TestImageRejectionRecovery:
         assert not _has_image_content(calls[1][0])
         assert "view_image" in _names(calls[1][1])
         assert agent._VISION_REJECTED_MODELS == set()
+
+    def _run_provider(self, tmp_path, messages, rejection):
+        """Run the loop through the real call_llm, against a provider that
+        rejects any request with an image in it.
+        Returns whether each request sent had an image, and the outcome."""
+        sent = []
+
+        def fake_completion(**kwargs):
+            sent.append(_has_image_content(kwargs["messages"]))
+            if sent[-1]:
+                raise rejection
+            choice = SimpleNamespace(message=make_message("done"), finish_reason="stop")
+            return SimpleNamespace(choices=[choice], usage=None)
+
+        with patch("time.sleep"):
+            try:
+                outcome = self._run(
+                    tmp_path,
+                    messages,
+                    fake_completion,
+                    target="litellm.completion",
+                    model_id="gpt-6-sol",
+                    llm_kwargs={"provider": "generic", "max_retries": 2},
+                )
+            except AgentError as e:
+                outcome = e
+        return sent, outcome
+
+    @pytest.mark.parametrize(
+        "rejection, sent_expected",
+        [
+            (policy_violation(), [True, True]),
+            (policy_violation("Rejected by our safety system."), [True]),
+        ],
+        ids=["prompt-rejection", "other-policy-error"],
+    )
+    def test_policy_rejection_keeps_the_image(self, tmp_path, rejection, sent_expected):
+        """A policy rejection that does not blame the image is reported with
+        the image still in place."""
+        messages = [{"role": "system", "content": "sys"}, _image_message()]
+        before = copy.deepcopy(messages)
+
+        sent, outcome = self._run_provider(tmp_path, messages, rejection)
+
+        assert isinstance(outcome, AgentError)
+        assert sent == sent_expected
+        assert messages == before
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Your image was flagged as violating our usage policy.",
+            PROMPT_REJECTION + " The attached image was flagged.",
+        ],
+        ids=["image-policy-error", "prompt-rejection-naming-the-image"],
+    )
+    def test_policy_rejection_naming_the_image_strips_it(self, tmp_path, text):
+        """The image is dropped right away instead of being sent again."""
+        messages = [{"role": "system", "content": "sys"}, _image_message()]
+
+        sent, outcome = self._run_provider(tmp_path, messages, policy_violation(text))
+
+        assert outcome[0] == "done"
+        assert sent == [True, False]
+        assert not _has_image_content(messages)
 
     def test_unrelated_error_with_pending_image_is_not_retried(self, tmp_path):
         messages = [{"role": "system", "content": "sys"}, _image_message()]

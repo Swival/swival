@@ -587,6 +587,38 @@ _SSO_TOKEN_ERROR_RE = re.compile(
     re.IGNORECASE,
 )
 
+# OpenAI sometimes rejects harmless prompts with this message.
+# Sending the same request again often works.
+_PROMPT_REJECTION_RE = re.compile(
+    r"invalid\s+prompt\s*:\s*your\s+prompt\s+was\s+flagged\s+as\s+"
+    r"potentially\s+violating\s+our\s+usage\s+policy",
+    re.IGNORECASE,
+)
+
+_PROMPT_REJECTION_HINT = (
+    "\n\nThe provider rejected the prompt. Try another model with /model in "
+    "the REPL or --model on the next run."
+)
+
+
+def _is_prompt_rejection(exc) -> bool:
+    """Is this OpenAI's usage-policy rejection, worth sending again?
+
+    A rejection that blames an image is left to the image repair, which
+    drops the image instead of sending it again.
+    """
+    import litellm
+
+    if not isinstance(exc, (litellm.APIError, litellm.BadRequestError)):
+        return False
+    if not _PROMPT_REJECTION_RE.search(str(exc)):
+        return False
+    return not _is_vision_rejection(exc)
+
+
+def _prompt_rejection_hint(exc) -> str:
+    return _PROMPT_REJECTION_HINT if _is_prompt_rejection(exc) else ""
+
 
 _GEAP_AUTH_KEYWORDS = ("credentials", "unauthorized", "permission")
 
@@ -3565,6 +3597,7 @@ def _call_summarize_llm(
             api_key=api_key,
             user_agent=user_agent,
             provider=provider,
+            call_kind="summary",
             **(provider_kwargs or {}),
         )
         resp = _result[0]
@@ -5618,12 +5651,16 @@ def _completion_with_retry(
     show_thinking=False,
     unknown_context_window=False,
     on_attempt=None,
+    retry_prompt_rejections=True,
 ):
     """Call litellm.completion() with retry on transient errors.
 
     Returns (response, provider_retries) where provider_retries is the number
     of retries performed (0 = first attempt succeeded).
     *on_attempt* runs right before every request actually sent.
+
+    Usage-policy prompt rejections are retried too, within the same attempt
+    limit, unless *retry_prompt_rejections* is false.
 
     On failure, attaches ``_provider_retries`` to the raised exception so
     callers can record how many attempts were made before the error.
@@ -5655,24 +5692,27 @@ def _completion_with_retry(
             coe = ContextOverflowError(f"context window exceeded (typed): {e}")
             coe._provider_retries = attempt
             raise coe
-        except litellm.BadRequestError as e:
-            e._provider_retries = attempt
-            raise
         except Exception as e:
-            if _looks_like_context_overflow(
+            if _is_prompt_rejection(e):
+                retryable, reason = retry_prompt_rejections, "Prompt rejected"
+            elif isinstance(e, litellm.BadRequestError):
+                retryable = False
+            elif _looks_like_context_overflow(
                 e, unknown_context_window=unknown_context_window
             ):
                 coe = ContextOverflowError(f"context window exceeded (inferred): {e}")
                 coe._provider_retries = attempt
                 raise coe
-            if not _is_transient(e) or attempt == max_retries - 1:
+            else:
+                retryable, reason = _is_transient(e), f"Network error: {e}"
+            if not retryable or attempt == max_retries - 1:
                 e._provider_retries = attempt
                 raise
             delay = min(2 * (2**attempt), 30)
             delay *= 0.75 + 0.5 * random.random()
             if verbose:
                 fmt.warning(
-                    f"Network error: {e} — retrying in {delay:.0f}s "
+                    f"{reason}; retrying in {delay:.0f}s "
                     f"(attempt {attempt + 2}/{max_retries})"
                 )
             time.sleep(delay)
@@ -5853,7 +5893,7 @@ def call_llm(
     Returns (message, finish_reason, cmd_activity, provider_retries, cache_stats).
     cmd_activity is a list of {"name": str, "succeeded": bool} dicts
     (non-empty only for command provider with tool calls).
-    provider_retries is the number of transient-error retries (0 = first attempt ok).
+    provider_retries is the number of retries (0 = first attempt ok).
     cache_stats is (cached_tokens, cache_write_tokens); both 0 for command provider
     and SQLite cache-hit paths.
     *exposure* is an ``ExposureRecorder`` that sees every request actually sent.
@@ -6209,6 +6249,9 @@ def call_llm(
         )
 
     on_attempt = _record_attempt if exposure is not None else None
+    # Summary calls fall back to something else, so a rejected prompt should
+    # not make them wait.
+    retry_prompt_rejections = call_kind == "agent"
 
     _show_stream = (
         provider
@@ -6273,6 +6316,7 @@ def call_llm(
                     max_retries=max_retries,
                     verbose=verbose,
                     on_attempt=on_attempt,
+                    retry_prompt_rejections=retry_prompt_rejections,
                 )
         except ContextOverflowError as coe2:
             coe2._provider_retries = first_retries + getattr(
@@ -6282,6 +6326,7 @@ def call_llm(
         except Exception as e2:
             ae = AgentError(
                 f"LLM call failed after switching to model {replacement!r}: {e2}"
+                + _prompt_rejection_hint(e2)
             )
             ae._provider_retries = first_retries + _retries_from_exc(e2)
             _raise_with_retries(ae)
@@ -6300,6 +6345,7 @@ def call_llm(
                 show_thinking=show_thinking,
                 unknown_context_window=unknown_context_window,
                 on_attempt=on_attempt,
+                retry_prompt_rejections=retry_prompt_rejections,
             )
     except ContextOverflowError:
         raise  # already has _provider_retries from _completion_with_retry
@@ -6356,6 +6402,7 @@ def call_llm(
                             verbose=verbose,
                             unknown_context_window=unknown_context_window,
                             on_attempt=on_attempt,
+                            retry_prompt_rejections=retry_prompt_rejections,
                         )
                 except ContextOverflowError as coe2:
                     coe2._provider_retries = first_retries + getattr(
@@ -6379,7 +6426,10 @@ def call_llm(
                         )
                         tne._provider_retries = combined
                         raise tne
-                    ae = AgentError(f"LLM call failed after message sanitization: {e2}")
+                    ae = AgentError(
+                        f"LLM call failed after message sanitization: {e2}"
+                        + _prompt_rejection_hint(e2)
+                    )
                     ae._provider_retries = combined
                     _raise_with_retries(ae)
                 retries += first_retries
@@ -6398,6 +6448,7 @@ def call_llm(
                             verbose=verbose,
                             unknown_context_window=unknown_context_window,
                             on_attempt=on_attempt,
+                            retry_prompt_rejections=retry_prompt_rejections,
                         )
                 except ContextOverflowError as coe2:
                     coe2._provider_retries = first_retries + getattr(
@@ -6423,6 +6474,7 @@ def call_llm(
                         raise tne
                     ae = AgentError(
                         f"LLM call failed after orphaned-tool-call fix: {e2}"
+                        + _prompt_rejection_hint(e2)
                     )
                     ae._provider_retries = combined
                     _raise_with_retries(ae)
@@ -6437,12 +6489,18 @@ def call_llm(
             raise tne
         msg = f"LLM call failed: {e}"
         msg += _geap_auth_hint(provider, msg_text)
+        msg += _prompt_rejection_hint(e)
         ae = AgentError(msg)
         ae._provider_retries = _retries_from_exc(e)
-        # A 400 we could not categorize. At an unknown window this may be an
-        # overflow the classifier missed, so mark it for the terminal-floor
-        # backstop (Phase 4) to probe with a minimal prompt before aborting.
-        ae._request_shaped = True
+        if not (
+            isinstance(e, litellm.ContentPolicyViolationError)
+            or _is_prompt_rejection(e)
+        ):
+            # An unrecognized 400 may be an overflow we failed to detect, so
+            # let the backstop try again with a minimal prompt.
+            # Policy rejections are never overflows, and shrinking the
+            # history for them would only lose context.
+            ae._request_shaped = True
         _raise_with_retries(ae)
     except ToolsNotSupportedError:
         raise
@@ -6475,6 +6533,7 @@ def call_llm(
             )
         else:
             msg += _geap_auth_hint(provider, msg_text)
+        msg += _prompt_rejection_hint(e)
         ae = AgentError(msg)
         ae._provider_retries = _retries_from_exc(e)
         _raise_with_retries(ae)
@@ -6864,7 +6923,7 @@ def build_parser():
         "--retries",
         type=int,
         default=_UNSET,
-        help="Max provider retries on transient network errors (default: 5, 1 = no retry).",
+        help="Max attempts per provider call, for network errors and prompt rejections (default: 5, 1 = no retry).",
     )
     provider_group.add_argument(
         "--provider-timeout",

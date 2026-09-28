@@ -301,7 +301,7 @@ print(answer)
 </tr>
 <tr>
 <td><code>retries</code></td>
-<td>Number of LLM call retries on transient failures. Must be &gt;= 1.</td>
+<td>Maximum attempts per LLM call, for network errors and usage-policy prompt rejections. Must be &gt;= 1.</td>
 </tr>
 <tr>
 <td><code>history</code></td>
@@ -418,10 +418,18 @@ session.cancel_flag = stop
 <td><code>turn</code>, <code>type</code> (<code>"reasoning"</code>), <code>text_length</code></td>
 <td>Emitted when the assistant produces reasoning text alongside tool calls (not a final answer).</td>
 </tr>
+<tr>
+<td><code>"status_update"</code></td>
+<td><code>text</code></td>
+<td>A short note while the agent waits for a subagent, or for a free subagent slot.</td>
+</tr>
 </tbody>
 </table>
 <p>Exceptions raised by the callback are silently swallowed — the agent loop never fails because of a callback error.</p>
 <p><strong><code>cancel_flag</code></strong> <code>threading.Event | None</code> — the agent loop checks this at the start of each turn and between tool calls. When set, the loop exits gracefully at the next check point. The loop does not interrupt a tool call that is already running.</p>
+<p>Waiting for subagents is the exception.
+If <code>check_subagents</code> is waiting for a result, or <code>spawn_subagent</code> is waiting for a free slot, it stops waiting and returns an error.
+Running subagents are asked to stop too.</p>
 <p>Both default to <code>None</code> (no streaming, no external cancellation).</p>
 <h3 id="sessionrunquestion-reportfalse-result"><code>Session.run(question, *, report=False) -&gt; Result</code></h3>
 <p>Single-shot execution. Each call is independent — fresh message history, fresh state.</p>

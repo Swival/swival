@@ -259,6 +259,7 @@ def _try_llm_summary(
             verbose=False,
             api_key=api_key,
             provider=provider,
+            call_kind="summary",
             **(provider_kwargs or {}),
         )
         resp = _result[0]

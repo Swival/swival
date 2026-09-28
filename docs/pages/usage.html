@@ -212,7 +212,11 @@ swival --oneshot-commands '/loop 30 sec check git status and report unusual acti
 <p><code>--extra-body JSON</code> passes extra parameters to the LLM API call. The value must be a JSON object. This is useful for provider-specific or model-specific options that Swival does not expose as dedicated flags.</p>
 <pre><code class="language-sh">swival --extra-body '{&quot;chat_template_kwargs&quot;: {&quot;enable_thinking&quot;: false}}' &quot;task&quot;
 </code></pre>
-<p><code>--retries N</code> sets the maximum number of provider retries on transient network errors and defaults to <code>5</code>. Set to <code>1</code> to disable retries entirely.</p>
+<p><code>--retries N</code> sets how many times Swival tries each provider call.
+It defaults to <code>5</code>, and <code>1</code> disables retries.</p>
+<p>Network errors are retried, and so are prompts the provider flags as "potentially violating our usage policy".
+Some OpenAI models return that for perfectly harmless requests, and sending the same request again often works.
+If it keeps failing, try another model.</p>
 <p><code>--reasoning-effort LEVEL</code> sets the reasoning effort for models that support tunable reasoning (e.g. gpt-5.5). Valid levels are <code>none</code>, <code>minimal</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, and <code>default</code>.</p>
 <pre><code class="language-sh">swival --provider chatgpt --model gpt-5.5 --reasoning-effort high &quot;task&quot;
 </code></pre>
