@@ -594,6 +594,46 @@ class TestCmdAlias:
 
 
 class TestRepairFeedback:
+    def test_large_malformed_think_call_has_brief_feedback(self, tmp_path):
+        from swival.agent import handle_tool_call
+        from swival.thinking import ThinkingState
+
+        thought = "Check the package contents. " * 200
+        fields = ["Need to run tests.\n" * 200, "Test frequently", "tmp dedicated dir"]
+        args = {"thought": thought, **dict.fromkeys(fields)}
+        state = ThinkingState()
+        call = make_tool_call("think", json.dumps(args))
+
+        message, metadata = handle_tool_call(call, str(tmp_path), state, False)
+
+        assert metadata["succeeded"]
+        assert state.history[0].thought == thought
+        assert metadata["arguments"] == {"thought": thought}
+        assert {repair["field"] for repair in metadata["repairs"]} == set(fields)
+        feedback = message["content"]
+        assert len(feedback) < 1000
+        assert "Removed 3 unknown parameters" in feedback
+        assert "thought" in feedback
+        assert "omitted" in feedback
+        assert all(field not in feedback for field in fields)
+
+    def test_prose_keys_do_not_hide_missing_thought(self, tmp_path):
+        from swival.agent import handle_tool_call
+        from swival.thinking import ThinkingState
+
+        prose = "Need to run tests.\n" * 200
+        state = ThinkingState()
+        call = make_tool_call("think", json.dumps({prose: None}))
+
+        message, metadata = handle_tool_call(call, str(tmp_path), state, False)
+
+        assert not metadata["succeeded"]
+        assert state.history == []
+        assert message["content"].startswith("error:")
+        assert "missing required argument: 'thought'" in message["content"]
+        assert len(message["content"]) < 1000
+        assert prose not in message["content"]
+
     def test_feedback_on_unwrap(self):
         import json
 

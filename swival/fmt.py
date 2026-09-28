@@ -1129,7 +1129,15 @@ def tool_error(name: str, msg: str) -> None:
 
 
 def tool_repair(name: str, repairs: list[dict]) -> None:
+    stripped = sum(r["type"] == "strip_unknown" for r in repairs)
+    if stripped:
+        plural = "s" if stripped != 1 else ""
+        line = Text(f"  ~ {name}", style="bold yellow")
+        line.append(f"  removed {stripped} unknown parameter{plural}", style="yellow")
+        _console.print(line)
     for r in repairs:
+        if r["type"] == "strip_unknown":
+            continue
         line = Text()
         line.append(f"  ~ {name}", style="bold yellow")
         line.append(f"  repaired: {r['type']} on {r.get('field', '?')}", style="yellow")

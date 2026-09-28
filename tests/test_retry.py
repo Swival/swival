@@ -1273,6 +1273,77 @@ class TestPromptRejectionMatcher:
 
 
 class TestPromptRejectionRetry:
+    def test_chatgpt_retry_preserves_converted_request_and_tool_arguments(self):
+        import json
+
+        import litellm
+
+        from swival._msg import _msg_tool_calls
+        from swival.tools import TOOLS
+
+        messages = [
+            {"role": "system", "content": "system instructions"},
+            {"role": "developer", "content": "developer instructions"},
+            {"role": "user", "content": "task"},
+        ]
+        tools = [copy.deepcopy(t) for t in TOOLS if t["function"]["name"] == "think"]
+        extra_body = {"reasoning": {"effort": "high"}, "parallel_tool_calls": False}
+        original = copy.deepcopy((messages, tools, extra_body))
+        arguments = json.dumps({"thought": "Run tests", "Test frequently": None})
+        sent = []
+
+        def responses(**kwargs):
+            sent.append(
+                {
+                    key: copy.deepcopy(kwargs.get(key))
+                    for key in (
+                        "input",
+                        "instructions",
+                        "tools",
+                        "reasoning",
+                        "parallel_tool_calls",
+                    )
+                }
+            )
+            if len(sent) == 1:
+                raise responses_rejection()
+            return litellm.ModelResponse(
+                choices=[
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "call_think",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "think",
+                                        "arguments": arguments,
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ]
+            )
+
+        with patch("litellm.responses", responses), patch("time.sleep"):
+            msg, finish, _, retries, _ = _call(
+                messages=messages, tools=tools, extra_body=extra_body, max_retries=2
+            )
+
+        assert retries == 1
+        assert finish == "tool_calls"
+        assert _msg_tool_calls(msg)[0].function.arguments == arguments
+        assert len(sent) == 2 and sent[0] == sent[1]
+        assert (messages, tools, extra_body) == original
+        wire_messages = json.dumps((sent[0]["instructions"], sent[0]["input"]))
+        assert "system instructions" in wire_messages
+        assert "developer instructions" in wire_messages
+        assert sent[0]["reasoning"] == {"effort": "high"}
+        assert sent[0]["parallel_tool_calls"] is False
+
     @_BOTH_SHAPES
     def test_resent_unchanged_then_succeeds(self, stub_provider, rejection, provider):
         outcomes = iter([rejection(), _make_response("recovered")])

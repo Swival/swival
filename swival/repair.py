@@ -337,6 +337,13 @@ _STRUCTURAL_REPAIRS = frozenset(
 )
 
 
+def _argument_preview(value: Any) -> str:
+    text = _json.dumps(value, ensure_ascii=False)
+    if len(text) > 1000:
+        return "(omitted: too long to display)"
+    return text
+
+
 def format_repair_feedback(
     name: str,
     raw_args: str,
@@ -388,8 +395,16 @@ def format_repair_feedback(
                 ideal[field] = value.split() if value.strip() else []
 
     lines: list[str] = [f"\n[Syntax correction] Your {name} call was auto-corrected:"]
-    lines.append(f"  Received:  {_json.dumps(original, ensure_ascii=False)}")
-    lines.append(f"  Corrected: {_json.dumps(ideal, ensure_ascii=False)}")
+    lines.append(f"  Received:  {_argument_preview(original)}")
+    lines.append(f"  Corrected: {_argument_preview(ideal)}")
+
+    stripped = sum(r["type"] == "strip_unknown" for r in structural)
+    if stripped:
+        plural = "s" if stripped != 1 else ""
+        lines.append(f"  Removed {stripped} unknown parameter{plural}.")
+        if schema:
+            allowed = list(schema.get("properties", {}))
+            lines.append(f"  Allowed parameters: {_argument_preview(allowed)}")
 
     for r in structural:
         rtype = r["type"]
@@ -402,8 +417,6 @@ def format_repair_feedback(
             lines.append("  Arguments were double-encoded as a JSON string.")
         elif rtype == "rename_field":
             lines.append(f'  The parameter is "{r["field"]}", not "{r["from"]}".')
-        elif rtype == "strip_unknown":
-            lines.append(f'  Unknown parameter "{r["field"]}" was removed.')
 
     # Extra hint when a required field is still the wrong type after repair.
     if schema:
@@ -457,7 +470,7 @@ def validate_required_args(
             lines.append(f"  - {field} ({ftype}): {desc}")
         else:
             lines.append(f"  - {field} ({ftype})")
-    lines.append(f"  Received fields: {sorted(args.keys())}")
+    lines.append(f"  Received fields: {_argument_preview(sorted(args.keys()))}")
     lines.append(f"  Required fields: {list(required)}")
     lines.append("  Retry the call with the missing argument(s) included.")
     return "\n".join(lines)

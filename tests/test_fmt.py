@@ -484,6 +484,19 @@ class TestToolError:
         assert "file not found" in out
 
 
+def test_unknown_parameter_repairs_are_summarized():
+    fields = ["Need to run tests.\n" * 200, "Test frequently", "tmp dedicated dir"]
+    repairs = [{"type": "strip_unknown", "field": field} for field in fields]
+    repairs.append({"type": "coerce_type", "field": "thought_number"})
+
+    out = _capture(fmt.tool_repair, "think", repairs)
+
+    assert "removed 3 unknown parameters" in out
+    assert "coerce_type on thought_number" in out
+    assert len(out.splitlines()) == 2
+    assert all(field not in out for field in fields)
+
+
 class TestGuardrail:
     def test_basic(self):
         out = _capture(fmt.guardrail, "run_command", 3, "error: command list is empty")
