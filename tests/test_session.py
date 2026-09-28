@@ -677,10 +677,12 @@ class TestVerboseOff:
 class TestSessionSubagentNotifyUser:
     """Verify that Session wires notify_user into SubagentManager correctly."""
 
-    def _build_manager(self, tmp_path, monkeypatch, event_callback=None):
+    def _build_manager(self, tmp_path, monkeypatch, event_callback=None, verbose=False):
         """Return the SubagentManager constructed by Session._build_loop_kwargs."""
         monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
-        s = Session(base_dir=str(tmp_path), history=False, subagents=True)
+        s = Session(
+            base_dir=str(tmp_path), history=False, subagents=True, verbose=verbose
+        )
         s._setup()
         if event_callback is not None:
             s.event_callback = event_callback
@@ -688,26 +690,39 @@ class TestSessionSubagentNotifyUser:
         kwargs = s._build_loop_kwargs(state)
         return kwargs["subagent_manager"]
 
-    def test_event_callback_emits_status_update(self, tmp_path, monkeypatch):
-        events = []
-        mgr = self._build_manager(
-            tmp_path, monkeypatch, event_callback=lambda k, d: events.append((k, d))
-        )
-        assert mgr._notify_user is not None
-        mgr._notify_user("waiting for capacity")
-        assert len(events) == 1
-        assert events[0][0] == "status_update"
-        assert events[0][1]["text"] == "waiting for capacity"
+    def test_event_callback_gets_wait_notes(self, tmp_path, monkeypatch):
+        from swival.subagent import SubagentHandle
 
-    def test_no_event_callback_falls_back_to_fmt_info(self, tmp_path, monkeypatch):
+        handle = SubagentHandle(id="sub_1", task="task", result="sub answer")
+        events = []
+
+        def on_event(kind, data):
+            events.append((kind, data))
+            handle.done.set()
+            raise RuntimeError("a broken callback must not break the wait")
+
+        mgr = self._build_manager(tmp_path, monkeypatch, event_callback=on_event)
+        mgr._handles["sub_1"] = handle
+
+        assert mgr.collect("sub_1", timeout=30) == "sub answer"
+        assert events == [
+            (
+                "status_update",
+                {"text": "Waiting for subagent sub_1 to finish (up to 30s)."},
+            )
+        ]
+
+    def test_without_event_callback_notes_print_only_when_verbose(
+        self, tmp_path, monkeypatch
+    ):
         from swival import fmt
 
-        fmt_calls = []
-        monkeypatch.setattr(fmt, "info", lambda msg: fmt_calls.append(msg))
-        mgr = self._build_manager(tmp_path, monkeypatch)
-        assert mgr._notify_user is not None
-        mgr._notify_user("waiting for capacity")
-        assert "waiting for capacity" in fmt_calls
+        printed = []
+        monkeypatch.setattr(fmt, "info", printed.append)
+        for verbose in (True, False):
+            mgr = self._build_manager(tmp_path, monkeypatch, verbose=verbose)
+            mgr._notify(f"verbose={verbose}")
+        assert printed == ["verbose=True"]
 
 
 class TestSessionCostLifetime:

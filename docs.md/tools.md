@@ -249,6 +249,11 @@ Subagents are auto-enabled for the `google`, `geap`, `chatgpt`, and `bedrock` pr
 
 `collect` blocks until a specific subagent finishes and returns its full result. Requires `subagent_id`. The default timeout is 300 seconds.
 
+While it waits, Swival prints a short note on stderr saying which subagent it is waiting for.
+After that, it prints a reminder every 15 seconds with the time spent so far and how many background agents are still working.
+`--quiet` turns these notes off.
+In the Python API, they are sent as `status_update` events when an `event_callback` is set.
+
 `cancel` sends a cancellation signal to a specific subagent. Requires `subagent_id`. The subagent will stop at its next cancellation check point (start of turn or between tool calls).
 
 This tool is only available when subagent support is enabled.

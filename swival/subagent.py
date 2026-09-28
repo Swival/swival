@@ -19,6 +19,8 @@ _SUBAGENT_OMITTED_TOOLS = _SUBAGENT_TOOLS | _PARENT_ONLY_TOOLS
 _MAX_CONCURRENT = 4
 _WAIT_TIMEOUT = 60
 _WAIT_POLL_INTERVAL = 0.25
+_COLLECT_TIMEOUT = 300
+_COLLECT_UPDATE_INTERVAL = 15
 
 # Keys from loop_kwargs that represent per-run mutable state or
 # non-shareable resources. Excluded when building the subagent template.
@@ -104,7 +106,9 @@ CHECK_SUBAGENTS_TOOL = {
                 },
                 "timeout": {
                     "type": "number",
-                    "description": "Timeout in seconds for 'collect' (default: 300).",
+                    "description": (
+                        f"Timeout in seconds for 'collect' (default: {_COLLECT_TIMEOUT})."
+                    ),
                 },
             },
             "required": [],
@@ -202,6 +206,21 @@ class SubagentManager:
         with self._lock:
             return sum(1 for h in self._handles.values() if not h.done.is_set())
 
+    def _notify(self, msg: str) -> None:
+        # A broken progress note must not break the wait it reports on.
+        try:
+            if self._notify_user is not None:
+                self._notify_user(msg)
+            elif self._verbose:
+                fmt.info(msg)
+        except Exception:
+            pass
+
+    def _parent_cancelled(self) -> bool:
+        return (
+            self._parent_cancel_flag is not None and self._parent_cancel_flag.is_set()
+        )
+
     def spawn(
         self,
         task: str,
@@ -214,11 +233,10 @@ class SubagentManager:
         # so blocking here (up to _WAIT_TIMEOUT seconds) is intentional — the agent
         # loop pauses until a slot opens or the deadline expires.
         if not self._slots.acquire(blocking=False):
-            if self._notify_user is not None:
-                self._notify_user(
-                    f"All {_MAX_CONCURRENT} background agents are already running; "
-                    f"waiting up to {_WAIT_TIMEOUT}s for one to finish before starting another."
-                )
+            self._notify(
+                f"All {_MAX_CONCURRENT} background agents are already running; "
+                f"waiting up to {_WAIT_TIMEOUT}s for one to finish before starting another."
+            )
             # Cancellation-aware polling — mirrors _CompositeCancelFlag.wait().
             deadline = time.monotonic() + _WAIT_TIMEOUT
             acquired = False
@@ -227,10 +245,7 @@ class SubagentManager:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     break
-                if (
-                    self._parent_cancel_flag is not None
-                    and self._parent_cancel_flag.is_set()
-                ):
+                if self._parent_cancelled():
                     wait_cancelled = True
                     break
                 if self._slots.acquire(
@@ -305,10 +320,10 @@ class SubagentManager:
             handle = self._handles.get(subagent_id)
         if handle is None:
             return f"error: unknown subagent {subagent_id!r}"
-        t = timeout if timeout is not None else 300
-        handle.done.wait(timeout=t)
-        if not handle.done.is_set():
-            return f"error: subagent {subagent_id} still running after {t}s timeout"
+        t = timeout if timeout is not None else _COLLECT_TIMEOUT
+        wait_error = self._wait_for(handle, t)
+        if wait_error is not None:
+            return wait_error
         if handle.error:
             return handle.error
         if handle.cancelled and handle.result is None:
@@ -318,6 +333,44 @@ class SubagentManager:
                 f"error: subagent {subagent_id} exhausted max turns without an answer"
             )
         return handle.result or "(no result)"
+
+    def _wait_for(self, handle: SubagentHandle, timeout: float) -> str | None:
+        """Wait for a subagent to finish, or return an error on timeout or cancel.
+
+        The main agent does nothing while it waits, so tell the user what it
+        is waiting for, then remind them now and then that work goes on.
+        """
+        start = time.monotonic()
+        deadline = start + timeout
+        next_update = None
+        while True:
+            # Read the clock first, so a subagent that finishes right at the
+            # deadline is not reported as timed out.
+            now = time.monotonic()
+            if handle.done.is_set():
+                return None
+            if now >= deadline:
+                return f"error: subagent {handle.id} still running after {timeout}s timeout"
+            if self._parent_cancelled():
+                return f"error: cancelled while waiting for subagent {handle.id}"
+            if next_update is None:
+                self._notify(
+                    f"Waiting for subagent {handle.id} to finish (up to {timeout:g}s)."
+                )
+                next_update = now + _COLLECT_UPDATE_INTERVAL
+            elif now >= next_update:
+                running = self.running_count
+                working = (
+                    "1 background agent is"
+                    if running == 1
+                    else f"{running} background agents are"
+                )
+                self._notify(
+                    f"Still waiting for subagent {handle.id} after "
+                    f"{int(now - start)}s; {working} working."
+                )
+                next_update = now + _COLLECT_UPDATE_INTERVAL
+            handle.done.wait(min(_WAIT_POLL_INTERVAL, deadline - now))
 
     def cancel(self, subagent_id: str) -> str:
         with self._lock:

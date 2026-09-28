@@ -810,7 +810,6 @@ class Session:
         if self.subagents:
             from .subagent import SubagentManager, SA_TEMPLATE_EXCLUDE
             from .a2a_types import EVENT_STATUS_UPDATE
-            from . import fmt
 
             sa_template = {
                 k: v for k, v in kwargs.items() if k not in SA_TEMPLATE_EXCLUDE
@@ -819,7 +818,7 @@ class Session:
             notify = (
                 (lambda msg: event_cb(EVENT_STATUS_UPDATE, {"text": msg}))
                 if event_cb is not None
-                else fmt.info
+                else None
             )
             kwargs["subagent_manager"] = SubagentManager(
                 loop_kwargs_template=sa_template,

@@ -2,6 +2,7 @@
 
 import threading
 import time
+import types
 
 from swival._msg import RECAP_MARKER
 from swival.subagent import (
@@ -654,6 +655,94 @@ class TestCollectEdgeCases:
         mgr.spawn(task="task")
         result = mgr.collect("sub_1", timeout=5)
         assert result == "success!"
+
+
+def _script_clock(monkeypatch, *times):
+    reads = iter(times)
+    monkeypatch.setattr(
+        "swival.subagent.time", types.SimpleNamespace(monotonic=lambda: next(reads))
+    )
+    monkeypatch.setattr("swival.subagent._WAIT_POLL_INTERVAL", 0)
+
+
+class TestCollectWaitFeedback:
+    """Handles are added directly and only finish when a test says so."""
+
+    def _make_manager(self, notify, *subagent_ids, parent_cancel_flag=None):
+        mgr = SubagentManager(
+            loop_kwargs_template={},
+            tools=[],
+            resolved_system_content=None,
+            parent_cancel_flag=parent_cancel_flag,
+            verbose=False,
+            notify_user=notify,
+        )
+        for sid in subagent_ids:
+            mgr._handles[sid] = SubagentHandle(id=sid, task="task", result="finished")
+        return mgr
+
+    def test_notes_while_waiting(self, monkeypatch):
+        notes = []
+        mgr = self._make_manager(notes.append, "sub_1", "sub_2")
+        # After the first reminder the clock jumps 100s, then hits the deadline.
+        _script_clock(monkeypatch, 1000, 1000, 1015, 1115, 1116, 1130)
+
+        result = mgr.collect("sub_1", timeout=130)
+
+        assert result == "error: subagent sub_1 still running after 130s timeout"
+        assert notes == [
+            "Waiting for subagent sub_1 to finish (up to 130s).",
+            "Still waiting for subagent sub_1 after 15s; 2 background agents are working.",
+            "Still waiting for subagent sub_1 after 115s; 2 background agents are working.",
+        ]
+
+    def test_requests_that_do_not_block_are_silent(self):
+        notes = []
+        mgr = self._make_manager(notes.append, "sub_1", "sub_2")
+        mgr._handles["sub_2"].done.set()
+
+        assert mgr.collect("sub_2") == "finished"
+        assert mgr.collect("sub_9").startswith("error: unknown subagent")
+        assert (
+            mgr.collect("sub_1", timeout=0)
+            == "error: subagent sub_1 still running after 0s timeout"
+        )
+        mgr.poll()
+        mgr.cancel("sub_1")
+        assert notes == []
+
+    def test_parent_cancel_ends_the_wait(self, monkeypatch):
+        parent = threading.Event()
+        notes = []
+
+        def note_and_cancel(msg):
+            notes.append(msg)
+            parent.set()
+
+        mgr = self._make_manager(note_and_cancel, "sub_1", parent_cancel_flag=parent)
+        monkeypatch.setattr("swival.subagent._WAIT_POLL_INTERVAL", 0)
+
+        cancelled = "error: cancelled while waiting for subagent sub_1"
+        assert mgr.collect("sub_1") == cancelled
+        assert mgr.collect("sub_1") == cancelled
+        assert len(notes) == 1
+
+    def test_finishing_at_the_deadline_is_not_a_timeout(self, monkeypatch):
+        mgr = self._make_manager(None, "sub_1")
+        handle = mgr._handles["sub_1"]
+        reads = []
+
+        def finish_on_second_read():
+            reads.append(None)
+            if len(reads) == 2:
+                handle.done.set()
+            return 1000
+
+        monkeypatch.setattr(
+            "swival.subagent.time",
+            types.SimpleNamespace(monotonic=finish_on_second_read),
+        )
+        assert mgr.collect("sub_1", timeout=0) == "finished"
 
 
 class TestFreshCopyLifecycle:

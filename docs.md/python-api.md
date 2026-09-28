@@ -183,10 +183,15 @@ session.cancel_flag = stop
 | `"status_update"` | `turn`, `max_turns`, `elapsed`                | Emitted at the start of each turn with progress info.                                         |
 | `"status_update"` | `turn`, `cancelled`                           | Emitted when the loop exits due to `cancel_flag`.                                             |
 | `"status_update"` | `turn`, `type` (`"reasoning"`), `text_length` | Emitted when the assistant produces reasoning text alongside tool calls (not a final answer). |
+| `"status_update"` | `text`                                        | A short note while the agent waits for a subagent, or for a free subagent slot.               |
 
 Exceptions raised by the callback are silently swallowed — the agent loop never fails because of a callback error.
 
 **`cancel_flag`** `threading.Event | None` — the agent loop checks this at the start of each turn and between tool calls. When set, the loop exits gracefully at the next check point. The loop does not interrupt a tool call that is already running.
+
+Waiting for subagents is the exception.
+If `check_subagents` is waiting for a result, or `spawn_subagent` is waiting for a free slot, it stops waiting and returns an error.
+Running subagents are asked to stop too.
 
 Both default to `None` (no streaming, no external cancellation).
 
