@@ -242,6 +242,33 @@ swival --provider generic \
     "task"
 ```
 
+### Tsubasa
+
+Use Tsubasa through the generic provider. Add this profile to
+`~/.config/swival/config.toml` (or `$XDG_CONFIG_HOME/swival/config.toml`):
+
+```toml
+[profiles.tsubasa]
+provider = "generic"
+base_url = "https://api.tsubasa.sh/v1"
+model = "tsubasa-fast"
+max_context_tokens = 32768
+max_output_tokens = 8192
+```
+
+Set `TSUBASA_API_KEY` in your shell, then pass it only to this invocation through
+the generic provider's `OPENAI_API_KEY` variable:
+
+```sh
+OPENAI_API_KEY="${TSUBASA_API_KEY:?Set TSUBASA_API_KEY}" \
+    swival --profile tsubasa "task"
+```
+
+To select Pro, add `--model tsubasa-pro`. Both models use a 32,768-token context
+window. The 8,192-token output reservation leaves room for the prompt and tool
+declarations; it is also Fast's output limit. Pro permits up to 16,384 output
+tokens, subject to the same total context window.
+
 ## Apple Foundation Models
 
 The `applefm` provider talks to a local Apple Foundation Models server that exposes an OpenAI-compatible endpoint at `http://127.0.0.1:1976/v1`. It is experimental, and tool support is limited — Swival sanitizes the tool schemas it sends, dropping any the Foundation Models runtime cannot handle.
