@@ -38,7 +38,7 @@ jobs:
       - name: Audit dependencies for known vulnerabilities
         run: >-
           uv export --format requirements-txt --no-dev --no-emit-project |
-          uvx pip-audit
+          uvx pip-audit@2.10.1
           --no-deps
           --disable-pip
           -r /dev/stdin
