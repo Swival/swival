@@ -22,7 +22,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "litellm>=1.102.0,<1.103",
+    "litellm>=1.103.0,<1.104",
     "tiktoken>=0.14.0",
     "html-to-markdown>=3.15.1,<4",
     "rich>=15.0.0",
@@ -33,7 +33,7 @@ dependencies = [
     "starlette>=1.7.0",
     "uvicorn>=0.54.0",
     "fast-cipher>=0.2.2",
-    "boto3>=1.43.103",
+    "boto3>=1.43.104",
     "google-cloud-aiplatform>=2.2.0,<3",
 ]
 
