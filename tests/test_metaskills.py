@@ -1,6 +1,8 @@
 """Tests for metaskills: discovery, tool exposure, execution, budgets, and errors."""
 
 import json
+import threading
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,9 +16,13 @@ from swival.skills import (
     MAX_METASKILL_FILE_BYTES,
 )
 from swival.metaskills import (
+    BudgetExhaustedError,
     MetaskillBudget,
+    MetaskillHostAPI,
+    MetaskillTimeoutError,
     MetaskillTrace,
     MetaskillError,
+    _run_starlark_with_timeout,
     run_metaskill,
     get_executable_metaskills,
     _normalize_return_value,
@@ -704,3 +710,156 @@ class TestBackwardCompat:
         skill = catalog["vanilla"]
         assert skill.metaskill_path is None
         assert skill.metaskill_language is None
+
+
+_SPIN = "def spin():\n    for i in range(1 << 40):\n        pass\n\n"
+
+
+class _SlowTraceHost(MetaskillHostAPI):
+    def trace(self, kind, data=None):
+        time.sleep(0.4)
+        super().trace(kind, data)
+
+
+def _host(timeout_s=5.0, cancel_flag=None, host_cls=MetaskillHostAPI, **budget):
+    b = MetaskillBudget(timeout_s=timeout_s, **budget)
+    b.start()
+    return host_cls(
+        budget=b,
+        trace=MetaskillTrace(),
+        loop_kwargs={"base_dir": "."},
+        tools=[],
+        cancel_flag=cancel_flag,
+        report=None,
+        verbose=False,
+    )
+
+
+def _run_source(tmp_path, name, source, **kwargs):
+    _make_metaskill(tmp_path / ".swival" / "skills", name, source)
+    return run_metaskill(
+        name,
+        {"task": "test"},
+        skills_catalog=discover_skills(str(tmp_path)),
+        metaskills_policy="local",
+        loop_kwargs={"base_dir": str(tmp_path)},
+        tools=[],
+        **kwargs,
+    )
+
+
+class TestStopClassification:
+    @pytest.mark.parametrize(
+        "source",
+        [
+            _SPIN + "spin()\n\ndef run(input):\n    return 'x'\n",
+            _SPIN + "def run(input):\n    spin()\n",
+        ],
+        ids=["definitions", "run"],
+    )
+    def test_native_timeout_stops_pure_computation(self, source, starlark_available):
+        host = _host(timeout_s=0.3)
+        threads = threading.active_count()
+        started = time.monotonic()
+        with pytest.raises(MetaskillTimeoutError, match=r"timeout \(0.3s\)"):
+            _run_starlark_with_timeout(source, host, {})
+        assert time.monotonic() - started < 1.0
+        # The interpreter stopped itself instead of being left spinning.
+        assert threading.active_count() == threads
+        assert host.stop is None
+
+    def test_phases_share_one_allowance(self, starlark_available):
+        host = _host(timeout_s=0.8, host_cls=_SlowTraceHost)
+        source = 'trace("setup")\n' + _SPIN + "def run(input):\n    spin()\n"
+        threads = threading.active_count()
+        started = time.monotonic()
+        with pytest.raises(MetaskillTimeoutError):
+            _run_starlark_with_timeout(source, host, {})
+        assert time.monotonic() - started < 1.1
+        assert threading.active_count() == threads
+
+    def test_host_timeout(self, starlark_available):
+        host = _host()
+        host._budget.timed_out = lambda: True
+        with pytest.raises(MetaskillTimeoutError):
+            _run_starlark_with_timeout('def run(input):\n    trace("x")\n', host, {})
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "upstream budget report missing",
+            "request timeout from the API",
+            "TimeoutError in parser",
+            "job cancelled by its owner",
+        ],
+    )
+    def test_fail_text_stays_a_runtime_error(
+        self, tmp_path, message, starlark_available
+    ):
+        result = _run_source(
+            tmp_path, "fails", f'def run(input):\n    fail("{message}")\n'
+        )
+        assert result.startswith("error: metaskill 'fails': runtime error:")
+        assert message in result
+
+    def test_reused_host_starts_each_run_clean(self, starlark_available):
+        host = _host(max_command_calls=0)
+        with pytest.raises(BudgetExhaustedError):
+            _run_starlark_with_timeout(
+                'def run(input):\n    command(["x"])\n', host, {}
+            )
+        with pytest.raises(MetaskillError, match="runtime error") as info:
+            _run_starlark_with_timeout(
+                'def run(input):\n    fail("ordinary")\n', host, {}
+            )
+        assert type(info.value) is MetaskillError
+
+
+class TestCancellation:
+    def test_cancelled_before_start(self, starlark_available):
+        cancel = threading.Event()
+        cancel.set()
+        host = _host(cancel_flag=cancel)
+        with pytest.raises(MetaskillError, match="^cancelled$"):
+            _run_starlark_with_timeout('def run(input):\n    return "ok"\n', host, {})
+
+    def test_cancel_during_pure_computation_returns_promptly(self, starlark_available):
+        cancel = threading.Event()
+        host = _host(timeout_s=1.5, cancel_flag=cancel)
+        threading.Timer(0.2, cancel.set).start()
+        started = time.monotonic()
+        with pytest.raises(MetaskillError, match="^cancelled$"):
+            _run_starlark_with_timeout(
+                _SPIN + "def run(input):\n    spin()\n", host, {}
+            )
+        assert time.monotonic() - started < 1.0
+
+    @pytest.mark.parametrize(
+        "timeout_s, command_s",
+        [(5.0, 0.5), (0.3, 1.0)],
+        ids=["before the deadline", "past the deadline"],
+    )
+    def test_cancel_waits_for_a_running_command(
+        self, starlark_available, monkeypatch, timeout_s, command_s
+    ):
+        import swival.metaskills as ms
+
+        monkeypatch.setattr(ms, "_CALLBACK_GRACE_S", 0.2)
+        cancel = threading.Event()
+        finished = []
+
+        def dispatch(*args, **kwargs):
+            time.sleep(command_s)
+            finished.append(True)
+            return "done"
+
+        monkeypatch.setattr("swival.tools.dispatch", dispatch)
+        host = _host(timeout_s=timeout_s, cancel_flag=cancel)
+        threading.Timer(0.1, cancel.set).start()
+        with pytest.raises(MetaskillError, match="^cancelled$"):
+            _run_starlark_with_timeout(
+                'def run(input):\n    command(["x"])\n', host, {}
+            )
+        # Only reported once the command had finished.
+        assert finished == [True]
+        assert host.stop is not None

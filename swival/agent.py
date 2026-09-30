@@ -4350,6 +4350,9 @@ def handle_tool_call(
         else nullcontext()
     )
 
+    # Extra message keys from dispatch, such as the tool calls a run_python
+    # snippet made. They start with an underscore, so the model never sees them.
+    tool_meta: dict = {}
     t0 = time.monotonic()
     try:
         with spinner_cm:
@@ -4392,6 +4395,7 @@ def handle_tool_call(
                 net_jail=net_jail,
                 tool_policy=tool_policy,
                 deferred_tools=deferred_tools,
+                tool_meta=tool_meta,
             )
     except McpShutdownError:
         result = "error: MCP server is shutting down"
@@ -4415,12 +4419,14 @@ def handle_tool_call(
         if feedback:
             result = result + feedback
 
+    tool_msg = {
+        "role": "tool",
+        "tool_call_id": tool_call.id,
+        "content": result,
+        **tool_meta,
+    }
     return (
-        {
-            "role": "tool",
-            "tool_call_id": tool_call.id,
-            "content": result,
-        },
+        tool_msg,
         {
             "name": name,
             "arguments": parsed_args,
@@ -9727,6 +9733,10 @@ def _run_main(args, report, _write_report, parser):
                 tools = enforce_mcp_token_budget(
                     tools, mcp_manager, context_length, verbose=args.verbose
                 )
+
+            from .python_bridge import annotate_run_python
+
+            annotate_run_python(tools, mcp_manager, net_jail)
 
             # Capture tool info AFTER pruning so prompt matches reality
             mcp_tool_info = mcp_manager.get_tool_info()

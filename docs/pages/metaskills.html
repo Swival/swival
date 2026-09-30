@@ -529,6 +529,15 @@ and size of trace entries.</p>
 <code>max_command_calls</code> within host-defined bounds. Hosts SHOULD check cancellation
 and timeout before every host API call. Hosts SHOULD also interrupt or isolate
 pure script computation so large loops cannot evade wall-clock limits.</p>
+<p>Swival gives the Starlark interpreter the time that is left, and the interpreter stops plain computation at the deadline.
+It cannot stop a host call that is still running, such as a long <code>ask</code>.
+In that case Swival reports the timeout up to two seconds after the deadline, and lets the call finish in the background.
+The timeout limits time, not memory.</p>
+<p>A cancellation is reported right away, unless a host call is running.
+Swival then waits for that call to finish, up to 125 seconds, so the script cannot start anything new.
+Waiting does not interrupt the call: a <code>command</code> runs until it ends or times out, and an <code>ask</code> stops at its next turn.</p>
+<p>Errors are classified by what Swival itself recorded.
+A script that calls <code>fail("budget report missing")</code> gets a runtime error, not a budget error.</p>
 <h2 id="9-result-contract">9. Result contract</h2>
 <p>Metaskill execution returns a string at the host tool boundary.</p>
 <p>On success, the string SHOULD contain a short completion header followed by one

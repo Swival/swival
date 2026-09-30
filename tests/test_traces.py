@@ -1004,3 +1004,57 @@ def test_write_trace_to_dir_no_original_paths(tmp_path):
     raw = (tmp_path / "rd5.jsonl").read_text()
     assert _BASE not in raw
     assert _HOME not in raw
+
+
+def test_bridge_child_calls_form_a_sidechain(tmp_path):
+    child_calls = {
+        "execution_id": "abc123",
+        "tool_call_id": "c1",
+        "calls": [
+            {
+                "id": "abc123-1",
+                "tool": "mcp__t__list",
+                "outcome": "ok",
+                "duration_s": 0.01,
+            }
+        ],
+    }
+    # Real traces open with the system prompt, which already uses every column
+    # the sidechain line needs.
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "count"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "run_python", "arguments": '{"code": "1"}'},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "c1",
+            "content": "3",
+            "_swival_child_calls": child_calls,
+        },
+        {"role": "assistant", "content": "3"},
+    ]
+    path = str(tmp_path / "trace.jsonl")
+    write_trace(messages, path=path, session_id="s1", base_dir="/tmp", model="m1")
+    lines = _read_lines(path)
+
+    result = next(
+        ln for ln in lines if ln.get("toolUseResult") == "3" and ln["type"] == "user"
+    )
+    (side,) = [ln for ln in lines if ln.get("isSidechain")]
+    assert side["type"] == "system" and side["isMeta"] is True
+    assert side["parentUuid"] == result["uuid"]
+    assert json.loads(side["content"]) == {"childToolCalls": child_calls}
+    # The conversation continues from the tool result, not from the sidechain.
+    final = [ln for ln in lines if ln["type"] == "assistant"][-1]
+    assert final["parentUuid"] == result["uuid"]
+    assert set(side) <= set().union(*(ln.keys() for ln in lines if ln is not side))

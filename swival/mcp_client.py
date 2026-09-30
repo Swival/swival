@@ -8,9 +8,11 @@ import asyncio
 import atexit
 import concurrent.futures
 import copy
+import functools
 import json
 import re
 import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -55,6 +57,47 @@ class McpWaitTimeout(TimeoutError):
     """
 
 
+class OutputSchemaError(Exception):
+    """The server's result does not match the tool's output schema."""
+
+
+@functools.cache
+def _checked_session_class(base):
+    """ClientSession that reports output-schema failures with their own type.
+
+    The SDK raises a plain RuntimeError, which we would take for a broken
+    connection.
+    """
+
+    class CheckedClientSession(base):
+        async def validate_tool_result(self, name, result):
+            try:
+                await super().validate_tool_result(name, result)
+            except RuntimeError as e:
+                raise OutputSchemaError(str(e)) from e
+
+    return CheckedClientSession
+
+
+class _McpConnectionLost(Exception):
+    """The connection or the client library failed during a call.
+
+    It is raised by that call, so the failure is never blamed on another call
+    to the same server.
+    """
+
+    def __init__(self, result: "McpCallResult"):
+        super().__init__(result.text)
+        self.result = result
+
+
+class McpCallAborted(Exception):
+    """The caller gave up waiting for a call.
+
+    The server may still carry it out.
+    """
+
+
 class McpCallResult(NamedTuple):
     """Outcome of one tool call.
 
@@ -71,6 +114,23 @@ class McpCallResult(NamedTuple):
 
 def _host_error(message: str, details: str = "") -> McpCallResult:
     return McpCallResult(f"error: {message}", True, details)
+
+
+class McpData(NamedTuple):
+    """Result of a tool call made by a run_python snippet.
+
+    ``value`` is the structured content if the server sent any, the parsed
+    value if the only content is JSON text, and the text otherwise.
+    ``error`` is set instead when the call failed.
+
+    ``cause`` says why a failed call got no answer from the server:
+    ``timeout``, ``aborted``, ``connection_lost``, or ``shutdown``.
+    In those cases the server may still carry the call out.
+    """
+
+    value: Any = None
+    error: McpCallResult | None = None
+    cause: str | None = None
 
 
 def _http_transport_order(config: dict) -> list[str]:
@@ -267,6 +327,9 @@ class McpManager:
         self._tool_map: dict[
             str, tuple[str, str]
         ] = {}  # namespaced_name -> (server, orig)
+        # Descriptions and schemas as listed, for python_tools only.
+        self._python_tool_meta: dict[str, dict[str, dict]] = {}
+        self._python_tools: frozenset[str] = frozenset()
         self._non_idempotent_tools: set[str] = set()
         self._degraded: set[str] = set()  # servers that crashed after startup
 
@@ -359,6 +422,35 @@ class McpManager:
             info.setdefault(server, []).append((namespaced, desc))
         return info
 
+    def python_tools(self) -> list[str]:
+        """Tools that run_python snippets may call.
+
+        Tools removed since startup, for example to fit the context budget,
+        are left out.
+        """
+        return sorted(name for name in self._python_tools if name in self._tool_map)
+
+    def tool_metadata(self, namespaced_name: str) -> dict | None:
+        """Describe a tool with the schemas its server declared.
+
+        The input schema is the original one, not the flattened copy shown to
+        the model.
+        ``output_schema`` is None when the server declares none.
+        """
+        route = self._tool_map.get(namespaced_name)
+        if route is None:
+            return None
+        server_name, original_name = route
+        meta = self._python_tool_meta.get(server_name, {}).get(namespaced_name)
+        if meta is None:
+            return None
+        return {
+            "name": namespaced_name,
+            "server": server_name,
+            "tool": original_name,
+            **meta,
+        }
+
     def is_non_idempotent_tool(self, namespaced_name: str) -> bool:
         """Return whether an MCP tool explicitly declares repeat side effects."""
         return namespaced_name in self._non_idempotent_tools
@@ -389,6 +481,65 @@ class McpManager:
         Callers read failure and provenance from the returned fields rather
         than from an ``error:`` prefix, which server output can also carry.
         """
+        meta = self._flatten_meta.get(namespaced_name)
+        if meta is not None and isinstance(arguments, dict):
+            from .tool_call_repair import nest_arguments
+
+            arguments = nest_arguments(arguments, meta)
+        try:
+            outcome = self._call_raw(namespaced_name, arguments, _CALL_TIMEOUT)
+        except McpWaitTimeout:
+            return _host_error(
+                f"MCP tool {namespaced_name!r} timed out after {_CALL_TIMEOUT}s"
+            )
+        except _McpConnectionLost as e:
+            return e.result
+        if isinstance(outcome, McpCallResult):
+            return outcome
+        return _normalize_result(outcome)
+
+    def call_tool_data(
+        self, namespaced_name: str, arguments: dict, timeout: float, abort=None
+    ) -> McpData:
+        """Call a tool for a run_python snippet and return its native result.
+
+        Arguments follow the server's own schema, since snippets never see
+        the flattened one.
+        The call is cancelled as soon as ``abort`` returns True.
+        """
+        try:
+            outcome = self._call_raw(namespaced_name, arguments, timeout, abort)
+        except _McpConnectionLost as e:
+            return McpData(error=e.result, cause="connection_lost")
+        except McpCallAborted:
+            return McpData(
+                error=_host_error(f"MCP tool {namespaced_name!r} was abandoned"),
+                cause="aborted",
+            )
+        except McpWaitTimeout:
+            return McpData(
+                error=_host_error(
+                    f"MCP tool {namespaced_name!r} timed out after {timeout:.3g}s"
+                ),
+                cause="timeout",
+            )
+        except McpShutdownError:
+            return McpData(
+                error=_host_error("Swival is shutting down its MCP connections"),
+                cause="shutdown",
+            )
+        if isinstance(outcome, McpCallResult):
+            return McpData(error=outcome)
+        return _result_data(outcome)
+
+    def _call_raw(
+        self, namespaced_name: str, arguments: dict, timeout: float, abort=None
+    ):
+        """Return the server's CallToolResult, or an McpCallResult on failure.
+
+        Raises McpWaitTimeout when *timeout* expires first, and McpCallAborted
+        when *abort* asks to give up.
+        """
         if self._closing or self._closed:
             raise McpShutdownError("manager is shutting down")
 
@@ -406,29 +557,20 @@ class McpManager:
         if session is None:
             return _host_error(f"MCP server {server_name!r} has no active session")
 
-        meta = self._flatten_meta.get(namespaced_name)
-        if meta is not None and isinstance(arguments, dict):
-            from .tool_call_repair import nest_arguments
-
-            arguments = nest_arguments(arguments, meta)
-
         try:
-            result = self._run_sync(
+            return self._run_sync(
                 session.call_tool(original_name, arguments),
-                timeout=_CALL_TIMEOUT,
+                timeout=timeout,
+                abort=abort,
             )
-            return _normalize_result(result)
-        except McpShutdownError:
-            raise
-        except McpWaitTimeout:
+        except (McpShutdownError, McpWaitTimeout, McpCallAborted):
             # A slow tool is not a dead server, and degrading would make every
             # other tool on it report "unavailable" for the rest of the session.
-            return _host_error(
-                f"MCP tool {namespaced_name!r} timed out after {_CALL_TIMEOUT}s"
-            )
+            raise
         except Exception as e:
             from mcp import MCPError
             from mcp.types import CONNECTION_CLOSED
+            from pydantic import ValidationError
 
             if isinstance(e, MCPError) and e.code != CONNECTION_CLOSED:
                 # A JSON-RPC error response means the server is alive, so one
@@ -437,13 +579,21 @@ class McpManager:
                     f"MCP server {server_name!r} rejected the call",
                     e.message or f"JSON-RPC error {e.code}",
                 )
+            if isinstance(e, (OutputSchemaError, ValidationError)):
+                # The server answered, so it stays available.
+                return _host_error(
+                    f"MCP server {server_name!r} returned an invalid result",
+                    _describe_exception(e),
+                )
             self._degraded.add(server_name)
             # SDK exceptions can quote server data, such as a malformed result
             # or structured content that fails its output schema.
-            return _host_error(
-                f"MCP server {server_name!r} failed and is now unavailable",
-                _describe_exception(e),
-            )
+            raise _McpConnectionLost(
+                _host_error(
+                    f"MCP server {server_name!r} failed and is now unavailable",
+                    _describe_exception(e),
+                )
+            ) from e
 
     def close(self) -> None:
         """Idempotent shutdown."""
@@ -521,23 +671,40 @@ class McpManager:
         """
         import mcp
 
-        return mcp.ClientSession(
+        return _checked_session_class(mcp.ClientSession)(
             read_stream,
             write_stream,
             list_roots_callback=self._list_roots if self._advertise_roots else None,
         )
 
-    def _run_sync(self, coro, timeout: float = 30):
-        """Submit a coroutine to the background loop and wait for result."""
+    def _run_sync(self, coro, timeout: float = 30, abort=None):
+        """Run a coroutine on the background loop and wait for its result.
+
+        ``abort`` is checked about ten times a second, and the coroutine is
+        cancelled once it returns True.
+        """
         if self._loop is None or not self._loop.is_running():
             raise McpShutdownError("event loop is not running")
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        # wait() reports our deadline expiring as a return value, so a
-        # TimeoutError out of result() can only be the coroutine's own.
-        done, _ = concurrent.futures.wait([future], timeout=timeout)
-        if not done:
-            future.cancel()
-            raise McpWaitTimeout(f"call did not finish within {timeout}s")
+        deadline = time.monotonic() + timeout
+        while True:
+            # Also checked right after submitting, so a caller that already
+            # gave up usually cancels the request before it is sent.
+            if abort is not None and time.monotonic() < deadline and abort():
+                if future.cancel():
+                    raise McpCallAborted("the caller gave up on the call")
+            left = deadline - time.monotonic()
+            # wait() reports our deadline expiring as a return value, so a
+            # TimeoutError out of result() can only be the coroutine's own.
+            done, _ = concurrent.futures.wait(
+                [future], timeout=max(0.0, left if abort is None else min(left, 0.1))
+            )
+            if done:
+                break
+            # If the call finished just now, cancel() fails and the answer
+            # is kept.
+            if time.monotonic() >= deadline and future.cancel():
+                raise McpWaitTimeout(f"call did not finish within {timeout}s")
         try:
             return future.result()
         except (asyncio.CancelledError, concurrent.futures.CancelledError):
@@ -628,6 +795,18 @@ class McpManager:
             tool_pairs, non_idempotent_tools = _convert_mcp_tool_pairs(
                 name, tools_result.tools
             )
+            wanted = set(config.get("python_tools") or ())
+            self._python_tool_meta[name] = {
+                schema["function"]["name"]: {
+                    "description": tool.description or "",
+                    "input_schema": tool.input_schema or {"type": "object"},
+                    "output_schema": tool.output_schema,
+                }
+                for (schema, _original_name), tool in zip(
+                    tool_pairs, tools_result.tools
+                )
+                if tool.name in wanted
+            }
             self._non_idempotent_tools.update(non_idempotent_tools)
             tool_pairs = self._apply_flattening(tool_pairs)
             self._tool_schemas[name] = [schema for schema, _original_name in tool_pairs]
@@ -822,6 +1001,28 @@ class McpManager:
                 )
 
         self._tool_map = tool_map
+        self._python_tools = self._resolve_python_tools()
+
+    def _resolve_python_tools(self) -> frozenset[str]:
+        """Map each server's ``python_tools`` list to namespaced tool names."""
+        allowed: set[str] = set()
+        for server_name, config in self._server_configs.items():
+            wanted = config.get("python_tools") or []
+            if not wanted or server_name not in self._sessions:
+                continue
+            found = {
+                original: namespaced
+                for namespaced, (server, original) in self._tool_map.items()
+                if server == server_name
+            }
+            missing = [name for name in wanted if name not in found]
+            if missing:
+                self._warning_notice(
+                    f"mcp_servers.{server_name}.python_tools names tools the "
+                    f"server does not offer: {', '.join(missing)}"
+                )
+            allowed.update(found[name] for name in wanted if name in found)
+        return frozenset(allowed)
 
 
 def _sanitize_tool_name(name: str) -> str:
@@ -902,6 +1103,27 @@ def _convert_schema(input_schema: dict) -> dict:
     return schema
 
 
+def _json_or_none(text):
+    """Parse *text* as JSON, or return None if it is not usable JSON.
+
+    Huge integers and very deep nesting count as unusable too.
+    """
+    try:
+        return json.loads(text)
+    except (TypeError, ValueError, RecursionError):
+        return None
+
+
+def _envelope_error(payload: dict) -> McpCallResult:
+    """The failure an ``{"ok": false, ...}`` envelope reports."""
+    error_msg = payload.get("error") or payload.get("message")
+    if not error_msg:
+        stack = payload.get("stack")
+        if isinstance(stack, str):
+            error_msg = stack.splitlines()[0] if stack else ""
+    return _host_error("MCP tool returned an error", str(error_msg or ""))
+
+
 def _normalize_result(result) -> McpCallResult:
     """Render an MCP CallToolResult as text for the model.
 
@@ -917,25 +1139,12 @@ def _normalize_result(result) -> McpCallResult:
         if getattr(block, "type", None) != "text":
             continue
 
-        raw_text = block.text
-        if not isinstance(raw_text, str):
-            continue
-
-        try:
-            payload = json.loads(raw_text)
-        except (TypeError, json.JSONDecodeError):
-            continue
-
+        payload = _json_or_none(block.text)
         if not isinstance(payload, dict) or "ok" not in payload:
             continue
 
         if payload.get("ok") is False:
-            error_msg = payload.get("error") or payload.get("message")
-            if not error_msg:
-                stack = payload.get("stack")
-                if isinstance(stack, str):
-                    error_msg = stack.splitlines()[0] if stack else ""
-            return _host_error("MCP tool returned an error", str(error_msg or ""))
+            return _envelope_error(payload)
 
         if payload.get("ok") is True and "result" in payload and not result.is_error:
             return McpCallResult(json.dumps(payload["result"], ensure_ascii=False))
@@ -978,3 +1187,36 @@ def _normalize_result(result) -> McpCallResult:
     if result.is_error:
         return _host_error("MCP tool returned an error", text)
     return McpCallResult(text or "(empty result)")
+
+
+def _result_data(result) -> McpData:
+    """Pick the value a run_python snippet gets from a CallToolResult.
+
+    An error comes first, then structured content.
+    Next, a single text block holding a JSON object or array is parsed,
+    since most servers send data that way.
+    Anything else comes back as the text the model would see.
+    """
+    if result.is_error:
+        return McpData(error=_normalize_result(result))
+    if "structured_content" in getattr(result, "model_fields_set", ()):
+        return McpData(result.structured_content)
+    content = result.content
+    if not content:
+        return McpData(None)
+    if len(content) == 1 and getattr(content[0], "type", None) == "text":
+        payload = _json_or_none(content[0].text)
+        if isinstance(payload, dict) and payload.get("ok") is False:
+            return McpData(error=_envelope_error(payload))
+        if (
+            isinstance(payload, dict)
+            and payload.get("ok") is True
+            and "result" in payload
+        ):
+            return McpData(payload["result"])
+        if isinstance(payload, (dict, list)):
+            return McpData(payload)
+    rendered = _normalize_result(result)
+    if rendered.is_error:
+        return McpData(error=rendered)
+    return McpData(rendered.text)

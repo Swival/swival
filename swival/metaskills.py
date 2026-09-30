@@ -1,8 +1,10 @@
 """Metaskill runtime: execute dynamic skill workflows in a sandboxed interpreter."""
 
+import functools
 import json
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -52,6 +54,9 @@ class MetaskillBudget:
 
     def timed_out(self) -> bool:
         return self.elapsed() > self.timeout_s
+
+    def remaining(self) -> float:
+        return self.timeout_s - self.elapsed()
 
     def ask_budget_remaining(self) -> bool:
         return self.ask_calls_used < self.max_ask_calls
@@ -136,16 +141,54 @@ class MetaskillHostAPI:
         self._cancel_flag = cancel_flag
         self._report = report
         self._verbose = verbose
+        # Why the host stopped the script. Starlark hands back only the error
+        # text, which a script's own fail() message could imitate.
+        self.stop: MetaskillError | None = None
+        self._active_calls = 0
+
+    @contextmanager
+    def host_call(self):
+        """Mark a host call as running, and record why it stopped the script."""
+        self._active_calls += 1
+        try:
+            yield
+        except MetaskillError as e:
+            self.stop = e
+            raise
+        finally:
+            self._active_calls -= 1
+
+    def in_host_call(self) -> bool:
+        return self._active_calls > 0
+
+    def timeout_error(self) -> MetaskillTimeoutError:
+        return MetaskillTimeoutError(
+            f"metaskill timeout ({self._budget.timeout_s}s) exceeded"
+        )
+
+    def stop_error(self) -> MetaskillError:
+        """The error for a script stopped outside a host call.
+
+        Starlark cannot see the cancel flag, so a cancellation during plain
+        computation looks like a timeout.
+        """
+        if self.cancelled():
+            return MetaskillError("cancelled")
+        return self.timeout_error()
+
+    def remaining_time(self) -> float:
+        return self._budget.remaining()
+
+    def cancelled(self) -> bool:
+        return self._cancel_flag is not None and self._cancel_flag.is_set()
 
     def _check_cancelled(self) -> None:
-        if self._cancel_flag is not None and self._cancel_flag.is_set():
+        if self.cancelled():
             raise MetaskillError("cancelled")
 
     def _check_timeout(self) -> None:
         if self._budget.timed_out():
-            raise MetaskillTimeoutError(
-                f"metaskill timeout ({self._budget.timeout_s}s) exceeded"
-            )
+            raise self.timeout_error()
 
     def ask(self, prompt: str, opts: dict | None = None) -> dict:
         self._check_cancelled()
@@ -192,6 +235,7 @@ class MetaskillHostAPI:
 
         t0 = time.monotonic()
         answer, exhausted = run_agent_loop(**nested_kwargs)
+        self._check_cancelled()
         duration = time.monotonic() - t0
 
         if self._report is not None:
@@ -248,6 +292,7 @@ class MetaskillHostAPI:
         t0 = time.monotonic()
         result = dispatch("run_command", args, base_dir, **dispatch_kwargs)
         duration = time.monotonic() - t0
+        self._check_cancelled()
 
         import re
 
@@ -296,82 +341,106 @@ def _check_starlark_available() -> bool:
         return False
 
 
-def _raise_from_eval_error(e: Exception) -> None:
-    err_str = str(e)
-    if "BudgetExhaustedError" in err_str or "budget" in err_str.lower():
-        raise BudgetExhaustedError(err_str)
-    if "TimeoutError" in err_str or "timeout" in err_str.lower():
-        raise MetaskillTimeoutError(err_str)
-    if "cancelled" in err_str.lower():
-        raise MetaskillError("cancelled")
-    raise MetaskillError(f"runtime error: {e}")
-
-
-def _run_starlark(
-    source: str, host_api: MetaskillHostAPI, input_data: dict, timeout_s: float
-) -> Any:
+def _run_starlark(source: str, host_api: MetaskillHostAPI, input_data: dict) -> Any:
     import starlark_go
 
     def _ask(prompt, opts=None):
         if opts is None:
             opts = {}
-        return host_api.ask(prompt, opts)
+        with host_api.host_call():
+            return host_api.ask(prompt, opts)
 
     def _command(argv, opts=None):
         if opts is None:
             opts = {}
-        return host_api.command(argv, opts)
+        with host_api.host_call():
+            return host_api.command(argv, opts)
 
     def _trace(kind, data=None):
         if data is None:
             data = {}
-        host_api.trace(kind, data)
+        with host_api.host_call():
+            host_api.trace(kind, data)
+
+    def _step(run, resolve_message: str):
+        """Run one step within the time left, then check for cancellation."""
+        left = host_api.remaining_time()
+        if left <= 0:
+            raise host_api.timeout_error()
+        # EvalTimeoutError is a kind of EvalError, so it must be caught first.
+        try:
+            result = run(timeout=left)
+        except starlark_go.ResolveError as e:
+            raise MetaskillError(f"{resolve_message}: {e}")
+        except starlark_go.EvalTimeoutError:
+            raise host_api.stop_error() from None
+        except starlark_go.EvalError as e:
+            # Trust what the host recorded, not the message, so a script's
+            # fail("budget ...") stays a runtime error.
+            if host_api.stop is not None:
+                raise host_api.stop from None
+            raise MetaskillError(f"runtime error: {e}")
+        host_api._check_cancelled()
+        return result
+
+    host_api.stop = None
+    host_api._check_cancelled()
 
     s = starlark_go.Starlark()
     s.set(ask=_ask, command=_command, trace=_trace, input=input_data)
+    _step(functools.partial(s.exec, source), "syntax/resolve error")
+    return _step(
+        functools.partial(s.eval, "run(input)"),
+        "metaskill must define a run(input) function",
+    )
 
-    try:
-        s.exec(source)
-    except starlark_go.ResolveError as e:
-        raise MetaskillError(f"syntax/resolve error: {e}")
-    except starlark_go.EvalError as e:
-        _raise_from_eval_error(e)
 
-    try:
-        result = s.eval("run(input)")
-    except starlark_go.ResolveError as e:
-        raise MetaskillError(f"metaskill must define a run(input) function: {e}")
-    except starlark_go.EvalError as e:
-        _raise_from_eval_error(e)
+# Extra time allowed for a host call that is still running at the deadline.
+_CALLBACK_GRACE_S = 2.0
 
-    return result
+# How long a cancelled script may wait for a running host call. `command`
+# gives up after 120 seconds anyway, so this is only a safety net.
+_CANCELLED_CALL_WAIT_S = 125.0
 
 
 def _run_starlark_with_timeout(
-    source: str, host_api: MetaskillHostAPI, input_data: dict, timeout_s: float
+    source: str, host_api: MetaskillHostAPI, input_data: dict
 ) -> Any:
-    """Run Starlark in a daemon thread with a wall-clock timeout.
+    """Run Starlark in a background thread, within the budget's time.
 
-    Limitation: starlark-go does not expose interpreter cancellation, so
-    on timeout the daemon thread may continue running until the next host
-    API call (which checks budget/cancellation) or until process exit.
-    Pure-computation loops without host calls cannot be interrupted.
+    Starlark stops plain computation at the deadline by itself.
+    A cancellation is reported right away, unless a host call such as a
+    command is running: then we wait for it to finish, so the script cannot
+    start anything new.
     """
     result_box: list = []
     error_box: list = []
 
     def _target():
         try:
-            result_box.append(_run_starlark(source, host_api, input_data, timeout_s))
+            result_box.append(_run_starlark(source, host_api, input_data))
         except BaseException as e:
             error_box.append(e)
 
     t = threading.Thread(target=_target, daemon=True)
     t.start()
-    t.join(timeout=timeout_s)
+    give_up = time.monotonic() + max(0.0, host_api.remaining_time()) + _CALLBACK_GRACE_S
+    cancelled_at = None
+    while t.is_alive():
+        now = time.monotonic()
+        if host_api.cancelled():
+            cancelled_at = cancelled_at or now
+            if (
+                not host_api.in_host_call()
+                or now - cancelled_at >= _CANCELLED_CALL_WAIT_S
+            ):
+                break
+        elif now >= give_up:
+            break
+        t.join(timeout=0.1)
 
     if t.is_alive():
-        raise MetaskillTimeoutError(f"metaskill timeout ({timeout_s}s) exceeded")
+        raise host_api.stop_error()
 
     if error_box:
         raise error_box[0]
@@ -462,9 +531,7 @@ def run_metaskill(
     )
 
     try:
-        raw_result = _run_starlark_with_timeout(
-            source, host_api, input_data, budget.timeout_s
-        )
+        raw_result = _run_starlark_with_timeout(source, host_api, input_data)
         return_value = _normalize_return_value(raw_result)
     except Exception as e:
         trace.append("metaskill_error", {"error": str(e)})

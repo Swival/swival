@@ -170,6 +170,11 @@ The same breakdowns appear under `by_source`, so you can see which parts of the 
 
 `lifecycle` appears when lifecycle hooks ran and is an array mirroring the timeline's `lifecycle` events.
 
+`python_bridge` appears when a `run_python` snippet could [call MCP tools](mcp.md#calling-tools-from-run_python).
+It adds up `executions`, `child_calls`, `child_failures`, `bytes_in`, `bytes_out`, and `child_time_s` across those runs.
+`stops` counts the runs that were stopped early.
+The time spent in these calls is not added to `total_tool_time_s`, which already includes the `run_python` call.
+
 ### `timeline`
 
 `timeline` is an ordered array of event objects. Each event includes `type`, and most include `turn` (the turn number when the event occurred). Review events are an exception — they include `round` instead of `turn` since they occur between agent loop iterations.
@@ -197,6 +202,20 @@ For `lifecycle`, fields include `event` (`startup` or `exit`), `exit_code`, `dur
 For `command_policy`, fields include `bucket` (the normalized command bucket) and `decision` (`allow`, `persist`, `once`, `always_ask`, `deny`, or `block`). The interactive decisions come from `--commands ask` approval prompts; a `block` decision is also recorded whenever any restricted policy (`none`, an allowlist, or a denied bucket) rejects a command.
 
 For `untrusted_input`, fields include `source` (the tool name, e.g. `fetch_url` or `mcp__server__tool`) and `origin` (the URL or empty string). These events are emitted when external content is successfully ingested.
+
+For `python_bridge`, fields include `execution_id`, `tool_call_id`, `exit_code` (negative when the snippet was killed), `elapsed_s`, `child_calls`, `child_failures`, `bytes_in`, `bytes_out`, and `child_time_s`.
+`execution_id` is unique to each run, since providers can reuse tool-call IDs.
+`stop` gives the reason when the bridge stopped answering calls.
+`uncertain_calls` counts calls that got no answer but may still have taken effect.
+`unfinished_call` is set when a call was still running as the snippet ended.
+
+`calls` lists the calls that reached Swival, up to 1,000, and `calls_not_listed` counts the rest.
+Each one has an `id`, the `tool` name (cut to 128 bytes), `duration_s`, and an `outcome`: `ok`, `error`, `timeout`, `refused`, `stopped`, or `unfinished`.
+Calls that may still have taken effect have `remote_outcome: "unknown"`, and a result the snippet never received has `delivered: false`.
+Failures are listed even when the snippet caught them.
+`bytes_out` counts only replies the snippet received.
+
+A run whose tools answered also adds an `untrusted_input` event, with `source` set to `run_python` and `origin` listing the tools.
 
 For `goal_event`, fields include `action` (one of `created`, `replaced`, `paused`, `resumed`, `budget_limited`, `completed`, or `cleared`) and, when a goal is active, a `goal` object carrying its current state. These events trace the persisted goal across the run. See [Goals](goal.md) for the goal lifecycle.
 
@@ -293,6 +312,8 @@ Each session produces a `<session_id>.jsonl` file in the target directory. The f
 - `role: "tool"` becomes `type: "user"` with `tool_result` content blocks
 - `role: "system"` becomes `type: "system"` with the prompt text
 - Each message line includes `harness: "swival"` for HuggingFace detection (a trailing `last-prompt` marker line closes the file)
+- After a `run_python` result whose snippet [called MCP tools](mcp.md#calling-tools-from-run_python), a `type: "system"` line with `isSidechain: true` and `isMeta: true` holds the same call records as the report, as JSON under `childToolCalls`.
+  The conversation continues from the tool result, so readers that follow the main chain skip this line.
 
 Works in one-shot mode, REPL mode, and through the Python API (`Session(trace_dir="traces/")`). When used with `Session.ask()`, all turns accumulate in a single file per session. Recognized credential tokens in the trace are always encrypted before the file is written, using the same key policy as report files.
 

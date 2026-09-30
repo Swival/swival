@@ -166,6 +166,12 @@ Setting `background=true` launches the command detached and returns immediately 
 
 Because it executes arbitrary code, `run_python` is only exposed with `--commands all` or `--yolo`, the same trust tier as `run_shell_command`. On top of that it appears only when a Python interpreter is available (the one running Swival, or `python3`/`python` on `PATH` for standalone builds) and when the detected context window is at least 100,000 tokens, the same floor that auto-enables subagents. This tool is experimental.
 
+If the run is cancelled, for example because its subagent was cancelled, the snippet is killed right away.
+The result then starts with `error: cancelled before the program finished`.
+
+MCP servers can let snippets call some of their tools through a `swival_tools` module, which keeps intermediate results out of the conversation.
+See [Calling Tools From run_python](mcp.md#calling-tools-from-run_python).
+
 ## `use_skill`
 
 When skills are discovered, Swival exposes `use_skill` so the model can load full instructions on demand. The system prompt only includes a compact skill catalog at startup, and full skill instructions are injected only when the tool is called. This keeps the default prompt smaller while still allowing rich task-specific guidance.

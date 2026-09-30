@@ -4,6 +4,7 @@ import base64
 import codecs
 import contextlib
 import copy
+import functools
 import hashlib
 import heapq
 import json
@@ -13,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import uuid
 import warnings
 import weakref
@@ -2990,9 +2992,17 @@ def _guard_mcp_output(
 
 
 def _cap_error_output(error: str) -> str:
-    if len(error.encode("utf-8")) > MCP_INLINE_LIMIT:
-        return _safe_truncate(error, MCP_INLINE_LIMIT, "\n[error output truncated]")
-    return error
+    """Limit an error to MCP_INLINE_LIMIT bytes of valid UTF-8.
+
+    A lone surrogate from the server becomes "?", so the conversation and its
+    trace can always be written.
+    """
+    # Check the length first, so a huge error is never encoded in full.
+    if len(error) <= MCP_INLINE_LIMIT:
+        data = error.encode("utf-8", errors="replace")
+        if len(data) <= MCP_INLINE_LIMIT:
+            return data.decode("utf-8")
+    return _safe_truncate(error, MCP_INLINE_LIMIT, "\n[error output truncated]")
 
 
 def _render_external_result(
@@ -3170,10 +3180,36 @@ def _spawn_background_process(
     return proc, log_rel
 
 
+def _wait_unless_cancelled(proc: subprocess.Popen, timeout: float, cancel_flag) -> bool:
+    """Wait like ``proc.wait(timeout)``, but give up when *cancel_flag* is set.
+
+    Returns False when cancelled, and leaves the process running.
+    """
+    deadline = time.monotonic() + timeout
+    while not cancel_flag.is_set():
+        try:
+            proc.wait(timeout=max(0.0, min(0.1, deadline - time.monotonic())))
+            return True
+        except subprocess.TimeoutExpired:
+            if time.monotonic() >= deadline:
+                raise
+    return False
+
+
 def _capture_process(
-    proc: subprocess.Popen, timeout: int, base_dir: str, scratch_dir: str | None = None
+    proc: subprocess.Popen,
+    timeout: int,
+    base_dir: str,
+    scratch_dir: str | None = None,
+    output_header=None,
+    cancel_flag=None,
 ) -> str:
-    """Capture output from a running subprocess with timeout enforcement."""
+    """Capture output from a running subprocess with timeout enforcement.
+
+    ``output_header`` is called after the process exits and returns text to
+    put before the output, including in spill files.
+    Setting ``cancel_flag`` kills the process right away.
+    """
     sink = TerminalSink()
 
     def _reader():
@@ -3189,12 +3225,16 @@ def _capture_process(
     reader_thread = threading.Thread(target=_reader, daemon=True)
     reader_thread.start()
 
-    timeout_status = f"error: command timed out after {timeout}s"
-    timed_out = False
+    # Why we killed the process; always the first line of the result.
+    stop_status = None
     try:
-        proc.wait(timeout=timeout)
+        if cancel_flag is None:
+            proc.wait(timeout=timeout)
+        elif not _wait_unless_cancelled(proc, timeout, cancel_flag):
+            stop_status = "error: cancelled before the program finished"
+            _kill_process_tree(proc)
     except subprocess.TimeoutExpired:
-        timed_out = True
+        stop_status = f"error: command timed out after {timeout}s"
         _kill_process_tree(proc)
 
     reader_thread.join(timeout=2)
@@ -3211,10 +3251,13 @@ def _capture_process(
     # survives even when the program wrote far more than the retained cap.
     raw_output = sink.finalize()
     output_truncated = sink.output_truncated
+    header = output_header() if output_header is not None else ""
+    if header and raw_output:
+        raw_output = header + raw_output
     parts: list[str] = []
 
-    if timed_out:
-        parts.append(timeout_status)
+    if stop_status:
+        parts.append(stop_status)
     elif proc.returncode != 0:
         parts.append(f"Exit code: {proc.returncode}")
 
@@ -3233,10 +3276,10 @@ def _capture_process(
         saved = _save_large_output(
             result, base_dir, was_truncated=output_truncated, scratch_dir=scratch_dir
         )
-        if timed_out:
+        if stop_status:
             # A failed disk write returns the original text, status included.
             # Only the summary notice needs the status added.
-            prefix = "" if saved.startswith("error:") else f"{timeout_status}\n"
+            prefix = "" if saved.startswith("error:") else f"{stop_status}\n"
             result = prefix + saved
         elif proc.returncode != 0:
             result = f"{saved}\nExit code: {proc.returncode}"
@@ -3250,8 +3293,13 @@ _SHELL_CHARS = frozenset("|&;><$`\\\"'*?~#!{}()[]\n\r")
 
 
 def _safe_truncate(text: str, limit: int, suffix: str) -> str:
-    """Truncate text to *limit* bytes (UTF-8 safe) and append *suffix*."""
-    return text.encode("utf-8")[:limit].decode("utf-8", errors="replace") + suffix
+    """Truncate text to *limit* bytes (UTF-8 safe) and append *suffix*.
+
+    Only the first *limit* characters are encoded, and a lone surrogate
+    becomes "?" instead of raising.
+    """
+    data = text[:limit].encode("utf-8", errors="replace")
+    return data[:limit].decode("utf-8", errors="replace") + suffix
 
 
 _CD_ROOT_RE = re.compile(
@@ -3357,8 +3405,14 @@ def _run_python(
     timeout: int,
     scratch_dir: str | None = None,
     net_jail: list[str] | None = None,
+    bridge=None,
+    cancel_flag=None,
 ) -> str:
-    """Execute *code* via a Python interpreter and return its captured output."""
+    """Execute *code* via a Python interpreter and return its captured output.
+
+    With a ``bridge``, the snippet can call MCP tools, and output that may
+    contain their results is labeled as untrusted.
+    """
     if not isinstance(code, str):
         return "error: run_python tool requires 'code' as a string"
     if not code.strip():
@@ -3376,22 +3430,64 @@ def _run_python(
 
     timeout = max(1, min(timeout, MAX_TIMEOUT))
 
+    env = child_env()
     try:
         popen_kwargs: dict = dict(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
             cwd=base_dir,
-            env=child_env(),
+            env=env,
         )
         if sys.platform != "win32":
             popen_kwargs["start_new_session"] = True
+        if bridge is not None:
+            popen_kwargs["pass_fds"] = bridge.open(env)
 
         proc = subprocess.Popen(_jail([python, "-c", code], net_jail), **popen_kwargs)
     except OSError as e:
+        if bridge is not None:
+            bridge.abandon()
         return f"error: failed to start python interpreter: {e}"
 
-    return _capture_process(proc, timeout, base_dir, scratch_dir=scratch_dir)
+    if bridge is None:
+        return _capture_process(
+            proc, timeout, base_dir, scratch_dir=scratch_dir, cancel_flag=cancel_flag
+        )
+
+    def finish_and_label() -> str:
+        bridge.finish()
+        tools = bridge.external_tools()
+        return _untrusted_header("run_python", ", ".join(tools)) if tools else ""
+
+    started = time.monotonic()
+    bridge.start()
+    try:
+        result = _capture_process(
+            proc,
+            timeout,
+            base_dir,
+            scratch_dir=scratch_dir,
+            output_header=finish_and_label,
+            cancel_flag=cancel_flag,
+        )
+    finally:
+        bridge.finish()
+    bridge.stats.elapsed = time.monotonic() - started
+    bridge.stats.exit_code = proc.returncode
+    uncertain = bridge.stats.uncertain_calls
+    if uncertain:
+        calls = "1 tool call was" if uncertain == 1 else f"{uncertain} tool calls were"
+        result += (
+            f"\nnote: {calls} cut off before the server answered; "
+            "whether it took effect is unknown"
+        )
+    if bridge.stats.unfinished:
+        result += (
+            "\nnote: a tool call was still running when the program ended; "
+            "whether it took effect is unknown"
+        )
+    return result
 
 
 ExecutionMode = Literal["argv", "shell"]
@@ -3797,6 +3893,66 @@ def _dispatch_goal_tool(name: str, args: dict, kwargs: dict) -> str:
     return f"error: unknown goal tool {name!r}"
 
 
+def _host_refusal(name: str, args, kwargs: dict) -> str | None:
+    """Return why this call is refused, or None to allow it.
+
+    Calls made from run_python snippets go through the same checks.
+    """
+    # Isolated runs may only use some tools.
+    # Every caller goes through here, so this cannot be skipped.
+    tool_policy = kwargs.get("tool_policy")
+    if tool_policy is not None:
+        policy_error = tool_policy.check(name, args if isinstance(args, dict) else {})
+        if policy_error is not None:
+            return policy_error
+
+    # Network tools are hidden in restricted modes; this catches models that
+    # call them anyway.
+    network_mode = kwargs.get("network_mode", "full")
+    if network_mode != "full" and name in NETWORK_TOOLS:
+        return (
+            f"error: {name} is disabled in this session "
+            f'(network = "{network_mode}"); agent tools cannot access the network'
+        )
+
+    goal_state = kwargs.get("goal_state")
+    if goal_state is not None and goal_state.budget_exhausted():
+        from .goal import budget_gate_decision
+
+        return budget_gate_decision(name, args)
+    return None
+
+
+def _python_bridge(timeout: int, kwargs: dict):
+    """Build the tool bridge for one run_python execution, if configured."""
+    manager = kwargs.get("mcp_manager")
+    allowed = manager.python_tools() if manager is not None else []
+    if not allowed:
+        return None
+    from .python_bridge import PythonBridge, bridge_available
+
+    if not bridge_available(kwargs.get("net_jail")):
+        return None
+    # Pass only what the checks need, not the whole conversation.
+    gate_kwargs = {
+        key: kwargs[key]
+        for key in ("tool_policy", "network_mode", "goal_state")
+        if key in kwargs
+    }
+    # Stop calls a little before the snippet is killed, so it can still print
+    # what it gathered.
+    margin = min(0.5, timeout / 10)
+    return PythonBridge(
+        manager,
+        allowed,
+        deadline=time.monotonic() + timeout - margin,
+        gate=functools.partial(_host_refusal, kwargs=gate_kwargs),
+        goal_state=kwargs.get("goal_state"),
+        cancel_flag=kwargs.get("cancel_flag"),
+        tool_call_id=kwargs.get("tool_call_id"),
+    )
+
+
 def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
     """Route a tool call to the appropriate implementation.
 
@@ -3820,32 +3976,9 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
 
     _report = kwargs.get("report")
 
-    # Host-enforced tool restrictions for isolated pipeline loops. dispatch()
-    # is the choke point every caller goes through -- the agent loop and
-    # dispatch-direct callers like MetaskillHostAPI alike -- so a forbidden
-    # tool or write is never executed regardless of the entry path.
-    _tool_policy = kwargs.get("tool_policy")
-    if _tool_policy is not None:
-        _policy_error = _tool_policy.check(name, args if isinstance(args, dict) else {})
-        if _policy_error is not None:
-            return _policy_error
-
-    # Network-dependent tools are filtered from the schema in restricted
-    # modes; this guard covers models that call them anyway.
-    _network_mode = kwargs.get("network_mode", "full")
-    if _network_mode != "full" and name in NETWORK_TOOLS:
-        return (
-            f"error: {name} is disabled in this session "
-            f'(network = "{_network_mode}"); agent tools cannot access the network'
-        )
-
-    goal_state = kwargs.get("goal_state")
-    if goal_state is not None and goal_state.budget_exhausted():
-        from .goal import budget_gate_decision
-
-        rejection = budget_gate_decision(name, args)
-        if rejection is not None:
-            return rejection
+    refusal = _host_refusal(name, args, kwargs)
+    if refusal is not None:
+        return refusal
 
     if name == "complete_goal":
         return _dispatch_goal_tool(name, args, kwargs)
@@ -4171,16 +4304,31 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             )
         code = args.get("code")
         try:
-            timeout = int(args.get("timeout", 30))
+            timeout = clamp_timeout(int(args.get("timeout", 30)))
         except (ValueError, TypeError):
             return "error: timeout must be an integer"
-        return _run_python(
+        bridge = _python_bridge(timeout, kwargs)
+        result = _run_python(
             code if isinstance(code, str) else "",
             base_dir,
             timeout,
             scratch_dir=scratch_dir,
             net_jail=kwargs.get("net_jail"),
+            bridge=bridge,
+            cancel_flag=kwargs.get("cancel_flag"),
         )
+        if bridge is not None and bridge.started:
+            execution = bridge.stats.to_dict()
+            tool_meta = kwargs.get("tool_meta")
+            if tool_meta is not None:
+                # Kept for traces; the model never sees underscore keys.
+                tool_meta["_swival_child_calls"] = execution
+            if _report is not None:
+                tools_used = bridge.external_tools()
+                if tools_used:
+                    _report.record_untrusted_input("run_python", ", ".join(tools_used))
+                _report.record_python_bridge(execution)
+        return result
     elif name == "view_image":
         image_stash = kwargs.get("image_stash")
         if image_stash is None:

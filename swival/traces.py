@@ -83,7 +83,12 @@ def write_trace(
     last_uuid = None
     lines: list[dict] = []
 
-    def _append(type_: str, **kwargs) -> str:
+    def _append(type_: str, sidechain: bool = False, **kwargs) -> str:
+        """Add a line.
+
+        A sidechain line is attached to the previous line, but the
+        conversation does not continue from it.
+        """
         nonlocal last_uuid
         uid = str(uuid.uuid4())
         line = {
@@ -95,12 +100,13 @@ def write_trace(
             "version": version,
             "cwd": cwd,
             "type": type_,
-            "isSidechain": False,
+            "isSidechain": sidechain,
             "userType": "external",
             **kwargs,
         }
         lines.append(line)
-        last_uuid = uid
+        if not sidechain:
+            last_uuid = uid
         return uid
 
     for msg in messages:
@@ -195,6 +201,22 @@ def write_trace(
                 },
                 toolUseResult=encrypted_raw,
             )
+            child_calls = _msg_get(msg, "_swival_child_calls")
+            if child_calls:
+                # Tool calls made by a run_python snippet. This reuses existing
+                # fields, since new ones would confuse HuggingFace, as noted below.
+                _append(
+                    "system",
+                    sidechain=True,
+                    content=enc(
+                        json.dumps(
+                            san_obj({"childToolCalls": child_calls}),
+                            ensure_ascii=False,
+                        )
+                    ),
+                    level="info",
+                    isMeta=True,
+                )
 
     lines.append(
         {

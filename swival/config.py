@@ -677,6 +677,7 @@ _MCP_SERVER_FIELD_TYPES: dict[str, type | tuple[type, ...]] = {
     "args": list,
     "env": dict,
     "headers": dict,
+    "python_tools": list,
 }
 
 
@@ -717,11 +718,11 @@ def _validate_mcp_server_configs(servers: dict, source: str) -> None:
                 )
 
         # Validate list element types
-        if "args" in cfg:
-            for i, elem in enumerate(cfg["args"]):
+        for list_field in ("args", "python_tools"):
+            for i, elem in enumerate(cfg.get(list_field, ())):
                 if not isinstance(elem, str):
                     raise ConfigError(
-                        f"{prefix}.args[{i}]: expected string, "
+                        f"{prefix}.{list_field}[{i}]: expected string, "
                         f"got {type(elem).__name__}"
                     )
 

@@ -104,7 +104,9 @@
 <p>Swival can connect to external tool servers via the <a href="https://modelcontextprotocol.io/">Model Context Protocol</a> (MCP). When MCP servers are configured, their tools are discovered at startup, converted to the same function-calling format as built-in tools, and exposed alongside them in the agent loop.</p>
 <p>Each MCP tool is namespaced as <code>mcp__&lt;server_name&gt;__&lt;tool_name&gt;</code> to avoid collisions with built-in tools and across servers. The model calls them like any other tool. Swival routes the call to the correct server and returns the result as a string following the same conventions as built-in tools.</p>
 <p>MCP servers can use stdio transport (local subprocess) or HTTP transport (remote server). Both are configured through <code>swival.toml</code> or <code>.swival/mcp.json</code>.</p>
-<p>If an MCP server fails to connect at startup, Swival logs a warning and continues without that server's tools. If a server crashes mid-session, its tools are marked as degraded and return an error message instead of blocking the agent loop.</p>
+<p>If an MCP server fails to connect at startup, Swival logs a warning and continues without that server's tools. If a server crashes mid-session, its tools are marked as degraded and return an error message instead of blocking the agent loop.
+A server that answers a call with a JSON-RPC error, such as invalid parameters, is still running, so it keeps its tools and the model can retry with corrected arguments.
+The same is true when a server's answer is invalid, for example when it does not match the tool's output schema: the call fails, but the server stays available.</p>
 <p>Tool name collisions across servers cause the colliding server's tools to be skipped entirely, with a warning.</p>
 <p>When MCP tool schemas consume more than 30% of the context window, Swival warns. At 50%, it iteratively drops the most expensive server's tools until usage is under budget.</p>
 <h2 id="deferred-schemas">Deferred Schemas</h2>
@@ -185,8 +187,51 @@ url = &quot;http://127.0.0.1:49374/mcp&quot;
 <h2 id="output-handling">Output Handling</h2>
 <p>MCP tool outputs are size-guarded similarly to <code>run_command</code>, with higher thresholds to accommodate richer external tool results. Results up to 20 KB are returned inline.</p>
 <p>Larger results are saved to <code>.swival/cmd_output_*.txt</code> and the model receives a pointer message telling it to use <code>read_file</code> for paginated access. Output is hard-capped at 10 MB before writing to disk, so a misbehaving server cannot consume unbounded memory or storage.</p>
-<p>Error outputs from MCP tools are kept inline but truncated at 20 KB. Errors are diagnostic, not data the model needs to page through, so they are never saved to file.</p>
+<p>Text content blocks are passed through as they are.
+When a result has no content blocks but carries <code>structuredContent</code>, the model gets that value as JSON instead, including empty objects, zero, <code>false</code>, and <code>null</code>.
+Results that include both are shown through their content blocks only, since servers usually repeat the structured value there as text.
+Resource links are shown with their URI and name, and images and audio are summarized by MIME type and size.</p>
+<p>Error outputs from MCP tools are kept inline but truncated at 20 KB. Errors are diagnostic, not data the model needs to page through, so they are never saved to file.
+A failure always starts with an <code>error:</code> line that Swival writes itself.
+Any text the server wrote or influenced, such as its error message or a validation error quoting a malformed result, follows under an <code>[UNTRUSTED EXTERNAL CONTENT]</code> header.
+A successful result is never treated as a failure, even when its text happens to start with <code>error:</code>.</p>
 <p>During context compaction, MCP tool results receive head-preserving summaries that retain the first 300 characters of content, unlike the generic fallback which discards content entirely.</p>
+<h2 id="calling-tools-from-run_python">Calling Tools From <code>run_python</code></h2>
+<p>This feature is experimental.</p>
+<p>A server can let the <a href="tools.html#run_python"><code>run_python</code></a> tool call some of its tools from code.
+A snippet can then page through results, join data from two servers, or filter a large response.
+Only what it prints goes back to the model.</p>
+<p>List the tools a snippet may call, using the names the server gives them:</p>
+<pre><code class="language-toml">[mcp_servers.tracker]
+command = &quot;tracker-mcp&quot;
+python_tools = [&quot;list_issues&quot;, &quot;get_issue&quot;]
+</code></pre>
+<p>In <code>.swival/mcp.json</code>, use the same <code>python_tools</code> key.
+Swival warns at startup about names the server does not offer.</p>
+<p>This only works when <code>run_python</code> is available, which needs <code>--commands all</code> and a context window of at least 100,000 tokens.
+It also needs Linux or macOS, and it is turned off by <code>network = "provider-only"</code>.</p>
+<p>The <code>run_python</code> description tells the model which tools it can call.
+A snippet uses them like this:</p>
+<pre><code class="language-python">import swival_tools
+
+swival_tools.ALL_TOOLS                        # tools this snippet may call
+swival_tools.help(&quot;mcp__tracker__get_issue&quot;)  # description and schemas
+page = swival_tools.call(&quot;mcp__tracker__list_issues&quot;, {&quot;page&quot;: 2}, timeout=10)
+</code></pre>
+<p><code>call()</code> returns the server's structured result when there is one, the parsed value when the server sent JSON text, and plain text otherwise.
+Arguments follow the server's own schema.
+A failed call raises <code>swival_tools.ToolError</code>, which the snippet can catch.
+Calls go through the same checks as direct tool calls.</p>
+<p>Each call must finish within the <code>run_python</code> timeout, and within 120 seconds or the <code>timeout</code> the snippet passes, whichever is shorter.
+A snippet can make up to 500 calls, get up to 10 MB from one call, and exchange up to 64 MB in total.</p>
+<p>When the timeout expires, a limit is reached, the user cancels, or the goal's budget runs out, the call raises <code>swival_tools.BridgeError</code>.
+Every later call in that run fails the same way.
+Calls stop a little before the snippet is killed, so it can still print what it gathered.</p>
+<p>Giving up on a call does not stop the server, so a call that timed out or was cancelled may still take effect.
+When that happens, the error says so, and the <code>run_python</code> result ends with a note.</p>
+<p>Snippets can call tools from several threads; the calls are made one at a time.</p>
+<p>Output that may contain tool results, or tool descriptions from <code>help()</code>, is marked as untrusted external content.
+JSON reports list these runs under <code>stats.python_bridge</code>, with a <code>python_bridge</code> timeline event for each run.</p>
 <h2 id="library-api">Library API</h2>
 <p>The <code>Session</code> class accepts <code>mcp_servers</code> as a constructor argument. Pass a dictionary mapping server names to config dicts:</p>
 <pre><code class="language-python">from swival import Session

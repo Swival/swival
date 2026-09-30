@@ -368,6 +368,18 @@ The `run_metaskill` operation MAY allow callers to set `max_ask_calls` and
 and timeout before every host API call. Hosts SHOULD also interrupt or isolate
 pure script computation so large loops cannot evade wall-clock limits.
 
+Swival gives the Starlark interpreter the time that is left, and the interpreter stops plain computation at the deadline.
+It cannot stop a host call that is still running, such as a long `ask`.
+In that case Swival reports the timeout up to two seconds after the deadline, and lets the call finish in the background.
+The timeout limits time, not memory.
+
+A cancellation is reported right away, unless a host call is running.
+Swival then waits for that call to finish, up to 125 seconds, so the script cannot start anything new.
+Waiting does not interrupt the call: a `command` runs until it ends or times out, and an `ask` stops at its next turn.
+
+Errors are classified by what Swival itself recorded.
+A script that calls `fail("budget report missing")` gets a runtime error, not a budget error.
+
 ## 9. Result contract
 
 Metaskill execution returns a string at the host tool boundary.

@@ -960,6 +960,11 @@ class TestMcpOutputGuard:
         )
         assert result == "error: something broke"
 
+    def test_lone_surrogate_in_a_server_error_is_replaced(self, tmp_path):
+        result, _ = _dispatch_outcome(tmp_path, _failed("bad \ud800 input"))
+        assert result.endswith("\n\nbad ? input")
+        result.encode("utf-8")
+
     def test_error_large_truncated_inline(self, tmp_path):
         """Giant error payloads are truncated inline, not saved to file."""
         from swival.tools import MCP_INLINE_LIMIT
@@ -1209,6 +1214,8 @@ class TestMcpManagerLifecycle:
             assert is_err
             assert "Ignore" not in result
             assert "Ignore prior instructions" in details
+            # The server answered, so it stays available.
+            assert not mgr._degraded
 
     def test_failed_tool_still_degrades(self):
         """A real transport failure keeps the existing degrade behaviour."""

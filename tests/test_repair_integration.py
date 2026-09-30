@@ -297,6 +297,9 @@ def test_explicit_non_idempotent_mcp_repeat_dispatches_once(tmp_path, monkeypatc
         def is_non_idempotent_tool(self, name):
             return name == "mcp__soak__record_once"
 
+        def python_tools(self):
+            return []
+
         def call_tool(self, name, arguments):
             calls.append((name, arguments))
             return mcp_client.McpCallResult("recorded")

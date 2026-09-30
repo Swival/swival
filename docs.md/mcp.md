@@ -8,6 +8,7 @@ MCP servers can use stdio transport (local subprocess) or HTTP transport (remote
 
 If an MCP server fails to connect at startup, Swival logs a warning and continues without that server's tools. If a server crashes mid-session, its tools are marked as degraded and return an error message instead of blocking the agent loop.
 A server that answers a call with a JSON-RPC error, such as invalid parameters, is still running, so it keeps its tools and the model can retry with corrected arguments.
+The same is true when a server's answer is invalid, for example when it does not match the tool's output schema: the call fails, but the server stays available.
 
 Tool name collisions across servers cause the colliding server's tools to be skipped entirely, with a warning.
 
@@ -142,6 +143,59 @@ Any text the server wrote or influenced, such as its error message or a validati
 A successful result is never treated as a failure, even when its text happens to start with `error:`.
 
 During context compaction, MCP tool results receive head-preserving summaries that retain the first 300 characters of content, unlike the generic fallback which discards content entirely.
+
+## Calling Tools From `run_python`
+
+This feature is experimental.
+
+A server can let the [`run_python`](tools.md#run_python) tool call some of its tools from code.
+A snippet can then page through results, join data from two servers, or filter a large response.
+Only what it prints goes back to the model.
+
+List the tools a snippet may call, using the names the server gives them:
+
+```toml
+[mcp_servers.tracker]
+command = "tracker-mcp"
+python_tools = ["list_issues", "get_issue"]
+```
+
+In `.swival/mcp.json`, use the same `python_tools` key.
+Swival warns at startup about names the server does not offer.
+
+This only works when `run_python` is available, which needs `--commands all` and a context window of at least 100,000 tokens.
+It also needs Linux or macOS, and it is turned off by `network = "provider-only"`.
+
+The `run_python` description tells the model which tools it can call.
+A snippet uses them like this:
+
+```python
+import swival_tools
+
+swival_tools.ALL_TOOLS                        # tools this snippet may call
+swival_tools.help("mcp__tracker__get_issue")  # description and schemas
+page = swival_tools.call("mcp__tracker__list_issues", {"page": 2}, timeout=10)
+```
+
+`call()` returns the server's structured result when there is one, the parsed value when the server sent JSON text, and plain text otherwise.
+Arguments follow the server's own schema.
+A failed call raises `swival_tools.ToolError`, which the snippet can catch.
+Calls go through the same checks as direct tool calls.
+
+Each call must finish within the `run_python` timeout, and within 120 seconds or the `timeout` the snippet passes, whichever is shorter.
+A snippet can make up to 500 calls, get up to 10 MB from one call, and exchange up to 64 MB in total.
+
+When the timeout expires, a limit is reached, the user cancels, or the goal's budget runs out, the call raises `swival_tools.BridgeError`.
+Every later call in that run fails the same way.
+Calls stop a little before the snippet is killed, so it can still print what it gathered.
+
+Giving up on a call does not stop the server, so a call that timed out or was cancelled may still take effect.
+When that happens, the error says so, and the `run_python` result ends with a note.
+
+Snippets can call tools from several threads; the calls are made one at a time.
+
+Output that may contain tool results, or tool descriptions from `help()`, is marked as untrusted external content.
+JSON reports list these runs under `stats.python_bridge`, with a `python_bridge` timeline event for each run.
 
 ## Library API
 

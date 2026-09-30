@@ -55,6 +55,7 @@ class ReportCollector:
         self.truncation_repairs = 0
         self.scavenged_calls = 0
         self.stormed_calls = 0
+        self.python_bridge: dict[str, int | float] = {}
         self.exposure = ExposureMeter()
 
     def record_goal_event(self, action: str, goal_payload: dict | None) -> None:
@@ -296,6 +297,23 @@ class ReportCollector:
             {"type": "untrusted_input", "source": source, "origin": origin}
         )
 
+    def record_python_bridge(self, execution: dict):
+        """Record one run_python run that could call tools.
+
+        Its calls are not added to total_tool_time, which already includes
+        the run_python call itself.
+        """
+        totals = self.python_bridge
+        totals["executions"] = totals.get("executions", 0) + 1
+        for key in ("child_calls", "child_failures", "bytes_in", "bytes_out"):
+            totals[key] = totals.get(key, 0) + execution.get(key, 0)
+        totals["child_time_s"] = round(
+            totals.get("child_time_s", 0.0) + execution.get("child_time_s", 0.0), 3
+        )
+        if execution.get("stop"):
+            totals["stops"] = totals.get("stops", 0) + 1
+        self.events.append({"type": "python_bridge", **execution})
+
     def record_repl_turn(self, input_text: str):
         """Record a REPL turn boundary in the timeline."""
         self.events.append(
@@ -420,6 +438,11 @@ class ReportCollector:
                 **(
                     {"security": dict(self.security_stats)}
                     if any(self.security_stats.values())
+                    else {}
+                ),
+                **(
+                    {"python_bridge": dict(self.python_bridge)}
+                    if self.python_bridge
                     else {}
                 ),
             },
