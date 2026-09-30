@@ -287,6 +287,7 @@ def test_chatgpt_catalog_includes_new_codex_models():
         "gpt-6-astra",
         "gpt-6-luna",
         "gpt-6-sol",
+        "gpt-6.1-sol",
     ):
         assert expected in ids
     # No duplicates, and entries stay sorted by id.
