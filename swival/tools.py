@@ -2917,9 +2917,12 @@ def _save_large_output(*args, **kwargs) -> str:
     return _save_large_output_with_path(*args, **kwargs)[0]
 
 
+UNTRUSTED_MARKER = "[UNTRUSTED EXTERNAL CONTENT]"
+
+
 def _untrusted_header(source: str, origin: str = "") -> str:
     """Build the deterministic untrusted-content header string."""
-    header = f"[UNTRUSTED EXTERNAL CONTENT]\nsource: {source}"
+    header = f"{UNTRUSTED_MARKER}\nsource: {source}"
     if origin:
         header += f"\norigin: {origin}"
     header += (
@@ -2930,13 +2933,30 @@ def _untrusted_header(source: str, origin: str = "") -> str:
 
 
 def _wrap_untrusted(result: str, tool_name: str, origin: str = "") -> str:
-    """Prepend an untrusted-content header to external tool output.
+    """Prepend an untrusted-content header to successful external output.
 
-    Does not wrap error messages — those are internal diagnostics.
+    Content that happens to start with ``error:`` is wrapped like anything
+    else, so it is not mistaken for a failure; callers handle failures before
+    getting here.
     """
-    if result.startswith("error:"):
-        return result
     return _untrusted_header(tool_name, origin) + result
+
+
+def _wrap_untrusted_error(error: str, details: str, tool_name: str) -> str:
+    """Render a host-written ``error:`` line followed by external details.
+
+    Guards and reports key on the first line, so it stays ours, while the
+    details are labeled like any other external content.
+    """
+    return f"{error}\n" + _wrap_untrusted(_cap_error_output(details), tool_name)
+
+
+def _untrusted_error_details(error: str) -> str:
+    """Return the labeled details of an error from `_wrap_untrusted_error`."""
+    _, _, rest = error.partition("\n")
+    if not rest.startswith(UNTRUSTED_MARKER):
+        return ""
+    return rest.partition("\n\n")[2]
 
 
 def _guard_mcp_output(
@@ -2967,6 +2987,34 @@ def _guard_mcp_output(
         scratch_dir=scratch_dir,
         untrusted_source=tool_name,
     )
+
+
+def _cap_error_output(error: str) -> str:
+    if len(error.encode("utf-8")) > MCP_INLINE_LIMIT:
+        return _safe_truncate(error, MCP_INLINE_LIMIT, "\n[error output truncated]")
+    return error
+
+
+def _render_external_result(
+    text: str,
+    is_error: bool,
+    details: str = "",
+    *,
+    name: str,
+    guard_fn,
+    base_dir: str,
+    scratch_dir: str | None,
+    report,
+) -> str:
+    """Render an MCP or A2A call outcome for the model."""
+    if is_error and not details:
+        return _cap_error_output(text)
+    if report is not None:
+        report.record_untrusted_input(name)
+    if is_error:
+        return _wrap_untrusted_error(text, details, name)
+    guarded = guard_fn(text, base_dir, name, scratch_dir=scratch_dir)
+    return _wrap_untrusted(guarded, name)
 
 
 def _guard_a2a_output(
@@ -3822,17 +3870,15 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             # searched one, so its next calls are made against its schema.
             if deferred_tools is not None:
                 deferred_tools.load(name)
-            result, is_error = manager.call_tool(name, args)
-            if is_error:
-                if len(result.encode("utf-8")) > MCP_INLINE_LIMIT:
-                    result = _safe_truncate(
-                        result, MCP_INLINE_LIMIT, "\n[error output truncated]"
-                    )
-                return result
-            guarded = guard_fn(result, base_dir, name, scratch_dir=scratch_dir)
-            if _report is not None:
-                _report.record_untrusted_input(name)
-            return _wrap_untrusted(guarded, name)
+            # A2A managers return (text, is_error); MCP adds labeled details.
+            return _render_external_result(
+                *manager.call_tool(name, args),
+                name=name,
+                guard_fn=guard_fn,
+                base_dir=base_dir,
+                scratch_dir=scratch_dir,
+                report=_report,
+            )
 
     if name == "think":
         thinking_state = kwargs.get("thinking_state")

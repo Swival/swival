@@ -227,6 +227,9 @@ In interactive mode, the user is typing directly, so commands are always enabled
 
 Output from external sources — `fetch_url`, MCP tools, and A2A tools — is wrapped with a deterministic `[UNTRUSTED EXTERNAL CONTENT]` header before the model sees it. This header instructs the model to treat the content as data, not instructions, and to avoid changing tool-selection behavior based on it.
 
+Failures reported by MCP servers get the same treatment.
+Swival writes the leading `error:` line, and the server's own error text follows under the header, so a failing tool cannot slip instructions past the label.
+
 The label is baked into spill files too. When an external tool produces output too large for inline context (over 20 KB for MCP/A2A, over 50 KB for fetch_url), the content is saved to a temp file under `.swival/`. The untrusted header is prepended to the file contents, so the label survives when the agent reads the file back via `read_file`.
 
 ## Filesystem Access Policy

@@ -7,6 +7,7 @@ Each MCP tool is namespaced as `mcp__<server_name>__<tool_name>` to avoid collis
 MCP servers can use stdio transport (local subprocess) or HTTP transport (remote server). Both are configured through `swival.toml` or `.swival/mcp.json`.
 
 If an MCP server fails to connect at startup, Swival logs a warning and continues without that server's tools. If a server crashes mid-session, its tools are marked as degraded and return an error message instead of blocking the agent loop.
+A server that answers a call with a JSON-RPC error, such as invalid parameters, is still running, so it keeps its tools and the model can retry with corrected arguments.
 
 Tool name collisions across servers cause the colliding server's tools to be skipped entirely, with a warning.
 
@@ -130,7 +131,15 @@ MCP tool outputs are size-guarded similarly to `run_command`, with higher thresh
 
 Larger results are saved to `.swival/cmd_output_*.txt` and the model receives a pointer message telling it to use `read_file` for paginated access. Output is hard-capped at 10 MB before writing to disk, so a misbehaving server cannot consume unbounded memory or storage.
 
+Text content blocks are passed through as they are.
+When a result has no content blocks but carries `structuredContent`, the model gets that value as JSON instead, including empty objects, zero, `false`, and `null`.
+Results that include both are shown through their content blocks only, since servers usually repeat the structured value there as text.
+Resource links are shown with their URI and name, and images and audio are summarized by MIME type and size.
+
 Error outputs from MCP tools are kept inline but truncated at 20 KB. Errors are diagnostic, not data the model needs to page through, so they are never saved to file.
+A failure always starts with an `error:` line that Swival writes itself.
+Any text the server wrote or influenced, such as its error message or a validation error quoting a malformed result, follows under an `[UNTRUSTED EXTERNAL CONTENT]` header.
+A successful result is never treated as a failure, even when its text happens to start with `error:`.
 
 During context compaction, MCP tool results receive head-preserving summaries that retain the first 300 characters of content, unlike the generic fallback which discards content entirely.
 

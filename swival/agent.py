@@ -123,6 +123,7 @@ from .tools import (
     USE_SKILL_TOOL,
     _bg_slots_in_use,
     _memory_path,
+    _untrusted_error_details,
     dispatch,
     cleanup_old_cmd_outputs,
     get_tool_schema,
@@ -1914,8 +1915,14 @@ def append_history(
 
 
 def _canonical_error(error: str) -> str:
-    """Extract a stable error fingerprint for repeat detection."""
-    return error.split("\n", 1)[0]
+    """Extract a stable error fingerprint for repeat detection.
+
+    Server-reported failures share a host-written first line, so the first
+    line of the server's own message is what tells them apart.
+    """
+    first = error.split("\n", 1)[0]
+    detail_line = _untrusted_error_details(error).split("\n", 1)[0]
+    return f"{first}\n{detail_line}" if detail_line else first
 
 
 def estimate_tokens(messages: list, tools: list | None = None) -> int:
@@ -4114,6 +4121,9 @@ def _accumulate_consecutive_errors(
     consecutive_errors[name] = (canonical, count)
     if count < 2:
         return interventions
+    # Only the host-written first line is quoted: the fingerprint can hold
+    # server text, which must never reach a user-role nudge.
+    summary = result.split("\n", 1)[0]
     if count >= 3:
         level = "stop"
         interventions.append(
@@ -4126,7 +4136,7 @@ def _accumulate_consecutive_errors(
         level = "nudge"
         interventions.append(
             f"IMPORTANT: `{name}` returned the same error {count} times. "
-            f"The error is: {canonical}\n"
+            f"The error is: {summary}\n"
             "Do not repeat an identical call unchanged. "
             "If the user explicitly requires one materially different call, "
             "make that call once. Otherwise, use a different approach."
@@ -4134,7 +4144,7 @@ def _accumulate_consecutive_errors(
     if report:
         report.record_guardrail(turn, name, level)
     if verbose:
-        fmt.guardrail(name, count, canonical)
+        fmt.guardrail(name, count, summary)
     return interventions
 
 

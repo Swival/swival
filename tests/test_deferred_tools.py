@@ -11,6 +11,7 @@ from swival.deferred_tools import (
     DeferredTools,
     defer_mcp_tools,
 )
+from swival.mcp_client import McpCallResult
 from swival.tokens import count_tokens
 
 
@@ -174,7 +175,7 @@ class _FakeManager:
 
     def call_tool(self, name, args):
         self.calls.append(name)
-        return "ok", False
+        return McpCallResult("ok")
 
     def is_non_idempotent_tool(self, name):
         return False

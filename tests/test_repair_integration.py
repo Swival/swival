@@ -299,7 +299,7 @@ def test_explicit_non_idempotent_mcp_repeat_dispatches_once(tmp_path, monkeypatc
 
         def call_tool(self, name, arguments):
             calls.append((name, arguments))
-            return "recorded", False
+            return mcp_client.McpCallResult("recorded")
 
     monkeypatch.setattr(mcp_client, "McpManager", FakeMcpManager)
     args = _base_args(tmp_path, no_mcp=False, network="full")

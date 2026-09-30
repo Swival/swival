@@ -13,7 +13,7 @@ import re
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from ._env import child_env
 from .report import ConfigError
@@ -53,6 +53,24 @@ class McpWaitTimeout(TimeoutError):
     dispatcher re-raises one when a transport's bounded send fails, which is a
     broken connection rather than a slow peer.
     """
+
+
+class McpCallResult(NamedTuple):
+    """Outcome of one tool call.
+
+    ``text`` is the server's output on success, and a host-written line
+    starting with ``error:`` on failure.
+    ``details`` holds any failure text the server wrote or could have shaped,
+    which the caller must label as untrusted before the model sees it.
+    """
+
+    text: str
+    is_error: bool = False
+    details: str = ""
+
+
+def _host_error(message: str, details: str = "") -> McpCallResult:
+    return McpCallResult(f"error: {message}", True, details)
 
 
 def _http_transport_order(config: dict) -> list[str]:
@@ -365,29 +383,28 @@ class McpManager:
             # server must not stall the REPL.
             asyncio.run_coroutine_threadsafe(self._notify_roots_changed(), self._loop)
 
-    def call_tool(self, namespaced_name: str, arguments: dict) -> tuple[str, bool]:
-        """Dispatch to the correct server and return (result_text, is_error).
+    def call_tool(self, namespaced_name: str, arguments: dict) -> McpCallResult:
+        """Dispatch to the correct server.
 
-        The boolean flag signals whether the result represents an error,
-        avoiding fragile ``result.startswith("error:")`` checks by callers.
+        Callers read failure and provenance from the returned fields rather
+        than from an ``error:`` prefix, which server output can also carry.
         """
         if self._closing or self._closed:
             raise McpShutdownError("manager is shutting down")
 
         if namespaced_name not in self._tool_map:
-            return (f"error: unknown MCP tool: {namespaced_name}", True)
+            return _host_error(f"unknown MCP tool: {namespaced_name}")
 
         server_name, original_name = self._tool_map[namespaced_name]
 
         if server_name in self._degraded:
-            return (
-                f"error: MCP server {server_name!r} is unavailable (crashed or disconnected)",
-                True,
+            return _host_error(
+                f"MCP server {server_name!r} is unavailable (crashed or disconnected)"
             )
 
         session = self._sessions.get(server_name)
         if session is None:
-            return (f"error: MCP server {server_name!r} has no active session", True)
+            return _host_error(f"MCP server {server_name!r} has no active session")
 
         meta = self._flatten_meta.get(namespaced_name)
         if meta is not None and isinstance(arguments, dict):
@@ -406,16 +423,26 @@ class McpManager:
         except McpWaitTimeout:
             # A slow tool is not a dead server, and degrading would make every
             # other tool on it report "unavailable" for the rest of the session.
-            return (
-                f"error: MCP tool {namespaced_name!r} timed out after {_CALL_TIMEOUT}s",
-                True,
+            return _host_error(
+                f"MCP tool {namespaced_name!r} timed out after {_CALL_TIMEOUT}s"
             )
         except Exception as e:
-            # Mark server as degraded
+            from mcp import MCPError
+            from mcp.types import CONNECTION_CLOSED
+
+            if isinstance(e, MCPError) and e.code != CONNECTION_CLOSED:
+                # A JSON-RPC error response means the server is alive, so one
+                # rejected call must not take its other tools down.
+                return _host_error(
+                    f"MCP server {server_name!r} rejected the call",
+                    e.message or f"JSON-RPC error {e.code}",
+                )
             self._degraded.add(server_name)
-            return (
-                f"error: MCP server {server_name!r} failed: {_describe_exception(e)}",
-                True,
+            # SDK exceptions can quote server data, such as a malformed result
+            # or structured content that fails its output schema.
+            return _host_error(
+                f"MCP server {server_name!r} failed and is now unavailable",
+                _describe_exception(e),
             )
 
     def close(self) -> None:
@@ -875,11 +902,14 @@ def _convert_schema(input_schema: dict) -> dict:
     return schema
 
 
-def _normalize_result(result) -> tuple[str, bool]:
-    """Convert MCP CallToolResult to ``(text, is_error)``.
+def _normalize_result(result) -> McpCallResult:
+    """Render an MCP CallToolResult as text for the model.
 
-    The boolean flag surfaces ``result.is_error`` and envelope ``ok: false``
-    structurally so callers don't need to parse the ``"error:"`` prefix.
+    Content blocks win whenever there are any, so a server that follows the
+    spec and also sends its structured result as JSON text is not shown it
+    twice.
+    Structured content is the fallback and counts whenever the field is
+    present: ``{}``, ``0``, ``false`` and ``null`` are all real answers.
     """
     # Fast-path for envelope-style tool responses, while preserving existing
     # handling for non-JSON and non-text blocks.
@@ -905,12 +935,10 @@ def _normalize_result(result) -> tuple[str, bool]:
                 stack = payload.get("stack")
                 if isinstance(stack, str):
                     error_msg = stack.splitlines()[0] if stack else ""
-            if not error_msg:
-                error_msg = "MCP tool returned an error"
-            return (f"error: {error_msg}", True)
+            return _host_error("MCP tool returned an error", str(error_msg or ""))
 
         if payload.get("ok") is True and "result" in payload and not result.is_error:
-            return (json.dumps(payload["result"], ensure_ascii=False), False)
+            return McpCallResult(json.dumps(payload["result"], ensure_ascii=False))
 
     parts = []
     for block in result.content:
@@ -932,13 +960,21 @@ def _normalize_result(result) -> tuple[str, bool]:
             else:
                 uri = getattr(resource, "uri", "unknown") if resource else "unknown"
                 parts.append(f"[resource: {uri}]")
+        elif block_type == "resource_link":
+            uri = getattr(block, "uri", "unknown")
+            name = getattr(block, "name", "")
+            if name and name != uri:
+                parts.append(f"[resource link: {uri} ({name})]")
+            else:
+                parts.append(f"[resource link: {uri}]")
         else:
             # Unknown content type — include type info as placeholder
             parts.append(f"[{block_type or 'unknown'}: unsupported content type]")
 
     text = "\n".join(parts)
+    if not parts and "structured_content" in getattr(result, "model_fields_set", ()):
+        text = json.dumps(result.structured_content, ensure_ascii=False)
 
     if result.is_error:
-        err = f"error: {text}" if text else "error: MCP tool returned an error"
-        return (err, True)
-    return (text if text else "(empty result)", False)
+        return _host_error("MCP tool returned an error", text)
+    return McpCallResult(text or "(empty result)")
