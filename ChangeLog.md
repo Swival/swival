@@ -2,6 +2,14 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.46
+
+- Provider calls now retry OpenAI's “Invalid prompt” rejection when it says the prompt was flagged as potentially violating its usage policy.
+- Waiting to collect a subagent result now shows an initial progress note and updates every 15 seconds, including elapsed time and the number of background agents still running.
+- Malformed tool-call feedback now summarizes removed unknown parameters instead of reporting each field separately, and lists the allowed parameters in correction messages.
+- Default communication guidance now emphasizes matching the requested language, readable prose, and direct answers. No one likes robotic AI-generated prose.
+- Swival no longer injects a reminder to use `think` after the model first changes a file without using it.
+
 ## 1.0.45
 
 - Large MCP tool catalogs now load schemas on demand through `tool_search`, leaving more context available for the conversation.
