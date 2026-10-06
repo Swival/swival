@@ -154,6 +154,20 @@ url = &quot;http://127.0.0.1:49374/mcp&quot;
 </code></pre>
 <p><code>transport</code> is accepted as a synonym for <code>type</code>. Pinning the transport also gives you a better error when the connection fails, since Swival reports the failure from the transport you asked for instead of the last one it tried.</p>
 <p>The accepted values are <code>http</code> (<code>streamable-http</code> and <code>streamable_http</code> mean the same thing), <code>sse</code>, and <code>stdio</code>, which is there so configs copied from other MCP clients load unchanged. Case and surrounding spaces are ignored. Anything else is a config error rather than a silent guess.</p>
+<h2 id="parallel-search">Parallel Search</h2>
+<p><a href="https://docs.parallel.ai/integrations/mcp/search-mcp">Parallel Search MCP</a> adds web search and page extraction without a local server or an API key. Its anonymous free tier is intended for exploration and light use, with rate limits. It uses Fast search mode; your configured model still runs the agent.</p>
+<p>Add this table to your project's <code>swival.toml</code>:</p>
+<pre><code class="language-toml">[mcp_servers.parallel]
+type = &quot;http&quot;
+url = &quot;https://search.parallel.ai/mcp&quot;
+headers = { &quot;User-Agent&quot; = &quot;Swival (+https://swival.dev)&quot; }
+</code></pre>
+<p>The server uses Streamable HTTP. The header identifies Swival to the service; no authorization header or Parallel credentials are needed.</p>
+<p>From the project directory, using your usual model configuration, run:</p>
+<pre><code class="language-sh">swival &quot;Use Parallel to find the official Python documentation for asyncio.TaskGroup, fetch that page, and summarize how it handles a failing task. Include the source URL.&quot;
+</code></pre>
+<p>Swival discovers <code>mcp__parallel__web_search</code> and <code>mcp__parallel__web_fetch</code> at startup. The model can use search to find sources, then fetch to read them. Search queries and requested URLs are sent to Parallel, so avoid including private project content in them.</p>
+<p>This server is enabled only when you add the table. It doesn't change your model provider or other configured servers. <code>--no-mcp</code> disables it along with all other MCP servers. Remove the table to stop using it.</p>
 <h2 id="json-configuration">JSON Configuration</h2>
 <p>Swival also reads <code>.swival/mcp.json</code>. This uses the same format as other MCP-compatible tools:</p>
 <pre><code class="language-json">{
