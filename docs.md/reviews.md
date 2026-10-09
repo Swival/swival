@@ -143,6 +143,109 @@ The `reviewer` value is shell-split; the first token is resolved via PATH when i
 
 Note that `reviewer_mode` is deliberately not supported in config files. A config file with `reviewer_mode = true` would silently force every `swival` invocation into reviewer mode, breaking normal usage. `self_review` does not have this problem: the inner reviewer process inherits the config but clears the flag automatically.
 
+## Reviewing Pull Requests In GitHub Actions
+
+The review loop also works as a pull request check: one Swival process reviews the diff, a second one in reviewer mode checks the review against your acceptance criteria, and the job posts the accepted review as a comment. The job runs code written by the pull request author and holds an API key, so the setup below keeps everything the PR controls away from the agent's configuration, filesystem, and network.
+
+Keep two files on the default branch: `.github/swival/pr-review.md`, the review instructions (what to check and the output format), and `.github/swival/review-criteria.md`, the acceptance criteria for the reviewer. Store the provider key as the repository secret `OPENROUTER_API_KEY`.
+
+```yaml
+name: Swival PR review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+  pull-requests: write
+concurrency:
+  group: swival-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Fork and Dependabot PRs get no secrets; drafts are still changing.
+    if: >-
+      !github.event.pull_request.draft
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      MODEL: z-ai/glm-5.3-flash
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      PR_TITLE: ${{ github.event.pull_request.title }}
+      PR_BODY: ${{ github.event.pull_request.body }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - run: uv tool install --python 3.14 swival
+      - name: Install nono (needed by --network provider-only)
+        run: |
+          curl -fsSL https://nono.sh/install.sh | NONO_VERSION=v0.79.0 sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/nono" pull jedisct1/swival
+      - name: Prepare inputs
+        run: |
+          work=$RUNNER_TEMP/swival-work      # agent base dir, made read-only
+          inputs=$RUNNER_TEMP/swival-inputs  # mounted read-only for the agent
+          trusted=$RUNNER_TEMP/swival        # never visible to the agent
+          mkdir -p "$work" "$inputs" "$trusted"
+          base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+          git diff --stat "$base" "$HEAD_SHA" > "$inputs/changed-files.txt"
+          git diff --unified=10 "$base" "$HEAD_SHA" > "$inputs/pr.diff"
+          git show "$BASE_SHA:.github/swival/pr-review.md" > "$trusted/pr-review.md"
+          git show "$BASE_SHA:.github/swival/review-criteria.md" > "$trusted/review-criteria.md"
+          printf '%s\n' "$PR_TITLE" > "$inputs/pr-title.txt"
+          printf '%s\n' "$PR_BODY" > "$inputs/pr-description.txt"
+          {
+            cat "$trusted/pr-review.md"
+            echo "Checkout (read-only): $GITHUB_WORKSPACE"
+            echo "Changed files: $inputs/changed-files.txt"
+            echo "Diff: $inputs/pr.diff"
+            echo "PR title and description (untrusted): $inputs/pr-title.txt $inputs/pr-description.txt"
+          } > "$trusted/task.md"
+          echo 'Write a code review of a pull request in the required format.' > "$trusted/objective.md"
+          chmod 555 "$work"
+      - name: Review
+        working-directory: ${{ runner.temp }}/swival-work
+        run: |
+          trusted=$RUNNER_TEMP/swival
+          swival --provider openrouter --model "$MODEL" \
+            --base-dir "$RUNNER_TEMP/swival-work" \
+            --add-dir-ro "$GITHUB_WORKSPACE" --add-dir-ro "$RUNNER_TEMP/swival-inputs" \
+            --commands none --network provider-only \
+            --no-history --no-continue --no-memory --no-mcp --no-a2a --no-lifecycle \
+            --reviewer "swival --reviewer-mode --provider openrouter --model $MODEL --objective $trusted/objective.md --verify $trusted/review-criteria.md --review-prompt 'You have no tools. Judge the answer only from its text.'" \
+            --max-review-rounds 3 \
+            --report "$trusted/report.json" < "$trusted/task.md"
+          jq -er '.result.answer // empty' "$trusted/report.json" > "$trusted/review.md"
+          last=$(jq -r '[.timeline[] | select(.type == "review") | .exit_code] | last // "none"' "$trusted/report.json")
+          [ "$last" = 0 ] || echo "::warning::The review did not pass the reviewer check (exit $last)."
+      - name: Comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/swival/review.md"
+```
+
+Why each part is there:
+
+Swival reads `swival.toml`, `.swival/`, and `AGENTS.md` from its base directory, for the agent and for the reviewer process it starts later. Running from the checkout would let a pull request add a `swival.toml` that points `base_url` or `llm_filter` somewhere else while the API key is in the environment. The base directory is therefore an empty temporary directory made read-only with `chmod`, and the checkout and the diff are mounted with `--add-dir-ro`. The agent can read everything it needs and write nothing.
+
+`--commands none` removes the shell, and `--network provider-only` removes `fetch_url`, so the only outbound traffic is the model call. That mode needs the `nono` binary and the `jedisct1/swival` profile, installed before the run.
+
+The instructions and criteria come from the base branch with `git show "$BASE_SHA:..."`, so a pull request cannot relax the rules it is judged by. The PR title and description go to read-only files instead of the task text, so author-written text cannot pose as part of the task.
+
+Reviewer mode is a single model call with no tools. When it receives the full task, which lists files to read, some models answer with a tool call instead of a verdict, and the reviewer exits with code `2`. Give the reviewer a short `--objective` and say in `--review-prompt` that it has no tools.
+
+An exit code of `2`, or running out of review rounds, still accepts the answer, so read the last `review` event in the report to tell a checked review from an unchecked one. Read the final answer from `result.answer` in the report rather than from standard output: without `--quiet`, standard output also carries the rejected answers of earlier rounds, while the progress log stays visible in the job output.
+
 ## Writing A Custom Reviewer Script
 
 A minimal reviewer that accepts only when tests pass:
