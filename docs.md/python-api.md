@@ -33,7 +33,7 @@ Session(
     api_key: str | None = None,
     user_agent: str | None = None,
     base_url: str | None = None,
-    max_turns: int = 100,
+    max_turns: int = 250,
     max_output_tokens: int = 32768,
     max_context_tokens: int | None = None,
     max_output_lines: int = 2000,

@@ -403,7 +403,7 @@ Swival can run a user-defined command before each shell command the agent issues
 swival --max-turns 10 "quick task"
 ```
 
-The default turn limit is `100`. If the loop reaches this limit without a final answer, Swival exits with code `2`.
+The default turn limit is `200` in the REPL and `250` in one-shot mode. If the loop reaches this limit without a final answer, Swival exits with code `2`.
 
 `--max-output-tokens` limits tokens generated per model call.
 

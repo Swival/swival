@@ -194,7 +194,7 @@ When `--profile` is combined with explicit flags like `--provider` or `--model`,
 
 ### Behavior Tuning Flags
 
-`--max-turns` sets the maximum number of loop iterations and defaults to `100`.
+`--max-turns` sets the maximum number of loop iterations. It defaults to `200` in the REPL and `250` in one-shot mode.
 
 `--max-output-tokens` sets the model output budget per call and defaults to `32768`.
 

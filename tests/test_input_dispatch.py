@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import types
 
+import pytest
+
 from swival.input_dispatch import (
     InputContext,
     is_command_script,
@@ -509,26 +511,27 @@ class TestGoalCommand:
         assert "[goal start]" in synth["content"]
         assert "Ship the auth migration" in synth["content"]
 
-    def test_goal_create_raises_default_max_turns(self, monkeypatch):
+    @pytest.mark.parametrize("default", [200, 250])
+    def test_goal_create_raises_default_max_turns(self, monkeypatch, default):
         from swival.agent import execute_input
 
         _stub_run_agent_step(monkeypatch)
         ctx = _make_goal_ctx()
-        ctx.turn_state["max_turns"] = 100
+        ctx.turn_state["max_turns"] = default
         result = execute_input(parse_input_line("/goal Ship it"), ctx, mode="repl")
         assert result.kind == "agent_turn"
         assert ctx.turn_state["max_turns"] == 500
-        assert ctx.turn_state["_swival_goal_previous_max_turns"] == 100
+        assert ctx.turn_state["_swival_goal_previous_max_turns"] == default
 
     def test_goal_create_preserves_non_default_max_turns(self, monkeypatch):
         from swival.agent import execute_input
 
         _stub_run_agent_step(monkeypatch)
         ctx = _make_goal_ctx()
-        ctx.turn_state["max_turns"] = 250
+        ctx.turn_state["max_turns"] = 300
         result = execute_input(parse_input_line("/goal Ship it"), ctx, mode="repl")
         assert result.kind == "agent_turn"
-        assert ctx.turn_state["max_turns"] == 250
+        assert ctx.turn_state["max_turns"] == 300
 
     def test_goal_summary_after_create(self, monkeypatch):
         from swival.agent import execute_input

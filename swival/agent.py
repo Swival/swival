@@ -49,7 +49,13 @@ from ._msg import (
     _set_msg_content,
     _tool_call_id,
 )
-from .config import _UNSET, INITIAL_TOOL_CHOICES, REASONING_LEVELS
+from .config import (
+    _UNSET,
+    INITIAL_TOOL_CHOICES,
+    ONESHOT_MAX_TURNS,
+    REASONING_LEVELS,
+    REPL_MAX_TURNS,
+)
 from .config import find_project_root as _find_project_root
 from .cost import CostObservation, SessionCost
 from .deferred_tools import TOOL_SEARCH_NAME, DeferredTools, defer_mcp_tools
@@ -6933,7 +6939,7 @@ def build_parser():
         "--max-turns",
         type=int,
         default=_UNSET,
-        help="Maximum agent loop iterations (default: 100).",
+        help="Maximum agent loop iterations (default: 200 in the REPL, 250 otherwise).",
     )
     behavior_group.add_argument(
         "--retries",
@@ -7784,6 +7790,9 @@ def main():
 
     if args.reviewer and args.repl:
         parser.error("--reviewer is incompatible with --repl")
+
+    if args.max_turns is None:
+        args.max_turns = REPL_MAX_TURNS if args.repl else ONESHOT_MAX_TURNS
 
     fmt.init(color=args.color, no_color=args.no_color)
 
@@ -8706,8 +8715,8 @@ def build_tools(
 
 
 _GOAL_TOOL_NAMES = {"complete_goal"}
-_DEFAULT_MAX_TURNS = 100
-_GOAL_DEFAULT_MAX_TURNS = _DEFAULT_MAX_TURNS * 5
+_DEFAULT_TURN_LIMITS = {REPL_MAX_TURNS, ONESHOT_MAX_TURNS}
+_GOAL_DEFAULT_MAX_TURNS = 500
 _GOAL_PREVIOUS_MAX_TURNS = "_swival_goal_previous_max_turns"
 _BTW_ABORT_MESSAGE = "/btw aborted; your conversation is unchanged."
 
@@ -8737,10 +8746,10 @@ def _ensure_goal_tools_disabled(tools: list) -> None:
 def _raise_goal_default_max_turns(turn_state: dict) -> None:
     """Save and raise the default turn limit for a new goal."""
     if (
-        turn_state.get("max_turns") == _DEFAULT_MAX_TURNS
+        turn_state.get("max_turns") in _DEFAULT_TURN_LIMITS
         and _GOAL_PREVIOUS_MAX_TURNS not in turn_state
     ):
-        turn_state[_GOAL_PREVIOUS_MAX_TURNS] = _DEFAULT_MAX_TURNS
+        turn_state[_GOAL_PREVIOUS_MAX_TURNS] = turn_state["max_turns"]
         turn_state["max_turns"] = _GOAL_DEFAULT_MAX_TURNS
 
 

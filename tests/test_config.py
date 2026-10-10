@@ -648,7 +648,7 @@ class TestApplyConfigToArgs:
     def test_sentinel_resolves_to_default(self):
         args = _make_args()
         apply_config_to_args(args, {})
-        assert args.max_turns == 100
+        assert args.max_turns is None
         assert args.provider == "lmstudio"
         assert args.yolo is False
         assert args.quiet is False

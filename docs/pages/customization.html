@@ -357,7 +357,7 @@ Don't add dependencies without asking.
 <p><code>--max-turns</code> limits how many agent-loop iterations are allowed.</p>
 <pre><code class="language-sh">swival --max-turns 10 &quot;quick task&quot;
 </code></pre>
-<p>The default turn limit is <code>100</code>. If the loop reaches this limit without a final answer, Swival exits with code <code>2</code>.</p>
+<p>The default turn limit is <code>200</code> in the REPL and <code>250</code> in one-shot mode. If the loop reaches this limit without a final answer, Swival exits with code <code>2</code>.</p>
 <p><code>--max-output-tokens</code> limits tokens generated per model call.</p>
 <pre><code class="language-sh">swival --max-output-tokens 16384 &quot;task&quot;
 </code></pre>

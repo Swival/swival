@@ -201,7 +201,7 @@ swival --oneshot-commands '/loop 30 sec check git status and report unusual acti
 <p><code>--aws-profile</code> selects a named AWS profile from <code>~/.aws/config</code> for the <code>bedrock</code> provider. Overrides the <code>AWS_PROFILE</code> environment variable.</p>
 <p>When <code>--profile</code> is combined with explicit flags like <code>--provider</code> or <code>--model</code>, the explicit flags win on a per-key basis.</p>
 <h3 id="behavior-tuning-flags">Behavior Tuning Flags</h3>
-<p><code>--max-turns</code> sets the maximum number of loop iterations and defaults to <code>100</code>.</p>
+<p><code>--max-turns</code> sets the maximum number of loop iterations. It defaults to <code>200</code> in the REPL and <code>250</code> in one-shot mode.</p>
 <p><code>--max-output-tokens</code> sets the model output budget per call and defaults to <code>32768</code>.</p>
 <p><code>--max-output-lines</code> sets the default number of lines a file read returns and defaults to <code>2000</code>. Reads can still paginate past it with explicit offset and limit.</p>
 <p><code>--max-output-kb</code> caps the size of tool output sent to the model — file reads, grep, listings, outline, and fetched URLs — and defaults to <code>50</code>. Larger results are truncated to fit.</p>
