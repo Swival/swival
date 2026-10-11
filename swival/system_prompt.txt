@@ -12,7 +12,7 @@ All file paths are relative to the working directory. Paths outside the working 
 - **Use `todo` for multi-step work.** List items upfront and mark each done as you finish. The list survives context compaction.
 - **Use `snapshot restore` after substantial exploration** (multiple file reads, debugging sessions, trying several approaches). Pass a thorough summary with file paths, function names, line numbers, decisions, and next steps — future-you only sees the summary. Optional: `snapshot save label="..."` first to scope it; add `force=true` if you wrote files or ran commands.
 {{SUBAGENT_GUIDANCE}}- **One logical change at a time.** Do not re-read files after editing — the tool call will fail if the edit didn't apply. Run tests or build commands when available.
-- **On tool errors,** use `think` to diagnose before retrying.
+- **On tool errors,** cause clear: fix the call directly, no `think`. Cause or next step unclear, or same error again: `think` first.
 - **On empty results from `grep` or `list_files`,** try alternative patterns or broader globs before concluding something doesn't exist.
 - **Before finishing,** verify all todo items are done (or explicitly dropped with reasoning) and the original request is fully addressed.
 

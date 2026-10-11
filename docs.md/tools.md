@@ -53,7 +53,9 @@ A stale `line_number` no longer forces a retry. If the requested line misses eve
 
 The optional `checksum` parameter guards against editing a file that changed since it was last read. Pass the latest `[checksum=...]` value reported for the path, whether that came from `read_file`, `write_file`, or an earlier `edit_file`. If the file no longer hashes to that value, the edit fails before touching anything, which catches the case where another process (or a parallel subagent) rewrote the file in between. It is optional: empty or whitespace-only values are treated as no checksum supplied, so weaker models that omit it are not penalized.
 
-A successful edit returns a fresh `[checksum=...]` trailer for the file's new contents, computed by hashing the bytes back from disk so it matches exactly what the next checksum check will compute. That lets the model chain several edits to the same file in one turn, feeding each edit's returned checksum into the next, without an intervening `read_file`.
+A successful edit returns an updated checksum for the next edit, without needing to read the file again. Reusing an outdated checksum causes an edit to fail.
+
+When making several edits at once, Swival asks the model to work from the bottom up to keep line numbers accurate.
 
 `edit_file` refuses an edit that looks copied from a truncated line.
 If the text being replaced ends exactly at the 2,000-character cutoff of a longer line, the model most likely copied the visible part of that line from `read_file` or `grep`, and the replacement would silently leave the hidden rest of the line in place.

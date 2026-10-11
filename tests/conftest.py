@@ -2,6 +2,7 @@
 
 import _thread
 import errno
+import json
 import os
 import shutil
 import subprocess
@@ -282,6 +283,24 @@ def _isolate_global_agents_md(monkeypatch):
         "swival.instructions.global_agents_md_path",
         lambda: Path("/nonexistent/.agents/AGENTS.md"),
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_chatgpt_login(monkeypatch, tmp_path_factory):
+    """Keep tests away from the developer's real ChatGPT login, which LiteLLM can refresh and rewrite."""
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path_factory.mktemp("chatgpt")))
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+
+
+@pytest.fixture
+def chatgpt_login():
+    """A stored ChatGPT login, so LiteLLM doesn't start a real device-code login."""
+    auth = {
+        "access_token": "test",
+        "account_id": "test",
+        "expires_at": time.time() + 3600,
+    }
+    (Path(os.environ["CHATGPT_TOKEN_DIR"]) / "auth.json").write_text(json.dumps(auth))
 
 
 def make_message(content=None, tool_calls=None):

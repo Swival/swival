@@ -8855,6 +8855,11 @@ _EDITING_GUIDANCE_BLOCK = (
     "Use `replace_all` only when every occurrence should change. Adding more context to "
     "`old_string` is a fallback, not the primary strategy.\n"
     "- Each call handles one edit. For multiple changes, make multiple calls.\n"
+    "- Independent edits of one logical change: all in one response, one call each. "
+    "They run in order.\n"
+    "- Edit needs result of earlier call: wait for that result.\n"
+    "- Several edits to one file in one response: order bottom to top, so "
+    "`line_number` stays valid. `checksum` on first edit only; a successful edit changes it.\n"
     "\n"
 )
 
