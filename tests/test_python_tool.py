@@ -4,7 +4,14 @@ import sys
 
 import pytest
 
-from swival.tools import PYTHON_TOOL, _run_python, dispatch, get_tool_schema
+from swival.tools import (
+    DEFAULT_TIMEOUT,
+    MAX_TIMEOUT,
+    PYTHON_TOOL,
+    _run_python,
+    dispatch,
+    get_tool_schema,
+)
 
 
 @pytest.fixture
@@ -139,6 +146,16 @@ def test_dispatch_passes_timeout(tmp_base):
         commands_unrestricted=True,
     )
     assert "timed out" in result
+
+
+@pytest.mark.parametrize(
+    "requested, applied", [(99999, MAX_TIMEOUT), (None, DEFAULT_TIMEOUT)]
+)
+def test_run_python_clamps_on_its_own(tmp_base, fake_long_job, requested, applied):
+    """Callers other than dispatch get the same ceiling and default."""
+    jobs, _ = fake_long_job
+    _run_python("# long-job", tmp_base, timeout=requested)
+    assert [job.waits for job in jobs] == [[applied]]
 
 
 def test_dispatch_suggests_run_python_for_old_name(tmp_base):

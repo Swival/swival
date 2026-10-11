@@ -146,13 +146,15 @@ swival --commands ask "Run the tests"
 
 In ask mode, Swival prompts before each new command bucket. Interpreter inline-code flags (`bash -c`, `python3 -c`, `node -e`, `bun -e`) are classified as separate high-risk buckets distinct from the plain interpreter name, so approving `bash` to run scripts does not also approve `bash -c` for arbitrary code. See [Safety and Sandboxing](safety-and-sandboxing.md#ask-mode) for details.
 
-Timeout defaults to 30 seconds and is clamped to a maximum of 240 seconds. While a command runs, Swival shows a transient progress indicator on stderr that fills toward the timeout, then wipes itself before the captured output prints. It is suppressed under `--quiet`, and for subagent and background commands.
+Timeout defaults to 30 seconds and is clamped to a maximum of 7,200 seconds (two hours). The ceiling is high on purpose. A model can wait for a long build or test suite in one call. With a low ceiling, it polls the job instead. Each poll costs a model request. While a command runs, Swival shows a transient progress indicator on stderr that fills toward the timeout, then wipes itself before the captured output prints. It is suppressed under `--quiet`, and for subagent and background commands.
+
+A running command is killed, along with its child processes, when you press Ctrl-C or Esc. The same happens when a subagent, an ACP session or an A2A task is cancelled. In that case, the tool result starts with `error: cancelled before the program finished`.
 
 Output is sanitized as it streams from the process. Programs that draw progress bars, spinners, or any live-updating display repaint the same region over and over, so Swival emulates a small terminal and collapses those repaints down to the final frame, the way a human sees it after the command finishes. This keeps intermediate frames out of the model's context and out of your terminal. The 1 MB hard cap applies to the retained sanitized output, not the raw byte volume, so a command that repaints one screen forever is not counted as truncated. When the cap is exceeded, `[output truncated at 1MB]` is appended.
 
 Inline command output is capped at 10 KB. Larger output is written to `.swival/cmd_output_*.txt`. Those files are cleaned up automatically after roughly ten minutes.
 
-Setting `background=true` launches the command detached and returns immediately with its PID and a log file path instead of waiting for it to exit. Standard output and standard error are appended to that log, which the model can read back later with `read_file`. This is how the agent starts long-running servers, file watchers, or any task meant to outlive a single tool call. The timeout does not apply to a backgrounded process, and the progress indicator is suppressed for it.
+Setting `background=true` launches the command detached and returns immediately with its PID and a log file path instead of waiting for it to exit. Standard output and standard error are appended to that log, which the model can read back later with `read_file`. This is how the agent starts servers, file watchers, and other processes that do not exit on their own. A long job that does finish, such as a build, is better run in the foreground with a large timeout. The timeout does not apply to a backgrounded process, and the progress indicator is suppressed for it.
 
 ## `run_shell_command`
 
@@ -162,7 +164,7 @@ Setting `background=true` launches the command detached and returns immediately 
 
 ## `run_python`
 
-`run_python` runs a Python snippet and returns its captured output. The code is handed straight to a fresh `python -c` subprocess in the workspace directory, with no shell in between, so there is nothing to quote or escape. It is meant for quickly evaluating a piece of Python without the argv-array or shell-string ceremony of `run_command` and `run_shell_command`. Parameters are `code` (required) and `timeout` (1-240 seconds, default 30). The subprocess runs with the same sanitized environment as the other command tools, so a snippet that shells out by name sees Swival's bundled dependency scripts stripped from `PATH`.
+`run_python` runs a Python snippet and returns its captured output. The code is handed straight to a fresh `python -c` subprocess in the workspace directory, with no shell in between, so there is nothing to quote or escape. It is meant for quickly evaluating a piece of Python without the argv-array or shell-string ceremony of `run_command` and `run_shell_command`. Parameters are `code` (required) and `timeout` (1-7200 seconds, default 30). The subprocess runs with the same sanitized environment as the other command tools, so a snippet that shells out by name sees Swival's bundled dependency scripts stripped from `PATH`.
 
 Because it executes arbitrary code, `run_python` is only exposed with `--commands all` or `--yolo`, the same trust tier as `run_shell_command`. On top of that it appears only when a Python interpreter is available (the one running Swival, or `python3`/`python` on `PATH` for standalone builds) and when the detected context window is at least 100,000 tokens, the same floor that auto-enables subagents. This tool is experimental.
 

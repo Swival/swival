@@ -1,19 +1,39 @@
 """Tests for the run_command tool."""
 
 import errno
+import json
 import os
 import re
 import shutil
 import stat
 import subprocess
 import sys
+import threading
 import time
+import types
 from pathlib import Path
 
 import pytest
 
-from conftest import run_command as _run_command, which_or_skip as _which
-from swival.tools import _read_file, dispatch
+from conftest import (
+    GROUP_LEADER_SCRIPT,
+    ScriptedLLM,
+    interrupt_once_started,
+    make_message,
+    make_tool_call,
+    process_group_is_gone,
+    read_pgid,
+    run_command as _run_command,
+    which_or_skip as _which,
+)
+from swival.tools import (
+    DEFAULT_TIMEOUT,
+    MAX_TIMEOUT,
+    _read_file,
+    clamp_timeout,
+    dispatch,
+    get_tool_schema,
+)
 
 
 @pytest.fixture
@@ -355,21 +375,7 @@ def test_process_tree_killed(tmp_base):
     match = re.search(r"PGID:(\d+)", result)
     assert match, f"missing PGID in output: {result!r}"
     pgid = int(match.group(1))
-
-    # Group should disappear quickly after timeout-driven kill.
-    for _ in range(20):
-        try:
-            os.killpg(pgid, 0)
-        except OSError as exc:
-            if exc.errno == errno.ESRCH:
-                break
-            if exc.errno == errno.EPERM:
-                pytest.fail(f"permission denied probing process group {pgid}")
-            raise
-        time.sleep(0.1)
-    else:
-        pytest.fail(f"process group {pgid} still exists after timeout kill")
-
+    assert process_group_is_gone(pgid)
     assert "timed out" in result
 
 
@@ -906,3 +912,204 @@ def test_background_popen_failure_cleans_up_log(tmp_base):
     if bg_dir.exists():
         leftovers = list(bg_dir.iterdir())
         assert not leftovers, f"orphan bg log files after Popen failure: {leftovers}"
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (None, DEFAULT_TIMEOUT),
+        ("soon", DEFAULT_TIMEOUT),
+        ("90", 90),
+        (0, 1),
+        (3600, 3600),
+        (MAX_TIMEOUT + 1, MAX_TIMEOUT),
+    ],
+)
+def test_clamp_timeout(value, expected):
+    assert clamp_timeout(value) == expected
+
+
+@pytest.mark.parametrize("name", ["run_command", "run_shell_command", "run_python"])
+def test_timeout_schema_states_the_ceiling(name):
+    description = get_tool_schema(name)["properties"]["timeout"]["description"]
+    assert f"(1-{MAX_TIMEOUT})" in description
+
+
+_LONG_JOB_CALLS = {
+    "run_command": {"command": ["long-job", "--all"]},
+    "run_shell_command": {"command": "./long-job --all"},
+    "run_python": {"code": "# long-job"},
+}
+
+
+def _dispatch_long_job(name, base_dir, **args):
+    return dispatch(
+        name,
+        {**_LONG_JOB_CALLS[name], **args},
+        base_dir,
+        resolved_commands={"long-job": "/opt/fake/long-job"},
+        commands_unrestricted=name != "run_command",
+        shell_allowed=True,
+    )
+
+
+@pytest.mark.parametrize("name", list(_LONG_JOB_CALLS))
+def test_long_job_finishes_in_one_wait(tmp_base, fake_long_job, name):
+    jobs, killed = fake_long_job
+    result = _dispatch_long_job(name, tmp_base, timeout=3600)
+    assert "all checks passed" in result
+    assert not result.startswith("error:")
+    assert [job.waits for job in jobs] == [[3600]]
+    assert killed == []
+
+
+@pytest.mark.parametrize("name", list(_LONG_JOB_CALLS))
+@pytest.mark.parametrize(
+    "requested, applied", [(None, DEFAULT_TIMEOUT), (99999, MAX_TIMEOUT)]
+)
+def test_long_job_gets_the_clamped_timeout(
+    tmp_base, fake_long_job, name, requested, applied
+):
+    jobs, _ = fake_long_job
+    args = {} if requested is None else {"timeout": requested}
+    _dispatch_long_job(name, tmp_base, **args)
+    assert [job.waits for job in jobs] == [[applied]]
+
+
+@pytest.mark.parametrize("name", list(_LONG_JOB_CALLS))
+def test_long_job_is_stopped_at_the_old_ceiling(tmp_base, fake_long_job, name):
+    jobs, killed = fake_long_job
+    result = _dispatch_long_job(name, tmp_base, timeout=240)
+    assert result.startswith("error: command timed out after 240s")
+    assert killed == jobs
+
+
+def test_long_wait_needs_no_model_request_while_it_runs(
+    tmp_path, monkeypatch, fake_long_job
+):
+    from swival import Session, agent
+
+    jobs, _ = fake_long_job
+    wait = make_tool_call(
+        "run_shell_command",
+        json.dumps({"command": "./long-job --all", "timeout": 3600}),
+    )
+    llm = ScriptedLLM([make_message(tool_calls=[wait])])
+    monkeypatch.setattr(agent, "call_llm", llm)
+    monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+    result = Session(base_dir=str(tmp_path), commands="all", history=False).run(
+        "Run the full check suite."
+    )
+
+    assert llm.calls == 2
+    assert [job.waits for job in jobs] == [[3600]]
+    tool_results = [m["content"] for m in result.messages if m.get("role") == "tool"]
+    assert len(tool_results) == 1
+    assert "all checks passed" in tool_results[0]
+
+
+def _group_leader(name: str):
+    if name == "run_command":
+        return ["sh", "-c", GROUP_LEADER_SCRIPT]
+    return GROUP_LEADER_SCRIPT
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-only: process groups")
+@pytest.mark.parametrize("name", ["run_command", "run_shell_command"])
+def test_cancel_stops_command_and_its_children(tmp_base, name):
+    cancel = threading.Event()
+    pgids: list[int | None] = []
+
+    def cancel_when_started():
+        pgids.append(read_pgid(tmp_base))
+        cancel.set()
+
+    threading.Thread(target=cancel_when_started, daemon=True).start()
+    started = time.monotonic()
+    result = dispatch(
+        name,
+        {"command": _group_leader(name), "timeout": 5},
+        tmp_base,
+        commands_unrestricted=True,
+        shell_allowed=True,
+        cancel_flag=cancel,
+    )
+
+    assert time.monotonic() - started < 4
+    assert result.startswith("error: cancelled before the program finished")
+    assert pgids and pgids[0] is not None
+    assert process_group_is_gone(pgids[0])
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-only: process groups")
+def test_interrupt_stops_command_and_its_children(tmp_base):
+    from swival.tools import _run_shell_command
+
+    interrupt_once_started(tmp_base)
+    with pytest.raises(KeyboardInterrupt):
+        _run_shell_command(GROUP_LEADER_SCRIPT, tmp_base, 60)
+
+    assert process_group_is_gone(read_pgid(tmp_base))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-only: process groups")
+def test_interrupt_while_draining_output_stops_leftover_children(tmp_base, monkeypatch):
+    """The shell exits at once, but its background child keeps the output pipe open while Swival drains it."""
+    from swival import tools
+
+    class InterruptedJoin(threading.Thread):
+        def join(self, timeout=None):
+            raise KeyboardInterrupt
+
+    fake_threading = types.SimpleNamespace(**vars(threading))
+    fake_threading.Thread = InterruptedJoin
+    monkeypatch.setattr(tools, "threading", fake_threading)
+
+    with pytest.raises(KeyboardInterrupt):
+        tools._run_shell_command("echo $$ > pgid; sleep 30 &", tmp_base, 60)
+
+    assert process_group_is_gone(read_pgid(tmp_base))
+
+
+def test_scaled_timeouts_reach_clamp_and_schemas(scaled_timeouts):
+    scaled_timeouts(maximum=2, default=1)
+    assert clamp_timeout(None) == 1
+    assert clamp_timeout(99999) == 2
+    for name in ("run_command", "run_shell_command", "run_python"):
+        timeout = get_tool_schema(name)["properties"]["timeout"]
+        assert timeout["default"] == 1
+        assert "(1-2). Defaults to 1." in timeout["description"]
+
+
+@pytest.mark.parametrize("maximum, default", [(10, 0), (10, 11)])
+def test_scaled_timeouts_reject_bad_limits(scaled_timeouts, maximum, default):
+    with pytest.raises(ValueError):
+        scaled_timeouts(maximum=maximum, default=default)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-only: process groups")
+def test_unattended_server_costs_its_whole_timeout(
+    tmp_path, monkeypatch, scaled_timeouts
+):
+    """Nobody can cancel a one-shot run, so a server left in the foreground holds it for the whole timeout."""
+    from swival import Session, agent
+
+    scaled_timeouts(maximum=1, default=1)
+    server = make_tool_call(
+        "run_shell_command",
+        json.dumps({"command": GROUP_LEADER_SCRIPT, "timeout": 99999}),
+    )
+    llm = ScriptedLLM([make_message(tool_calls=[server])])
+    monkeypatch.setattr(agent, "call_llm", llm)
+    monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+    result = Session(base_dir=str(tmp_path), commands="all", history=False).run(
+        "Start the dev server.", report=True
+    )
+
+    tool_results = [m["content"] for m in result.messages if m.get("role") == "tool"]
+    assert tool_results[0].startswith("error: command timed out after 1s")
+    (event,) = [e for e in result.report["timeline"] if e["type"] == "tool_call"]
+    assert 1 <= event["duration_s"] < 3
+    assert process_group_is_gone(read_pgid(str(tmp_path)))

@@ -1,5 +1,6 @@
 """Tests for subagent.py — parallel subagent support."""
 
+import json
 import threading
 import time
 import types
@@ -1064,3 +1065,68 @@ class TestSubagentSessionCost:
         assert seen["verbose"] is False
         assert seen["is_subagent"] is True
         assert sc.snapshot().known_usd == 0.004
+
+
+class TestLongCommandInChild:
+    """A child runs a command that outlasts the default 'collect' wait."""
+
+    CHILD_TASK = "CHILD-TASK: run the slow check"
+
+    def _llm(self, collect_args):
+        from swival._msg import _msg_content, _msg_role
+        from tests.conftest import make_message, make_tool_call
+
+        collects = []
+
+        def reply(tool, args, tc_id):
+            call = make_tool_call(tool, json.dumps(args), tc_id=tc_id)
+            return make_message(tool_calls=[call]), "stop"
+
+        def llm(*args, **kwargs):
+            messages = args[2]
+            users = [_msg_content(m) for m in messages if _msg_role(m) == "user"]
+            results = [_msg_content(m) for m in messages if _msg_role(m) == "tool"]
+            if any(self.CHILD_TASK in text for text in users):
+                if not results:
+                    slow_check = {
+                        "command": "sleep 0.5; echo child-done",
+                        "timeout": 99,
+                    }
+                    return reply("run_shell_command", slow_check, "c1")
+                return make_message(content=results[-1]), "stop"
+            if not results:
+                return reply("spawn_subagent", {"task": self.CHILD_TASK}, "p0")
+            if "child-done" in results[-1]:
+                return make_message(content="the check passed"), "stop"
+            collects.append(results[-1])
+            args = {"action": "collect", "subagent_id": "sub_1", **collect_args}
+            return reply("check_subagents", args, f"p{len(collects)}")
+
+        return llm, collects
+
+    def _run(self, tmp_path, monkeypatch, collect_args):
+        from swival import Session, agent
+
+        llm, collects = self._llm(collect_args)
+        monkeypatch.setattr(agent, "call_llm", llm)
+        monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+        session = Session(
+            base_dir=str(tmp_path), commands="all", subagents=True, history=False
+        )
+        return session.run("Run the slow check in a subagent."), collects
+
+    def test_default_collect_makes_the_parent_poll(
+        self, tmp_path, monkeypatch, scaled_timeouts
+    ):
+        scaled_timeouts(collect=0.1)
+        result, collects = self._run(tmp_path, monkeypatch, {})
+        assert result.answer == "the check passed"
+        assert len(collects) >= 2
+
+    def test_explicit_collect_timeout_waits_in_one_call(
+        self, tmp_path, monkeypatch, scaled_timeouts
+    ):
+        scaled_timeouts(collect=0.1)
+        result, collects = self._run(tmp_path, monkeypatch, {"timeout": 30})
+        assert result.answer == "the check passed"
+        assert len(collects) == 1

@@ -4346,7 +4346,7 @@ def handle_tool_call(
     _background = bool(parsed_args.get("background")) if _args_ok else False
     _show_spinner = _is_cmd and verbose and not is_subagent and not _background
     _command = parsed_args.get("command") if _args_ok else None
-    _timeout = clamp_timeout(parsed_args.get("timeout", 30)) if _args_ok else 30
+    _timeout = clamp_timeout(parsed_args.get("timeout") if _args_ok else None)
     # Rich allows only one active live display; this is safe because the LLM
     # spinner has stopped before dispatch begins and subagents are excluded.
     # The bar fills toward the same timeout the command tool enforces.
