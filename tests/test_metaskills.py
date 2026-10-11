@@ -910,3 +910,18 @@ class TestCancellation:
         # The command must be stopped before the interrupt goes on, not later.
         assert not host.in_host_call()
         assert process_group_is_gone(read_pgid(str(tmp_path)))
+
+
+class TestCommandStatus:
+    def test_spilled_failure(self, tmp_path):
+        host = _host(loop_kwargs=_commands_in(tmp_path))
+        argv = [sys.executable, "-c", "import sys; print('x' * 20_000); sys.exit(3)"]
+        r = host.command(argv, {})
+        assert "too large for context" in r["result"]
+        assert (r["ok"], r["exit_code"]) == (False, 3)
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix-only: signals")
+    def test_signal_exit(self, tmp_path):
+        host = _host(loop_kwargs=_commands_in(tmp_path))
+        r = host.command(["sh", "-c", "kill -TERM $$"], {})
+        assert (r["ok"], r["exit_code"]) == (False, -15)

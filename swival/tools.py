@@ -3311,12 +3311,11 @@ def _capture_process(
     header = output_header() if output_header is not None else ""
     if header and raw_output:
         raw_output = header + raw_output
-    parts: list[str] = []
 
-    if stop_status:
-        parts.append(stop_status)
-    elif proc.returncode != 0:
-        parts.append(f"Exit code: {proc.returncode}")
+    status = stop_status
+    if not status and proc.returncode != 0:
+        status = f"Exit code: {proc.returncode}"
+    parts: list[str] = [status] if status else []
 
     if raw_output:
         parts.append(raw_output)
@@ -3330,18 +3329,11 @@ def _capture_process(
 
     # Save large output to file instead of stuffing the context
     if len(result.encode("utf-8")) > MAX_INLINE_OUTPUT:
-        saved = _save_large_output(
+        saved, saved_path = _save_large_output_with_path(
             result, base_dir, was_truncated=output_truncated, scratch_dir=scratch_dir
         )
-        if stop_status:
-            # A failed disk write returns the original text, status included.
-            # Only the summary notice needs the status added.
-            prefix = "" if saved.startswith("error:") else f"{stop_status}\n"
-            result = prefix + saved
-        elif proc.returncode != 0:
-            result = f"{saved}\nExit code: {proc.returncode}"
-        else:
-            result = saved
+        # Keep the status first, like for short output. If saving failed, we got our own text back, with the status already on top.
+        result = f"{status}\n{saved}" if status and saved_path else saved
 
     return result
 

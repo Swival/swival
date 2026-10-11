@@ -548,7 +548,7 @@ def test_large_output_saved_to_file(tmp_base):
         timeout=30,
     )
     assert ".swival/" in result
-    assert "too large for context" in result
+    assert result.startswith("Command output too large for context")
     assert "read_file" in result
 
     # The file should actually exist

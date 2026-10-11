@@ -302,12 +302,8 @@ class MetaskillHostAPI:
 
         import re
 
-        # run_command reports a non-zero status on the first line, or on the
-        # last line when the output was saved to a file; anchor the search so
-        # output text cannot spoof it.
-        m = re.match(r"Exit code: (\d+)", result)
-        if m is None and "too large for context" in result:
-            m = re.search(r"\nExit code: (\d+)\Z", result)
+        # A failed command always has its status on the first line. Signals give negative codes. Output that starts with "Exit code:" can still fool this.
+        m = re.match(r"Exit code: (-?\d+)", result)
         ok = not result.startswith("error:") and m is None
         exit_code = 0 if ok else 1
         if m:
