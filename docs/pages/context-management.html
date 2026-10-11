@@ -187,6 +187,7 @@ Because this only removes scaffolding the model already acted on, the proactive 
 <h3 id="todo-state">Todo State</h3>
 <p>The <code>todo</code> tool tracks work items in memory for the duration of the session. When aggressive compaction drops the turns where the agent planned its work, the todo list still exists because the state object lives outside the message history.</p>
 <p>Swival also injects periodic reminders — if the agent hasn't checked its todo list for 3 turns and there are unfinished items, a reminder surfaces the list back into the conversation.</p>
+<p>A reminder that says the same thing as the last one adds little, so it comes back less often. The wait doubles each time, from 3 turns to 6, 12, and then at most 24. The wait goes back to 3 turns when the reminder text changes, for example after the agent finishes an item. It also goes back to 3 turns when compaction removes the last reminder from the conversation.</p>
 <h3 id="snapshot-history">Snapshot History</h3>
 <p>As described above, completed snapshot summaries are injected directly into the system prompt. This is the most durable persistence channel — the system prompt survives every compaction level, so investigation conclusions are never lost.</p>
 <h3 id="continue-here-files">Continue-Here Files</h3>

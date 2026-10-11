@@ -142,6 +142,8 @@ The `todo` tool tracks work items in memory for the duration of the session. Whe
 
 Swival also injects periodic reminders — if the agent hasn't checked its todo list for 3 turns and there are unfinished items, a reminder surfaces the list back into the conversation.
 
+A reminder that says the same thing as the last one adds little, so it comes back less often. The wait doubles each time, from 3 turns to 6, 12, and then at most 24. The wait goes back to 3 turns when the reminder text changes, for example after the agent finishes an item. It also goes back to 3 turns when compaction removes the last reminder from the conversation.
+
 ### Snapshot History
 
 As described above, completed snapshot summaries are injected directly into the system prompt. This is the most durable persistence channel — the system prompt survives every compaction level, so investigation conclusions are never lost.

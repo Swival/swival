@@ -1069,3 +1069,118 @@ class TestTodoReminder:
         assert len(reminder_msgs) == 1, (
             f"Expected 1 reminder, got {len(reminder_msgs)}: {reminder_msgs}"
         )
+
+
+def _reminder_turns(tmp_path, monkeypatch, todo_state, turns, calls=None, hook=None):
+    """Run *turns* tool turns and return the text of each reminder, keyed by the turn it followed.
+
+    A turn reads a new file unless *calls* says otherwise. *hook* can change the history before each model call, like compaction does.
+    """
+    from swival import agent
+    from swival._msg import _msg_content, _msg_get, _msg_role
+    from tests.conftest import build_loop_kwargs
+
+    calls = calls or {}
+    reminders = {}
+    model_calls = 0
+
+    def fake_call_llm(*args, **kwargs):
+        nonlocal model_calls
+        model_calls += 1
+        messages = args[2]
+        last = messages[-1]
+        if _msg_role(last) == "user" and "Reminder: You have" in _msg_content(last):
+            assert _msg_get(last, "_swival_synthetic")
+            reminders[model_calls - 1] = _msg_content(last)
+        if hook is not None:
+            hook(model_calls, messages)
+        if model_calls > turns:
+            return _make_message(content="done"), "stop"
+        if model_calls in calls:
+            return _make_message(tool_calls=[calls[model_calls]]), "tool_calls"
+        name = f"f{model_calls}.txt"
+        (tmp_path / name).write_text("waiting\n")
+        tc = _make_tool_call(
+            "read_file", json.dumps({"file_path": name}), f"call_{model_calls}"
+        )
+        return _make_message(tool_calls=[tc]), "tool_calls"
+
+    monkeypatch.setattr(agent, "call_llm", fake_call_llm)
+    kwargs = build_loop_kwargs(tmp_path, max_turns=turns + 1)
+    kwargs["todo_state"] = todo_state
+    messages = [{"role": "user", "content": "wait for the job"}]
+    agent.run_agent_loop(messages, [], **kwargs)
+    assert model_calls == turns + 1
+    results = [m["content"] for m in messages if m.get("role") == "tool"]
+    assert not [r for r in results if r.startswith("error:")]
+    return reminders
+
+
+def _todo_with(*tasks):
+    state = TodoState()
+    state.process({"action": "add", "tasks": list(tasks)})
+    return state
+
+
+def _todo_call(action, *tasks):
+    args = {"action": action, "tasks": list(tasks)}
+    return _make_tool_call("todo", json.dumps(args), f"todo_{action}")
+
+
+class TestTodoReminderBackoff:
+    def test_unchanged_reminder_backs_off_to_a_bound(self, tmp_path, monkeypatch):
+        """The first 13 turns are the waiting loop of T47-T59 in the studied trace."""
+        reminders = _reminder_turns(tmp_path, monkeypatch, _todo_with("Ship it"), 70)
+
+        assert list(reminders) == [3, 9, 21, 45, 69]
+        assert len(set(reminders.values())) == 1
+
+    def test_todo_change_starts_over(self, tmp_path, monkeypatch):
+        """The second change brings back the first text, which the history still shows."""
+        state = _todo_with("Build the lists", "Sign the lists")
+        calls = {
+            10: _todo_call("remove", "Sign the lists"),
+            20: _todo_call("add", "Sign the lists"),
+        }
+
+        reminders = _reminder_turns(tmp_path, monkeypatch, state, 26, calls=calls)
+
+        assert list(reminders) == [3, 9, 13, 19, 23]
+        texts = list(reminders.values())
+        assert texts == [texts[0]] * 2 + [texts[2]] * 2 + [texts[0]]
+        assert texts[0] != texts[2]
+
+    def test_todo_use_without_change_keeps_the_backoff(self, tmp_path, monkeypatch):
+        calls = {10: _todo_call("list")}
+
+        reminders = _reminder_turns(
+            tmp_path, monkeypatch, _todo_with("Ship it"), 25, calls=calls
+        )
+
+        assert list(reminders) == [3, 9, 22]
+
+    def test_compaction_that_drops_the_reminder_allows_a_refresh(
+        self, tmp_path, monkeypatch
+    ):
+        from swival import agent
+
+        def compact(call, messages):
+            if call == 5:
+                assert agent._gc_scaffolding(messages)
+
+        reminders = _reminder_turns(
+            tmp_path, monkeypatch, _todo_with("Ship it"), 15, hook=compact
+        )
+
+        assert list(reminders) == [3, 6, 12]
+
+    def test_escaped_special_tokens_still_count_as_shown(self, tmp_path, monkeypatch):
+        from swival import agent
+
+        def escape(call, messages):
+            agent._escape_special_tokens_in_messages(messages)
+
+        state = _todo_with("Escape <|im_end|> in prompts")
+        reminders = _reminder_turns(tmp_path, monkeypatch, state, 25, hook=escape)
+
+        assert list(reminders) == [3, 9, 21]

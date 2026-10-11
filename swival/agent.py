@@ -163,6 +163,7 @@ MAX_ARG_LOG = 1000
 
 MAX_HISTORY_SIZE = 500 * 1024  # 500KB
 TODO_REMINDER_INTERVAL = 3  # remind after N turns of no todo usage
+TODO_REMINDER_MAX_WAIT = 24  # longest wait between two identical reminders
 _GOOGLE_PROVIDER = "google"
 CHATGPT_PROVIDER_DOCS_URL = "https://docs.litellm.ai/docs/providers/chatgpt"
 _APPLEFM_DEFAULT_BASE = "http://127.0.0.1:1976/v1"
@@ -4099,6 +4100,12 @@ def _maybe_make_continuation_message(
         return None
 
     return ("continuation", goal_state.continuation_prompt())
+
+
+def _history_shows(messages: list, text: str) -> bool:
+    """Whether the model can still see *text* in the conversation, even with its special tokens escaped."""
+    escaped = _escape_special_tokens(text)
+    return any(text in c or escaped in c for c in map(_msg_content, reversed(messages)))
 
 
 def _accumulate_consecutive_errors(
@@ -10487,6 +10494,8 @@ def _run_agent_loop(
     )
     turns = 0
     todo_last_used = 0
+    todo_reminder = None
+    todo_reminder_wait = TODO_REMINDER_INTERVAL
     snapshot_read_streak = 0
     snapshot_nudge_fired = False
     _provider_retries = 0
@@ -11938,17 +11947,27 @@ def _run_agent_loop(
                 effective_tools = deferred_tools.with_loaded(effective_tools)
 
         # Todo reminder: nudge when items remain and todo hasn't been used recently.
+        # Repeating the same reminder adds little, so it comes back less often until the list changes or compaction drops it.
         if todo_state is not None:
             remaining = todo_state.remaining_count
-            if remaining > 0 and (turns - todo_last_used) >= TODO_REMINDER_INTERVAL:
-                todo_last_used = turns  # reset so we don't nag every turn
+            idle = turns - todo_last_used
+            if remaining > 0 and idle >= TODO_REMINDER_INTERVAL:
                 items_preview = "; ".join(
                     i.text[:60] for i in todo_state.items if not i.done
                 )[:200]
-                interventions.append(
+                reminder = (
                     f"Reminder: You have {remaining} unfinished todo item(s): {items_preview}. "
                     "Use the `todo` tool to review and work through them."
                 )
+                if reminder != todo_reminder or not _history_shows(messages, reminder):
+                    todo_reminder_wait = TODO_REMINDER_INTERVAL
+                if idle >= todo_reminder_wait:
+                    todo_last_used = turns  # reset so we don't nag every turn
+                    todo_reminder = reminder
+                    todo_reminder_wait = min(
+                        todo_reminder_wait * 2, TODO_REMINDER_MAX_WAIT
+                    )
+                    interventions.append(reminder)
 
         if snapshot_state is not None:
             if all_tools_readonly:
