@@ -2,6 +2,21 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.47
+
+- `run_python` can now call MCP tools explicitly allowed with a server's `python_tools` setting.
+  Code snippets can page, filter, and combine tool results before returning only printed output to the model.
+- MCP tool results now pass structured-only data to the model and summarize resource links, images, and audio.
+  JSON-RPC errors and invalid responses no longer degrade an otherwise working server.
+  Server-controlled error text now appears under the untrusted-content label.
+- The default turn limit is now 200 in the REPL and 250 in one-shot mode.
+- `run_command`, `run_shell_command`, and `run_python` timeouts can now reach two hours.
+- Command exit codes now appear before spilled-output previews and in reports and traces.
+  A nonzero exit code no longer marks a successful tool dispatch as a failure.
+- Repeated unchanged todo reminders now back off from 3 to 6, 12, and then 24 turns.
+- The agent now corrects understood tool errors without an extra `think` call.
+  It also groups independent file edits and applies same-file edits from bottom to top.
+
 ## 1.0.46
 
 - Provider calls now retry OpenAI's “Invalid prompt” rejection when it says the prompt was flagged as potentially violating its usage policy.
