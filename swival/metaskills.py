@@ -277,7 +277,7 @@ class MetaskillHostAPI:
         if not isinstance(argv, list) or not argv:
             return {
                 "ok": False,
-                "exit_code": -1,
+                "exit_code": None,
                 "result": "error: argv must be a non-empty list of strings",
                 "truncated": False,
             }
@@ -294,31 +294,30 @@ class MetaskillHostAPI:
         }
         dispatch_kwargs["report"] = self._report
         dispatch_kwargs["cancel_flag"] = self._cancel_flag
+        tool_meta: dict = {}
+        dispatch_kwargs["tool_meta"] = tool_meta
 
         t0 = time.monotonic()
         result = dispatch("run_command", args, base_dir, **dispatch_kwargs)
         duration = time.monotonic() - t0
         self._check_cancelled()
 
-        import re
-
-        # A failed command always has its status on the first line. Signals give negative codes. Output that starts with "Exit code:" can still fool this.
-        m = re.match(r"Exit code: (-?\d+)", result)
-        ok = not result.startswith("error:") and m is None
-        exit_code = 0 if ok else 1
-        if m:
-            exit_code = int(m.group(1))
+        # No code means that the command did not run to the end.
+        # It was blocked, it did not start, or it timed out.
+        exit_code = tool_meta.get("_swival_exit_code")
+        ok = exit_code == 0
 
         if self._report is not None:
-            self._report.events.append(
-                {
-                    "type": "metaskill_step",
-                    "operation": "command",
-                    "argv": argv[:3],
-                    "duration_s": round(duration, 3),
-                    "success": ok,
-                }
-            )
+            step = {
+                "type": "metaskill_step",
+                "operation": "command",
+                "argv": argv[:3],
+                "duration_s": round(duration, 3),
+                "success": ok,
+            }
+            if exit_code is not None:
+                step["exit_code"] = exit_code
+            self._report.events.append(step)
 
         result_text, truncated = _truncate(result, MAX_COMMAND_RESULT_CHARS)
         return {

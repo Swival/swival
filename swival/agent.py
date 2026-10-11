@@ -4213,6 +4213,7 @@ def _post_tool_bookkeeping(
             len(tool_msg["content"]),
             error=tool_msg["content"] if not tool_meta["succeeded"] else None,
             repairs=tool_meta.get("repairs"),
+            exit_code=tool_msg.get("_swival_exit_code"),
         )
 
     if snapshot_state is not None:
@@ -4356,8 +4357,9 @@ def handle_tool_call(
         else nullcontext()
     )
 
-    # Extra message keys from dispatch, such as the tool calls a run_python
-    # snippet made. They start with an underscore, so the model never sees them.
+    # Extra message keys from dispatch, such as a command's exit code or the
+    # tool calls a run_python snippet made. They start with an underscore, so
+    # the model never sees them.
     tool_meta: dict = {}
     t0 = time.monotonic()
     try:

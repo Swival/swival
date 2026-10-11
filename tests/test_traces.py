@@ -1058,3 +1058,53 @@ def test_bridge_child_calls_form_a_sidechain(tmp_path):
     final = [ln for ln in lines if ln["type"] == "assistant"][-1]
     assert final["parentUuid"] == result["uuid"]
     assert set(side) <= set().union(*(ln.keys() for ln in lines if ln is not side))
+
+
+def _command_trace(tmp_path, content, **tool_keys):
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "check"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "run_command", "arguments": '{"command": []}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": content, **tool_keys},
+        {"role": "assistant", "content": "done"},
+    ]
+    path = str(tmp_path / "trace.jsonl")
+    write_trace(messages, path=path, session_id="s1", base_dir="/tmp", model="m1")
+    return _read_lines(path)
+
+
+@pytest.mark.parametrize("code, content", [(0, "(no output)"), (1, "Exit code: 1")])
+def test_exit_code_forms_a_sidechain(tmp_path, code, content):
+    lines = _command_trace(tmp_path, content, _swival_exit_code=code)
+
+    result = next(ln for ln in lines if ln.get("toolUseResult") == content)
+    (side,) = [ln for ln in lines if ln.get("isSidechain")]
+    assert result["message"]["content"][0]["is_error"] is False
+    assert side["type"] == "system" and side["isMeta"] is True
+    assert side["parentUuid"] == result["uuid"]
+    assert json.loads(side["content"]) == {"exitCode": code}
+    assert set(side) <= set().union(*(ln.keys() for ln in lines if ln is not side))
+
+
+def test_no_sidechain_without_metadata(tmp_path):
+    lines = _command_trace(tmp_path, "Exit code: 1")
+    assert not any(ln.get("isSidechain") for ln in lines)
+
+
+def test_exit_code_shares_the_child_call_line(tmp_path):
+    child_calls = {"execution_id": "abc123", "calls": []}
+    lines = _command_trace(
+        tmp_path, "3", _swival_exit_code=0, _swival_child_calls=child_calls
+    )
+    (side,) = [ln for ln in lines if ln.get("isSidechain")]
+    assert json.loads(side["content"]) == {"childToolCalls": child_calls, "exitCode": 0}

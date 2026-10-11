@@ -3267,12 +3267,15 @@ def _capture_process(
     scratch_dir: str | None = None,
     output_header=None,
     cancel_flag=None,
+    tool_meta: dict | None = None,
 ) -> str:
     """Capture output from a running subprocess with timeout enforcement.
 
     ``output_header`` is called after the process exits and returns text to
     put before the output, including in spill files.
     Setting ``cancel_flag`` kills the process right away.
+    When the program exits on its own, its exit code goes into ``tool_meta``.
+    The output text can say anything, so nobody should parse the code from it.
     """
     sink = TerminalSink()
 
@@ -3313,8 +3316,11 @@ def _capture_process(
         raw_output = header + raw_output
 
     status = stop_status
-    if not status and proc.returncode != 0:
-        status = f"Exit code: {proc.returncode}"
+    if not status:
+        if tool_meta is not None:
+            tool_meta["_swival_exit_code"] = proc.returncode
+        if proc.returncode != 0:
+            status = f"Exit code: {proc.returncode}"
     parts: list[str] = [status] if status else []
 
     if raw_output:
@@ -3381,6 +3387,7 @@ def _run_shell_command(
     background: bool = False,
     net_jail: list[str] | None = None,
     cancel_flag=None,
+    tool_meta: dict | None = None,
 ) -> str:
     """Execute a shell string via sh -c (Unix) or cmd.exe /c (Windows)."""
     base_path = Path(base_dir)
@@ -3428,7 +3435,12 @@ def _run_shell_command(
         return f"error: failed to start shell command: {e}"
 
     return _capture_process(
-        proc, timeout, base_dir, scratch_dir=scratch_dir, cancel_flag=cancel_flag
+        proc,
+        timeout,
+        base_dir,
+        scratch_dir=scratch_dir,
+        cancel_flag=cancel_flag,
+        tool_meta=tool_meta,
     )
 
 
@@ -3459,6 +3471,7 @@ def _run_python(
     net_jail: list[str] | None = None,
     bridge=None,
     cancel_flag=None,
+    tool_meta: dict | None = None,
 ) -> str:
     """Execute *code* via a Python interpreter and return its captured output.
 
@@ -3504,7 +3517,12 @@ def _run_python(
 
     if bridge is None:
         return _capture_process(
-            proc, timeout, base_dir, scratch_dir=scratch_dir, cancel_flag=cancel_flag
+            proc,
+            timeout,
+            base_dir,
+            scratch_dir=scratch_dir,
+            cancel_flag=cancel_flag,
+            tool_meta=tool_meta,
         )
 
     def finish_and_label() -> str:
@@ -3522,6 +3540,7 @@ def _run_python(
             scratch_dir=scratch_dir,
             output_header=finish_and_label,
             cancel_flag=cancel_flag,
+            tool_meta=tool_meta,
         )
     finally:
         bridge.finish()
@@ -3650,6 +3669,7 @@ def _run_argv_command(
     background: bool = False,
     net_jail: list[str] | None = None,
     cancel_flag=None,
+    tool_meta: dict | None = None,
 ) -> str:
     """Execute an argv-form command and return its output."""
     if not command:
@@ -3742,7 +3762,12 @@ def _run_argv_command(
         return f"error: failed to start command: {e}"
 
     return _capture_process(
-        proc, timeout, base_dir, scratch_dir=scratch_dir, cancel_flag=cancel_flag
+        proc,
+        timeout,
+        base_dir,
+        scratch_dir=scratch_dir,
+        cancel_flag=cancel_flag,
+        tool_meta=tool_meta,
     )
 
 
@@ -3757,6 +3782,7 @@ def _execute_normalized_command(
     background: bool = False,
     net_jail: list[str] | None = None,
     cancel_flag=None,
+    tool_meta: dict | None = None,
 ) -> str:
     """Execute a pre-normalized command call."""
     bg_capacity_note: str | None = None
@@ -3776,6 +3802,7 @@ def _execute_normalized_command(
             background=background,
             net_jail=net_jail,
             cancel_flag=cancel_flag,
+            tool_meta=tool_meta,
         )
     else:
         result = _run_argv_command(
@@ -3788,6 +3815,7 @@ def _execute_normalized_command(
             background=background,
             net_jail=net_jail,
             cancel_flag=cancel_flag,
+            tool_meta=tool_meta,
         )
 
     if normalized.repair_note:
@@ -4353,6 +4381,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             background=bool(args.get("background", False)),
             net_jail=kwargs.get("net_jail"),
             cancel_flag=kwargs.get("cancel_flag"),
+            tool_meta=kwargs.get("tool_meta"),
         )
     elif name == "run_python":
         unrestricted = kwargs.get("commands_unrestricted", False)
@@ -4367,6 +4396,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
         except (ValueError, TypeError):
             return "error: timeout must be an integer"
         bridge = _python_bridge(timeout, kwargs)
+        tool_meta = kwargs.get("tool_meta")
         result = _run_python(
             code if isinstance(code, str) else "",
             base_dir,
@@ -4375,10 +4405,10 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             net_jail=kwargs.get("net_jail"),
             bridge=bridge,
             cancel_flag=kwargs.get("cancel_flag"),
+            tool_meta=tool_meta,
         )
         if bridge is not None and bridge.started:
             execution = bridge.stats.to_dict()
-            tool_meta = kwargs.get("tool_meta")
             if tool_meta is not None:
                 # Kept for traces; the model never sees underscore keys.
                 tool_meta["_swival_child_calls"] = execution

@@ -734,6 +734,7 @@ def _host(
     cancel_flag=None,
     host_cls=MetaskillHostAPI,
     loop_kwargs=None,
+    report=None,
     **budget,
 ):
     b = MetaskillBudget(timeout_s=timeout_s, **budget)
@@ -744,7 +745,7 @@ def _host(
         loop_kwargs=loop_kwargs or {"base_dir": "."},
         tools=[],
         cancel_flag=cancel_flag,
-        report=None,
+        report=report,
         verbose=False,
     )
 
@@ -925,3 +926,29 @@ class TestCommandStatus:
         host = _host(loop_kwargs=_commands_in(tmp_path))
         r = host.command(["sh", "-c", "kill -TERM $$"], {})
         assert (r["ok"], r["exit_code"]) == (False, -15)
+
+    @pytest.mark.parametrize("text", ["Exit code: 7", "error: not really"])
+    def test_printed_status_is_ignored(self, tmp_path, text):
+        host = _host(loop_kwargs=_commands_in(tmp_path))
+        r = host.command([sys.executable, "-c", f"print({text!r})"], {})
+        assert r["result"].startswith(text)
+        assert (r["ok"], r["exit_code"]) == (True, 0)
+
+    @pytest.mark.parametrize("argv", [[], ["swival-no-such-program"]])
+    def test_no_code_when_the_command_did_not_run(self, tmp_path, argv):
+        host = _host(loop_kwargs=_commands_in(tmp_path))
+        r = host.command(argv, {})
+        assert r["result"].startswith("error:")
+        assert (r["ok"], r["exit_code"]) == (False, None)
+
+    def test_report_step_has_the_code(self, tmp_path):
+        from swival.report import ReportCollector
+
+        report = ReportCollector()
+        host = _host(loop_kwargs=_commands_in(tmp_path), report=report)
+        host.command([sys.executable, "-c", "pass"], {})
+        host.command(["swival-no-such-program"], {})
+        steps = [e for e in report.events if e["type"] == "metaskill_step"]
+        assert [s["success"] for s in steps] == [True, False]
+        assert steps[0]["exit_code"] == 0
+        assert "exit_code" not in steps[1]

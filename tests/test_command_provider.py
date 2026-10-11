@@ -906,13 +906,41 @@ class TestCommandToolContextPrefix:
 # ---------------------------------------------------------------------------
 
 
+def _handle_tool_call_kwargs(tmp_path, shell_allowed=True):
+    from swival.thinking import ThinkingState
+    from swival.todo import TodoState
+
+    return dict(
+        base_dir=str(tmp_path),
+        thinking_state=ThinkingState(),
+        verbose=False,
+        resolved_commands={},
+        skills_catalog={},
+        skill_read_roots=[],
+        extra_write_roots=[],
+        files_mode="some",
+        commands_unrestricted=True,
+        shell_allowed=shell_allowed,
+        file_tracker=None,
+        todo_state=TodoState(),
+        snapshot_state=None,
+        mcp_manager=None,
+        a2a_manager=None,
+        subagent_manager=None,
+        messages=None,
+        image_stash=None,
+        scratch_dir=None,
+        command_policy=None,
+        is_subagent=False,
+        report=None,
+    )
+
+
 class TestCommandProviderShellAllowed:
     """Verify shell_allowed propagates through the command-provider tool-call path."""
 
     def _run_shell_call(self, tmp_path, monkeypatch, shell_allowed):
         from swival.agent import _call_command_with_tools
-        from swival.thinking import ThinkingState
-        from swival.todo import TodoState
 
         shell_response = (
             '<swival:call id="c1" name="run_shell_command">'
@@ -929,34 +957,10 @@ class TestCommandProviderShellAllowed:
 
         monkeypatch.setattr(sp, "run", fake_run)
 
-        tc_kwargs = dict(
-            base_dir=str(tmp_path),
-            thinking_state=ThinkingState(),
-            verbose=False,
-            resolved_commands={},
-            skills_catalog={},
-            skill_read_roots=[],
-            extra_write_roots=[],
-            files_mode="some",
-            commands_unrestricted=True,
-            shell_allowed=shell_allowed,
-            file_tracker=None,
-            todo_state=TodoState(),
-            snapshot_state=None,
-            mcp_manager=None,
-            a2a_manager=None,
-            subagent_manager=None,
-            messages=None,
-            image_stash=None,
-            scratch_dir=None,
-            command_policy=None,
-            is_subagent=False,
-            report=None,
-        )
         _msg, _stop, activity = _call_command_with_tools(
             command_str="echo test",
             messages=[{"role": "user", "content": "hi"}],
-            handle_tool_call_kwargs=tc_kwargs,
+            handle_tool_call_kwargs=_handle_tool_call_kwargs(tmp_path, shell_allowed),
             outer_turn=0,
             outer_turn_offset=0,
             report=None,
@@ -975,6 +979,47 @@ class TestCommandProviderShellAllowed:
         """With shell_allowed=False, run_shell_command via <swival:call> is blocked."""
         activity = self._run_shell_call(tmp_path, monkeypatch, shell_allowed=False)
         assert not activity[0]["succeeded"]
+
+
+def test_failing_command_is_not_a_tool_error(tmp_path, monkeypatch):
+    from swival.a2a_types import EVENT_TOOL_FINISH, EVENT_TOOL_START
+    from swival.agent import _call_command_with_tools
+    from swival.report import ReportCollector
+
+    call = (
+        '<swival:call id="c1" name="run_shell_command">'
+        '{"command": "exit 1"}'
+        "</swival:call>"
+    )
+    transcripts = []
+
+    def fake_run(cmd, **kwargs):
+        transcripts.append(kwargs["input"])
+        stdout = call if len(transcripts) == 1 else "Done."
+        return sp.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    report = ReportCollector()
+    events = []
+
+    _msg, _stop, activity = _call_command_with_tools(
+        command_str="echo test",
+        messages=[{"role": "user", "content": "hi"}],
+        handle_tool_call_kwargs=_handle_tool_call_kwargs(tmp_path),
+        outer_turn=0,
+        outer_turn_offset=0,
+        report=report,
+        snapshot_state=None,
+        verbose=False,
+        _emit=lambda kind, data: events.append(kind),
+    )
+
+    assert activity == [{"name": "run_shell_command", "succeeded": True}]
+    assert events == [EVENT_TOOL_START, EVENT_TOOL_FINISH]
+    (event,) = [e for e in report.events if e["type"] == "tool_call"]
+    assert (event["succeeded"], event["exit_code"]) == (True, 1)
+    assert "Exit code: 1" in transcripts[1]
+    assert "_swival" not in transcripts[1]
 
 
 class TestCommandProviderToolCatalog:
