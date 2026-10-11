@@ -22,9 +22,9 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "litellm>=1.103.3,<1.104",
+    "litellm>=1.105.0,<1.106",
     "tiktoken>=0.14.0",
-    "html-to-markdown>=3.17.1,<4",
+    "html-to-markdown>=3.17.2,<4",
     "rich>=15.0.0",
     "prompt-toolkit>=3.0.53",
     "mcp>=2.3.0,<3",
@@ -33,8 +33,8 @@ dependencies = [
     "starlette>=1.7.0",
     "uvicorn>=0.54.0",
     "fast-cipher>=0.2.2",
-    "boto3>=1.43.108",
-    "google-cloud-aiplatform>=2.3.0,<3",
+    "boto3>=1.43.111",
+    "google-cloud-aiplatform>=2.4.0,<3",
 ]
 
 [project.optional-dependencies]
@@ -73,7 +73,7 @@ packages = ["swival"]
 [tool.uv]
 package = true
 constraint-dependencies = ["requests>=2.34.2", "cryptography>=50.0.2"]
-override-dependencies = ["aiohttp>=3.14.4", "python-dotenv>=1.2.4"]
+override-dependencies = ["aiohttp>=3.14.5", "python-dotenv>=1.2.4"]
 
 [tool.ruff.lint]
 # Ruff 0.16 grew its default selection from 59 rules to 413. Keep the older,
@@ -89,7 +89,7 @@ markers = [
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
-    "ruff>=0.16.10,<0.17",
+    "ruff>=0.17.0,<0.18",
 ]
 website = [
     "markdown>=3.11",
