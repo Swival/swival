@@ -200,6 +200,18 @@ class TestArgumentParsing:
         mock_parser.error.assert_not_called()
         assert mock_args.repl is True
 
+    def test_default_max_turns_in_repl(self):
+        _, mock_args = _run_main_validation(repl=True)
+        assert mock_args.max_turns == 200
+
+    def test_default_max_turns_in_oneshot(self):
+        _, mock_args = _run_main_validation(question="a task")
+        assert mock_args.max_turns == 250
+
+    def test_explicit_max_turns_wins_in_repl(self):
+        _, mock_args = _run_main_validation(repl=True, max_turns=7)
+        assert mock_args.max_turns == 7
+
     @pytest.mark.parametrize(
         ("argv", "expected_splash"),
         [

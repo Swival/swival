@@ -1,19 +1,39 @@
 """Tests for the run_command tool."""
 
 import errno
+import json
 import os
 import re
 import shutil
 import stat
 import subprocess
 import sys
+import threading
 import time
+import types
 from pathlib import Path
 
 import pytest
 
-from conftest import run_command as _run_command, which_or_skip as _which
-from swival.tools import _read_file, dispatch
+from conftest import (
+    GROUP_LEADER_SCRIPT,
+    ScriptedLLM,
+    interrupt_once_started,
+    make_message,
+    make_tool_call,
+    process_group_is_gone,
+    read_pgid,
+    run_command as _run_command,
+    which_or_skip as _which,
+)
+from swival.tools import (
+    DEFAULT_TIMEOUT,
+    MAX_TIMEOUT,
+    _read_file,
+    clamp_timeout,
+    dispatch,
+    get_tool_schema,
+)
 
 
 @pytest.fixture
@@ -355,21 +375,7 @@ def test_process_tree_killed(tmp_base):
     match = re.search(r"PGID:(\d+)", result)
     assert match, f"missing PGID in output: {result!r}"
     pgid = int(match.group(1))
-
-    # Group should disappear quickly after timeout-driven kill.
-    for _ in range(20):
-        try:
-            os.killpg(pgid, 0)
-        except OSError as exc:
-            if exc.errno == errno.ESRCH:
-                break
-            if exc.errno == errno.EPERM:
-                pytest.fail(f"permission denied probing process group {pgid}")
-            raise
-        time.sleep(0.1)
-    else:
-        pytest.fail(f"process group {pgid} still exists after timeout kill")
-
+    assert process_group_is_gone(pgid)
     assert "timed out" in result
 
 
@@ -542,7 +548,7 @@ def test_large_output_saved_to_file(tmp_base):
         timeout=30,
     )
     assert ".swival/" in result
-    assert "too large for context" in result
+    assert result.startswith("Command output too large for context")
     assert "read_file" in result
 
     # The file should actually exist
@@ -906,3 +912,387 @@ def test_background_popen_failure_cleans_up_log(tmp_base):
     if bg_dir.exists():
         leftovers = list(bg_dir.iterdir())
         assert not leftovers, f"orphan bg log files after Popen failure: {leftovers}"
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (None, DEFAULT_TIMEOUT),
+        ("soon", DEFAULT_TIMEOUT),
+        ("90", 90),
+        (0, 1),
+        (3600, 3600),
+        (MAX_TIMEOUT + 1, MAX_TIMEOUT),
+    ],
+)
+def test_clamp_timeout(value, expected):
+    assert clamp_timeout(value) == expected
+
+
+@pytest.mark.parametrize("name", ["run_command", "run_shell_command", "run_python"])
+def test_timeout_schema_states_the_ceiling(name):
+    description = get_tool_schema(name)["properties"]["timeout"]["description"]
+    assert f"(1-{MAX_TIMEOUT})" in description
+
+
+_LONG_JOB_CALLS = {
+    "run_command": {"command": ["long-job", "--all"]},
+    "run_shell_command": {"command": "./long-job --all"},
+    "run_python": {"code": "# long-job"},
+}
+
+
+def _dispatch_long_job(name, base_dir, **args):
+    return dispatch(
+        name,
+        {**_LONG_JOB_CALLS[name], **args},
+        base_dir,
+        resolved_commands={"long-job": "/opt/fake/long-job"},
+        commands_unrestricted=name != "run_command",
+        shell_allowed=True,
+    )
+
+
+@pytest.mark.parametrize("name", list(_LONG_JOB_CALLS))
+def test_long_job_finishes_in_one_wait(tmp_base, fake_long_job, name):
+    jobs, killed = fake_long_job
+    result = _dispatch_long_job(name, tmp_base, timeout=3600)
+    assert "all checks passed" in result
+    assert not result.startswith("error:")
+    assert [job.waits for job in jobs] == [[3600]]
+    assert killed == []
+
+
+@pytest.mark.parametrize("name", list(_LONG_JOB_CALLS))
+@pytest.mark.parametrize(
+    "requested, applied", [(None, DEFAULT_TIMEOUT), (99999, MAX_TIMEOUT)]
+)
+def test_long_job_gets_the_clamped_timeout(
+    tmp_base, fake_long_job, name, requested, applied
+):
+    jobs, _ = fake_long_job
+    args = {} if requested is None else {"timeout": requested}
+    _dispatch_long_job(name, tmp_base, **args)
+    assert [job.waits for job in jobs] == [[applied]]
+
+
+@pytest.mark.parametrize("name", list(_LONG_JOB_CALLS))
+def test_long_job_is_stopped_at_the_old_ceiling(tmp_base, fake_long_job, name):
+    jobs, killed = fake_long_job
+    result = _dispatch_long_job(name, tmp_base, timeout=240)
+    assert result.startswith("error: command timed out after 240s")
+    assert killed == jobs
+
+
+def test_long_wait_needs_no_model_request_while_it_runs(
+    tmp_path, monkeypatch, fake_long_job
+):
+    from swival import Session, agent
+
+    jobs, _ = fake_long_job
+    wait = make_tool_call(
+        "run_shell_command",
+        json.dumps({"command": "./long-job --all", "timeout": 3600}),
+    )
+    llm = ScriptedLLM([make_message(tool_calls=[wait])])
+    monkeypatch.setattr(agent, "call_llm", llm)
+    monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+    result = Session(base_dir=str(tmp_path), commands="all", history=False).run(
+        "Run the full check suite."
+    )
+
+    assert llm.calls == 2
+    assert [job.waits for job in jobs] == [[3600]]
+    tool_results = [m["content"] for m in result.messages if m.get("role") == "tool"]
+    assert len(tool_results) == 1
+    assert "all checks passed" in tool_results[0]
+
+
+def _group_leader(name: str):
+    if name == "run_command":
+        return ["sh", "-c", GROUP_LEADER_SCRIPT]
+    return GROUP_LEADER_SCRIPT
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-only: process groups")
+@pytest.mark.parametrize("name", ["run_command", "run_shell_command"])
+def test_cancel_stops_command_and_its_children(tmp_base, name):
+    cancel = threading.Event()
+    pgids: list[int | None] = []
+
+    def cancel_when_started():
+        pgids.append(read_pgid(tmp_base))
+        cancel.set()
+
+    threading.Thread(target=cancel_when_started, daemon=True).start()
+    started = time.monotonic()
+    result = dispatch(
+        name,
+        {"command": _group_leader(name), "timeout": 5},
+        tmp_base,
+        commands_unrestricted=True,
+        shell_allowed=True,
+        cancel_flag=cancel,
+    )
+
+    assert time.monotonic() - started < 4
+    assert result.startswith("error: cancelled before the program finished")
+    assert pgids and pgids[0] is not None
+    assert process_group_is_gone(pgids[0])
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-only: process groups")
+def test_interrupt_stops_command_and_its_children(tmp_base):
+    from swival.tools import _run_shell_command
+
+    interrupt_once_started(tmp_base)
+    with pytest.raises(KeyboardInterrupt):
+        _run_shell_command(GROUP_LEADER_SCRIPT, tmp_base, 60)
+
+    assert process_group_is_gone(read_pgid(tmp_base))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-only: process groups")
+def test_interrupt_while_draining_output_stops_leftover_children(tmp_base, monkeypatch):
+    """The shell exits at once, but its background child keeps the output pipe open while Swival drains it."""
+    from swival import tools
+
+    class InterruptedJoin(threading.Thread):
+        def join(self, timeout=None):
+            raise KeyboardInterrupt
+
+    fake_threading = types.SimpleNamespace(**vars(threading))
+    fake_threading.Thread = InterruptedJoin
+    monkeypatch.setattr(tools, "threading", fake_threading)
+
+    with pytest.raises(KeyboardInterrupt):
+        tools._run_shell_command("echo $$ > pgid; sleep 30 &", tmp_base, 60)
+
+    assert process_group_is_gone(read_pgid(tmp_base))
+
+
+def test_scaled_timeouts_reach_clamp_and_schemas(scaled_timeouts):
+    scaled_timeouts(maximum=2, default=1)
+    assert clamp_timeout(None) == 1
+    assert clamp_timeout(99999) == 2
+    for name in ("run_command", "run_shell_command", "run_python"):
+        timeout = get_tool_schema(name)["properties"]["timeout"]
+        assert timeout["default"] == 1
+        assert "(1-2). Defaults to 1." in timeout["description"]
+
+
+@pytest.mark.parametrize("maximum, default", [(10, 0), (10, 11)])
+def test_scaled_timeouts_reject_bad_limits(scaled_timeouts, maximum, default):
+    with pytest.raises(ValueError):
+        scaled_timeouts(maximum=maximum, default=default)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-only: process groups")
+def test_unattended_server_costs_its_whole_timeout(
+    tmp_path, monkeypatch, scaled_timeouts
+):
+    """Nobody can cancel a one-shot run, so a server left in the foreground holds it for the whole timeout."""
+    from swival import Session, agent
+
+    scaled_timeouts(maximum=1, default=1)
+    server = make_tool_call(
+        "run_shell_command",
+        json.dumps({"command": GROUP_LEADER_SCRIPT, "timeout": 99999}),
+    )
+    llm = ScriptedLLM([make_message(tool_calls=[server])])
+    monkeypatch.setattr(agent, "call_llm", llm)
+    monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+
+    result = Session(base_dir=str(tmp_path), commands="all", history=False).run(
+        "Start the dev server.", report=True
+    )
+
+    tool_results = [m["content"] for m in result.messages if m.get("role") == "tool"]
+    assert tool_results[0].startswith("error: command timed out after 1s")
+    (event,) = [e for e in result.report["timeline"] if e["type"] == "tool_call"]
+    assert 1 <= event["duration_s"] < 3
+    assert "exit_code" not in event
+    assert process_group_is_gone(read_pgid(str(tmp_path)))
+
+
+def _dispatch_with_meta(name, args, base_dir, **kwargs):
+    meta: dict = {}
+    result = dispatch(
+        name,
+        args,
+        base_dir,
+        commands_unrestricted=True,
+        shell_allowed=True,
+        tool_meta=meta,
+        **kwargs,
+    )
+    return result, meta
+
+
+_EXIT_3 = {
+    "run_command": {"command": [sys.executable, "-c", "raise SystemExit(3)"]},
+    "run_shell_command": {"command": "exit 3"},
+    "run_python": {"code": "raise SystemExit(3)"},
+}
+
+
+@pytest.mark.parametrize("name", list(_EXIT_3))
+def test_exit_code_is_kept_apart_from_the_text(tmp_base, name):
+    result, meta = _dispatch_with_meta(name, _EXIT_3[name], tmp_base)
+    assert result.startswith("Exit code: 3")
+    assert meta == {"_swival_exit_code": 3}
+
+
+def test_printed_status_does_not_change_the_code(tmp_base):
+    result, meta = _dispatch_with_meta(
+        "run_command",
+        {"command": [sys.executable, "-c", "print('Exit code: 1')"]},
+        tmp_base,
+    )
+    assert result.startswith("Exit code: 1")
+    assert meta == {"_swival_exit_code": 0}
+
+
+def test_spilled_output_keeps_the_code(tmp_base):
+    code = "print('x' * 20_000); raise SystemExit(4)"
+    result, meta = _dispatch_with_meta(
+        "run_command", {"command": [sys.executable, "-c", code]}, tmp_base
+    )
+    assert "too large for context" in result
+    assert meta == {"_swival_exit_code": 4}
+
+
+@pytest.mark.parametrize(
+    "name, args",
+    [
+        ("run_command", {"command": ["swival-no-such-program"]}),
+        ("run_shell_command", {"command": "true", "background": True}),
+    ],
+)
+def test_no_code_when_nothing_exited(tmp_base, name, args):
+    result, meta = _dispatch_with_meta(name, args, tmp_base)
+    assert result.startswith(("error:", "Started background process"))
+    assert meta == {}
+
+
+def test_no_code_when_swival_stops_the_command(tmp_base):
+    cancel = threading.Event()
+    cancel.set()
+    sleeper = [sys.executable, "-c", "import time; time.sleep(30)"]
+    result, meta = _dispatch_with_meta(
+        "run_command", {"command": sleeper}, tmp_base, cancel_flag=cancel
+    )
+    assert result.startswith("error: cancelled")
+    assert meta == {}
+
+
+def test_no_code_after_a_timeout(tmp_base, fake_long_job):
+    result, meta = _dispatch_with_meta(
+        "run_shell_command", {"command": "./long-job", "timeout": 240}, tmp_base
+    )
+    assert result.startswith("error: command timed out")
+    assert meta == {}
+
+
+def test_failing_command_is_shown_as_a_result(tmp_base, monkeypatch):
+    from contextlib import nullcontext
+
+    from swival import agent, fmt
+    from swival.thinking import ThinkingState
+
+    shown = []
+    monkeypatch.setattr(fmt, "command_spinner", lambda *a, **k: nullcontext())
+    monkeypatch.setattr(fmt, "tool_call", lambda *a: None)
+    monkeypatch.setattr(fmt, "tool_result", lambda *a: shown.append("result"))
+    monkeypatch.setattr(fmt, "tool_error", lambda *a: shown.append("error"))
+    call = make_tool_call("run_shell_command", json.dumps({"command": "exit 1"}))
+
+    msg, meta = agent.handle_tool_call(
+        call,
+        tmp_base,
+        ThinkingState(),
+        True,
+        commands_unrestricted=True,
+        shell_allowed=True,
+    )
+
+    assert shown == ["result"]
+    assert meta["succeeded"] is True
+    assert msg["_swival_exit_code"] == 1
+
+
+def test_failing_checks_are_not_tool_errors(tmp_path, monkeypatch):
+    """Four checks that each exit with 1, as in the trace the plan studied.
+
+    Three more checks follow, one per turn, with the same result text.
+    The model would get a STOP if a nonzero exit counted as a tool error.
+    """
+    from swival import Session, agent
+    from swival.a2a_types import EVENT_TOOL_ERROR, EVENT_TOOL_FINISH
+
+    for program in ("grep", "test", "cmp"):
+        _which(program)
+    (tmp_path / "a.txt").write_text("a\n")
+    (tmp_path / "b.txt").write_text("b\n")
+    checks = [
+        ["grep", "-q", "needle", "a.txt"],
+        ["test", "-f", "missing.txt"],
+        ["cmp", "-s", "a.txt", "b.txt"],
+        [sys.executable, "-c", "raise SystemExit(1)"],
+    ]
+
+    def calls(argvs, prefix):
+        return [
+            make_tool_call("run_command", json.dumps({"command": argv}), f"{prefix}{i}")
+            for i, argv in enumerate(argvs)
+        ]
+
+    more = [["test", "-f", f"missing{i}.txt"] for i in range(3)]
+    llm = ScriptedLLM(
+        [make_message(tool_calls=calls(checks, "check"))]
+        + [
+            make_message(tool_calls=calls([argv], f"more{i}-"))
+            for i, argv in enumerate(more)
+        ]
+    )
+    monkeypatch.setattr(agent, "call_llm", llm)
+    monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+    session = Session(
+        base_dir=str(tmp_path),
+        commands="all",
+        history=False,
+        trace_dir=str(tmp_path / "traces"),
+    )
+    events = []
+    session.event_callback = lambda kind, data: events.append(kind)
+
+    result = session.run("Verify the signatures.", report=True)
+
+    tool_results = [m["content"] for m in result.messages if m.get("role") == "tool"]
+    assert len(tool_results) == 7
+    assert all(text.startswith("Exit code: 1") for text in tool_results)
+    nudges = [m["content"] for m in result.messages if m.get("role") == "user"][1:]
+    assert not any("STOP" in text or "IMPORTANT" in text for text in nudges)
+    assert events.count(EVENT_TOOL_FINISH) == 7
+    assert EVENT_TOOL_ERROR not in events
+
+    timeline = result.report["timeline"]
+    tool_events = [e for e in timeline if e["type"] == "tool_call"]
+    assert [(e["succeeded"], e["exit_code"]) for e in tool_events] == [(True, 1)] * 7
+    stats = result.report["stats"]
+    assert stats["tool_calls_by_name"]["run_command"] == {"succeeded": 7, "failed": 0}
+    assert stats["guardrail_interventions"] == 0
+
+    (trace,) = (tmp_path / "traces").glob("*.jsonl")
+    lines = [json.loads(line) for line in trace.read_text().splitlines()]
+    results = {
+        ln["uuid"]: ln["message"]["content"][0]
+        for ln in lines
+        if ln.get("toolUseResult") is not None and ln["type"] == "user"
+    }
+    sides = [ln for ln in lines if ln.get("isSidechain")]
+    assert len(results) == 7
+    assert not any(block["is_error"] for block in results.values())
+    assert sorted(side["parentUuid"] for side in sides) == sorted(results)
+    assert all(json.loads(side["content"]) == {"exitCode": 1} for side in sides)

@@ -8,6 +8,8 @@ trim or rewrite:
   - Instruction priority hierarchy and the always-binding safety rule
   - Edit semantics (verbatim old_string, line_number disambiguator,
     one edit per call, no re-read after edit)
+  - Batched edits: independent edits share a response, edits to one file go bottom to top
+  - Tool errors: fix an understood error directly, `think` only when it isn't understood
   - The literal <learned>...</learned> tag (downstream tooling parses it)
   - Explicit when-to-use triggers for think / todo / snapshot — Swival is
     expected to work with small models, so workflow guidance must remain
@@ -137,6 +139,40 @@ class TestEditContract:
             r"(do not|don't|never)[^.]{0,40}re-?read[^.]{0,40}(after )?edit",
             text,
         ), "no-re-read-after-edit guardrail missing"
+
+    def test_independent_edits_share_one_response(self):
+        text = _normalize(_read_prompt())
+        # Edits the model already knows shouldn't each cost a model request.
+        assert re.search(r"independent edits[^.]{0,80}one response", text), (
+            "independent edits must be allowed in one response"
+        )
+        assert re.search(r"result[^.]{0,40}wait|wait[^.]{0,40}result", text), (
+            "an edit that needs an earlier result must wait for it"
+        )
+
+    def test_several_edits_to_one_file(self):
+        text = _normalize(_read_prompt())
+        # An earlier edit can shift lines, and a stale line_number then quietly edits the wrong match.
+        assert re.search(r"bottom[^.]{0,120}line_number", text), (
+            "edits to one file must go bottom to top"
+        )
+        assert re.search(r"checksum[^.;]{0,40}first[^.;]{0,20}only", text), (
+            "a later edit to one file must not reuse the checksum"
+        )
+
+
+class TestToolErrorContract:
+    def test_think_only_when_the_error_is_not_understood(self):
+        text = _normalize(_read_prompt())
+        assert re.search(r"tool errors[^.]{0,80}directly, no `think`", text), (
+            "an understood error must get a direct fix"
+        )
+        assert re.search(r"unclear[^.]{0,80}think", text), (
+            "an unclear error must still go through `think`"
+        )
+        assert re.search(r"same error[^.]{0,40}think", text), (
+            "a repeated error must still go through `think`"
+        )
 
 
 class TestLearnedTagContract:

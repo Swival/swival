@@ -201,19 +201,21 @@ def write_trace(
                 },
                 toolUseResult=encrypted_raw,
             )
+            # A command's exit code and the tool calls a run_python snippet made.
+            # This reuses existing fields, since new ones would confuse
+            # HuggingFace, as noted below.
+            meta = {}
             child_calls = _msg_get(msg, "_swival_child_calls")
             if child_calls:
-                # Tool calls made by a run_python snippet. This reuses existing
-                # fields, since new ones would confuse HuggingFace, as noted below.
+                meta["childToolCalls"] = child_calls
+            exit_code = _msg_get(msg, "_swival_exit_code")
+            if exit_code is not None:
+                meta["exitCode"] = exit_code
+            if meta:
                 _append(
                     "system",
                     sidechain=True,
-                    content=enc(
-                        json.dumps(
-                            san_obj({"childToolCalls": child_calls}),
-                            ensure_ascii=False,
-                        )
-                    ),
+                    content=enc(json.dumps(san_obj(meta), ensure_ascii=False)),
                     level="info",
                     isMeta=True,
                 )

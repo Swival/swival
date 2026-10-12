@@ -113,6 +113,7 @@ class ReportCollector:
         result_length: int,
         error: str | None = None,
         repairs: list[dict] | None = None,
+        exit_code: int | None = None,
     ):
         self.total_tool_time += duration
         if name == "use_skill" and succeeded and arguments:
@@ -136,6 +137,8 @@ class ReportCollector:
             event["error"] = error
         if repairs:
             event["repairs"] = repairs
+        if exit_code is not None:
+            event["exit_code"] = exit_code
         self.events.append(event)
 
     def record_compaction(

@@ -200,29 +200,41 @@ class TestUntrustedPreview:
 
 
 # ---------------------------------------------------------------------------
-# _capture_process integration — exit code after preview
+# _capture_process integration — status before the spill notice
 # ---------------------------------------------------------------------------
 
 
+def _capture_big_failure(tmp_path):
+    from swival.tools import _capture_process
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import sys; print('A' * 25_000); sys.exit(42)"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    return _capture_process(proc, timeout=30, base_dir=str(tmp_path))
+
+
 class TestCaptureProcessPreview:
-    def test_exit_code_after_preview(self, tmp_path):
-        from swival.tools import _capture_process
+    def test_exit_code_before_notice(self, tmp_path):
+        result = _capture_big_failure(tmp_path)
 
-        cmd = [
-            sys.executable,
-            "-c",
-            "import sys; print('A' * 25_000); sys.exit(42)",
-        ]
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        result = _capture_process(proc, timeout=30, base_dir=str(tmp_path))
+        assert result.startswith("Exit code: 42\nCommand output too large")
+        assert result.endswith("[/preview]")
+        saved = next((tmp_path / ".swival").glob("cmd_output_*.txt"))
+        assert saved.read_text() == "Exit code: 42\n" + "A" * 25_000 + "\n"
 
-        assert "[preview]" in result
-        assert "[/preview]" in result
-        assert "Exit code: 42" in result
+    def test_failed_save_keeps_one_status(self, tmp_path, monkeypatch):
+        import swival.tools as tools
 
-        preview_end = result.index("[/preview]")
-        tail = result[preview_end:]
-        assert "Exit code: 42" in tail
+        def refuse(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(tools, "open", refuse, raising=False)
+        result = _capture_big_failure(tmp_path)
+
+        assert result.startswith("Exit code: 42\nAAA")
+        assert result.count("Exit code: 42") == 1
 
 
 # ---------------------------------------------------------------------------

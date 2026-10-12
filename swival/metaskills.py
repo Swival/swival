@@ -10,6 +10,7 @@ from typing import Any
 
 from .report import ReportCollector
 from .skills import SkillInfo
+from .subagent import _CompositeCancelFlag
 
 
 MAX_ASK_CALLS_DEFAULT = 5
@@ -138,7 +139,8 @@ class MetaskillHostAPI:
         self._trace = trace
         self._loop_kwargs = loop_kwargs
         self._tools = tools
-        self._cancel_flag = cancel_flag
+        # Ctrl-C only reaches the main thread, not the worker that runs the script, so we keep our own flag that interrupt() can set.
+        self._cancel_flag = _CompositeCancelFlag(cancel_flag, threading.Event())
         self._report = report
         self._verbose = verbose
         # Why the host stopped the script. Starlark hands back only the error
@@ -180,7 +182,11 @@ class MetaskillHostAPI:
         return self._budget.remaining()
 
     def cancelled(self) -> bool:
-        return self._cancel_flag is not None and self._cancel_flag.is_set()
+        return self._cancel_flag.is_set()
+
+    def interrupt(self) -> None:
+        """Stop the script and whatever host call it is running."""
+        self._cancel_flag.set()
 
     def _check_cancelled(self) -> None:
         if self.cancelled():
@@ -230,8 +236,7 @@ class MetaskillHostAPI:
         nested_kwargs.pop("turn_state", None)
         nested_kwargs.pop("goal_launch_turn", None)
 
-        if self._cancel_flag is not None:
-            nested_kwargs["cancel_flag"] = self._cancel_flag
+        nested_kwargs["cancel_flag"] = self._cancel_flag
 
         t0 = time.monotonic()
         answer, exhausted = run_agent_loop(**nested_kwargs)
@@ -272,15 +277,15 @@ class MetaskillHostAPI:
         if not isinstance(argv, list) or not argv:
             return {
                 "ok": False,
-                "exit_code": -1,
+                "exit_code": None,
                 "result": "error: argv must be a non-empty list of strings",
                 "truncated": False,
             }
 
-        opts = opts or {}
-        timeout = min(opts.get("timeout", 30), 120)
+        from .tools import clamp_timeout, dispatch
 
-        from .tools import dispatch
+        opts = opts or {}
+        timeout = min(clamp_timeout(opts.get("timeout")), 120)
 
         args = {"command": argv, "timeout": timeout}
         base_dir = self._loop_kwargs["base_dir"]
@@ -288,35 +293,31 @@ class MetaskillHostAPI:
             k: v for k, v in self._loop_kwargs.items() if k != "base_dir"
         }
         dispatch_kwargs["report"] = self._report
+        dispatch_kwargs["cancel_flag"] = self._cancel_flag
+        tool_meta: dict = {}
+        dispatch_kwargs["tool_meta"] = tool_meta
 
         t0 = time.monotonic()
         result = dispatch("run_command", args, base_dir, **dispatch_kwargs)
         duration = time.monotonic() - t0
         self._check_cancelled()
 
-        import re
-
-        # run_command reports a non-zero status on the first line, or on the
-        # last line when the output was saved to a file; anchor the search so
-        # output text cannot spoof it.
-        m = re.match(r"Exit code: (\d+)", result)
-        if m is None and "too large for context" in result:
-            m = re.search(r"\nExit code: (\d+)\Z", result)
-        ok = not result.startswith("error:") and m is None
-        exit_code = 0 if ok else 1
-        if m:
-            exit_code = int(m.group(1))
+        # No code means that the command did not run to the end.
+        # It was blocked, it did not start, or it timed out.
+        exit_code = tool_meta.get("_swival_exit_code")
+        ok = exit_code == 0
 
         if self._report is not None:
-            self._report.events.append(
-                {
-                    "type": "metaskill_step",
-                    "operation": "command",
-                    "argv": argv[:3],
-                    "duration_s": round(duration, 3),
-                    "success": ok,
-                }
-            )
+            step = {
+                "type": "metaskill_step",
+                "operation": "command",
+                "argv": argv[:3],
+                "duration_s": round(duration, 3),
+                "success": ok,
+            }
+            if exit_code is not None:
+                step["exit_code"] = exit_code
+            self._report.events.append(step)
 
         result_text, truncated = _truncate(result, MAX_COMMAND_RESULT_CHARS)
         return {
@@ -398,9 +399,11 @@ def _run_starlark(source: str, host_api: MetaskillHostAPI, input_data: dict) -> 
 # Extra time allowed for a host call that is still running at the deadline.
 _CALLBACK_GRACE_S = 2.0
 
-# How long a cancelled script may wait for a running host call. `command`
-# gives up after 120 seconds anyway, so this is only a safety net.
+# How long a cancelled script may wait for a running host call. Commands stop right away now, so this mostly covers a slow ask().
 _CANCELLED_CALL_WAIT_S = 125.0
+
+# How long Ctrl-C waits for the running host call to stop. Commands stop right away; this only caps a slow ask().
+_INTERRUPTED_CALL_WAIT_S = 5.0
 
 
 def _run_starlark_with_timeout(
@@ -411,7 +414,8 @@ def _run_starlark_with_timeout(
     Starlark stops plain computation at the deadline by itself.
     A cancellation is reported right away, unless a host call such as a
     command is running: then we wait for it to finish, so the script cannot
-    start anything new.
+    start anything new. Ctrl-C cancels the script the same way, gives the
+    running call a moment to stop, then propagates.
     """
     result_box: list = []
     error_box: list = []
@@ -423,21 +427,30 @@ def _run_starlark_with_timeout(
             error_box.append(e)
 
     t = threading.Thread(target=_target, daemon=True)
-    t.start()
-    give_up = time.monotonic() + max(0.0, host_api.remaining_time()) + _CALLBACK_GRACE_S
-    cancelled_at = None
-    while t.is_alive():
-        now = time.monotonic()
-        if host_api.cancelled():
-            cancelled_at = cancelled_at or now
-            if (
-                not host_api.in_host_call()
-                or now - cancelled_at >= _CANCELLED_CALL_WAIT_S
-            ):
+    try:
+        t.start()
+        give_up = (
+            time.monotonic() + max(0.0, host_api.remaining_time()) + _CALLBACK_GRACE_S
+        )
+        cancelled_at = None
+        while t.is_alive():
+            now = time.monotonic()
+            if host_api.cancelled():
+                cancelled_at = cancelled_at or now
+                if (
+                    not host_api.in_host_call()
+                    or now - cancelled_at >= _CANCELLED_CALL_WAIT_S
+                ):
+                    break
+            elif now >= give_up:
                 break
-        elif now >= give_up:
-            break
-        t.join(timeout=0.1)
+            t.join(timeout=0.1)
+    except BaseException:
+        # Stop the command before letting go: in one-shot mode Swival exits right away, and the worker dies without cleaning up.
+        host_api.interrupt()
+        if host_api.in_host_call():
+            t.join(timeout=_INTERRUPTED_CALL_WAIT_S)
+        raise
 
     if t.is_alive():
         raise host_api.stop_error()

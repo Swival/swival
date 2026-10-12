@@ -99,6 +99,15 @@ class TestReportCollector:
         assert r["stats"]["tool_calls_succeeded"] == 2
         assert r["stats"]["tool_calls_failed"] == 1
 
+    def test_tool_call_exit_code(self):
+        rc = ReportCollector()
+        rc.record_tool_call(1, "run_command", {}, True, 0.01, 12, exit_code=1)
+        rc.record_tool_call(1, "run_command", {}, True, 0.01, 11, exit_code=0)
+        rc.record_tool_call(1, "read_file", {}, True, 0.01, 10)
+
+        assert [e.get("exit_code", "absent") for e in rc.events] == [1, 0, "absent"]
+        assert rc.tool_stats["run_command"] == {"succeeded": 2, "failed": 0}
+
     def test_compaction_tracking(self):
         rc = ReportCollector()
         rc.record_compaction(3, "compact_messages", 95000, 62000)

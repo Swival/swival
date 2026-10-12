@@ -1,12 +1,20 @@
 """Tests for metaskills: discovery, tool exposure, execution, budgets, and errors."""
 
 import json
+import sys
 import threading
 import time
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+
+from conftest import (
+    GROUP_LEADER_SCRIPT,
+    interrupt_once_started,
+    process_group_is_gone,
+    read_pgid,
+)
 
 from swival.skills import (
     SkillInfo,
@@ -721,18 +729,29 @@ class _SlowTraceHost(MetaskillHostAPI):
         super().trace(kind, data)
 
 
-def _host(timeout_s=5.0, cancel_flag=None, host_cls=MetaskillHostAPI, **budget):
+def _host(
+    timeout_s=5.0,
+    cancel_flag=None,
+    host_cls=MetaskillHostAPI,
+    loop_kwargs=None,
+    report=None,
+    **budget,
+):
     b = MetaskillBudget(timeout_s=timeout_s, **budget)
     b.start()
     return host_cls(
         budget=b,
         trace=MetaskillTrace(),
-        loop_kwargs={"base_dir": "."},
+        loop_kwargs=loop_kwargs or {"base_dir": "."},
         tools=[],
         cancel_flag=cancel_flag,
-        report=None,
+        report=report,
         verbose=False,
     )
+
+
+def _commands_in(base_dir) -> dict:
+    return {"base_dir": str(base_dir), "commands_unrestricted": True}
 
 
 def _run_source(tmp_path, name, source, **kwargs):
@@ -863,3 +882,73 @@ class TestCancellation:
         # Only reported once the command had finished.
         assert finished == [True]
         assert host.stop is not None
+
+    def test_cancel_stops_the_running_command(self, tmp_path):
+        cancel = threading.Event()
+        host = _host(
+            timeout_s=60, cancel_flag=cancel, loop_kwargs=_commands_in(tmp_path)
+        )
+        threading.Timer(0.2, cancel.set).start()
+        started = time.monotonic()
+        with pytest.raises(MetaskillError, match="^cancelled$"):
+            host.command(["sleep", "30"], {"timeout": 3})
+        assert time.monotonic() - started < 2
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix-only: process groups")
+    def test_interrupt_stops_the_running_command(self, tmp_path, monkeypatch):
+        """Ctrl-C reaches only the main thread, while the command runs in the script's worker thread."""
+        import swival.metaskills as ms
+
+        def script(source, host_api, input_data):
+            with host_api.host_call():
+                host_api.command(["sh", "-c", GROUP_LEADER_SCRIPT], {"timeout": 60})
+
+        monkeypatch.setattr(ms, "_run_starlark", script)
+        host = _host(timeout_s=60, loop_kwargs=_commands_in(tmp_path))
+        interrupt_once_started(tmp_path)
+        with pytest.raises(KeyboardInterrupt):
+            _run_starlark_with_timeout("", host, {})
+        # The command must be stopped before the interrupt goes on, not later.
+        assert not host.in_host_call()
+        assert process_group_is_gone(read_pgid(str(tmp_path)))
+
+
+class TestCommandStatus:
+    def test_spilled_failure(self, tmp_path):
+        host = _host(loop_kwargs=_commands_in(tmp_path))
+        argv = [sys.executable, "-c", "import sys; print('x' * 20_000); sys.exit(3)"]
+        r = host.command(argv, {})
+        assert "too large for context" in r["result"]
+        assert (r["ok"], r["exit_code"]) == (False, 3)
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix-only: signals")
+    def test_signal_exit(self, tmp_path):
+        host = _host(loop_kwargs=_commands_in(tmp_path))
+        r = host.command(["sh", "-c", "kill -TERM $$"], {})
+        assert (r["ok"], r["exit_code"]) == (False, -15)
+
+    @pytest.mark.parametrize("text", ["Exit code: 7", "error: not really"])
+    def test_printed_status_is_ignored(self, tmp_path, text):
+        host = _host(loop_kwargs=_commands_in(tmp_path))
+        r = host.command([sys.executable, "-c", f"print({text!r})"], {})
+        assert r["result"].startswith(text)
+        assert (r["ok"], r["exit_code"]) == (True, 0)
+
+    @pytest.mark.parametrize("argv", [[], ["swival-no-such-program"]])
+    def test_no_code_when_the_command_did_not_run(self, tmp_path, argv):
+        host = _host(loop_kwargs=_commands_in(tmp_path))
+        r = host.command(argv, {})
+        assert r["result"].startswith("error:")
+        assert (r["ok"], r["exit_code"]) == (False, None)
+
+    def test_report_step_has_the_code(self, tmp_path):
+        from swival.report import ReportCollector
+
+        report = ReportCollector()
+        host = _host(loop_kwargs=_commands_in(tmp_path), report=report)
+        host.command([sys.executable, "-c", "pass"], {})
+        host.command(["swival-no-such-program"], {})
+        steps = [e for e in report.events if e["type"] == "metaskill_step"]
+        assert [s["success"] for s in steps] == [True, False]
+        assert steps[0]["exit_code"] == 0
+        assert "exit_code" not in steps[1]

@@ -49,7 +49,13 @@ from ._msg import (
     _set_msg_content,
     _tool_call_id,
 )
-from .config import _UNSET, INITIAL_TOOL_CHOICES, REASONING_LEVELS
+from .config import (
+    _UNSET,
+    INITIAL_TOOL_CHOICES,
+    ONESHOT_MAX_TURNS,
+    REASONING_LEVELS,
+    REPL_MAX_TURNS,
+)
 from .config import find_project_root as _find_project_root
 from .cost import CostObservation, SessionCost
 from .deferred_tools import TOOL_SEARCH_NAME, DeferredTools, defer_mcp_tools
@@ -157,6 +163,7 @@ MAX_ARG_LOG = 1000
 
 MAX_HISTORY_SIZE = 500 * 1024  # 500KB
 TODO_REMINDER_INTERVAL = 3  # remind after N turns of no todo usage
+TODO_REMINDER_MAX_WAIT = 24  # longest wait between two identical reminders
 _GOOGLE_PROVIDER = "google"
 CHATGPT_PROVIDER_DOCS_URL = "https://docs.litellm.ai/docs/providers/chatgpt"
 _APPLEFM_DEFAULT_BASE = "http://127.0.0.1:1976/v1"
@@ -4095,6 +4102,12 @@ def _maybe_make_continuation_message(
     return ("continuation", goal_state.continuation_prompt())
 
 
+def _history_shows(messages: list, text: str) -> bool:
+    """Whether the model can still see *text* in the conversation, even with its special tokens escaped."""
+    escaped = _escape_special_tokens(text)
+    return any(text in c or escaped in c for c in map(_msg_content, reversed(messages)))
+
+
 def _accumulate_consecutive_errors(
     name: str,
     result: str,
@@ -4207,6 +4220,7 @@ def _post_tool_bookkeeping(
             len(tool_msg["content"]),
             error=tool_msg["content"] if not tool_meta["succeeded"] else None,
             repairs=tool_meta.get("repairs"),
+            exit_code=tool_msg.get("_swival_exit_code"),
         )
 
     if snapshot_state is not None:
@@ -4340,7 +4354,7 @@ def handle_tool_call(
     _background = bool(parsed_args.get("background")) if _args_ok else False
     _show_spinner = _is_cmd and verbose and not is_subagent and not _background
     _command = parsed_args.get("command") if _args_ok else None
-    _timeout = clamp_timeout(parsed_args.get("timeout", 30)) if _args_ok else 30
+    _timeout = clamp_timeout(parsed_args.get("timeout") if _args_ok else None)
     # Rich allows only one active live display; this is safe because the LLM
     # spinner has stopped before dispatch begins and subagents are excluded.
     # The bar fills toward the same timeout the command tool enforces.
@@ -4350,8 +4364,9 @@ def handle_tool_call(
         else nullcontext()
     )
 
-    # Extra message keys from dispatch, such as the tool calls a run_python
-    # snippet made. They start with an underscore, so the model never sees them.
+    # Extra message keys from dispatch, such as a command's exit code or the
+    # tool calls a run_python snippet made. They start with an underscore, so
+    # the model never sees them.
     tool_meta: dict = {}
     t0 = time.monotonic()
     try:
@@ -6933,7 +6948,7 @@ def build_parser():
         "--max-turns",
         type=int,
         default=_UNSET,
-        help="Maximum agent loop iterations (default: 100).",
+        help="Maximum agent loop iterations (default: 200 in the REPL, 250 otherwise).",
     )
     behavior_group.add_argument(
         "--retries",
@@ -7784,6 +7799,9 @@ def main():
 
     if args.reviewer and args.repl:
         parser.error("--reviewer is incompatible with --repl")
+
+    if args.max_turns is None:
+        args.max_turns = REPL_MAX_TURNS if args.repl else ONESHOT_MAX_TURNS
 
     fmt.init(color=args.color, no_color=args.no_color)
 
@@ -8706,8 +8724,8 @@ def build_tools(
 
 
 _GOAL_TOOL_NAMES = {"complete_goal"}
-_DEFAULT_MAX_TURNS = 100
-_GOAL_DEFAULT_MAX_TURNS = _DEFAULT_MAX_TURNS * 5
+_DEFAULT_TURN_LIMITS = {REPL_MAX_TURNS, ONESHOT_MAX_TURNS}
+_GOAL_DEFAULT_MAX_TURNS = 500
 _GOAL_PREVIOUS_MAX_TURNS = "_swival_goal_previous_max_turns"
 _BTW_ABORT_MESSAGE = "/btw aborted; your conversation is unchanged."
 
@@ -8737,10 +8755,10 @@ def _ensure_goal_tools_disabled(tools: list) -> None:
 def _raise_goal_default_max_turns(turn_state: dict) -> None:
     """Save and raise the default turn limit for a new goal."""
     if (
-        turn_state.get("max_turns") == _DEFAULT_MAX_TURNS
+        turn_state.get("max_turns") in _DEFAULT_TURN_LIMITS
         and _GOAL_PREVIOUS_MAX_TURNS not in turn_state
     ):
-        turn_state[_GOAL_PREVIOUS_MAX_TURNS] = _DEFAULT_MAX_TURNS
+        turn_state[_GOAL_PREVIOUS_MAX_TURNS] = turn_state["max_turns"]
         turn_state["max_turns"] = _GOAL_DEFAULT_MAX_TURNS
 
 
@@ -8837,6 +8855,11 @@ _EDITING_GUIDANCE_BLOCK = (
     "Use `replace_all` only when every occurrence should change. Adding more context to "
     "`old_string` is a fallback, not the primary strategy.\n"
     "- Each call handles one edit. For multiple changes, make multiple calls.\n"
+    "- Independent edits of one logical change: all in one response, one call each. "
+    "They run in order.\n"
+    "- Edit needs result of earlier call: wait for that result.\n"
+    "- Several edits to one file in one response: order bottom to top, so "
+    "`line_number` stays valid. `checksum` on first edit only; a successful edit changes it.\n"
     "\n"
 )
 
@@ -10476,6 +10499,8 @@ def _run_agent_loop(
     )
     turns = 0
     todo_last_used = 0
+    todo_reminder = None
+    todo_reminder_wait = TODO_REMINDER_INTERVAL
     snapshot_read_streak = 0
     snapshot_nudge_fired = False
     _provider_retries = 0
@@ -11927,17 +11952,27 @@ def _run_agent_loop(
                 effective_tools = deferred_tools.with_loaded(effective_tools)
 
         # Todo reminder: nudge when items remain and todo hasn't been used recently.
+        # Repeating the same reminder adds little, so it comes back less often until the list changes or compaction drops it.
         if todo_state is not None:
             remaining = todo_state.remaining_count
-            if remaining > 0 and (turns - todo_last_used) >= TODO_REMINDER_INTERVAL:
-                todo_last_used = turns  # reset so we don't nag every turn
+            idle = turns - todo_last_used
+            if remaining > 0 and idle >= TODO_REMINDER_INTERVAL:
                 items_preview = "; ".join(
                     i.text[:60] for i in todo_state.items if not i.done
                 )[:200]
-                interventions.append(
+                reminder = (
                     f"Reminder: You have {remaining} unfinished todo item(s): {items_preview}. "
                     "Use the `todo` tool to review and work through them."
                 )
+                if reminder != todo_reminder or not _history_shows(messages, reminder):
+                    todo_reminder_wait = TODO_REMINDER_INTERVAL
+                if idle >= todo_reminder_wait:
+                    todo_last_used = turns  # reset so we don't nag every turn
+                    todo_reminder = reminder
+                    todo_reminder_wait = min(
+                        todo_reminder_wait * 2, TODO_REMINDER_MAX_WAIT
+                    )
+                    interventions.append(reminder)
 
         if snapshot_state is not None:
             if all_tools_readonly:

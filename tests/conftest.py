@@ -1,9 +1,16 @@
 """Shared test fixtures."""
 
+import _thread
+import errno
+import json
+import os
 import shutil
+import subprocess
+import threading
+import time
 import types
 from contextlib import contextmanager
-from io import StringIO
+from io import BytesIO, StringIO
 from pathlib import Path
 
 import pytest
@@ -91,6 +98,113 @@ def run_command(
     )
 
 
+class FakeLongJob:
+    """A pretend process that runs for `duration` seconds without really sleeping: shorter waits time out, longer ones succeed."""
+
+    # No real process can have this PID, so a stray kill can't hit anything.
+    pid = 2**30
+
+    def __init__(self, duration: float, output: bytes):
+        self.duration = duration
+        self.stdout = BytesIO(output)
+        self.returncode = None
+        self.waits: list[float | None] = []
+
+    def wait(self, timeout=None):
+        self.waits.append(timeout)
+        if timeout is not None and timeout < self.duration:
+            raise subprocess.TimeoutExpired("long-job", timeout)
+        self.returncode = 0
+        return 0
+
+
+@pytest.fixture
+def fake_long_job(monkeypatch):
+    """Make the command tools run anything that mentions "long-job" as a 30-minute FakeLongJob.
+
+    Returns the jobs started and the processes the tools tried to kill.
+    """
+    from swival import tools
+
+    jobs: list[FakeLongJob] = []
+    killed: list = []
+
+    def popen(args, **kwargs):
+        line = args if isinstance(args, str) else " ".join(map(str, args))
+        if "long-job" not in line:
+            return subprocess.Popen(args, **kwargs)
+        job = FakeLongJob(duration=1800, output=b"all checks passed\n")
+        jobs.append(job)
+        return job
+
+    fake_subprocess = types.SimpleNamespace(**vars(subprocess))
+    fake_subprocess.Popen = popen
+    monkeypatch.setattr(tools, "subprocess", fake_subprocess)
+    monkeypatch.setattr(tools, "_kill_process_tree", killed.append)
+    return jobs, killed
+
+
+@pytest.fixture
+def scaled_timeouts():
+    """Let a test shrink the timeout limits, and put the real ones back afterwards."""
+    from swival import subagent, tools
+
+    saved = tools.MAX_TIMEOUT, tools.DEFAULT_TIMEOUT, subagent._COLLECT_TIMEOUT
+
+    def scale(maximum=None, default=None, collect=None):
+        if maximum is not None:
+            tools.set_command_timeouts(maximum, default)
+        if collect is not None:
+            subagent.set_collect_timeout(collect)
+
+    yield scale
+    tools.set_command_timeouts(saved[0], saved[1])
+    subagent.set_collect_timeout(saved[2])
+
+
+# A command that leads its own process group, with a background child in it.
+GROUP_LEADER_SCRIPT = "echo $$ > pgid; sleep 30 & sleep 30"
+
+
+def read_pgid(base_dir: str, deadline: float = 10.0) -> int | None:
+    """Wait for a test command's `echo $$ > pgid` and return that PID, which is also its process group since Swival starts each command in its own session."""
+    pgid_file = Path(base_dir) / "pgid"
+    end = time.monotonic() + deadline
+    while time.monotonic() < end:
+        try:
+            text = pgid_file.read_text()
+        except FileNotFoundError:
+            text = ""
+        if text.endswith("\n"):
+            return int(text)
+        time.sleep(0.02)
+    return None
+
+
+def process_group_is_gone(pgid: int, deadline: float = 2.0) -> bool:
+    end = time.monotonic() + deadline
+    while time.monotonic() < end:
+        try:
+            os.killpg(pgid, 0)
+        except OSError as e:
+            if e.errno == errno.ESRCH:
+                return True
+            raise
+        time.sleep(0.05)
+    return False
+
+
+def interrupt_once_started(base_dir) -> None:
+    """Hit the main thread with Ctrl-C, in effect, as soon as the test command is running."""
+
+    def interrupt():
+        # Never interrupt after the call has returned, or we would stop pytest itself.
+        if read_pgid(str(base_dir)) is not None:
+            _thread.interrupt_main()
+
+    threading.Thread(target=interrupt, daemon=True).start()
+
+
 def which_or_skip(name: str) -> str:
     """Resolve a command name to its absolute path, skip test if not found."""
     path = shutil.which(name)
@@ -169,6 +283,24 @@ def _isolate_global_agents_md(monkeypatch):
         "swival.instructions.global_agents_md_path",
         lambda: Path("/nonexistent/.agents/AGENTS.md"),
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_chatgpt_login(monkeypatch, tmp_path_factory):
+    """Keep tests away from the developer's real ChatGPT login, which LiteLLM can refresh and rewrite."""
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path_factory.mktemp("chatgpt")))
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+
+
+@pytest.fixture
+def chatgpt_login():
+    """A stored ChatGPT login, so LiteLLM doesn't start a real device-code login."""
+    auth = {
+        "access_token": "test",
+        "account_id": "test",
+        "expires_at": time.time() + 3600,
+    }
+    (Path(os.environ["CHATGPT_TOKEN_DIR"]) / "auth.json").write_text(json.dumps(auth))
 
 
 def make_message(content=None, tool_calls=None):

@@ -182,6 +182,9 @@ The time spent in these calls is not added to `total_tool_time_s`, which already
 For `llm_call`, fields include `duration_s`, `prompt_tokens_est`, `finish_reason`, `is_retry`, and optionally `provider_retries` (retries within this call after network errors or prompt rejections; omitted when 0). Retry calls include `retry_reason`, the compaction strategy that produced the retried request shape. Like the `compaction` event's `strategy`, it is a single rung (`gc_scaffolding`, `compact_messages`, `strip_reasoning_content`, `drop_middle_turns`, `aggressive_drop`, `drop_tools`, or `emergency_truncate`) or a `+`-joined combination of them. Three non-rung values also appear: `drop_tools_unsupported` when the provider rejected function calling and the call was retried without tools, and `terminal_floor` or `terminal_floor_backstop` when a minimal fixed-budget prompt succeeded after the compaction ladder gave up. Prompt cache counts are not recorded per call; they are summed into the run-level `stats.prompt_cache` object instead.
 
 For `tool_call`, fields include `name`, `arguments`, `succeeded`, `duration_s`, and `result_length`. If arguments were invalid JSON, `arguments` is `null`. Failed tool calls include `error`.
+A command or `run_python` snippet that ran to the end also has `exit_code`.
+The field is absent when there is no exit status, for example after a timeout, a blocked command, or a background start.
+`succeeded` describes the tool, not the command. A command that exits with 1 has `succeeded: true` and `exit_code: 1`.
 
 For `compaction`, fields include `strategy`, `tokens_before`, and `tokens_after`. `strategy` is the rung or rungs applied in that pass: one of `gc_scaffolding`, `compact_messages`, `strip_reasoning_content`, `drop_middle_turns`, `aggressive_drop`, or `emergency_truncate`, or a `+`-joined combination when several ran together in a single pass. `drop_tools` can appear inside a combination; a pass that only dropped tools mutates no history and is not recorded as a compaction event.
 
@@ -223,7 +226,7 @@ For `repl_turn`, fields include `turn_offset` (the cumulative turn count at the 
 
 For `session_clear`, the event marks that a `/clear` or `/new` command reset the conversation state. No additional fields. These events appear only in REPL reports.
 
-For Agent MetaSKILL events: `metaskill_start` includes `name` and `language`. `metaskill_step` includes `operation` (`ask` or `command`), `purpose` or `argv`, `duration_s`, and `success`.
+For Agent MetaSKILL events: `metaskill_start` includes `name` and `language`. `metaskill_step` includes `operation` (`ask` or `command`), `purpose` or `argv`, `duration_s`, and `success`. A `command` step also has `exit_code` when the command ran to the end.
 
 `metaskill_finish` includes `name`, `status`, and `duration_s`. `metaskill_error` includes `name` and `error`. These events appear when `run_metaskill` is called.
 
@@ -312,8 +315,12 @@ Each session produces a `<session_id>.jsonl` file in the target directory. The f
 - `role: "tool"` becomes `type: "user"` with `tool_result` content blocks
 - `role: "system"` becomes `type: "system"` with the prompt text
 - Each message line includes `harness: "swival"` for HuggingFace detection (a trailing `last-prompt` marker line closes the file)
-- After a `run_python` result whose snippet [called MCP tools](mcp.md#calling-tools-from-run_python), a `type: "system"` line with `isSidechain: true` and `isMeta: true` holds the same call records as the report, as JSON under `childToolCalls`.
+- After some tool results, a `type: "system"` line with `isSidechain: true` and `isMeta: true` holds extra data as a JSON object.
+  `exitCode` is the exit code of a command or `run_python` snippet that ran to the end.
+  `childToolCalls` appears when a `run_python` snippet [called MCP tools](mcp.md#calling-tools-from-run_python). It holds the same call records as the report.
+  The line's `parentUuid` points to the tool result, which carries the `tool_use_id`.
   The conversation continues from the tool result, so readers that follow the main chain skip this line.
+  A nonzero exit code does not set `is_error` on the tool result. Only a tool error does.
 
 Works in one-shot mode, REPL mode, and through the Python API (`Session(trace_dir="traces/")`). When used with `Session.ask()`, all turns accumulate in a single file per session. Recognized credential tokens in the trace are always encrypted before the file is written, using the same key policy as report files.
 

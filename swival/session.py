@@ -19,6 +19,7 @@ from .config import (
     _UNSET,
     INITIAL_TOOL_CHOICES,
     NETWORK_MODES,
+    ONESHOT_MAX_TURNS,
     first_remote_integration,
 )
 from .cost import SessionCost
@@ -70,7 +71,7 @@ class Session:
         api_key: str | None = None,
         user_agent: str | None = None,
         base_url: str | None = None,
-        max_turns: int = 100,
+        max_turns: int = ONESHOT_MAX_TURNS,
         max_output_tokens: int = 32768,
         max_context_tokens: int | None = None,
         max_output_lines: int = 2000,

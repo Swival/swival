@@ -22,6 +22,11 @@ _WAIT_POLL_INTERVAL = 0.25
 _COLLECT_TIMEOUT = 300
 _COLLECT_UPDATE_INTERVAL = 15
 
+
+def _collect_timeout_description() -> str:
+    return f"Timeout in seconds for 'collect' (default: {_COLLECT_TIMEOUT:g})."
+
+
 # Keys from loop_kwargs that represent per-run mutable state or
 # non-shareable resources. Excluded when building the subagent template.
 SA_TEMPLATE_EXCLUDE = frozenset(
@@ -106,15 +111,23 @@ CHECK_SUBAGENTS_TOOL = {
                 },
                 "timeout": {
                     "type": "number",
-                    "description": (
-                        f"Timeout in seconds for 'collect' (default: {_COLLECT_TIMEOUT})."
-                    ),
+                    "description": _collect_timeout_description(),
                 },
             },
             "required": [],
         },
     },
 }
+
+
+def set_collect_timeout(seconds: float) -> None:
+    """Change the default 'collect' wait, and the schema text that tells the model about it. Meant for benchmarks; call it before the tools are built."""
+    global _COLLECT_TIMEOUT
+    if seconds <= 0:
+        raise ValueError(f"collect timeout must be > 0, got {seconds}")
+    _COLLECT_TIMEOUT = seconds
+    timeout = CHECK_SUBAGENTS_TOOL["function"]["parameters"]["properties"]["timeout"]
+    timeout["description"] = _collect_timeout_description()
 
 
 class _CompositeCancelFlag:

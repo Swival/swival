@@ -165,6 +165,11 @@ _INVERT_BOOL_KEYS: dict[str, str] = {
     "quiet": "verbose",
 }
 
+# The REPL has a human in the loop who can extend the budget with /continue.
+# Unattended runs get a larger budget because nobody can extend it.
+REPL_MAX_TURNS = 200
+ONESHOT_MAX_TURNS = 250
+
 # Argparse dest -> hardcoded default
 _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "provider": "lmstudio",
@@ -179,7 +184,7 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "temperature": None,
     "top_p": None,
     "seed": None,
-    "max_turns": 100,
+    "max_turns": None,
     "retries": 5,
     "provider_timeout": 900,
     "initial_tool_choice": "auto",
@@ -1486,7 +1491,7 @@ def generate_config(
         "# show_thinking = true            # keep streamed thinking in scrollback after the answer (default: off)",
         "",
         "# --- Agent behaviour ---",
-        "# max_turns = 50",
+        "# max_turns = 250                # default: 200 in the REPL, 250 otherwise",
         "# max_output_lines = 2000         # default line count for file reads",
         "# max_output_kb = 50              # tool output size cap in KB (reads, grep, listings, outline, fetch)",
         "# retries = 5                     # max attempts per provider call (1 = no retry)",

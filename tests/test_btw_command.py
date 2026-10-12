@@ -263,13 +263,13 @@ class TestStateIsolation:
         ctx = _make_ctx(goal_state=GoalState())
         ctx.goal_state.create("first")
         ctx.turn_state["max_turns"] = 500
-        ctx.turn_state[agent._GOAL_PREVIOUS_MAX_TURNS] = 100
+        ctx.turn_state[agent._GOAL_PREVIOUS_MAX_TURNS] = 200
         ctx.goal_state.set_status(GoalStatus.COMPLETE)
         agent._teardown_goal(ctx)
         ctx.goal_state.create("second")
         agent._raise_goal_default_max_turns(ctx.turn_state)
         assert ctx.turn_state["max_turns"] == 500
-        assert ctx.turn_state[agent._GOAL_PREVIOUS_MAX_TURNS] == 100
+        assert ctx.turn_state[agent._GOAL_PREVIOUS_MAX_TURNS] == 200
 
     def test_goal_budget_restores_after_completion(self, monkeypatch):
         goal = GoalState()

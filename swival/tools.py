@@ -38,6 +38,30 @@ warnings.filterwarnings(
     module=r"^swival\.tools$",
 )
 
+# High enough that the model can wait for a long build or test run in one call, instead of polling it and paying for a request each time.
+MAX_TIMEOUT = 7200
+DEFAULT_TIMEOUT = 30
+
+
+def _timeout_description() -> str:
+    return f"Timeout in seconds (1-{MAX_TIMEOUT}). Defaults to {DEFAULT_TIMEOUT}."
+
+
+def _command_timeout_description() -> str:
+    return (
+        f"{_timeout_description()} The command is killed when the timeout "
+        "expires. For a long job that exits on its own, set a timeout that "
+        "covers it and wait in one call instead of polling."
+    )
+
+
+_BACKGROUND_DESCRIPTION = (
+    "If true, launch the command detached and return immediately with the "
+    "PID and a log file path. stdout and stderr are appended to the log; "
+    "the tool does not wait for the process to exit. Use this for servers, "
+    "watchers, and other processes that do not exit on their own."
+)
+
 TOOLS = [
     {
         "type": "function",
@@ -715,12 +739,12 @@ RUN_COMMAND_TOOL = {
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Timeout in seconds (1-240). Defaults to 30.",
-                    "default": 30,
+                    "description": _command_timeout_description(),
+                    "default": DEFAULT_TIMEOUT,
                 },
                 "background": {
                     "type": "boolean",
-                    "description": "If true, launch the command detached and return immediately with the PID and a log file path. stdout and stderr are appended to the log; the tool does not wait for the process to exit. Use this for long-running servers, watchers, or tasks that outlive a single tool call.",
+                    "description": _BACKGROUND_DESCRIPTION,
                     "default": False,
                 },
             },
@@ -749,12 +773,12 @@ RUN_SHELL_COMMAND_TOOL = {
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Timeout in seconds (1-240). Defaults to 30.",
-                    "default": 30,
+                    "description": _command_timeout_description(),
+                    "default": DEFAULT_TIMEOUT,
                 },
                 "background": {
                     "type": "boolean",
-                    "description": "If true, launch the command detached and return immediately with the PID and a log file path. stdout and stderr are appended to the log; the tool does not wait for the process to exit.",
+                    "description": _BACKGROUND_DESCRIPTION,
                     "default": False,
                 },
             },
@@ -787,8 +811,8 @@ PYTHON_TOOL = {
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Timeout in seconds (1-240). Defaults to 30.",
-                    "default": 30,
+                    "description": _timeout_description(),
+                    "default": DEFAULT_TIMEOUT,
                 },
             },
             "required": ["code"],
@@ -2699,15 +2723,36 @@ LARGE_OUTPUT_PREVIEW_LINES = 50  # max lines in inline preview
 LARGE_OUTPUT_PREVIEW_BYTES = 2048  # max bytes in inline preview body
 SWIVAL_DIR = ".swival"
 OUTPUT_FILE_TTL = 600  # seconds before temp file cleanup
-MAX_TIMEOUT = 240
 
 
-def clamp_timeout(value, default: int = 30) -> int:
-    """Clamp a command timeout to the [1, MAX_TIMEOUT] range, with a fallback."""
+def clamp_timeout(value) -> int:
+    """Keep a timeout within 1..MAX_TIMEOUT, and use DEFAULT_TIMEOUT when it is missing or not a number."""
     try:
         return max(1, min(int(value), MAX_TIMEOUT))
     except (TypeError, ValueError):
-        return default
+        return DEFAULT_TIMEOUT
+
+
+def set_command_timeouts(maximum: int, default: int) -> None:
+    """Change the command timeout limits, and the schema text that tells the model about them.
+
+    Benchmarks use this to shrink the clock, so that a short job can still outlast the limit. Call it before the tools are built.
+    """
+    global MAX_TIMEOUT, DEFAULT_TIMEOUT
+    if not 1 <= default <= maximum:
+        raise ValueError(
+            f"timeouts need 1 <= default <= maximum, got {default} and {maximum}"
+        )
+    MAX_TIMEOUT = maximum
+    DEFAULT_TIMEOUT = default
+    for name, description in (
+        ("run_command", _command_timeout_description()),
+        ("run_shell_command", _command_timeout_description()),
+        ("run_python", _timeout_description()),
+    ):
+        schema = get_tool_schema(name)["properties"]["timeout"]
+        schema["default"] = default
+        schema["description"] = description
 
 
 def cleanup_old_cmd_outputs(base_dir: str) -> int:
@@ -3125,7 +3170,9 @@ def _format_background_result(pid: int, log_rel_path: str) -> str:
         f"Log: {log_rel_path}\n"
         "The process runs detached; stdout and stderr are appended to the log file. "
         "Use read_file on the log to inspect output, or shell tools "
-        "(kill, ps, wait) to manage the process."
+        "(kill, ps) to manage the process. To wait for it to exit, run one "
+        "command that loops until the PID is gone, with a timeout that covers "
+        "the job. Do not poll with repeated short sleeps."
     )
 
 
@@ -3186,14 +3233,31 @@ def _wait_unless_cancelled(proc: subprocess.Popen, timeout: float, cancel_flag) 
     Returns False when cancelled, and leaves the process running.
     """
     deadline = time.monotonic() + timeout
-    while not cancel_flag.is_set():
-        try:
-            proc.wait(timeout=max(0.0, min(0.1, deadline - time.monotonic())))
-            return True
-        except subprocess.TimeoutExpired:
-            if time.monotonic() >= deadline:
-                raise
-    return False
+    delay = 0.001
+    while proc.poll() is None:
+        if cancel_flag.is_set():
+            return False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(proc.args, timeout)
+        # Short commands get noticed fast; long ones are checked ten times a second.
+        time.sleep(min(delay, remaining))
+        delay = min(delay * 2, 0.1)
+    return True
+
+
+def _wait_for_exit(proc: subprocess.Popen, timeout: int, cancel_flag) -> str | None:
+    """Wait for the process to finish, killing it on timeout or cancellation, and return why it was killed, if it was."""
+    try:
+        if cancel_flag is None:
+            proc.wait(timeout=timeout)
+        elif not _wait_unless_cancelled(proc, timeout, cancel_flag):
+            _kill_process_tree(proc)
+            return "error: cancelled before the program finished"
+    except subprocess.TimeoutExpired:
+        _kill_process_tree(proc)
+        return f"error: command timed out after {timeout}s"
+    return None
 
 
 def _capture_process(
@@ -3203,12 +3267,15 @@ def _capture_process(
     scratch_dir: str | None = None,
     output_header=None,
     cancel_flag=None,
+    tool_meta: dict | None = None,
 ) -> str:
     """Capture output from a running subprocess with timeout enforcement.
 
     ``output_header`` is called after the process exits and returns text to
     put before the output, including in spill files.
     Setting ``cancel_flag`` kills the process right away.
+    When the program exits on its own, its exit code goes into ``tool_meta``.
+    The output text can say anything, so nobody should parse the code from it.
     """
     sink = TerminalSink()
 
@@ -3225,25 +3292,18 @@ def _capture_process(
     reader_thread = threading.Thread(target=_reader, daemon=True)
     reader_thread.start()
 
-    # Why we killed the process; always the first line of the result.
-    stop_status = None
     try:
-        if cancel_flag is None:
-            proc.wait(timeout=timeout)
-        elif not _wait_unless_cancelled(proc, timeout, cancel_flag):
-            stop_status = "error: cancelled before the program finished"
-            _kill_process_tree(proc)
-    except subprocess.TimeoutExpired:
-        stop_status = f"error: command timed out after {timeout}s"
-        _kill_process_tree(proc)
-
-    reader_thread.join(timeout=2)
-    if reader_thread.is_alive():
-        # Reader is still blocked on proc.stdout.read() — a backgrounded
-        # child likely inherited the pipe.  Kill the whole process group so
-        # the pipe closes and the reader can finish.
-        _kill_process_tree(proc)
+        # If we had to kill the process, this says why; it becomes the first line of the result.
+        stop_status = _wait_for_exit(proc, timeout, cancel_flag)
         reader_thread.join(timeout=2)
+        if reader_thread.is_alive():
+            # A background child probably still holds the pipe open, so kill the whole group to close it.
+            _kill_process_tree(proc)
+            reader_thread.join(timeout=2)
+    except BaseException:
+        # The program runs in its own session and never sees Ctrl-C or Esc, so stop it ourselves before letting the interrupt through.
+        _kill_process_tree(proc)
+        raise
     proc.stdout.close()
 
     # The sink has already collapsed terminal control sequences (progress bars,
@@ -3254,12 +3314,14 @@ def _capture_process(
     header = output_header() if output_header is not None else ""
     if header and raw_output:
         raw_output = header + raw_output
-    parts: list[str] = []
 
-    if stop_status:
-        parts.append(stop_status)
-    elif proc.returncode != 0:
-        parts.append(f"Exit code: {proc.returncode}")
+    status = stop_status
+    if not status:
+        if tool_meta is not None:
+            tool_meta["_swival_exit_code"] = proc.returncode
+        if proc.returncode != 0:
+            status = f"Exit code: {proc.returncode}"
+    parts: list[str] = [status] if status else []
 
     if raw_output:
         parts.append(raw_output)
@@ -3273,18 +3335,11 @@ def _capture_process(
 
     # Save large output to file instead of stuffing the context
     if len(result.encode("utf-8")) > MAX_INLINE_OUTPUT:
-        saved = _save_large_output(
+        saved, saved_path = _save_large_output_with_path(
             result, base_dir, was_truncated=output_truncated, scratch_dir=scratch_dir
         )
-        if stop_status:
-            # A failed disk write returns the original text, status included.
-            # Only the summary notice needs the status added.
-            prefix = "" if saved.startswith("error:") else f"{stop_status}\n"
-            result = prefix + saved
-        elif proc.returncode != 0:
-            result = f"{saved}\nExit code: {proc.returncode}"
-        else:
-            result = saved
+        # Keep the status first, like for short output. If saving failed, we got our own text back, with the status already on top.
+        result = f"{status}\n{saved}" if status and saved_path else saved
 
     return result
 
@@ -3327,10 +3382,12 @@ def _is_root_path(p: str) -> bool:
 def _run_shell_command(
     command: str,
     base_dir: str,
-    timeout: int,
+    timeout: int | None,
     scratch_dir: str | None = None,
     background: bool = False,
     net_jail: list[str] | None = None,
+    cancel_flag=None,
+    tool_meta: dict | None = None,
 ) -> str:
     """Execute a shell string via sh -c (Unix) or cmd.exe /c (Windows)."""
     base_path = Path(base_dir)
@@ -3377,7 +3434,14 @@ def _run_shell_command(
     except OSError as e:
         return f"error: failed to start shell command: {e}"
 
-    return _capture_process(proc, timeout, base_dir, scratch_dir=scratch_dir)
+    return _capture_process(
+        proc,
+        timeout,
+        base_dir,
+        scratch_dir=scratch_dir,
+        cancel_flag=cancel_flag,
+        tool_meta=tool_meta,
+    )
 
 
 def _find_python_executable() -> str | None:
@@ -3407,6 +3471,7 @@ def _run_python(
     net_jail: list[str] | None = None,
     bridge=None,
     cancel_flag=None,
+    tool_meta: dict | None = None,
 ) -> str:
     """Execute *code* via a Python interpreter and return its captured output.
 
@@ -3428,7 +3493,7 @@ def _run_python(
     if not base_path.is_dir():
         return f"error: base directory is not a directory: {base_dir}"
 
-    timeout = max(1, min(timeout, MAX_TIMEOUT))
+    timeout = clamp_timeout(timeout)
 
     env = child_env()
     try:
@@ -3452,7 +3517,12 @@ def _run_python(
 
     if bridge is None:
         return _capture_process(
-            proc, timeout, base_dir, scratch_dir=scratch_dir, cancel_flag=cancel_flag
+            proc,
+            timeout,
+            base_dir,
+            scratch_dir=scratch_dir,
+            cancel_flag=cancel_flag,
+            tool_meta=tool_meta,
         )
 
     def finish_and_label() -> str:
@@ -3470,6 +3540,7 @@ def _run_python(
             scratch_dir=scratch_dir,
             output_header=finish_and_label,
             cancel_flag=cancel_flag,
+            tool_meta=tool_meta,
         )
     finally:
         bridge.finish()
@@ -3592,11 +3663,13 @@ def _run_argv_command(
     command: list[str],
     base_dir: str,
     resolved_commands: dict[str, str],
-    timeout: int = 30,
+    timeout: int | None = None,
     unrestricted: bool = False,
     scratch_dir: str | None = None,
     background: bool = False,
     net_jail: list[str] | None = None,
+    cancel_flag=None,
+    tool_meta: dict | None = None,
 ) -> str:
     """Execute an argv-form command and return its output."""
     if not command:
@@ -3688,7 +3761,14 @@ def _run_argv_command(
     except OSError as e:
         return f"error: failed to start command: {e}"
 
-    return _capture_process(proc, timeout, base_dir, scratch_dir=scratch_dir)
+    return _capture_process(
+        proc,
+        timeout,
+        base_dir,
+        scratch_dir=scratch_dir,
+        cancel_flag=cancel_flag,
+        tool_meta=tool_meta,
+    )
 
 
 def _execute_normalized_command(
@@ -3696,11 +3776,13 @@ def _execute_normalized_command(
     *,
     base_dir: str,
     resolved_commands: dict[str, str],
-    timeout: int = 30,
+    timeout: int | None = None,
     unrestricted: bool = False,
     scratch_dir: str | None = None,
     background: bool = False,
     net_jail: list[str] | None = None,
+    cancel_flag=None,
+    tool_meta: dict | None = None,
 ) -> str:
     """Execute a pre-normalized command call."""
     bg_capacity_note: str | None = None
@@ -3719,6 +3801,8 @@ def _execute_normalized_command(
             scratch_dir=scratch_dir,
             background=background,
             net_jail=net_jail,
+            cancel_flag=cancel_flag,
+            tool_meta=tool_meta,
         )
     else:
         result = _run_argv_command(
@@ -3730,6 +3814,8 @@ def _execute_normalized_command(
             scratch_dir=scratch_dir,
             background=background,
             net_jail=net_jail,
+            cancel_flag=cancel_flag,
+            tool_meta=tool_meta,
         )
 
     if normalized.repair_note:
@@ -3746,7 +3832,7 @@ def _execute_command_call(
     prefer_shell: bool,
     base_dir: str,
     resolved_commands: dict[str, str],
-    timeout: int = 30,
+    timeout: int | None = None,
     unrestricted: bool = False,
     scratch_dir: str | None = None,
     background: bool = False,
@@ -4259,7 +4345,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
                 tool_name=name,
                 normalized=normalized,
                 base_dir=base_dir,
-                timeout=args.get("timeout", 30),
+                timeout=args.get("timeout", DEFAULT_TIMEOUT),
                 is_subagent=kwargs.get("is_subagent", False),
             )
             if kwargs.get("verbose", False) and _mw_result.warning:
@@ -4289,11 +4375,13 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             normalized,
             base_dir=base_dir,
             resolved_commands=resolved,
-            timeout=args.get("timeout", 30),
+            timeout=args.get("timeout"),
             unrestricted=True if prefer_shell else unrestricted,
             scratch_dir=scratch_dir,
             background=bool(args.get("background", False)),
             net_jail=kwargs.get("net_jail"),
+            cancel_flag=kwargs.get("cancel_flag"),
+            tool_meta=kwargs.get("tool_meta"),
         )
     elif name == "run_python":
         unrestricted = kwargs.get("commands_unrestricted", False)
@@ -4304,10 +4392,11 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             )
         code = args.get("code")
         try:
-            timeout = clamp_timeout(int(args.get("timeout", 30)))
+            timeout = clamp_timeout(int(args.get("timeout", DEFAULT_TIMEOUT)))
         except (ValueError, TypeError):
             return "error: timeout must be an integer"
         bridge = _python_bridge(timeout, kwargs)
+        tool_meta = kwargs.get("tool_meta")
         result = _run_python(
             code if isinstance(code, str) else "",
             base_dir,
@@ -4316,10 +4405,10 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             net_jail=kwargs.get("net_jail"),
             bridge=bridge,
             cancel_flag=kwargs.get("cancel_flag"),
+            tool_meta=tool_meta,
         )
         if bridge is not None and bridge.started:
             execution = bridge.stats.to_dict()
-            tool_meta = kwargs.get("tool_meta")
             if tool_meta is not None:
                 # Kept for traces; the model never sees underscore keys.
                 tool_meta["_swival_child_calls"] = execution

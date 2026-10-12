@@ -1273,7 +1273,9 @@ class TestPromptRejectionMatcher:
 
 
 class TestPromptRejectionRetry:
-    def test_chatgpt_retry_preserves_converted_request_and_tool_arguments(self):
+    def test_chatgpt_retry_preserves_converted_request_and_tool_arguments(
+        self, chatgpt_login
+    ):
         import json
 
         import litellm
