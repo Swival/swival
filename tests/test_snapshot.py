@@ -727,6 +727,7 @@ class TestReadOnlyAllowlist:
             "snapshot",
             "view_image",
             "outline",
+            "decide",
         }
         assert expected == READ_ONLY_TOOLS
 

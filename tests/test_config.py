@@ -162,6 +162,7 @@ class TestLoadConfig:
         ]
         assert headings == [
             "Provider / model",
+            "Decision model (decide tool)",
             "Generation parameters",
             "Agent behaviour",
             "Sandbox / security",

@@ -4,6 +4,7 @@ Costs come from LiteLLM pricing metadata, so the subtotal is an estimate,
 never an invoice. Values accumulate unrounded; only the formatter rounds.
 """
 
+import math
 import threading
 from dataclasses import dataclass, field
 from typing import Literal
@@ -22,6 +23,21 @@ class CostObservation:
 
     status: Literal["known", "unavailable", "not_applicable"]
     usd: float | None = None
+
+
+def price_observation(cost, *, has_usage: bool) -> CostObservation:
+    """Turn a reported price into an observation, refusing untrustworthy ones.
+
+    A zero price without any reported usage is a placeholder, not a real price.
+    """
+    if isinstance(cost, bool) or not isinstance(cost, (int, float)):
+        return CostObservation("unavailable")
+    cost = float(cost)
+    if not math.isfinite(cost) or cost < 0:
+        return CostObservation("unavailable")
+    if cost == 0.0 and not has_usage:
+        return CostObservation("unavailable")
+    return CostObservation("known", cost)
 
 
 @dataclass(frozen=True)

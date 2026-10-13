@@ -178,6 +178,13 @@ The result then starts with `error: cancelled before the program finished`.
 MCP servers can let snippets call some of their tools through a `swival_tools` module, which keeps intermediate results out of the conversation.
 See [Calling Tools From run_python](mcp.md#calling-tools-from-run_python).
 
+## `decide`
+
+`decide` asks a decision model for probabilities about a short text: a yes/no answer (`noul`), one label out of several (`choice`), or a place on a scale (`score`).
+
+It only appears when you set a decision model with `--decision-model`, and it only sends what the chat model passes to it.
+See [Decision Models](decision-models.md) for setup, the question format, and the size limit.
+
 ## `use_skill`
 
 When skills are discovered, Swival exposes `use_skill` so the model can load full instructions on demand. The system prompt only includes a compact skill catalog at startup, and full skill instructions are injected only when the tool is called. This keeps the default prompt smaller while still allowing rich task-specific guidance.

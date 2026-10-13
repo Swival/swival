@@ -550,6 +550,7 @@ def make_isolated_loop_kwargs(
         "mcp_manager",
         "deferred_tools",
         "a2a_manager",
+        "decisions",
         "subagent_manager",
         "report",
         "event_callback",

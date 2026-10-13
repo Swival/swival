@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Decision Models — Swival</title>
+    <meta name="description" content="Decision Models: An optional decide tool that asks a System One model for yes/no, choice, and score probabilities">
+    <link rel="canonical" href="https://swival.dev/pages/decision-models.html">
+    <meta property="og:type" content="article">
+    <meta property="og:title" content="Decision Models — Swival">
+    <meta property="og:description" content="Decision Models: An optional decide tool that asks a System One model for yes/no, choice, and score probabilities">
+    <meta property="og:image" content="https://swival.dev/img/og.png">
+    <meta property="og:url" content="https://swival.dev/pages/decision-models.html">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="Decision Models — Swival">
+    <meta name="twitter:description" content="Decision Models: An optional decide tool that asks a System One model for yes/no, choice, and score probabilities">
+    <meta name="twitter:image" content="https://swival.dev/img/og.png">
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "TechArticle",
+        "headline": "Decision Models — Swival",
+        "description": "Decision Models: An optional decide tool that asks a System One model for yes/no, choice, and score probabilities",
+        "url": "https://swival.dev/pages/decision-models.html",
+        "publisher": {
+            "@type": "Organization",
+            "name": "Swival",
+            "logo": { "@type": "ImageObject", "url": "https://swival.dev/img/logo.png" }
+        },
+        "isPartOf": {
+            "@type": "WebSite",
+            "name": "Swival",
+            "url": "https://swival.dev/"
+        }
+    }
+    </script>
+    <link rel="icon" href="../favicon.ico">
+    <link rel="stylesheet" href="../css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../" class="header-logo">
+                <img src="../img/logo.png" alt="Swival">
+            </a>
+            <nav class="header-nav">
+                <a href="./">Docs</a>
+                <a href="https://github.com/swival/swival">GitHub</a>
+            </nav>
+        </div>
+    </header>
+    <main id="main" class="docs-layout-3col">
+        <aside class="sidebar">
+            <div class="sidebar-section">
+<h4>Basics</h4>
+<ul>
+<li><a href="getting-started.html">Getting Started</a></li>
+<li><a href="usage.html">Usage</a></li>
+<li><a href="tools.html">Tools</a></li>
+<li><a href="audit.html">Security Audit</a></li>
+<li><a href="simplify.html">Simplification</a></li>
+<li><a href="goal.html">Goals</a></li>
+<li><a href="context-management.html">Context Management</a></li>
+<li><a href="open-models.html">Not Just for Frontier Models</a></li>
+</ul>
+</div>
+<div class="sidebar-section">
+<h4>Configuration & Deployment</h4>
+<ul>
+<li><a href="safety-and-sandboxing.html">Safety & Sandboxing</a></li>
+<li><a href="secrets.html">Secret Encryption</a></li>
+<li><a href="llm-filter.html">Outbound LLM Filter</a></li>
+<li><a href="decision-models.html" class="active">Decision Models</a></li>
+<li><a href="command-middleware.html">Command Middleware</a></li>
+<li><a href="skills.html">Skills</a></li>
+<li><a href="library.html">The Library</a></li>
+<li><a href="metaskills.html">Metaskills</a></li>
+<li><a href="web-browsing.html">Web Browsing</a></li>
+<li><a href="mcp.html">MCP</a></li>
+<li><a href="a2a.html">A2A</a></li>
+<li><a href="acp.html">ACP</a></li>
+<li><a href="lifecycle-hooks.html">Lifecycle Hooks</a></li>
+<li><a href="custom-commands.html">Custom Commands</a></li>
+<li><a href="customization.html">Customization</a></li>
+<li><a href="providers.html">Providers</a></li>
+<li><a href="reports.html">Reports</a></li>
+<li><a href="reviews.html">Reviews</a></li>
+<li><a href="agentfs.html">AgentFS</a></li>
+<li><a href="nono.html">nono</a></li>
+</ul>
+</div>
+<div class="sidebar-section">
+<h4>Reference</h4>
+<ul>
+<li><a href="python-api.html">Python API</a></li>
+</ul>
+</div>
+        </aside>
+        <article class="docs-content">
+            <h1 id="decision-models">Decision Models</h1>
+<p>A decision model answers questions about a short text with probabilities instead of words.</p>
+<p>Swival can give your chat model one as an optional <code>decide</code> tool.
+The chat model sends the text and its questions, gets numbers back, and keeps working.</p>
+<p>Decision models are not chat models.
+They always run next to your regular <code>--model</code>, never in its place.</p>
+<h2 id="setup">Setup</h2>
+<p>A hosted decision model needs its name, and its provider's key in the environment:</p>
+<pre><code class="language-sh">export TYPESAFE_API_KEY=...
+swival --decision-model typesafe/jev-latest &quot;task&quot;
+</code></pre>
+<p>A model on your own server also needs the server's URL:</p>
+<pre><code class="language-sh">swival --decision-model clef-flash-oQ4e \
+  --decision-base-url http://127.0.0.1:8000/v1 &quot;task&quot;
+</code></pre>
+<p>To use it in every run, put the same settings in a config file:</p>
+<pre><code class="language-toml">decision_model = &quot;clef-flash-oQ4e&quot;
+decision_base_url = &quot;http://127.0.0.1:8000/v1&quot;
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>CLI</th>
+<th>Config / <code>Session</code></th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--decision-model</code></td>
+<td><code>decision_model</code></td>
+<td>Turns on the <code>decide</code> tool. Off by default.</td>
+</tr>
+<tr>
+<td><code>--decision-base-url</code></td>
+<td><code>decision_base_url</code></td>
+<td>The server to use.</td>
+</tr>
+<tr>
+<td><code>--decision-api-key</code></td>
+<td><code>decision_api_key</code></td>
+<td>Optional key for that server.</td>
+</tr>
+<tr>
+<td><code>--no-decisions</code></td>
+<td><code>decision_model = ""</code></td>
+<td>Turns off a decision model set in a config file.</td>
+</tr>
+</tbody>
+</table>
+<p>CLI flags win over the project <code>swival.toml</code>, which wins over the global config.</p>
+<p>These settings are not part of <a href="customization.html#profiles">profiles</a>.
+Switching chat models with <code>/profile</code> keeps the same decision model.</p>
+<p>A name starting with a LiteLLM decision provider, such as <code>typesafe/</code>, <code>cloudflare/</code>, <code>openrouter/</code>, or <code>hosted_vllm/</code>, is used as is.
+Any other name, even one with a slash like <code>team/clef</code>, is treated as a model on your own server and needs <code>--decision-base-url</code>.</p>
+<p>The URL can be the server root, end with <code>/v1</code>, or be the full <code>/v1/systemone</code> address.</p>
+<p>The decision model never uses the chat model's key.
+When you give a URL but no <code>--decision-api-key</code>, Swival does not send any key from your environment to that server.
+Without a URL, LiteLLM uses the provider's usual environment variable and address.</p>
+<p>Swival warns if <code>decision_api_key</code> is set in a project config that git tracks.</p>
+<p>Unless you pass <code>--quiet</code>, Swival prints one line at startup with the decision model and its address.
+Nothing is sent to it until the chat model calls the tool.</p>
+<h2 id="the-decide-tool">The <code>decide</code> Tool</h2>
+<p><code>decide</code> takes the text to judge, called <code>state</code>, and some named <code>questions</code>:</p>
+<pre><code class="language-json">{
+  &quot;state&quot;: &quot;The README says install with uv sync.&quot;,
+  &quot;questions&quot;: {
+    &quot;mentions_uv&quot;: {
+      &quot;type&quot;: &quot;noul&quot;,
+      &quot;instructions&quot;: &quot;Does the README mention uv sync?&quot;
+    },
+    &quot;install_tool&quot;: {
+      &quot;type&quot;: &quot;choice&quot;,
+      &quot;instructions&quot;: &quot;Which installation tool is documented?&quot;,
+      &quot;criteria&quot;: {&quot;uv&quot;: &quot;uv sync&quot;, &quot;pip&quot;: &quot;pip install&quot;}
+    },
+    &quot;clarity&quot;: {
+      &quot;type&quot;: &quot;score&quot;,
+      &quot;instructions&quot;: &quot;How explicit is the instruction?&quot;,
+      &quot;criteria&quot;: [&quot;missing&quot;, &quot;ambiguous&quot;, &quot;explicit&quot;]
+    }
+  }
+}
+</code></pre>
+<p><code>state</code> can be text, a JSON object, or a list.</p>
+<p>There are three kinds of questions:</p>
+<ul>
+<li><code>noul</code> gives the probability that the answer is yes.</li>
+<li><code>choice</code> picks one label from <code>criteria</code>, which maps each label to a description.</li>
+<li><code>score</code> places the text on the <code>criteria</code> scale, listed from lowest to highest. The score can fall between two levels.</li>
+</ul>
+<p>The result holds every answer, plus the token count when the server reports one.
+Swival sends it as compact JSON; here it is formatted:</p>
+<pre><code class="language-json">{
+  &quot;model&quot;: &quot;clef-flash-oQ4e&quot;,
+  &quot;answers&quot;: {
+    &quot;mentions_uv&quot;: {&quot;type&quot;: &quot;noul&quot;, &quot;noul&quot;: 0.93},
+    &quot;install_tool&quot;: {
+      &quot;type&quot;: &quot;choice&quot;,
+      &quot;choice&quot;: &quot;uv&quot;,
+      &quot;confidence&quot;: 0.97,
+      &quot;probabilities&quot;: {&quot;uv&quot;: 0.97, &quot;pip&quot;: 0.03}
+    },
+    &quot;clarity&quot;: {
+      &quot;type&quot;: &quot;score&quot;,
+      &quot;score&quot;: 1.77,
+      &quot;confidence&quot;: 0.86,
+      &quot;legend&quot;: {&quot;0&quot;: &quot;missing&quot;, &quot;1&quot;: &quot;ambiguous&quot;, &quot;2&quot;: &quot;explicit&quot;},
+      &quot;probabilities&quot;: {&quot;0&quot;: 0.08, &quot;1&quot;: 0.06, &quot;2&quot;: 0.86}
+    }
+  },
+  &quot;usage&quot;: {&quot;input_tokens&quot;: 318, &quot;output_tokens&quot;: 0}
+}
+</code></pre>
+<p>Swival checks every answer against the questions it asked.
+A missing answer, an unknown label, a probability outside 0 to 1, probabilities that do not add up to 1,
+or a score off the scale makes the call fail.
+Swival never fills in a missing answer.</p>
+<p>These checks see the answers as LiteLLM returns them, not as the server sent them.
+LiteLLM fills in score levels and legend entries the server left out,
+so a score answer that skipped some levels can still pass when its probabilities add up to 1.</p>
+<p>Like anything else that comes from outside, the result is marked <code>[UNTRUSTED EXTERNAL CONTENT]</code> before the chat model sees it.</p>
+<p>The chat model uses <code>decide</code> on its own when it classifies, sorts, rates, or makes a yes/no call about some text.
+You can also ask for it.</p>
+<p>The tool only sends what the chat model passes to it.
+It never reads files or sends the conversation.</p>
+<h2 id="size-limit">Size Limit</h2>
+<p>A request can use up to 15,000 units.
+Each byte of the JSON request counts as one unit, each question as 40 more, and each choice label or score level as 10 more.</p>
+<p>Questions and labels take more room on the server than their bytes suggest.
+When a request is too long, the server quietly cuts off the end of the text, so the extra units keep requests well under its limit.</p>
+<p>A request over the limit fails with a message asking the chat model to shorten the text or ask fewer questions.</p>
+<h2 id="filtering-encryption-and-costs">Filtering, Encryption, and Costs</h2>
+<p>Decision requests get the same protections as chat requests.</p>
+<p>The <a href="llm-filter.html">outbound filter</a> sees each request as one user message holding the JSON, with <code>call_kind</code> set to <code>"decision"</code>.
+It can edit or block the request.</p>
+<p><a href="secrets.html">Secret encryption</a> covers question names, labels, and text.
+The answer is decrypted before the chat model sees it.</p>
+<p>The size limit is checked after both, just before the request is sent.</p>
+<p>Each call shows up like any other tool call: in the terminal, in <a href="reports.html">reports</a>, and in traces.
+Reports also list decision requests on their own, under <code>decision</code>.</p>
+<p>Prices from LiteLLM are only used for a provider's own hosted service.
+For your own server, Swival uses the cost the server reports, or marks the call as unpriced.</p>
+<p>Calls time out after 30 seconds, or sooner if <code>--provider-timeout</code> is lower.
+A failed call, a timeout, or a cancellation gives an ordinary <code>error:</code> result, so the chat model can explain it and carry on.</p>
+<p>For <a href="tools.html#snapshot">snapshots</a>, <code>decide</code> counts as a read-only tool.</p>
+<h2 id="where-the-tool-is-available">Where the Tool Is Available</h2>
+<p>Subagents, metaskills, the <a href="providers.html#command-external-program">command provider</a>, and the <a href="a2a.html">A2A</a> and <a href="acp.html">ACP</a> servers get the decision model too.
+Isolated workers, such as the <code>/audit</code> and <code>/simplify</code> reviewers, never do.</p>
+<p><code>--network provider-only</code> allows decision requests, because Swival makes them itself rather than through a sandboxed command.
+<code>--network none</code> refuses to start with a decision model, because it is a network service.</p>
+<p>If you set the chat <code>--model</code> to a decision model by mistake, the server refuses to chat, and Swival suggests <code>--decision-model</code> instead.</p>
+            <nav class="page-nav" aria-label="Page navigation"><a class="nav-prev" href="llm-filter.html"><span class="nav-label">&larr; Previous</span><span class="nav-title">Outbound LLM Filter</span></a><a class="nav-next" href="command-middleware.html"><span class="nav-label">Next &rarr;</span><span class="nav-title">Command Middleware</span></a></nav>
+        </article>
+        <aside class="page-toc" aria-label="On this page">
+            <p class="page-toc-title">On this page</p>
+            <div class="page-toc-list"></div>
+        </aside>
+    </main>
+    <footer class="site-footer">
+        <div class="footer-inner">
+            <div class="footer-grid">
+                <div class="footer-col">
+                    <img src="../img/logo.png" alt="Swival" class="footer-logo">
+                    <p class="footer-tagline">A coding agent for any model.<br>Free, open-source, and easy to set up.</p>
+                </div>
+                <div class="footer-col">
+                    <h4>Resources</h4>
+                    <ul>
+                        <li><a href="getting-started.html">Getting Started</a></li>
+                        <li><a href="usage.html">Usage</a></li>
+                        <li><a href="tools.html">Tools</a></li>
+                        <li><a href="context-management.html">Context Management</a></li>
+                    </ul>
+                </div>
+                <div class="footer-col">
+                    <h4>Guides</h4>
+                    <ul>
+                        <li><a href="providers.html">Providers</a></li>
+                        <li><a href="safety-and-sandboxing.html">Safety &amp; Sandboxing</a></li>
+                        <li><a href="python-api.html">Python API</a></li>
+                        <li><a href="open-models.html">Open Models</a></li>
+                    </ul>
+                </div>
+                <div class="footer-col">
+                    <h4>Community</h4>
+                    <ul>
+                        <li><a href="https://github.com/swival/swival">GitHub</a></li>
+                        <li><a href="https://calibra.swival.dev">Calibra</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2025&ndash;2026 Swival &middot; MIT License</p>
+            </div>
+        </div>
+    </footer>
+    <button class="back-to-top" aria-label="Back to top">&uarr;</button>
+    <script src="../js/site.js"></script>
+</body>
+</html>

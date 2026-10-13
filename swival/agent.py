@@ -9,7 +9,6 @@ from datetime import datetime
 import functools
 import json
 from typing import Literal
-import math
 import os
 import platform
 import random
@@ -57,7 +56,7 @@ from .config import (
     REPL_MAX_TURNS,
 )
 from .config import find_project_root as _find_project_root
-from .cost import CostObservation, SessionCost
+from .cost import CostObservation, SessionCost, price_observation
 from .deferred_tools import TOOL_SEARCH_NAME, DeferredTools, defer_mcp_tools
 from .exposure import ExposureMeter, rekey_results, tag_results
 from .report import (
@@ -122,6 +121,7 @@ from .mcp_client import McpShutdownError
 from .tools import (
     clamp_timeout,
     TOOLS,
+    DECIDE_TOOL,
     PYTHON_TOOL,
     python_tool_available,
     RUN_COMMAND_TOOL,
@@ -524,6 +524,18 @@ _TOOLS_NOT_SUPPORTED_RE = re.compile(
 )
 
 _HF_NOT_CHAT_MODEL_RE = re.compile(r"not a chat model", re.IGNORECASE)
+
+# Error from a decision model server when it is used as the chat model.
+_DECISION_MODEL_CHAT_RE = re.compile(
+    r"not an LLM\s*/\s*chat model.{0,80}/v1/systemone", re.IGNORECASE | re.DOTALL
+)
+
+
+def _decision_model_hint(error_text: str) -> str:
+    if _DECISION_MODEL_CHAT_RE.search(error_text):
+        return "\n\nUse --decision-model for this model alongside your regular chat --model."
+    return ""
+
 
 # (Endpoint, requested model string) -> the single model the server serves.
 # Lets later call_llm() invocations skip the failing round-trip after an
@@ -2250,10 +2262,11 @@ def _image_pending(messages: list) -> bool:
     return _has_image_content(messages[_last_assistant_index(messages) + 1 :])
 
 
-def _without_view_image(tools: list | None) -> list | None:
-    if tools is None:
-        return None
-    return [t for t in tools if t.get("function", {}).get("name") != "view_image"]
+def _without_tool(tools: list | None, name: str) -> list | None:
+    """Return *tools* without *name*, copying the list only when it changes."""
+    if not tools or all(t.get("function", {}).get("name") != name for t in tools):
+        return tools
+    return [t for t in tools if t.get("function", {}).get("name") != name]
 
 
 def _vision_unsupported(provider: str, model_id: str, api_base: str | None) -> bool:
@@ -4294,6 +4307,7 @@ def handle_tool_call(
     net_jail=None,
     tool_policy=None,
     deferred_tools=None,
+    decide_call=None,
 ):
     """Execute a single tool call and return (tool_msg, metadata).
 
@@ -4410,6 +4424,7 @@ def handle_tool_call(
                 net_jail=net_jail,
                 tool_policy=tool_policy,
                 deferred_tools=deferred_tools,
+                decide_call=decide_call,
                 tool_meta=tool_meta,
             )
     except McpShutdownError:
@@ -4907,12 +4922,12 @@ def _render_swival_tool_catalog(tool_schemas):
 
 
 def _filter_command_tool_schemas(tools):
-    """Filter tool schemas to those exposable to command provider (MCP/A2A/skills)."""
+    """Filter tool schemas to those exposable to command provider (MCP/A2A/skills/decide)."""
     return [
         t
         for t in tools
         if t.get("function", {}).get("name", "").startswith(("mcp__", "a2a__"))
-        or t.get("function", {}).get("name") in ("use_skill", "run_metaskill")
+        or t.get("function", {}).get("name") in ("use_skill", "run_metaskill", "decide")
     ]
 
 
@@ -5815,14 +5830,7 @@ def _response_cost_observation(
     except Exception:
         return CostObservation("unavailable")
 
-    if isinstance(cost, bool) or not isinstance(cost, (int, float)):
-        return CostObservation("unavailable")
-    cost = float(cost)
-    if not math.isfinite(cost) or cost < 0:
-        return CostObservation("unavailable")
-    if cost == 0.0 and not _has_meaningful_usage(response):
-        return CostObservation("unavailable")
-    return CostObservation("known", cost)
+    return price_observation(cost, has_usage=_has_meaningful_usage(response))
 
 
 def _display_session_cost(session_cost, *, reconcile=False) -> None:
@@ -6520,17 +6528,19 @@ def call_llm(
             raise tne
         msg = f"LLM call failed: {e}"
         msg += _geap_auth_hint(provider, msg_text)
+        msg += _decision_model_hint(msg_text)
         msg += _prompt_rejection_hint(e)
         ae = AgentError(msg)
         ae._provider_retries = _retries_from_exc(e)
         if not (
             isinstance(e, litellm.ContentPolicyViolationError)
             or _is_prompt_rejection(e)
+            or _DECISION_MODEL_CHAT_RE.search(msg_text)
         ):
             # An unrecognized 400 may be an overflow we failed to detect, so
             # let the backstop try again with a minimal prompt.
-            # Policy rejections are never overflows, and shrinking the
-            # history for them would only lose context.
+            # Policy rejections and a wrong endpoint are never overflows, and
+            # shrinking the history for them would only lose context.
             ae._request_shaped = True
         _raise_with_retries(ae)
     except ToolsNotSupportedError:
@@ -6564,6 +6574,7 @@ def call_llm(
             )
         else:
             msg += _geap_auth_hint(provider, msg_text)
+        msg += _decision_model_hint(msg_text)
         msg += _prompt_rejection_hint(e)
         ae = AgentError(msg)
         ae._provider_retries = _retries_from_exc(e)
@@ -6962,6 +6973,38 @@ def build_parser():
         default=_UNSET,
         metavar="SECONDS",
         help="Provider request timeout in seconds (default: 900).",
+    )
+    decision_group = provider_group.add_mutually_exclusive_group()
+    decision_group.add_argument(
+        "--decision-model",
+        metavar="MODEL",
+        default=_UNSET,
+        help="Decision model for the decide tool, alongside the chat --model: "
+        "a LiteLLM decision model such as typesafe/jev-latest, or a model name "
+        "served at --decision-base-url (default: disabled).",
+    )
+    decision_group.add_argument(
+        "--no-decisions",
+        dest="decision_model",
+        action="store_const",
+        const="",
+        default=_UNSET,
+        help="Disable a decision model set in a config file.",
+    )
+    provider_group.add_argument(
+        "--decision-base-url",
+        metavar="URL",
+        default=_UNSET,
+        help="System One server for --decision-model, such as "
+        "http://127.0.0.1:8000/v1.",
+    )
+    provider_group.add_argument(
+        "--decision-api-key",
+        metavar="KEY",
+        default=_UNSET,
+        help="API key for the decision model. Without it, an explicit "
+        "--decision-base-url gets no key and a hosted provider uses its "
+        "environment variable.",
     )
     provider_group.add_argument(
         "--initial-tool-choice",
@@ -7957,6 +8000,16 @@ def main():
 
             fmt.info(f"Review changes: {rollback_hint()}")
 
+    # Resolved after the sandbox re-exec, so LiteLLM is only imported once.
+    from .decisions import resolve_settings as _resolve_decisions
+
+    try:
+        args._decisions = _resolve_decisions(
+            args.decision_model, args.decision_base_url, args.decision_api_key
+        )
+    except _ConfigError as e:
+        parser.error(str(e))
+
     # --- A2A serve mode ---
     # Placed after validations and AgentFS re-exec so all CLI checks apply.
     if _is_serve:
@@ -8640,6 +8693,7 @@ def build_tools(
     metaskill_names: list[str] | None = None,
     python_tool: bool = False,
     network: str = "full",
+    decide: bool = False,
 ) -> list:
     """Construct the tools list from base + conditionals.
 
@@ -8716,6 +8770,8 @@ def build_tools(
             f"Run a command and return its output. Allowed commands: {', '.join(sorted(resolved_commands))}."
         )
         tools.append(tool)
+    if decide:
+        tools.append(copy.deepcopy(DECIDE_TOOL))
     if subagents:
         from .subagent import SPAWN_SUBAGENT_TOOL, CHECK_SUBAGENTS_TOOL
 
@@ -9394,6 +9450,13 @@ def _resolve_network_policy(
                 f"the A2A server needs a listening socket",
                 diagnostic,
             )
+
+        if getattr(args, "decision_model", None):
+            return (
+                f"{what} cannot be used with a decision model, which is an "
+                f"HTTP service; pass --no-decisions or use --network provider-only",
+                diagnostic,
+            )
     else:  # provider-only
         if args.sandbox == "nono":
             return (
@@ -9696,6 +9759,7 @@ def _run_main(args, report, _write_report, parser):
         )
 
     _network_mode = args.network
+    _decisions = args._decisions
 
     # Network jail for agent subprocesses (network = "provider-only"):
     # a nono run --block-net prefix built once and threaded down to every
@@ -9720,7 +9784,10 @@ def _run_main(args, report, _write_report, parser):
         metaskill_names=_metaskill_names,
         python_tool=_python_tool,
         network=_network_mode,
+        decide=_decisions is not None,
     )
+    if _decisions is not None and args.verbose:
+        fmt.info(_decisions.startup_line())
 
     # Initialize MCP servers
     mcp_manager = None
@@ -9959,6 +10026,7 @@ def _run_main(args, report, _write_report, parser):
         session_cost=SessionCost(),
         exposure_meter=report.exposure if report is not None else None,
         deferred_tools=deferred_tools,
+        decisions=_decisions,
     )
 
     # Validate and thread llm_filter
@@ -10428,6 +10496,7 @@ def _run_agent_loop(
     tool_policy=None,
     instructions_full: bool = False,
     initial_tool_choice: str = "auto",
+    decisions=None,
 ) -> tuple[str | None, bool]:
     """Run the tool-calling loop until a final answer or max turns.
 
@@ -10538,6 +10607,7 @@ def _run_agent_loop(
         "session_cost": session_cost,
         "exposure_meter": exposure_meter,
         "tool_policy": tool_policy,
+        "decisions": decisions,
     }
 
     # True until the model acts on the last goal continuation prompt.
@@ -10706,7 +10776,28 @@ def _run_agent_loop(
 
     provider = llm_kwargs.get("provider", "lmstudio")
     if _vision_unsupported(provider, model_id, api_base):
-        tools = _without_view_image(tools)
+        tools = _without_tool(tools, "view_image")
+    # Workers without a decision model may still share the parent's tool list.
+    decide_call = None
+    if decisions is None:
+        tools = _without_tool(tools, "decide")
+    else:
+        from .decisions import MAX_TIMEOUT, decide
+
+        decide_call = functools.partial(
+            decide,
+            decisions,
+            llm_filter=llm_kwargs.get("llm_filter"),
+            secret_shield=llm_kwargs.get("secret_shield"),
+            session_cost=session_cost,
+            exposure=(
+                exposure_meter.recorder("decision")
+                if exposure_meter is not None
+                else None
+            ),
+            timeout=min(llm_kwargs.get("provider_timeout", 900), MAX_TIMEOUT),
+            cancel_flag=cancel_flag,
+        )
     if deferred_tools is not None:
         tools = deferred_tools.with_loaded(tools)
     effective_tools = None if provider == "command" else tools
@@ -10748,6 +10839,7 @@ def _run_agent_loop(
             network_mode=network_mode,
             net_jail=net_jail,
             tool_policy=tool_policy,
+            decide_call=decide_call,
         )
         llm_kwargs = {
             **llm_kwargs,
@@ -10845,8 +10937,8 @@ def _run_agent_loop(
         """Remember that this model refuses images and stop offering view_image."""
         nonlocal tools, effective_tools
         _remember_vision_rejection(provider, model_id, api_base)
-        tools = _without_view_image(tools)
-        effective_tools = _without_view_image(effective_tools)
+        tools = _without_tool(tools, "view_image")
+        effective_tools = _without_tool(effective_tools, "view_image")
 
     _summary_kwargs = dict(
         call_llm_fn=_call_llm_for_secondary,
@@ -11914,6 +12006,7 @@ def _run_agent_loop(
                 net_jail=net_jail,
                 tool_policy=tool_policy,
                 deferred_tools=deferred_tools,
+                decide_call=decide_call,
             )
             messages.append(tool_msg)
 
@@ -15358,6 +15451,7 @@ def repl_loop(
     instructions_enabled: bool = True,
     instructions_full: bool = False,
     initial_tool_choice: str = "auto",
+    decisions=None,
 ):
     """Interactive read-eval-print loop.
 
@@ -15546,6 +15640,7 @@ def repl_loop(
         deferred_tools=deferred_tools,
         continue_here=continue_here,
         instructions_full=instructions_full,
+        decisions=decisions,
     )
 
     ctx = InputContext(

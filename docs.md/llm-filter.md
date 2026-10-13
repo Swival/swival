@@ -2,7 +2,7 @@
 
 Swival can run a user-defined script before every outbound LLM request. The script receives the message list as JSON, and can modify messages, redact content, or block the request entirely. This is useful for stripping internal URLs, project names, customer identifiers, or any other text that should not reach an external provider.
 
-The filter covers all Swival-managed LLM call paths: normal agent turns, REPL turns, the Session API, and compaction summaries.
+The filter covers all Swival-managed LLM call paths: normal agent turns, REPL turns, the Session API, compaction summaries, and decision model requests.
 
 ## Enabling a Filter
 
@@ -47,6 +47,8 @@ Swival sends a JSON object to the script's stdin:
 ```
 
 `messages` is the exact message list about to be sent. `tools` is included as read-only context so the filter can make informed decisions. `call_kind` is `"agent"` for normal turns and `"summary"` for internal summarization calls (compaction summaries, proactive checkpoints, continue-file enrichment).
+Requests to a [decision model](decision-models.md) use `call_kind` `"decision"` and hold the JSON request in a single user message.
+The filter must return exactly one user message with a valid request, or the call is blocked.
 
 The script writes a JSON object to stdout. Two response shapes are supported:
 

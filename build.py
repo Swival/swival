@@ -91,6 +91,11 @@ NAV = [
                 "User-defined scripts that redact or block content before it reaches the LLM provider",
             ),
             (
+                "decision-models",
+                "Decision Models",
+                "An optional decide tool that asks a System One model for yes/no, choice, and score probabilities",
+            ),
+            (
                 "command-middleware",
                 "Command Middleware",
                 "Intercept, rewrite, or block shell commands before execution — RTK integration included",

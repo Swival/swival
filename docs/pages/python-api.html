@@ -74,6 +74,7 @@
 <li><a href="safety-and-sandboxing.html">Safety & Sandboxing</a></li>
 <li><a href="secrets.html">Secret Encryption</a></li>
 <li><a href="llm-filter.html">Outbound LLM Filter</a></li>
+<li><a href="decision-models.html">Decision Models</a></li>
 <li><a href="command-middleware.html">Command Middleware</a></li>
 <li><a href="skills.html">Skills</a></li>
 <li><a href="library.html">The Library</a></li>
@@ -172,6 +173,11 @@ print(answer)
     cache_dir: str | None = None,
     scratch_dir: str | None = None,
     retries: int = 5,
+    provider_timeout: int = 900,
+    initial_tool_choice: str = &quot;auto&quot;,
+    decision_model: str | None = None,
+    decision_base_url: str | None = None,
+    decision_api_key: str | None = None,
     encrypt_secrets: bool = False,
     encrypt_secrets_key: str | None = None,
     encrypt_secrets_tweak: str | None = None,
@@ -290,6 +296,10 @@ print(answer)
 <tr>
 <td><code>llm_filter</code></td>
 <td>Path to a filter script that can redact or block outbound LLM requests (see <a href="llm-filter.html">Outbound LLM Filter</a>).</td>
+</tr>
+<tr>
+<td><code>decision_model</code></td>
+<td>Decision model for the optional <code>decide</code> tool, with <code>decision_base_url</code> and <code>decision_api_key</code> (see <a href="decision-models.html">Decision Models</a>). An empty string turns it off.</td>
 </tr>
 <tr>
 <td><code>subagents</code></td>

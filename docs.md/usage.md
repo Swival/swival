@@ -441,6 +441,16 @@ These setup flags do not require a question argument. Config generation never ov
 
 `--llm-filter COMMAND` runs a user-defined script before each outbound LLM request. The script receives the message list as JSON on stdin and can modify messages, redact content, or block the request. Fails closed: if the script errors or rejects, nothing is sent to the provider. See [Outbound LLM Filter](llm-filter.md) for the full script contract and examples.
 
+### Decision Model Flags
+
+`--decision-model MODEL` gives the chat model a `decide` tool backed by a decision model, such as `typesafe/jev-latest`.
+
+`--decision-base-url URL` points it at your own server, and `--decision-api-key KEY` gives it a key.
+
+`--no-decisions` turns off a decision model set in a config file.
+
+See [Decision Models](decision-models.md) for details.
+
 ### Encryption And Sanitization Flags
 
 `--encrypt-secrets` enables transparent format-preserving encryption of recognized credential tokens before sending messages to the LLM provider. The LLM sees realistic-looking fakes, and Swival decrypts them back before tool dispatch or final output. Off by default. See [Secret Encryption](secrets.md) for details.

@@ -74,6 +74,7 @@
 <li><a href="safety-and-sandboxing.html">Safety & Sandboxing</a></li>
 <li><a href="secrets.html">Secret Encryption</a></li>
 <li><a href="llm-filter.html">Outbound LLM Filter</a></li>
+<li><a href="decision-models.html">Decision Models</a></li>
 <li><a href="command-middleware.html">Command Middleware</a></li>
 <li><a href="skills.html">Skills</a></li>
 <li><a href="library.html">The Library</a></li>
@@ -335,6 +336,11 @@ A new CLI process starts from zero.</p>
 <p>These setup flags do not require a question argument. Config generation never overwrites an existing config file: if one exists, the template is written to a <code>.new</code> file next to it, with your current settings preserved, so you can review it before moving it into place.</p>
 <h3 id="outbound-filter-flag">Outbound Filter Flag</h3>
 <p><code>--llm-filter COMMAND</code> runs a user-defined script before each outbound LLM request. The script receives the message list as JSON on stdin and can modify messages, redact content, or block the request. Fails closed: if the script errors or rejects, nothing is sent to the provider. See <a href="llm-filter.html">Outbound LLM Filter</a> for the full script contract and examples.</p>
+<h3 id="decision-model-flags">Decision Model Flags</h3>
+<p><code>--decision-model MODEL</code> gives the chat model a <code>decide</code> tool backed by a decision model, such as <code>typesafe/jev-latest</code>.</p>
+<p><code>--decision-base-url URL</code> points it at your own server, and <code>--decision-api-key KEY</code> gives it a key.</p>
+<p><code>--no-decisions</code> turns off a decision model set in a config file.</p>
+<p>See <a href="decision-models.html">Decision Models</a> for details.</p>
 <h3 id="encryption-and-sanitization-flags">Encryption And Sanitization Flags</h3>
 <p><code>--encrypt-secrets</code> enables transparent format-preserving encryption of recognized credential tokens before sending messages to the LLM provider. The LLM sees realistic-looking fakes, and Swival decrypts them back before tool dispatch or final output. Off by default. See <a href="secrets.html">Secret Encryption</a> for details.</p>
 <p><code>--no-encrypt-secrets</code> explicitly disables secret encryption (the default).</p>

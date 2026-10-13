@@ -59,6 +59,9 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "aws_profile": str,
     "project": str,
     "location": str,
+    "decision_model": str,
+    "decision_base_url": str,
+    "decision_api_key": str,
     "max_output_tokens": int,
     "max_context_tokens": int,
     "max_output_lines": int,
@@ -177,6 +180,9 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "api_key": None,
     "user_agent": None,
     "base_url": None,
+    "decision_model": None,
+    "decision_base_url": None,
+    "decision_api_key": None,
     "max_output_tokens": 32768,
     "max_context_tokens": None,
     "max_output_lines": 2000,
@@ -525,22 +531,25 @@ def _validate_profiles(profiles: dict, source: str) -> None:
 
 
 def _check_api_key_in_git(config: dict, config_path: Path) -> None:
-    """Warn if api_key is set in a project config (or its profiles) inside a git repo."""
-    has_top_level = "api_key" in config
-    has_in_profile = any(
+    """Warn if an API key is set in a project config (or its profiles) inside a git repo."""
+    found = []
+    if "api_key" in config:
+        found.append("api_key")
+    elif any(
         "api_key" in body
         for body in config.get("profiles", {}).values()
         if isinstance(body, dict)
-    )
-    if not has_top_level and not has_in_profile:
+    ):
+        found.append("api_key in a profile")
+    if "decision_api_key" in config:
+        found.append("decision_api_key")
+    if not found:
         return
     # Walk up from config file looking for .git
     parent = config_path.parent
     while parent != parent.parent:
         if (parent / ".git").exists():
-            where = "api_key"
-            if has_in_profile and not has_top_level:
-                where = "api_key in a profile"
+            where = "' and '".join(found)
             print(
                 f"warning: {config_path}: '{where}' in a git-tracked project config "
                 f"may be committed accidentally. Consider using an environment variable.",
@@ -1243,6 +1252,9 @@ def args_to_session_kwargs(args, base_dir: str) -> dict:
         "retries",
         "provider_timeout",
         "initial_tool_choice",
+        "decision_model",
+        "decision_base_url",
+        "decision_api_key",
         "llm_filter",
         "encrypt_secrets_key",
         "encrypt_secrets_tweak",
@@ -1478,6 +1490,11 @@ def generate_config(
         '# aws_profile = "bedrock"          # AWS profile name for bedrock provider (from ~/.aws/config)',
         '# project = "my-gcp-project"       # Google Cloud project ID for geap provider',
         '# location = "us-central1"         # Google Cloud location for geap provider',
+        "",
+        "# --- Decision model (decide tool) ---",
+        '# decision_model = "typesafe/jev-latest"     # or a model name served at decision_base_url',
+        '# decision_base_url = "http://127.0.0.1:8000/v1"',
+        '# decision_api_key = "..."         # optional; prefer the provider env var',
         "",
         "# --- Generation parameters ---",
         "# max_output_tokens = 32768",

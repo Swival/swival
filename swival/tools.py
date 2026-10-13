@@ -26,6 +26,7 @@ from typing import Literal
 
 from ._env import child_env
 from .a2a_types import A2A_META_PREFIX
+from .decisions import QUESTION_TYPES
 from .deferred_tools import TOOL_SEARCH_NAME
 from .terminal import TerminalSink
 from .tracker import FileAccessTracker
@@ -820,6 +821,57 @@ PYTHON_TOOL = {
     },
 }
 
+DECIDE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "decide",
+        "description": (
+            "Ask a decision model for calibrated probabilities. Use it whenever "
+            "you classify, triage, route, rate, or make a yes/no call about a "
+            "given text (message, log, ticket, diff, output), and report its "
+            "probabilities instead of guessing. Batch related questions in one "
+            "call. Pass excerpts: a call holds about 15 KB."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "state": {
+                    "oneOf": [
+                        {"type": "string"},
+                        {"type": "object"},
+                        {"type": "array"},
+                    ],
+                    "description": "Text or JSON being judged.",
+                },
+                "questions": {
+                    "type": "object",
+                    # Some adapters, such as Vertex, drop additionalProperties,
+                    # so the description has to explain the format on its own.
+                    "description": (
+                        "Questions keyed by answer name, each "
+                        "{type, instructions, criteria}. noul: yes/no "
+                        "probability, no criteria. choice: picks one label from "
+                        "criteria {label: description}. score: position on "
+                        "criteria, a list of levels, lowest first."
+                    ),
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "type": {"type": "string", "enum": list(QUESTION_TYPES)},
+                            "instructions": {"type": "string"},
+                            "criteria": {
+                                "oneOf": [{"type": "object"}, {"type": "array"}]
+                            },
+                        },
+                        "required": ["type", "instructions"],
+                    },
+                },
+            },
+            "required": ["state", "questions"],
+        },
+    },
+}
+
 COMPLETE_GOAL_TOOL = {
     "type": "function",
     "function": {
@@ -868,6 +920,9 @@ def _build_schema_index() -> None:
     _TOOL_SCHEMA_INDEX[PYTHON_TOOL["function"]["name"]] = PYTHON_TOOL["function"].get(
         "parameters", {}
     )
+    _TOOL_SCHEMA_INDEX[DECIDE_TOOL["function"]["name"]] = DECIDE_TOOL["function"][
+        "parameters"
+    ]
     for goal_tool in GOAL_TOOLS:
         fn = goal_tool["function"]
         _TOOL_SCHEMA_INDEX[fn["name"]] = fn.get("parameters", {})
@@ -4285,6 +4340,20 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
         if _report is not None:
             _report.record_untrusted_input("fetch_url", origin=url)
         return _wrap_untrusted(fetch_result.body, "fetch_url", origin=url)
+    elif name == "decide":
+        decide_call = kwargs.get("decide_call")
+        if decide_call is None:
+            return "error: decide tool is not available in this session"
+        result = decide_call(args)
+        return _render_external_result(
+            result,
+            result.startswith("error:"),
+            name=name,
+            guard_fn=_guard_mcp_output,
+            base_dir=base_dir,
+            scratch_dir=scratch_dir,
+            report=_report,
+        )
     elif name == "use_skill":
         from .skills import activate_skill
 

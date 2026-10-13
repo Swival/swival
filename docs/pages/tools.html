@@ -74,6 +74,7 @@
 <li><a href="safety-and-sandboxing.html">Safety & Sandboxing</a></li>
 <li><a href="secrets.html">Secret Encryption</a></li>
 <li><a href="llm-filter.html">Outbound LLM Filter</a></li>
+<li><a href="decision-models.html">Decision Models</a></li>
 <li><a href="command-middleware.html">Command Middleware</a></li>
 <li><a href="skills.html">Skills</a></li>
 <li><a href="library.html">The Library</a></li>
@@ -197,6 +198,10 @@ swival --commands ask &quot;Run the tests&quot;
 The result then starts with <code>error: cancelled before the program finished</code>.</p>
 <p>MCP servers can let snippets call some of their tools through a <code>swival_tools</code> module, which keeps intermediate results out of the conversation.
 See <a href="mcp.html#calling-tools-from-run_python">Calling Tools From run_python</a>.</p>
+<h2 id="decide"><code>decide</code></h2>
+<p><code>decide</code> asks a decision model for probabilities about a short text: a yes/no answer (<code>noul</code>), one label out of several (<code>choice</code>), or a place on a scale (<code>score</code>).</p>
+<p>It only appears when you set a decision model with <code>--decision-model</code>, and it only sends what the chat model passes to it.
+See <a href="decision-models.html">Decision Models</a> for setup, the question format, and the size limit.</p>
 <h2 id="use_skill"><code>use_skill</code></h2>
 <p>When skills are discovered, Swival exposes <code>use_skill</code> so the model can load full instructions on demand. The system prompt only includes a compact skill catalog at startup, and full skill instructions are injected only when the tool is called. This keeps the default prompt smaller while still allowing rich task-specific guidance.</p>
 <h2 id="run_metaskill"><code>run_metaskill</code></h2>

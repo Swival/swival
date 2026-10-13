@@ -35,6 +35,7 @@ READ_ONLY_TOOLS = frozenset(
         "todo",
         "snapshot",
         "outline",
+        "decide",
     }
 )
 

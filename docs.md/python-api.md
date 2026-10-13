@@ -82,6 +82,11 @@ Session(
     cache_dir: str | None = None,
     scratch_dir: str | None = None,
     retries: int = 5,
+    provider_timeout: int = 900,
+    initial_tool_choice: str = "auto",
+    decision_model: str | None = None,
+    decision_base_url: str | None = None,
+    decision_api_key: str | None = None,
     encrypt_secrets: bool = False,
     encrypt_secrets_key: str | None = None,
     encrypt_secrets_tweak: str | None = None,
@@ -131,6 +136,7 @@ All parameters are keyword-only. The important ones:
 | `lifecycle_command`     | Shell command to run at startup and exit (see [Lifecycle Hooks](lifecycle-hooks.html)).                                                                                                                                                                                                |
 | `lifecycle_fail_closed` | If `True`, hook failures raise `LifecycleError` instead of being silently ignored.                                                                                                                                                                                                     |
 | `llm_filter`            | Path to a filter script that can redact or block outbound LLM requests (see [Outbound LLM Filter](llm-filter.html)).                                                                                                                                                                   |
+| `decision_model`        | Decision model for the optional `decide` tool, with `decision_base_url` and `decision_api_key` (see [Decision Models](decision-models.html)). An empty string turns it off.                                                                                                            |
 | `subagents`             | Enable parallel subagent support (`spawn_subagent` / `check_subagents` tools).                                                                                                                                                                                                         |
 | `encrypt_secrets`       | Enable format-preserving secret encryption (see [Secret Encryption](secrets.html)).                                                                                                                                                                                                    |
 | `retries`               | Maximum attempts per LLM call, for network errors and usage-policy prompt rejections. Must be >= 1.                                                                                                                                                                                    |

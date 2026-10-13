@@ -123,6 +123,9 @@ class Session:
         retries: int = 5,
         provider_timeout: int = 900,
         initial_tool_choice: str = "auto",
+        decision_model: str | None = None,
+        decision_base_url: str | None = None,
+        decision_api_key: str | None = None,
         encrypt_secrets: bool = False,
         encrypt_secrets_key: str | None = None,
         encrypt_secrets_tweak: str | None = None,
@@ -174,6 +177,10 @@ class Session:
                 f"initial_tool_choice must be one of {INITIAL_TOOL_CHOICES!r}"
             )
         self.initial_tool_choice = initial_tool_choice
+        # An empty decision_model turns the decide tool off.
+        self.decision_model = decision_model
+        self.decision_base_url = decision_base_url
+        self.decision_api_key = decision_api_key
         # Resolve _UNSET defaults; yolo only upgrades when the caller didn't
         # pass an explicit value (same semantics as the CLI path).
         if files is _UNSET:
@@ -289,6 +296,9 @@ class Session:
         # Secret shield (created in _setup if encrypt_secrets is enabled)
         self._secret_shield = None
 
+        # Decision model (resolved in _setup)
+        self._decisions = None
+
         # Lifecycle hook state
         self._lifecycle_git_meta: dict | None = None
         self._lifecycle_startup_result: dict | None = None
@@ -306,6 +316,12 @@ class Session:
             from . import fmt
 
             fmt.init()
+
+        from .decisions import resolve_settings
+
+        self._decisions = resolve_settings(
+            self.decision_model, self.decision_base_url, self.decision_api_key
+        )
 
         # Network policy. Session never bootstraps a sandbox, so "none" is
         # only honest when the process already runs inside nono with the
@@ -325,6 +341,11 @@ class Session:
                     'network="none" requires the command provider; provider '
                     f"{self.provider!r} needs network access. For hosted or "
                     'local HTTP providers use network="provider-only".'
+                )
+            if self._decisions is not None:
+                raise ConfigError(
+                    'network="none" cannot be used with a decision model, which '
+                    'is an HTTP service; unset decision_model or use network="provider-only".'
                 )
             if not is_inside_nono():
                 raise ConfigError(
@@ -494,7 +515,12 @@ class Session:
             subagents=self.subagents,
             metaskill_names=self._metaskill_names,
             network=self.network,
+            decide=self._decisions is not None,
         )
+        if self._decisions is not None and self.verbose:
+            from . import fmt
+
+            fmt.info(self._decisions.startup_line())
 
         # Initialize MCP servers
         if self.mcp_servers:
@@ -791,6 +817,7 @@ class Session:
             session=self,
             network_mode=self.network,
             net_jail=self._net_jail,
+            decisions=self._decisions,
         )
         if state.get("compaction_state") is not None:
             kwargs["compaction_state"] = state["compaction_state"]

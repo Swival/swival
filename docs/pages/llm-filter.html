@@ -74,6 +74,7 @@
 <li><a href="safety-and-sandboxing.html">Safety & Sandboxing</a></li>
 <li><a href="secrets.html">Secret Encryption</a></li>
 <li><a href="llm-filter.html" class="active">Outbound LLM Filter</a></li>
+<li><a href="decision-models.html">Decision Models</a></li>
 <li><a href="command-middleware.html">Command Middleware</a></li>
 <li><a href="skills.html">Skills</a></li>
 <li><a href="library.html">The Library</a></li>
@@ -102,7 +103,7 @@
         <article class="docs-content">
             <h1 id="outbound-llm-filter">Outbound LLM Filter</h1>
 <p>Swival can run a user-defined script before every outbound LLM request. The script receives the message list as JSON, and can modify messages, redact content, or block the request entirely. This is useful for stripping internal URLs, project names, customer identifiers, or any other text that should not reach an external provider.</p>
-<p>The filter covers all Swival-managed LLM call paths: normal agent turns, REPL turns, the Session API, and compaction summaries.</p>
+<p>The filter covers all Swival-managed LLM call paths: normal agent turns, REPL turns, the Session API, compaction summaries, and decision model requests.</p>
 <h2 id="enabling-a-filter">Enabling a Filter</h2>
 <p>On the command line:</p>
 <pre><code class="language-sh">swival --llm-filter &quot;./scripts/redact.py&quot; &quot;task&quot;
@@ -130,7 +131,9 @@ result = session.run(&quot;task&quot;)
   &quot;tools&quot;: [...]
 }
 </code></pre>
-<p><code>messages</code> is the exact message list about to be sent. <code>tools</code> is included as read-only context so the filter can make informed decisions. <code>call_kind</code> is <code>"agent"</code> for normal turns and <code>"summary"</code> for internal summarization calls (compaction summaries, proactive checkpoints, continue-file enrichment).</p>
+<p><code>messages</code> is the exact message list about to be sent. <code>tools</code> is included as read-only context so the filter can make informed decisions. <code>call_kind</code> is <code>"agent"</code> for normal turns and <code>"summary"</code> for internal summarization calls (compaction summaries, proactive checkpoints, continue-file enrichment).
+Requests to a <a href="decision-models.html">decision model</a> use <code>call_kind</code> <code>"decision"</code> and hold the JSON request in a single user message.
+The filter must return exactly one user message with a valid request, or the call is blocked.</p>
 <p>The script writes a JSON object to stdout. Two response shapes are supported:</p>
 <p><strong>Allow (with optional modifications):</strong></p>
 <pre><code class="language-json">{&quot;messages&quot;: [...]}
@@ -226,7 +229,7 @@ else:
 <li>Tool schemas are included in the payload as read-only context but cannot be modified by the filter.</li>
 <li>The filter is stateless across calls. Each invocation is a fresh subprocess.</li>
 </ul>
-            <nav class="page-nav" aria-label="Page navigation"><a class="nav-prev" href="secrets.html"><span class="nav-label">&larr; Previous</span><span class="nav-title">Secret Encryption</span></a><a class="nav-next" href="command-middleware.html"><span class="nav-label">Next &rarr;</span><span class="nav-title">Command Middleware</span></a></nav>
+            <nav class="page-nav" aria-label="Page navigation"><a class="nav-prev" href="secrets.html"><span class="nav-label">&larr; Previous</span><span class="nav-title">Secret Encryption</span></a><a class="nav-next" href="decision-models.html"><span class="nav-label">Next &rarr;</span><span class="nav-title">Decision Models</span></a></nav>
         </article>
         <aside class="page-toc" aria-label="On this page">
             <p class="page-toc-title">On this page</p>
