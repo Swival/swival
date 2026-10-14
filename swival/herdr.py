@@ -9,6 +9,8 @@ import time
 
 from ._env import child_env
 
+OWNER_ENV = "SWIVAL_HERDR_OWNER"
+
 
 class HerdrActivity:
     def __init__(self):
@@ -51,10 +53,25 @@ class HerdrActivity:
         except (OSError, subprocess.TimeoutExpired):
             pass
 
+    def _owns_pane(self, pane):
+        # Commands inherit this marker, so a Swival started from one of our
+        # commands in the same pane leaves the pane to us.
+        # Otherwise it would report idle and release the pane mid-turn.
+        marker = f"{os.getpid()}@{pane}"
+        current = os.environ.get(OWNER_ENV, "")
+        if current != marker:
+            if current.partition("@")[2] == pane:
+                return False
+            os.environ[OWNER_ENV] = marker
+        return True
+
     def report(self, state):
-        if os.environ.get("HERDR_ENV") != "1":
+        pane = os.environ.get("HERDR_PANE_ID")
+        if os.environ.get("HERDR_ENV") != "1" or not pane:
             return
         with self._lock:
+            if not self._owns_pane(pane):
+                return
             if not self._registered:
                 atexit.register(self.release)
                 self._registered = True

@@ -66,6 +66,7 @@ It shows `working` during a turn, `blocked` while waiting for command approval,
 and `idle` between turns.
 
 Swival clears its activity status when it exits.
+If Swival starts another Swival in the same pane, for example through a command, only the outer one reports.
 If herdr is unavailable, Swival continues normally.
 
 ## Input Commands

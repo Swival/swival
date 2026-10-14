@@ -279,6 +279,8 @@ def _isolate_global_skills(monkeypatch):
 @pytest.fixture(autouse=True)
 def _isolate_herdr(monkeypatch):
     monkeypatch.delenv("HERDR_ENV", raising=False)
+    # Reporting writes this into os.environ; going through monkeypatch undoes it.
+    monkeypatch.setenv("SWIVAL_HERDR_OWNER", "")
 
 
 @pytest.fixture(autouse=True)

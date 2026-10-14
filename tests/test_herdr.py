@@ -1,9 +1,12 @@
+import os
 import subprocess
+import sys
 from unittest.mock import Mock
 
 import pytest
 
 from swival import agent, command_policy, herdr
+from swival._env import child_env
 
 
 @pytest.fixture
@@ -122,3 +125,40 @@ def test_approval_restores_working_state(reporter, monkeypatch, answer):
         result = command_policy.prompt_approval("git push")
         assert result == ("deny" if isinstance(answer, BaseException) else "allow")
     assert states(run) == ["working", "blocked", "working", "idle"]
+
+
+@pytest.mark.parametrize(
+    "owner, reports",
+    [("1@w1:p2", False), ("1@w1:p3", True), (f"{os.getpid()}@w1:p2", True)],
+)
+def test_inherited_owner_marker(reporter, monkeypatch, owner, reports):
+    activity, run, _ = reporter
+    monkeypatch.setenv(herdr.OWNER_ENV, owner)
+    with activity.turn():
+        pass
+    activity.release()
+    assert states(run) == (["working", "idle", "release"] if reports else [])
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+def test_nested_process_leaves_pane_to_parent(tmp_path, monkeypatch):
+    log = tmp_path / "herdr.log"
+    fake = tmp_path / "herdr"
+    fake.write_text(f'#!/bin/sh\necho "$2 ${{11}}" >> "{log}"\n')
+    fake.chmod(0o755)
+    monkeypatch.setenv("HERDR_ENV", "1")
+    monkeypatch.setenv("HERDR_BIN_PATH", str(fake))
+    monkeypatch.setenv("HERDR_PANE_ID", "w1:p2")
+    monkeypatch.setattr(herdr.atexit, "register", Mock())
+    activity = herdr.HerdrActivity()
+    nested = "from swival.herdr import activity\nwith activity.turn():\n    pass\n"
+    with activity.turn():
+        subprocess.run([sys.executable, "-c", nested], env=child_env(), check=True)
+        assert log.read_text().split("\n") == ["report-agent working", ""]
+    activity.release()
+    assert log.read_text().split("\n") == [
+        "report-agent working",
+        "report-agent idle",
+        "release-agent ",
+        "",
+    ]

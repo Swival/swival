@@ -138,6 +138,7 @@ cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5.2
 It shows <code>working</code> during a turn, <code>blocked</code> while waiting for command approval,
 and <code>idle</code> between turns.</p>
 <p>Swival clears its activity status when it exits.
+If Swival starts another Swival in the same pane, for example through a command, only the outer one reports.
 If herdr is unavailable, Swival continues normally.</p>
 <h2 id="input-commands">Input Commands</h2>
 <p>Slash commands work in interactive mode (typed at the REPL prompt) and optionally in one-shot mode. In one-shot mode, command dispatch is disabled by default because the input may come from an untrusted source (a pipe, a file, or an upstream program). Pass <code>--oneshot-commands</code> to enable it:</p>
