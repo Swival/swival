@@ -138,6 +138,7 @@ from .tools import (
 )
 from .repair import format_repair_feedback, repair_tool_args, validate_required_args
 from .keepawake import keep_awake
+from .herdr import activity as herdr_activity
 from .tool_call_repair import (
     StormBreaker,
     content_is_pure_tool_call,
@@ -10427,7 +10428,8 @@ def run_agent_loop(messages: list, tools: list, **loop_kwargs):
     exit: checkpoints, continue-file summaries, and concurrent subagents can
     all add cost after the last turn line."""
     try:
-        return _run_agent_loop(messages, tools, **loop_kwargs)
+        with herdr_activity.turn(enabled=not loop_kwargs.get("is_subagent", False)):
+            return _run_agent_loop(messages, tools, **loop_kwargs)
     finally:
         session_cost = loop_kwargs.get("session_cost")
         if (
@@ -15737,6 +15739,8 @@ def repl_loop(
     # After start, so the git status does not delay the first prompt.
     _refresh_toolbar_state()
     try:
+        if not is_subagent:
+            herdr_activity.report("idle")
         while True:
             # A Ctrl-C can land here when the key was pressed just as a turn
             # ended. There is nothing to interrupt, so it is ignored.

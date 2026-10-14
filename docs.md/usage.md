@@ -59,6 +59,15 @@ The REPL greets you with an animated splash, and in one-shot mode the rule that 
 SWIVAL_ANIMATIONS=0 swival
 ```
 
+## herdr Activity Indicator
+
+Inside [herdr](https://herdr.dev), Swival updates the activity dot automatically.
+It shows `working` during a turn, `blocked` while waiting for command approval,
+and `idle` between turns.
+
+Swival clears its activity status when it exits.
+If herdr is unavailable, Swival continues normally.
+
 ## Input Commands
 
 Slash commands work in interactive mode (typed at the REPL prompt) and optionally in one-shot mode. In one-shot mode, command dispatch is disabled by default because the input may come from an untrusted source (a pipe, a file, or an upstream program). Pass `--oneshot-commands` to enable it:

@@ -2872,6 +2872,17 @@ class TestStatusCommand:
         assert len(messages) == 1
 
 
+def test_repl_reports_initial_herdr_idle(tmp_path):
+    mock_session = MagicMock()
+    mock_session.prompt.side_effect = EOFError
+    with (
+        patch("prompt_toolkit.PromptSession", return_value=mock_session),
+        patch("swival.agent.herdr_activity.report") as report,
+    ):
+        repl_loop([_sys("s")], [], **_loop_kwargs(tmp_path))
+    report.assert_called_once_with("idle")
+
+
 def test_safe_file_history_recreates_directory(tmp_path):
     """_SafeFileHistory.store_string recreates .swival/ if deleted mid-session."""
     from prompt_toolkit.history import FileHistory

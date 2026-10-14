@@ -133,6 +133,12 @@ cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5.2
 <p>The REPL greets you with an animated splash, and in one-shot mode the rule that marks the start of each request flows into place before it settles. These only play on a genuine interactive terminal with color, never when output is piped or redirected. To turn them off entirely, for a slow terminal, a screen reader, a remote shell, or just a preference for reduced motion, set <code>SWIVAL_ANIMATIONS=0</code>:</p>
 <pre><code class="language-sh">SWIVAL_ANIMATIONS=0 swival
 </code></pre>
+<h2 id="herdr-activity-indicator">herdr Activity Indicator</h2>
+<p>Inside <a href="https://herdr.dev">herdr</a>, Swival updates the activity dot automatically.
+It shows <code>working</code> during a turn, <code>blocked</code> while waiting for command approval,
+and <code>idle</code> between turns.</p>
+<p>Swival clears its activity status when it exits.
+If herdr is unavailable, Swival continues normally.</p>
 <h2 id="input-commands">Input Commands</h2>
 <p>Slash commands work in interactive mode (typed at the REPL prompt) and optionally in one-shot mode. In one-shot mode, command dispatch is disabled by default because the input may come from an untrusted source (a pipe, a file, or an upstream program). Pass <code>--oneshot-commands</code> to enable it:</p>
 <pre><code class="language-sh">swival --oneshot-commands &quot;/status&quot;

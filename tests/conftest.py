@@ -277,6 +277,11 @@ def _isolate_global_skills(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_herdr(monkeypatch):
+    monkeypatch.delenv("HERDR_ENV", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_global_agents_md(monkeypatch):
     """Prevent all tests from picking up real ~/.agents/AGENTS.md."""
     monkeypatch.setattr(

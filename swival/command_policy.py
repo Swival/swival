@@ -302,10 +302,11 @@ class CommandPolicy:
 
 def prompt_approval(bucket: str, high_risk: bool = False) -> str:
     from .fmt import suspend_live
+    from .herdr import activity
 
     console = Console(stderr=True)
 
-    with suspend_live():
+    with activity.approval(), suspend_live():
         label = Text(bucket, style="bold")
         if high_risk:
             console.print(Text("⚠ high-risk ", style="bold red"), label, end="")
