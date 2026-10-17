@@ -6701,7 +6701,15 @@ def build_parser():
         '  swival --yolo --self-review "Add input validation"\n'
         '  swival -q --network provider-only --no-history --no-continue --no-mcp --no-a2a "Review <description of what has to be reviewed>"\n'
         "  swival -q --network provider-only --no-history --no-continue --no-mcp --no-a2a < description_of_what_has_to_be_reviewed.txt\n"
-        "  swival -q < task.md"
+        "  swival -q < task.md\n"
+        "\n"
+        "Reviewer mode:\n"
+        "  Review the answer with read-only access to BASE_DIR; no edits or commands.\n"
+        "  Positional argument: BASE_DIR. Task: SWIVAL_TASK or --objective FILE.\n"
+        "  Answer: stdin. Feedback: stdout. Exit: 0=accept, 1=retry, 2=error.\n"
+        "\n"
+        '  SWIVAL_TASK="Fix the login bug" swival --reviewer-mode . < answer.txt\n'
+        "  swival --reviewer-mode --objective task.md . < answer.txt"
     )
     parser = argparse.ArgumentParser(
         prog="swival",
@@ -7319,8 +7327,10 @@ def build_parser():
         "--reviewer-mode",
         action="store_true",
         default=False,
-        help="Run as a reviewer: read base_dir from positional arg, answer from stdin, "
-        "call LLM to judge, exit 0/1/2.",
+        help="Review an answer from stdin with read-only workspace tools. "
+        "Positional argument: BASE_DIR; "
+        "task: SWIVAL_TASK or --objective. Feedback on stdout; "
+        "exit 0=accept, 1=retry, 2=error. See examples below.",
     )
     review_group.add_argument(
         "--self-review",

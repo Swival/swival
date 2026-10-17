@@ -1,12 +1,15 @@
 """Tests for --reviewer-mode feature."""
 
+import json
 import shlex
 import types
 
 import pytest
 from unittest.mock import patch, MagicMock
 
+from conftest import make_tool_call
 from swival import agent
+from swival._msg import _msg_content, _msg_role
 from swival.config import _UNSET, ConfigError, load_config, apply_config_to_args
 from swival.report import AgentError
 from swival.reviewer import (
@@ -519,6 +522,180 @@ class TestRunAsReviewer:
         assert code == 2
         captured = capsys.readouterr()
         assert "cannot read --objective file" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# Read-only review loop
+# ---------------------------------------------------------------------------
+
+
+class TestReadOnlyReviewer:
+    @pytest.fixture(autouse=True)
+    def setup(self, monkeypatch):
+        monkeypatch.setenv("SWIVAL_TASK", "Fix add.py so add(a, b) returns a + b")
+        monkeypatch.setattr(
+            "sys.stdin", types.SimpleNamespace(read=lambda: "Fixed add.py.")
+        )
+        monkeypatch.setattr(
+            agent,
+            "resolve_provider",
+            lambda **kw: (
+                "test-model",
+                "http://fake",
+                None,
+                None,
+                {"provider": "lmstudio", "api_key": None},
+            ),
+        )
+
+    def test_reads_workspace_before_verdict(self, tmp_path, monkeypatch, capsys):
+        source = "def add(a, b):\n    return a - b\n"
+        (tmp_path / "add.py").write_text(source)
+        args = _reviewer_args(str(tmp_path), max_turns=2, verbose=False)
+        calls = 0
+
+        def call_llm(base_url, model_id, messages, *a, **kw):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                names = {tool["function"]["name"] for tool in a[4]}
+                assert names == {
+                    "read_file",
+                    "read_multiple_files",
+                    "list_files",
+                    "grep",
+                    "outline",
+                    "think",
+                    "todo",
+                }
+                return _make_message(
+                    content="I will inspect add.py.",
+                    tool_calls=[make_tool_call("read_file", '{"file_path": "add.py"}')],
+                ), "tool_calls"
+            assert _msg_role(messages[-1]) == "tool"
+            assert "return a - b" in _msg_content(messages[-1])
+            return _make_message(
+                content="add.py still subtracts.\nVERDICT: RETRY"
+            ), "stop"
+
+        monkeypatch.setattr(agent, "call_llm", call_llm)
+        assert run_as_reviewer(args, str(tmp_path)) == 1
+        assert calls == 2
+        assert capsys.readouterr().out == "add.py still subtracts.\nVERDICT: RETRY\n"
+        assert (tmp_path / "add.py").read_text() == source
+        assert not (tmp_path / ".swival").exists()
+
+    @pytest.mark.parametrize(
+        ("name", "arguments"),
+        [
+            ("write_file", {"file_path": "add.py", "content": "changed"}),
+            (
+                "edit_file",
+                {
+                    "file_path": "add.py",
+                    "old_string": "original",
+                    "new_string": "changed",
+                },
+            ),
+            ("delete_file", {"file_path": "add.py"}),
+            ("run_command", {"command": ["touch", "created"]}),
+            ("run_shell_command", {"command": "touch created"}),
+            ("run_python", {"code": "open('created', 'w').close()"}),
+            ("fetch_url", {"url": "https://example.com"}),
+        ],
+    )
+    def test_rejects_disallowed_tools(self, tmp_path, monkeypatch, name, arguments):
+        (tmp_path / "add.py").write_text("original")
+        args = _reviewer_args(
+            str(tmp_path),
+            max_turns=2,
+            verbose=False,
+            yolo=True,
+            files="all",
+            commands="all",
+        )
+        calls = 0
+
+        def call_llm(base_url, model_id, messages, *a, **kw):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return _make_message(
+                    tool_calls=[make_tool_call(name, json.dumps(arguments))]
+                ), "tool_calls"
+            result = _msg_content(messages[-1])
+            assert result.startswith("error:")
+            assert f"tool {name!r} is not available" in result
+            return _make_message(content="VERDICT: RETRY"), "stop"
+
+        monkeypatch.setattr(agent, "call_llm", call_llm)
+        assert run_as_reviewer(args, str(tmp_path)) == 1
+        assert calls == 2
+        assert (tmp_path / "add.py").read_text() == "original"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["add.py"]
+
+    @pytest.mark.parametrize(
+        "name", ["read_file", "read_multiple_files", "list_files", "grep", "outline"]
+    )
+    @pytest.mark.parametrize("symlink", [False, True])
+    def test_reads_stay_inside_base_dir(self, tmp_path, monkeypatch, name, symlink):
+        base = tmp_path / "project"
+        base.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.py").write_text("SECRET_OUTSIDE_REVIEW = True\n")
+        if symlink:
+            (base / "link").symlink_to(outside, target_is_directory=True)
+            path = "link"
+        else:
+            path = "../outside"
+        if name == "read_multiple_files":
+            arguments = {"files": [{"file_path": f"{path}/secret.py"}]}
+        elif name in {"list_files", "grep"}:
+            arguments = {"path": path, "pattern": "*" if name == "list_files" else "."}
+        else:
+            arguments = {"file_path": f"{path}/secret.py"}
+        args = _reviewer_args(str(base), max_turns=2, verbose=False, files="all")
+        calls = 0
+
+        def call_llm(base_url, model_id, messages, *a, **kw):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return _make_message(
+                    tool_calls=[make_tool_call(name, json.dumps(arguments))]
+                ), "tool_calls"
+            result = _msg_content(messages[-1])
+            assert "outside" in result
+            assert "error:" in result
+            assert "SECRET_OUTSIDE_REVIEW" not in result
+            return _make_message(content="VERDICT: RETRY"), "stop"
+
+        monkeypatch.setattr(agent, "call_llm", call_llm)
+        assert run_as_reviewer(args, str(base)) == 1
+        assert calls == 2
+
+    def test_exhausted_review_is_error_and_does_not_save(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        (tmp_path / "add.py").write_text("original")
+        args = _reviewer_args(str(tmp_path), max_turns=1, verbose=False)
+        monkeypatch.setattr(
+            agent,
+            "call_llm",
+            lambda *a, **kw: (
+                _make_message(
+                    content="VERDICT: ACCEPT",
+                    tool_calls=[make_tool_call("read_file", '{"file_path": "add.py"}')],
+                ),
+                "tool_calls",
+            ),
+        )
+        assert run_as_reviewer(args, str(tmp_path)) == 2
+        captured = capsys.readouterr()
+        assert "review did not finish" in captured.err
+        assert captured.out == ""
+        assert not (tmp_path / ".swival").exists()
 
 
 # ---------------------------------------------------------------------------

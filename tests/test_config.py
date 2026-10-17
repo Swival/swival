@@ -1191,6 +1191,24 @@ class TestCLIIntegration:
             "--no-a2a < description_of_what_has_to_be_reviewed.txt"
         ) in help_text
 
+    def test_help_includes_reviewer_protocol(self):
+        from swival.agent import build_parser
+
+        help_text = build_parser().format_help()
+
+        assert "Reviewer mode:" in help_text
+        assert (
+            "Review the answer with read-only access to BASE_DIR; no edits or commands."
+        ) in help_text
+        assert "Positional argument: BASE_DIR." in help_text
+        assert "Task: SWIVAL_TASK or --objective FILE." in help_text
+        assert "Answer: stdin. Feedback: stdout." in help_text
+        assert "Exit: 0=accept, 1=retry, 2=error." in help_text
+        assert (
+            'SWIVAL_TASK="Fix the login bug" swival --reviewer-mode . < answer.txt'
+        ) in help_text
+        assert "swival --reviewer-mode --objective task.md . < answer.txt" in help_text
+
     def test_commands_list_flows_through(self, tmp_path, monkeypatch):
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
         _write_toml(tmp_path / "swival.toml", 'commands = ["ls"]\n')

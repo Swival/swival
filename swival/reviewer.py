@@ -6,8 +6,13 @@ import sys
 from pathlib import Path
 
 from . import fmt
+from .config import ONESHOT_MAX_TURNS
 from .cost import SessionCost
 from .report import AgentError
+from .thinking import ThinkingState
+from .todo import TodoState
+from .tools import TOOLS
+from .worktree import READ_ONLY_AGENT_TOOLS, ToolPolicy, filter_tool_schemas
 
 _VERDICT_RE = re.compile(r"^\s*VERDICT:\s*(ACCEPT|RETRY)\s*$", re.IGNORECASE)
 
@@ -24,6 +29,9 @@ You are reviewing a coding agent's work.
 </answer>
 
 Evaluate whether the answer correctly and completely addresses the task.
+You have read-only tools to inspect files in the base directory. Read relevant
+code before judging code changes; do not rely only on the agent's claims.
+You cannot edit files or run commands, including tests.
 {custom_instructions}
 You MUST end your response with exactly one of these lines:
   VERDICT: ACCEPT
@@ -86,7 +94,7 @@ def _build_prompt(
 
 def run_as_reviewer(args, base_dir: str) -> int:
     """Execute reviewer mode. Returns exit code (0, 1, or 2)."""
-    from .agent import call_llm, resolve_provider, _provider_extra_kwargs
+    from .agent import resolve_provider, run_agent_loop
 
     # Read answer from stdin
     answer = sys.stdin.read()
@@ -130,7 +138,7 @@ def run_as_reviewer(args, base_dir: str) -> int:
         custom_instructions=args.review_prompt,
     )
 
-    # Resolve provider and call LLM
+    # Resolve provider
     try:
         model_id, api_base, api_key, context_length, llm_kwargs = resolve_provider(
             provider=args.provider,
@@ -165,44 +173,54 @@ def run_as_reviewer(args, base_dir: str) -> int:
 
     # The reviewer is a separate process, so it keeps its own subtotal.
     session_cost = SessionCost()
+    max_turns = getattr(args, "max_turns", None)
+    if max_turns is None:
+        max_turns = ONESHOT_MAX_TURNS
 
     try:
-        extra_kwargs = {}
-        if secret_shield is not None:
-            extra_kwargs["secret_shield"] = secret_shield
-        _llm_result = call_llm(
-            api_base,
-            model_id,
+        response_text, exhausted = run_agent_loop(
             messages,
-            args.max_output_tokens,
-            args.temperature,
-            args.top_p,
-            args.seed,
-            None,  # no tools
-            args.verbose,
-            provider=llm_kwargs.get("provider", args.provider),
-            api_key=api_key,
-            user_agent=llm_kwargs.get("user_agent"),
-            max_retries=getattr(args, "retries", 5),
-            provider_timeout=getattr(args, "provider_timeout", 900),
+            filter_tool_schemas(TOOLS, READ_ONLY_AGENT_TOOLS),
+            api_base=api_base,
+            model_id=model_id,
+            max_turns=max_turns,
+            max_output_tokens=args.max_output_tokens,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            seed=args.seed,
+            context_length=context_length,
+            base_dir=base_dir,
+            thinking_state=ThinkingState(verbose=args.verbose),
+            todo_state=TodoState(verbose=args.verbose),
+            resolved_commands={},
+            skills_catalog={},
+            skill_read_roots=[],
+            extra_write_roots=[],
+            files_mode="some",
+            verbose=args.verbose,
+            llm_kwargs={
+                **llm_kwargs,
+                "api_key": api_key,
+                "max_retries": getattr(args, "retries", 5),
+                "provider_timeout": getattr(args, "provider_timeout", 900),
+            },
+            continue_here=False,
+            network_mode="provider-only",
+            tool_policy=ToolPolicy(allowed_tools=READ_ONLY_AGENT_TOOLS),
             session_cost=session_cost,
-            **_provider_extra_kwargs(llm_kwargs),
-            **extra_kwargs,
+            secret_shield=secret_shield,
         )
-        msg = _llm_result[0]
     except AgentError as e:
         print(f"reviewer error: LLM call failed: {e}", file=sys.stderr)
+        return 2
+    finally:
         if secret_shield is not None:
             secret_shield.destroy()
+
+    response_text = response_text or ""
+    if exhausted:
+        fmt.error("reviewer: review did not finish within its limits")
         return 2
-
-    if args.verbose:
-        fmt.session_cost(session_cost.snapshot())
-
-    response_text = msg.content or ""
-
-    if secret_shield is not None:
-        secret_shield.destroy()
 
     # Parse verdict
     verdict = _parse_verdict(response_text)
