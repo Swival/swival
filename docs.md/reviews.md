@@ -39,7 +39,16 @@ swival "Refactor error handling in src/api.py" \
     --reviewer "swival --reviewer-mode"
 ```
 
-When `--reviewer-mode` is active, Swival reads the base directory from the first positional argument (as passed by the outer instance), reads the agent's answer from standard input, reads the task from `SWIVAL_TASK` (or a `--objective` file), calls the LLM to evaluate the answer, parses the verdict, and exits with the appropriate code.
+When `--reviewer-mode` is active, Swival reads the base directory from the first positional argument (as passed by the outer instance), reads the agent's answer from standard input, and reads the task from `SWIVAL_TASK` (or a `--objective` file). The reviewer can read, list, search, and outline files under the base directory before returning its verdict. It cannot edit files, run commands or tests, or call external tools. These restrictions apply even with `--yolo` or broader file and command permissions in config.
+
+Other agents and applications can call it directly:
+
+```sh
+SWIVAL_TASK="Fix the login bug" swival --reviewer-mode . < answer.txt
+swival --reviewer-mode --objective task.md . < answer.txt
+```
+
+Feedback goes to stdout; diagnostics go to stderr. Exit status `0` accepts, `1` requests changes, and `2` reports a reviewer error. Relative `--objective` and `--verify` paths on the command line resolve against the base directory. `--max-turns` limits the review loop; an unfinished review returns `2` and does not write a continuation file.
 
 ### Self-Review
 

@@ -122,7 +122,12 @@
 <pre><code class="language-sh">swival &quot;Refactor error handling in src/api.py&quot; \
     --reviewer &quot;swival --reviewer-mode&quot;
 </code></pre>
-<p>When <code>--reviewer-mode</code> is active, Swival reads the base directory from the first positional argument (as passed by the outer instance), reads the agent's answer from standard input, reads the task from <code>SWIVAL_TASK</code> (or a <code>--objective</code> file), calls the LLM to evaluate the answer, parses the verdict, and exits with the appropriate code.</p>
+<p>When <code>--reviewer-mode</code> is active, Swival reads the base directory from the first positional argument (as passed by the outer instance), reads the agent's answer from standard input, and reads the task from <code>SWIVAL_TASK</code> (or a <code>--objective</code> file). The reviewer can read, list, search, and outline files under the base directory before returning its verdict. It cannot edit files, run commands or tests, or call external tools. These restrictions apply even with <code>--yolo</code> or broader file and command permissions in config.</p>
+<p>Other agents and applications can call it directly:</p>
+<pre><code class="language-sh">SWIVAL_TASK=&quot;Fix the login bug&quot; swival --reviewer-mode . &lt; answer.txt
+swival --reviewer-mode --objective task.md . &lt; answer.txt
+</code></pre>
+<p>Feedback goes to stdout; diagnostics go to stderr. Exit status <code>0</code> accepts, <code>1</code> requests changes, and <code>2</code> reports a reviewer error. Relative <code>--objective</code> and <code>--verify</code> paths on the command line resolve against the base directory. <code>--max-turns</code> limits the review loop; an unfinished review returns <code>2</code> and does not write a continuation file.</p>
 <h3 id="self-review">Self-Review</h3>
 <p>The <code>--self-review</code> flag is a shorthand that automatically builds the reviewer command by mirroring the current invocation's provider, model, and other settings. Instead of writing the reviewer command by hand:</p>
 <pre><code class="language-sh">swival --provider huggingface --model zai-org/GLM-5.2 --yolo \
