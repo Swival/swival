@@ -22,19 +22,19 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "litellm>=1.105.0,<1.106",
+    "litellm>=1.105.1,<1.106",
     "tiktoken>=0.14.0",
-    "html-to-markdown>=3.17.2,<4",
+    "html-to-markdown>=3.18.1,<4",
     "rich>=15.0.0",
     "prompt-toolkit>=3.0.53",
     "mcp>=2.3.0,<3",
     "rank-bm25>=0.2.2",
     "httpx2>=2.13.1",
-    "starlette>=1.7.0",
+    "starlette>=1.8.0",
     "uvicorn>=0.54.0",
-    "fast-cipher>=0.2.2",
-    "boto3>=1.43.111",
-    "google-cloud-aiplatform>=2.4.0,<3",
+    "fast-cipher>=0.3.0",
+    "boto3>=1.43.114",
+    "google-cloud-aiplatform>=2.5.0,<3",
 ]
 
 [project.optional-dependencies]
@@ -89,9 +89,9 @@ markers = [
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
-    "ruff>=0.17.0,<0.18",
+    "ruff>=0.17.1,<0.18",
 ]
 website = [
-    "markdown>=3.11",
-    "pillow>=12.3.0",
+    "markdown>=3.11.1",
+    "pillow>=13.0.0",
 ]

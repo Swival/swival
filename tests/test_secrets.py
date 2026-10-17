@@ -69,6 +69,36 @@ class TestRoundTrip:
         restored = shield.reverse_known(enc)
         assert restored == text
 
+    @pytest.mark.parametrize("separator", ["", "-", "_"])
+    def test_adjacent_tokens_round_trip(self, shield, separator):
+        text = f"{GHP_TOKEN}{separator}{SKPROJ_TOKEN}"
+        encrypted = shield.encrypt_text(text)
+
+        assert GHP_TOKEN not in encrypted
+        assert SKPROJ_TOKEN not in encrypted
+        assert len(encrypted) == len(text)
+        assert encrypted[len(GHP_TOKEN) :].startswith(separator + "sk-proj-")
+        assert shield.reverse_known(encrypted) == text
+
+    @pytest.mark.parametrize(
+        ("prefix", "id_count"), [("xoxb-", 2), ("xoxp-", 2), ("xoxp-", 3)]
+    )
+    def test_slack_segments_round_trip(self, shield, prefix, id_count):
+        segments = ["123456789012", "234567890123", "345678901234"][:id_count]
+        segments.append("AbCdEf0123456789GhIjKlMnOpQrStUvW")
+        token = prefix + "-".join(segments)
+        text = f'{{"token": "{token}"}}'
+        encrypted = shield.encrypt_text(text)
+
+        assert token not in encrypted
+        assert len(encrypted) == len(text)
+        assert encrypted.startswith('{"token": "' + prefix)
+        encrypted_segments = encrypted[len('{"token": "' + prefix) : -2].split("-")
+        for plaintext, ciphertext in zip(segments, encrypted_segments, strict=True):
+            assert len(ciphertext) == len(plaintext)
+            assert ciphertext != plaintext
+        assert shield.reverse_known(encrypted) == text
+
     def test_no_tokens_unchanged(self, shield):
         msgs = [{"role": "user", "content": "No secrets here."}]
         encrypted = shield.encrypt_messages(msgs)
@@ -212,6 +242,9 @@ class TestTweakIsolation:
             assert isinstance(e2[0]["content"], str)
             assert GHP_TOKEN not in e1[0]["content"]
             assert GHP_TOKEN not in e2[0]["content"]
+            assert e1[0]["content"] != e2[0]["content"]
+            assert s1.reverse_known(e1[0]["content"]) == text
+            assert s2.reverse_known(e2[0]["content"]) == text
         finally:
             s1.destroy()
             s2.destroy()
