@@ -81,6 +81,31 @@ url = "http://127.0.0.1:49374/mcp"
 
 The accepted values are `http` (`streamable-http` and `streamable_http` mean the same thing), `sse`, and `stdio`, which is there so configs copied from other MCP clients load unchanged. Case and surrounding spaces are ignored. Anything else is a config error rather than a silent guess.
 
+## Parallel Search
+
+[Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp) adds web search and page extraction without a local server or an API key. Its anonymous free tier is intended for exploration and light use, with rate limits. It uses Fast search mode; your configured model still runs the agent.
+
+Add this table to your project's `swival.toml`:
+
+```toml
+[mcp_servers.parallel]
+type = "http"
+url = "https://search.parallel.ai/mcp"
+headers = { "User-Agent" = "Swival (+https://swival.dev)" }
+```
+
+The server uses Streamable HTTP. The header identifies Swival to the service; no authorization header or Parallel credentials are needed.
+
+From the project directory, using your usual model configuration, run:
+
+```sh
+swival "Use Parallel to find the official Python documentation for asyncio.TaskGroup, fetch that page, and summarize how it handles a failing task. Include the source URL."
+```
+
+Swival discovers `mcp__parallel__web_search` and `mcp__parallel__web_fetch` at startup. The model can use search to find sources, then fetch to read them. Search queries and requested URLs are sent to Parallel, so avoid including private project content in them.
+
+This server is enabled only when you add the table. It doesn't change your model provider or other configured servers. `--no-mcp` disables it along with all other MCP servers. Remove the table to stop using it.
+
 ## JSON Configuration
 
 Swival also reads `.swival/mcp.json`. This uses the same format as other MCP-compatible tools:
