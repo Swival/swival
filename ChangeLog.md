@@ -2,6 +2,19 @@
 
 All notable user-facing changes to Swival.
 
+## 1.0.48
+
+- Added optional decision models alongside the chat model through `--decision-model`, including hosted Jev and local Clef servers.
+  The `decide` tool returns yes/no probabilities, classifications, and scores.
+  Use `--decision-base-url` and `--decision-api-key` for a custom server, or `--no-decisions` to disable a configured model.
+  These settings are also available in config and the Python `Session` API.
+- `--reviewer-mode` and `--self-review` now let the reviewer inspect workspace files through a read-only tool loop.
+  Reviewers can read, list, search, and outline files, but cannot edit files, run commands, or fetch URLs.
+  These restrictions apply even with `--yolo`; external reviewer scripts remain unchanged.
+- Swival now updates herdr's activity indicator automatically: working during turns, blocked during command approval, and idle between turns.
+  It clears its status on exit, and nested Swival processes leave the parent's status alone.
+- When the model's context window is unknown, the instruction budget is now 8,192 tokens instead of 2,048.
+
 ## 1.0.47
 
 - `run_python` can now call MCP tools explicitly allowed with a server's `python_tools` setting.
