@@ -2,7 +2,9 @@
 
 import subprocess
 import sys
+import threading
 import types
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -96,6 +98,91 @@ class TestEncoderReporting:
         )
         assert out.returncode == 0, out.stderr
         assert "ok" in out.stdout
+
+    def test_slow_initialization_keeps_one_fallback_for_all_callers(self, monkeypatch):
+        release = threading.Event()
+        workers = []
+
+        def slow_encoding():
+            workers.append(threading.current_thread())
+            release.wait()
+            return object()
+
+        monkeypatch.setattr(tokens, "_encoder", None)
+        monkeypatch.setattr(tokens, "_is_fallback", False)
+        monkeypatch.setattr(tokens, "TOKENIZER_INIT_TIMEOUT", 0.05)
+        monkeypatch.setattr(tokens, "_load_encoder", slow_encoding)
+        text = "café 🙂"
+        try:
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                counts = list(pool.map(tokens.count_tokens, [text] * 8))
+            assert counts == [len(text.encode("utf-8"))] * 8
+            assert tokens.encoder_is_fallback() is True
+            assert len(workers) == 1
+        finally:
+            release.set()
+            for worker in workers:
+                worker.join(timeout=5)
+                assert not worker.is_alive()
+
+        # Keep byte counts even if the real tokenizer becomes available later.
+        assert tokens.count_tokens(text) == len(text.encode("utf-8"))
+        assert tokens.encoder_is_fallback() is True
+        assert len(workers) == 1
+
+    def test_stalled_tokenizer_does_not_block_prompt_assembly_or_exit(self, tmp_path):
+        code = """
+import sys
+import threading
+
+from swival import agent, tokens
+
+def stalled_encoding():
+    threading.Event().wait()
+
+tokens._load_encoder = stalled_encoding
+tokens.TOKENIZER_INIT_TIMEOUT = 0.05
+prompt = agent.assemble_system_prompt(
+    base_dir=sys.argv[1], system_prompt=None, no_system_prompt=False,
+    no_instructions=True, no_memory=True, no_continue=True,
+    skills_catalog={}, verbose=False, provider="chatgpt", context_length=922000,
+)
+assert prompt.content
+assert tokens.encoder_is_fallback() is True
+print("ready")
+"""
+        out = subprocess.run(
+            [sys.executable, "-c", code, str(tmp_path)],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert out.returncode == 0, out.stderr
+        assert out.stdout.strip() == "ready"
+
+    def test_empty_cache_uses_bundled_data_without_network(self, tmp_path):
+        code = """
+import os
+import sys
+from unittest.mock import patch
+
+os.environ["TIKTOKEN_CACHE_DIR"] = sys.argv[1]
+os.environ.pop("CUSTOM_TIKTOKEN_CACHE_DIR", None)
+from swival import tokens
+
+with patch("requests.get", side_effect=AssertionError("unexpected download")):
+    assert tokens.count_tokens("hello world") == 2
+    assert tokens.encoder_is_fallback() is False
+print("offline ready")
+"""
+        out = subprocess.run(
+            [sys.executable, "-c", code, str(tmp_path)],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert out.returncode == 0, out.stderr
+        assert out.stdout.strip() == "offline ready"
 
 
 class TestAwkwardText:

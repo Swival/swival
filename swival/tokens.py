@@ -1,8 +1,7 @@
 """Shared token counting and truncation using tiktoken."""
 
+import queue
 import threading
-
-import tiktoken
 
 
 class _FallbackEncoder:
@@ -19,25 +18,40 @@ _encoder = None
 _is_fallback = False
 _warned = False
 _lock = threading.Lock()
+TOKENIZER_INIT_TIMEOUT = 2.0
+
+
+def _load_encoder():
+    # Use LiteLLM's bundled data so startup doesn't need a download.
+    from litellm.litellm_core_utils.default_encoding import encoding
+
+    return encoding
 
 
 def _get_encoder():
-    """Return the shared encoder, building it on first use.
-
-    Subagents count tokens from their own threads, and building the encoder can
-    reach the network. The lock keeps one failed attempt from marking the shared
-    counts as byte estimates while another thread has the real tokenizer.
-    """
+    """Use the same token counter all session without waiting indefinitely to load it."""
     global _encoder, _is_fallback
     if _encoder is not None:
         return _encoder
     with _lock:
         if _encoder is None:
+            result = queue.SimpleQueue()
+
+            def load():
+                try:
+                    encoder = _load_encoder()
+                except Exception:
+                    encoder = _FallbackEncoder()
+                result.put(encoder)
+
+            # Let slow downloads finish for later runs without delaying startup or exit.
+            threading.Thread(target=load, daemon=True).start()
             try:
-                _encoder = tiktoken.get_encoding("cl100k_base")
-            except Exception:
-                _encoder = _FallbackEncoder()
-                _is_fallback = True
+                encoder = result.get(timeout=TOKENIZER_INIT_TIMEOUT)
+            except queue.Empty:
+                encoder = _FallbackEncoder()
+            _is_fallback = isinstance(encoder, _FallbackEncoder)
+            _encoder = encoder
     return _encoder
 
 
