@@ -1204,6 +1204,7 @@ class TestCLIIntegration:
         assert "Task: SWIVAL_TASK or --objective FILE." in help_text
         assert "Answer: stdin. Feedback: stdout." in help_text
         assert "Exit: 0=accept, 1=retry, 2=error." in help_text
+        assert "History: .swival/HISTORY.md is neither read nor written." in help_text
         assert (
             'SWIVAL_TASK="Fix the login bug" swival --reviewer-mode . < answer.txt'
         ) in help_text

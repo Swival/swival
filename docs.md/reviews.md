@@ -41,6 +41,8 @@ swival "Refactor error handling in src/api.py" \
 
 When `--reviewer-mode` is active, Swival reads the base directory from the first positional argument (as passed by the outer instance), reads the agent's answer from standard input, and reads the task from `SWIVAL_TASK` (or a `--objective` file). The reviewer can read, list, search, and outline files under the base directory before returning its verdict. It cannot edit files, run commands or tests, or call external tools. These restrictions apply even with `--yolo` or broader file and command permissions in config.
 
+Reviewer mode ignores the history file. The reviewer tools act as if `.swival/HISTORY.md` does not exist. Past answers are claims from the agent, not evidence. The review also adds no entry to the history file, even if the config enables history.
+
 Other agents and applications can call it directly:
 
 ```sh

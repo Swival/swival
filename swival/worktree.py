@@ -462,9 +462,13 @@ def match_path_glob(file: str, glob: str) -> bool:
 
 @dataclass(frozen=True)
 class ToolPolicy:
-    """Host-enforced tool allowlist for an isolated agent loop."""
+    """Host-enforced tool allowlist for an isolated agent loop.
+
+    Read tools act as if the files in ``hidden_paths`` don't exist.
+    """
 
     allowed_tools: frozenset[str]
+    hidden_paths: frozenset[Path] = frozenset()
 
     def check(self, name: str, args: dict) -> str | None:
         if name not in self.allowed_tools:

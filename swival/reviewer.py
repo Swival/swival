@@ -11,7 +11,7 @@ from .cost import SessionCost
 from .report import AgentError
 from .thinking import ThinkingState
 from .todo import TodoState
-from .tools import TOOLS
+from .tools import TOOLS, _history_path
 from .worktree import READ_ONLY_AGENT_TOOLS, ToolPolicy, filter_tool_schemas
 
 _VERDICT_RE = re.compile(r"^\s*VERDICT:\s*(ACCEPT|RETRY)\s*$", re.IGNORECASE)
@@ -206,7 +206,11 @@ def run_as_reviewer(args, base_dir: str) -> int:
             },
             continue_here=False,
             network_mode="provider-only",
-            tool_policy=ToolPolicy(allowed_tools=READ_ONLY_AGENT_TOOLS),
+            # Past answers are only the agent's own claims, so the reviewer shouldn't see them.
+            tool_policy=ToolPolicy(
+                allowed_tools=READ_ONLY_AGENT_TOOLS,
+                hidden_paths=frozenset({_history_path(base_dir)}),
+            ),
             session_cost=session_cost,
             secret_shield=secret_shield,
         )

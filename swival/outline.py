@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import tools
 from .codeparse import mask_noncode
-from .tools import safe_resolve
+from .tools import _is_hidden, safe_resolve
 
 _MAX_OUTLINE_FILES = 20
 
@@ -85,6 +85,7 @@ def outline(
     extra_read_roots: list[Path] = (),
     extra_write_roots: list[Path] = (),
     files_mode: str = "some",
+    hidden_paths: frozenset[Path] = frozenset(),
     **kwargs,
 ) -> str:
     explicit_depth = depth is not None
@@ -102,6 +103,7 @@ def outline(
             extra_read_roots=extra_read_roots,
             extra_write_roots=extra_write_roots,
             files_mode=files_mode,
+            hidden_paths=hidden_paths,
         )
     except ValueError as exc:
         return f"error: {exc}"
@@ -115,6 +117,7 @@ def outline(
             extra_read_roots=extra_read_roots,
             extra_write_roots=extra_write_roots,
             files_mode=files_mode,
+            hidden_paths=hidden_paths,
         )
 
     try:
@@ -607,11 +610,13 @@ def _outline_directory(
     extra_read_roots: list[Path] = (),
     extra_write_roots: list[Path] = (),
     files_mode: str = "some",
+    hidden_paths: frozenset[Path] = frozenset(),
 ) -> str:
     try:
         children = list(resolved.iterdir())
     except OSError as exc:
         return f"error: {exc}"
+    children = [c for c in children if not _is_hidden(c, hidden_paths)]
 
     subdirs: list[str] = []
     source_names: list[str] = []
@@ -657,6 +662,7 @@ def _outline_directory(
         extra_read_roots=extra_read_roots,
         extra_write_roots=extra_write_roots,
         files_mode=files_mode,
+        hidden_paths=hidden_paths,
     )
 
     summary = f"{len(selected)} selected"
@@ -691,6 +697,7 @@ def outline_files(
     extra_read_roots: list[Path] = (),
     extra_write_roots: list[Path] = (),
     files_mode: str = "some",
+    hidden_paths: frozenset[Path] = frozenset(),
 ) -> str:
     """Outline multiple files using the same batch section envelope as read_multiple_files."""
     if not files:
@@ -753,6 +760,7 @@ def outline_files(
             extra_read_roots=extra_read_roots,
             extra_write_roots=extra_write_roots,
             files_mode=files_mode,
+            hidden_paths=hidden_paths,
         )
 
         if not _record_section(

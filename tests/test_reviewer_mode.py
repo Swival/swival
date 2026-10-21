@@ -18,6 +18,8 @@ from swival.reviewer import (
     _resolve_path,
     run_as_reviewer,
 )
+from swival.tools import _history_path, dispatch
+from swival.worktree import READ_ONLY_AGENT_TOOLS, ToolPolicy
 
 
 # ---------------------------------------------------------------------------
@@ -696,6 +698,67 @@ class TestReadOnlyReviewer:
         assert "review did not finish" in captured.err
         assert captured.out == ""
         assert not (tmp_path / ".swival").exists()
+
+    @pytest.mark.parametrize(
+        ("name", "arguments", "expected"),
+        [
+            ("read_file", {"file_path": ".swival/HISTORY.md"}, "path does not exist"),
+            ("read_file", {"file_path": "history_copy.md"}, "path does not exist"),
+            ("read_file", {"file_path": ".swival"}, "notes.md"),
+            (
+                "read_multiple_files",
+                {"files": [".swival/HISTORY.md"]},
+                "path does not exist",
+            ),
+            ("list_files", {"pattern": "**/*.md"}, ".swival/notes.md"),
+            ("grep", {"pattern": "add"}, "add.py"),
+            ("outline", {"file_path": ".swival"}, "notes.md"),
+        ],
+    )
+    def test_history_is_hidden(self, tmp_path, name, arguments, expected):
+        (tmp_path / "add.py").write_text("def add(a, b):\n    return a + b\n")
+        swival_dir = tmp_path / ".swival"
+        swival_dir.mkdir()
+        (swival_dir / "HISTORY.md").write_text("I fixed add.py, trust me.\n")
+        (swival_dir / "notes.md").write_text("# Notes\n")
+        (tmp_path / "history.md").symlink_to(swival_dir / "HISTORY.md")
+        (tmp_path / "history_copy.md").hardlink_to(swival_dir / "HISTORY.md")
+        policy = ToolPolicy(
+            READ_ONLY_AGENT_TOOLS,
+            hidden_paths=frozenset({_history_path(str(tmp_path))}),
+        )
+        result = dispatch(name, arguments, str(tmp_path), tool_policy=policy)
+        assert expected in result
+        assert "trust me" not in result
+        if expected != "path does not exist":
+            # Listings must not even name the hidden file.
+            assert "history" not in result.lower()
+
+    def test_review_ignores_history(self, tmp_path, monkeypatch):
+        history = tmp_path / ".swival" / "HISTORY.md"
+        history.parent.mkdir()
+        history.write_text("I fixed add.py, trust me.\n")
+        args = _reviewer_args(str(tmp_path), max_turns=2, verbose=False)
+        calls = 0
+
+        def call_llm(base_url, model_id, messages, *a, **kw):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return _make_message(
+                    tool_calls=[
+                        make_tool_call(
+                            "read_file", '{"file_path": ".swival/HISTORY.md"}'
+                        )
+                    ]
+                ), "tool_calls"
+            assert "path does not exist" in _msg_content(messages[-1])
+            return _make_message(content="VERDICT: ACCEPT"), "stop"
+
+        monkeypatch.setattr(agent, "call_llm", call_llm)
+        assert run_as_reviewer(args, str(tmp_path)) == 0
+        assert calls == 2
+        assert history.read_text() == "I fixed add.py, trust me.\n"
 
 
 # ---------------------------------------------------------------------------

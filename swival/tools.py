@@ -1181,12 +1181,28 @@ def _history_path(base_dir: str) -> Path:
     return (Path(base_dir).resolve() / ".swival" / "HISTORY.md").resolve()
 
 
+def _is_hidden(path: Path, hidden_paths: frozenset[Path]) -> bool:
+    """Tell if *path* is a hidden file, even under another name such as a symlink, a hard link or a different letter case."""
+    if not hidden_paths:
+        return False
+    if path in hidden_paths:
+        return True
+    for hidden in hidden_paths:
+        try:
+            if path.samefile(hidden):
+                return True
+        except OSError:
+            pass
+    return False
+
+
 def safe_resolve(
     file_path: str,
     base_dir: str,
     extra_read_roots: list[Path] = (),
     extra_write_roots: list[Path] = (),
     files_mode: str = "some",
+    hidden_paths: frozenset[Path] = frozenset(),
 ) -> Path:
     """Resolve a file path, ensuring it stays within allowed roots.
 
@@ -1200,7 +1216,7 @@ def safe_resolve(
       "none" — .swival/ directory only
 
     Raises:
-        ValueError: If the resolved path escapes all allowed roots.
+        ValueError: If the resolved path escapes all allowed roots, or is hidden.
     """
     base = Path(base_dir).resolve()
 
@@ -1211,6 +1227,9 @@ def safe_resolve(
         resolved = p.resolve()
     else:
         resolved = (base / p).resolve()
+
+    if _is_hidden(resolved, hidden_paths):
+        raise ValueError(f'path does not exist: "{file_path}"')
 
     if files_mode == "all":
         if resolved == Path(resolved.anchor):
@@ -1276,8 +1295,11 @@ def _is_within_base(
     files_mode: str = "some",
     extra_read_roots: list[Path] = (),
     extra_write_roots: list[Path] = (),
+    hidden_paths: frozenset[Path] = frozenset(),
 ) -> bool:
-    """Check that a resolved path is within the base directory or extra roots."""
+    """Check that a path is visible and within the base directory or extra roots."""
+    if _is_hidden(path, hidden_paths):
+        return False
     if files_mode == "all":
         return True
     try:
@@ -1337,6 +1359,7 @@ def _list_files(
     extra_read_roots: list[Path] = (),
     extra_write_roots: list[Path] = (),
     files_mode: str = "some",
+    hidden_paths: frozenset[Path] = frozenset(),
 ) -> str:
     """Recursively list files matching a glob pattern."""
     # Expand ~ so ~/src/**/*.py becomes /home/user/src/**/*.py and is
@@ -1363,6 +1386,7 @@ def _list_files(
             extra_read_roots=extra_read_roots,
             extra_write_roots=extra_write_roots,
             files_mode=files_mode,
+            hidden_paths=hidden_paths,
         )
     except ValueError as exc:
         return f"error: {exc}"
@@ -1411,6 +1435,7 @@ def _list_files(
                 filepath,
                 base,
                 files_mode=files_mode,
+                hidden_paths=hidden_paths,
                 extra_read_roots=extra_read_roots,
                 extra_write_roots=extra_write_roots,
             ):
@@ -1607,6 +1632,7 @@ def _grep(
     extra_read_roots: list[Path] = (),
     extra_write_roots: list[Path] = (),
     files_mode: str = "some",
+    hidden_paths: frozenset[Path] = frozenset(),
 ) -> str:
     """Search file contents for a regex pattern.
 
@@ -1639,6 +1665,7 @@ def _grep(
             extra_read_roots=extra_read_roots,
             extra_write_roots=extra_write_roots,
             files_mode=files_mode,
+            hidden_paths=hidden_paths,
         )
     except ValueError as exc:
         return f"error: {exc}"
@@ -1683,6 +1710,7 @@ def _grep(
                     filepath,
                     base,
                     files_mode=files_mode,
+                    hidden_paths=hidden_paths,
                     extra_read_roots=extra_read_roots,
                     extra_write_roots=extra_write_roots,
                 ):
@@ -1809,6 +1837,7 @@ def _read_file(
     extra_write_roots: list[Path] = (),
     files_mode: str = "some",
     tracker=None,
+    hidden_paths: frozenset[Path] = frozenset(),
 ) -> str:
     """Read a file or list a directory."""
     if limit is None:
@@ -1820,6 +1849,7 @@ def _read_file(
             extra_read_roots=extra_read_roots,
             extra_write_roots=extra_write_roots,
             files_mode=files_mode,
+            hidden_paths=hidden_paths,
         )
     except ValueError as exc:
         return f"error: {exc}"
@@ -1845,6 +1875,8 @@ def _read_file(
         truncated = False
         try:
             for child in sorted(resolved.iterdir()):
+                if _is_hidden(child, hidden_paths):
+                    continue
                 name = child.name + ("/" if child.is_dir() else "")
                 encoded_len = len(name.encode("utf-8")) + 1  # +1 for newline
                 if total_bytes + encoded_len > MAX_OUTPUT_BYTES:
@@ -2079,6 +2111,7 @@ def _read_files(
     extra_write_roots: list[Path] = (),
     files_mode: str = "some",
     tracker=None,
+    hidden_paths: frozenset[Path] = frozenset(),
 ) -> str:
     """Read multiple files and return results grouped by file."""
     if not files:
@@ -2204,6 +2237,7 @@ def _read_files(
                 extra_read_roots=extra_read_roots,
                 extra_write_roots=extra_write_roots,
                 files_mode=files_mode,
+                hidden_paths=hidden_paths,
             )
             if resolved.exists() and resolved.is_dir():
                 sections.append(
@@ -2230,6 +2264,7 @@ def _read_files(
             extra_write_roots=extra_write_roots,
             files_mode=files_mode,
             tracker=pending_reads,
+            hidden_paths=hidden_paths,
         )
 
         if result.startswith("error: "):
@@ -4114,6 +4149,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
     skill_read_roots = kwargs.get("skill_read_roots", ())
     file_tracker = kwargs.get("file_tracker")
     scratch_dir = kwargs.get("scratch_dir")
+    hidden_paths = getattr(kwargs.get("tool_policy"), "hidden_paths", frozenset())
 
     _report = kwargs.get("report")
 
@@ -4190,6 +4226,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             extra_write_roots=extra_write_roots,
             files_mode=files_mode,
             tracker=file_tracker,
+            hidden_paths=hidden_paths,
         )
     elif name == "read_multiple_files":
         files = args.get("files")
@@ -4204,6 +4241,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             extra_write_roots=extra_write_roots,
             files_mode=files_mode,
             tracker=file_tracker,
+            hidden_paths=hidden_paths,
         )
     elif name == "write_file":
         return _write_file(
@@ -4246,6 +4284,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             extra_read_roots=skill_read_roots,
             extra_write_roots=extra_write_roots,
             files_mode=files_mode,
+            hidden_paths=hidden_paths,
         )
     elif name == "grep":
         return _grep(
@@ -4258,6 +4297,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             extra_read_roots=skill_read_roots,
             extra_write_roots=extra_write_roots,
             files_mode=files_mode,
+            hidden_paths=hidden_paths,
         )
     elif name == "todo":
         todo_state = kwargs.get("todo_state")
@@ -4301,6 +4341,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
                 extra_read_roots=skill_read_roots,
                 extra_write_roots=extra_write_roots,
                 files_mode=files_mode,
+                hidden_paths=hidden_paths,
             )
         if not file_path:
             return (
@@ -4314,6 +4355,7 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
             extra_read_roots=skill_read_roots,
             extra_write_roots=extra_write_roots,
             files_mode=files_mode,
+            hidden_paths=hidden_paths,
         )
     elif name == "fetch_url":
         from .fetch import _fetch

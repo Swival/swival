@@ -6707,6 +6707,7 @@ def build_parser():
         "  Review the answer with read-only access to BASE_DIR; no edits or commands.\n"
         "  Positional argument: BASE_DIR. Task: SWIVAL_TASK or --objective FILE.\n"
         "  Answer: stdin. Feedback: stdout. Exit: 0=accept, 1=retry, 2=error.\n"
+        "  History: .swival/HISTORY.md is neither read nor written.\n"
         "\n"
         '  SWIVAL_TASK="Fix the login bug" swival --reviewer-mode . < answer.txt\n'
         "  swival --reviewer-mode --objective task.md . < answer.txt"
