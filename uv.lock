@@ -6,6 +6,14 @@ resolution-markers = [
     "python_full_version < '3.14'",
 ]
 
+[options]
+exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
+exclude-newer-span = "PT48H"
+
+[options.exclude-newer-package]
+fast-cipher = false
+swival = false
+
 [manifest]
 constraints = [
     { name = "cryptography", specifier = ">=50.0.2" },

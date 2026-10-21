@@ -72,6 +72,8 @@ packages = ["swival"]
 
 [tool.uv]
 package = true
+exclude-newer = "48 hours"
+exclude-newer-package = { fast-cipher = false, swival = false }
 constraint-dependencies = ["requests>=2.34.2", "cryptography>=50.0.2"]
 override-dependencies = ["aiohttp>=3.14.5", "python-dotenv>=1.2.4"]
 
