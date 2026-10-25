@@ -22,10 +22,20 @@ TOKENIZER_INIT_TIMEOUT = 2.0
 
 
 def _load_encoder():
-    # Use LiteLLM's bundled data so startup doesn't need a download.
-    from litellm.litellm_core_utils.default_encoding import encoding
+    import os
+    from importlib.metadata import distribution
 
-    return encoding
+    import tiktoken
+
+    cache_dir = os.environ.get("CUSTOM_TIKTOKEN_CACHE_DIR")
+    if cache_dir:
+        os.makedirs(cache_dir, exist_ok=True)
+    else:
+        cache_dir = str(
+            distribution("litellm").locate_file("litellm/litellm_core_utils/tokenizers")
+        )
+    os.environ["TIKTOKEN_CACHE_DIR"] = cache_dir
+    return tiktoken.get_encoding("cl100k_base")
 
 
 def _get_encoder():

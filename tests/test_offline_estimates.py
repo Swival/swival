@@ -162,10 +162,17 @@ print("ready")
 
     def test_empty_cache_uses_bundled_data_without_network(self, tmp_path):
         code = """
+import importlib.abc
 import os
 import sys
 from unittest.mock import patch
 
+class NoLiteLLM(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "litellm" or fullname.startswith("litellm."):
+            raise AssertionError("tokenizer startup must not import LiteLLM")
+
+sys.meta_path.insert(0, NoLiteLLM())
 os.environ["TIKTOKEN_CACHE_DIR"] = sys.argv[1]
 os.environ.pop("CUSTOM_TIKTOKEN_CACHE_DIR", None)
 from swival import tokens
