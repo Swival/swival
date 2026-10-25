@@ -70,6 +70,21 @@ def _has_within(text: str, anchor: str, triggers: list[str], window: int = 200) 
 # ---------------------------------------------------------------------------
 
 
+class TestConversationalFramingContract:
+    def test_conversational_guidance_present_once_in_both_policies(self):
+        for policy in ("autonomous", "interactive"):
+            text = _normalize(_read_prompt(policy))
+            assert "you are swival, a coding agent." in text
+            assert (
+                text.count(
+                    "you are chatting with a person in a casual conversational setting."
+                )
+                == 1
+            )
+            assert text.count("be helpful, natural, and engaged.") == 1
+            assert "friendly, human-like personality" not in text
+
+
 class TestPathSandboxContract:
     def test_path_sandboxing_present(self):
         text = _normalize(_read_prompt())
