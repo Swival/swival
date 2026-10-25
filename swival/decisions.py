@@ -391,6 +391,19 @@ def decide(
     except Exception as e:
         if cancelled():
             return "error: decide cancelled"
+        if isinstance(
+            e,
+            (
+                litellm.APIConnectionError,
+                litellm.Timeout,
+                litellm.ServiceUnavailableError,
+            ),
+        ):
+            return reveal(
+                "warning: decision model unavailable. Continue this session without "
+                "the decision model; do not retry or invent model probabilities. "
+                f"Details: {e}"
+            )
         return reveal(f"error: decision model request failed: {e}")
 
     # Record the cost before checking the answers, since the service may bill
