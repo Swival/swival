@@ -235,14 +235,20 @@ class TestDecide:
                 message="Connection refused", llm_provider="hosted_vllm", model="m"
             ),
             litellm.Timeout(message="timed out", model="m", llm_provider="hosted_vllm"),
+            litellm.ServiceUnavailableError(
+                message="temporarily unavailable", model="m", llm_provider="hosted_vllm"
+            ),
         ],
     )
     def test_service_failures(self, systemone, error):
         systemone.error = error
         meter = ExposureMeter()
         out = decide(_local(), _args(), exposure=meter.recorder("decision"))
-        assert out.startswith("error: decision model request failed: ")
+        assert out.startswith("warning: decision model unavailable. ")
+        assert "Continue this session without the decision model" in out
+        assert "do not retry or invent model probabilities" in out
         assert error.message in out
+        assert len(systemone.calls) == 1
         assert meter.to_dict()["by_source"]["decision"]["requests"]["failed"] == 1
 
     def test_suppresses_litellm_banners(self, systemone, monkeypatch):
