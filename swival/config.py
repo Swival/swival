@@ -62,6 +62,8 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "decision_model": str,
     "decision_base_url": str,
     "decision_api_key": str,
+    "model_routing": bool,
+    "routing_profiles": list,
     "max_output_tokens": int,
     "max_context_tokens": int,
     "max_output_lines": int,
@@ -183,6 +185,8 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "decision_model": None,
     "decision_base_url": None,
     "decision_api_key": None,
+    "model_routing": False,
+    "routing_profiles": None,
     "max_output_tokens": 32768,
     "max_context_tokens": None,
     "max_output_lines": 2000,
@@ -968,6 +972,32 @@ def _validate_serve_skills(skills: list, source: str) -> None:
 # --- Public API ---
 
 
+def _overlay_profile(pre_profile_baseline: dict | None, profile_body: dict) -> dict:
+    """Overlay a profile body onto the pre-profile top-level config.
+
+    Matches startup semantics: profiles that omit e.g. api_key inherit it
+    from top-level config, not from the previous profile.
+    """
+    merged = dict(pre_profile_baseline or {})
+    for k, v in profile_body.items():
+        if k not in _PROFILE_METADATA_KEYS:
+            merged[k] = v
+    return merged
+
+
+def check_routing_profiles(routing_profiles, profiles: dict) -> None:
+    unknown = [
+        name
+        for name in routing_profiles or ()
+        if not isinstance(name, str) or name not in profiles
+    ]
+    if unknown:
+        known = ", ".join(profiles) or "(none defined)"
+        raise ConfigError(
+            f"routing_profiles: unknown profile(s) {unknown!r}. Known profiles: {known}"
+        )
+
+
 def load_config(base_dir: Path) -> dict:
     """Load and merge global + project config.
 
@@ -1076,6 +1106,8 @@ def load_config(base_dir: Path) -> dict:
                     f"(after merging global and project config)"
                 )
         merged["profiles"] = profiles_merged
+
+    check_routing_profiles(merged.get("routing_profiles"), profiles_merged)
 
     # active_profile: project wins over global
     active_profile = project_active_profile or global_active_profile
@@ -1329,6 +1361,24 @@ def args_to_session_kwargs(args, base_dir: str) -> dict:
     if gcp_project is not None:
         kwargs["project"] = gcp_project
 
+    # The settings above already include the active profile, so Session only
+    # gets its name, and only when no CLI flag changed the model.
+    profiles = getattr(args, "_all_profiles", None)
+    if profiles:
+        kwargs["profiles"] = profiles
+        kwargs["profile_baseline"] = getattr(args, "_pre_profile_baseline", None) or {}
+        active = getattr(args, "_active_profile", None)
+        if active and not getattr(args, "_model_from_cli", False):
+            kwargs["active_profile"] = active
+    # Choosing the model on the command line turns routing off for the run.
+    if getattr(args, "model_routing", False) is True and not getattr(
+        args, "_llm_from_cli", False
+    ):
+        kwargs["model_routing"] = True
+        routing_profiles = getattr(args, "routing_profiles", None)
+        if routing_profiles is not None:
+            kwargs["routing_profiles"] = routing_profiles
+
     return kwargs
 
 
@@ -1341,6 +1391,17 @@ def config_to_session_kwargs(config: dict) -> dict:
     (color, reviewer).
     """
     kwargs = {}
+    profiles = config.get("profiles")
+    active = config.get("active_profile")
+    if profiles and active in profiles:
+        # Apply the active profile over the top-level settings, as the command
+        # line does, and keep those settings as what profiles inherit.
+        kwargs["profile_baseline"] = {
+            key: config[key]
+            for key in PROFILE_KEYS - _PROFILE_METADATA_KEYS
+            if key in config
+        }
+        config = _overlay_profile(config, profiles[active])
     _DROP_KEYS = {
         "color",
         "reviewer",
@@ -1359,6 +1420,7 @@ def config_to_session_kwargs(config: dict) -> dict:
         "approved_buckets",
         "oneshot_commands",
         "audit",
+        "_active_profile_source",
     }
     for key, value in config.items():
         if key in _DROP_KEYS:
@@ -1491,10 +1553,12 @@ def generate_config(
         '# project = "my-gcp-project"       # Google Cloud project ID for geap provider',
         '# location = "us-central1"         # Google Cloud location for geap provider',
         "",
-        "# --- Decision model (decide tool) ---",
+        "# --- Decision model (decide tool, model routing) ---",
         '# decision_model = "typesafe/jev-latest"     # or a model name served at decision_base_url',
         '# decision_base_url = "http://127.0.0.1:8000/v1"',
         '# decision_api_key = "..."         # optional; prefer the provider env var',
+        "# model_routing = false            # route each task to the best described profile",
+        '# routing_profiles = ["local", "gpt"]  # with routing, only these run tasks unless picked by hand',
         "",
         "# --- Generation parameters ---",
         "# max_output_tokens = 32768",
@@ -1602,9 +1666,12 @@ def generate_config(
         '# serve_skills = [{id = "ask", name = "Ask", description = "Send a question"}]',
         "",
         "# --- Profile examples ---",
+        "# A description tells model routing what the profile is good at.",
+        "#",
         "# [profiles.fast-local]",
         '# provider = "lmstudio"',
         '# model = "qwen3-coder-next"',
+        '# description = "Small local model. Free and fast, weak at reasoning. Use for trivial edits and short questions."',
         "#",
         "# [profiles.gpt5]",
         '# provider = "chatgpt"',

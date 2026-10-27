@@ -98,7 +98,9 @@ If a project config inside a git repository contains `api_key`, at the top level
 
 The `system_prompt` and `no_system_prompt` settings are mutually exclusive in config files, just as the matching flags are on the command line.
 
-The library API (`Session` class) does not auto-load config files. If you want config file support in library code, call `load_config()` and `config_to_session_kwargs()` explicitly. Note that `config_to_session_kwargs()` drops `approved_buckets`: for `commands="ask"`, pass `approved_buckets` to `Session` directly, optionally using `load_persisted_buckets()` from `swival.command_policy` to include runtime-persisted approvals.
+The library API (`Session` class) does not auto-load config files. If you want config file support in library code, call `load_config()` and `config_to_session_kwargs()` explicitly.
+`config_to_session_kwargs()` applies `active_profile` over the top-level settings, as the command line does.
+Note that `config_to_session_kwargs()` drops `approved_buckets`: for `commands="ask"`, pass `approved_buckets` to `Session` directly, optionally using `load_persisted_buckets()` from `swival.command_policy` to include runtime-persisted approvals.
 
 ## Profiles
 
@@ -145,7 +147,20 @@ swival --list-profiles
 
 Each profile requires `provider`. The allowed keys are: `provider`, `model`, `api_key`, `user_agent`, `base_url`, `aws_profile`, `project`, `location`, `max_output_tokens`, `max_context_tokens`, `temperature`, `top_p`, `seed`, `extra_body`, `reasoning_effort`, `sanitize_thinking`, `show_thinking`, and `description`.
 
-Keys outside this set, like `files`, `commands`, or `reviewer`, are rejected with an error listing the allowed keys. Profiles are for choosing a model stack, not for changing agent behavior. The `description` key is metadata: a free-form note for yourself that is never passed to the provider.
+Keys outside this set, like `files`, `commands`, or `reviewer`, are rejected with an error listing the allowed keys. Profiles are for choosing a model stack, not for changing agent behavior.
+
+The `description` key is a note about the profile and is never sent to the chat provider.
+With [model routing](decision-models.md#model-routing), only profiles with descriptions are considered.
+Describe when to use each profile, including its strengths, limitations, speed, and cost:
+
+```toml
+[profiles.max]
+description = "Slow and expensive; use for difficult debugging, security audits, and architecture design."
+```
+
+Descriptions do not enforce privacy.
+To restrict automatic routing to approved profiles, list them in `routing_profiles`.
+Explicit selections with `--profile`, `--model`, `--provider`, `/profile`, or `/model` bypass that list.
 
 If `--profile` is combined with explicit flags like `--provider` or `--model`, the explicit flags win on a per-key basis, just like CLI flags override config everywhere else in Swival.
 
@@ -180,6 +195,8 @@ swival> /profile -            # revert to the profile active at session start
 ```
 
 Switching only changes LLM settings: conversation history, tools, files, and all other state are preserved. New subagents spawned after the switch use the new profile; existing running subagents are unaffected.
+
+With model routing on, `/profile NAME` also pauses routing, so the profile you picked stays in use until `/route on`.
 
 Profiles defined in global config and project config merge per-key for the same profile name. A project can refine a global profile by overriding just one or two keys without copying the whole table.
 

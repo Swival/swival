@@ -162,6 +162,11 @@ INPUT_COMMANDS: dict[str, CommandInfo] = {
         arg="[name]",
         kind="state_change",
     ),
+    "/route": CommandInfo(
+        desc="Show model routing, or turn it on or off",
+        arg="[on|off]",
+        kind="state_change",
+    ),
     "/quit": CommandInfo(
         desc="Exit the REPL",
         kind="flow_control",

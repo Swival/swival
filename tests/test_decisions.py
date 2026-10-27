@@ -427,6 +427,27 @@ class TestEncryption:
         assert self.TOKEN not in sent and self.LABEL not in sent
         assert json.loads(out)["answers"][self.TOKEN]["choice"] == self.LABEL
 
+    def test_score_levels_come_back_decrypted(self, systemone):
+        levels = [f"leaks {self.TOKEN}", "clean"]
+
+        def answer(kwargs):
+            sent = kwargs["questions"]["risk"]["criteria"]
+            score = {
+                "type": "score",
+                "score": 0.2,
+                "confidence": 0.8,
+                "legend": {str(i): level for i, level in enumerate(sent)},
+                "probabilities": {"0": 0.8, "1": 0.2},
+            }
+            systemone.response = _response({"risk": score})
+
+        systemone.on_call = answer
+        risk = {"type": "score", "instructions": "Risky?", "criteria": levels}
+        args = _args(questions={"risk": risk})
+        out = decide(_local(), args, secret_shield=SecretShield())
+        assert self.TOKEN not in json.dumps(systemone.calls[0])
+        assert json.loads(out)["answers"]["risk"]["legend"]["0"] == levels[0]
+
     def test_errors_are_decrypted(self, systemone):
         def fail(kwargs):
             [name] = kwargs["questions"]

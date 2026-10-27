@@ -153,7 +153,8 @@ decision_base_url = &quot;http://127.0.0.1:8000/v1&quot;
 </table>
 <p>CLI flags win over the project <code>swival.toml</code>, which wins over the global config.</p>
 <p>These settings are not part of <a href="customization.html#profiles">profiles</a>.
-Switching chat models with <code>/profile</code> keeps the same decision model.</p>
+Switching chat models with <code>/profile</code> keeps the same decision model.
+The decision model can also pick the profile for each task: see <a href="#model-routing">Model Routing</a>.</p>
 <p>A name starting with a LiteLLM decision provider, such as <code>typesafe/</code>, <code>cloudflare/</code>, <code>openrouter/</code>, or <code>hosted_vllm/</code>, is used as is.
 Any other name, even one with a slash like <code>team/clef</code>, is treated as a model on your own server and needs <code>--decision-base-url</code>.</p>
 <p>The URL can be the server root, end with <code>/v1</code>, or be the full <code>/v1/systemone</code> address.</p>
@@ -162,7 +163,7 @@ When you give a URL but no <code>--decision-api-key</code>, Swival does not send
 Without a URL, LiteLLM uses the provider's usual environment variable and address.</p>
 <p>Swival warns if <code>decision_api_key</code> is set in a project config that git tracks.</p>
 <p>Unless you pass <code>--quiet</code>, Swival prints one line at startup with the decision model and its address.
-Nothing is sent to it until the chat model calls the tool.</p>
+Without model routing, nothing is sent to it until the chat model calls the tool.</p>
 <h2 id="the-decide-tool">The <code>decide</code> Tool</h2>
 <p><code>decide</code> takes the text to judge, called <code>state</code>, and some named <code>questions</code>:</p>
 <pre><code class="language-json">{
@@ -226,7 +227,8 @@ so a score answer that skipped some levels can still pass when its probabilities
 <p>The chat model uses <code>decide</code> on its own when it classifies, sorts, rates, or makes a yes/no call about some text.
 You can also ask for it.</p>
 <p>The tool only sends what the chat model passes to it.
-It never reads files or sends the conversation.</p>
+It never reads files or sends the conversation.
+Model routing does send an excerpt of the conversation, but only when you turn it on.</p>
 <h2 id="size-limit">Size Limit</h2>
 <p>A request can use up to 15,000 units.
 Each byte of the JSON request counts as one unit, each question as 40 more, and each choice label or score level as 10 more.</p>
@@ -241,7 +243,7 @@ It can edit or block the request.</p>
 The answer is decrypted before the chat model sees it.</p>
 <p>The size limit is checked after both, just before the request is sent.</p>
 <p>Each call shows up like any other tool call: in the terminal, in <a href="reports.html">reports</a>, and in traces.
-Reports also list decision requests on their own, under <code>decision</code>.</p>
+Reports also list decision requests on their own, under <code>decision</code>, and routing requests under <code>routing</code>.</p>
 <p>Prices from LiteLLM are only used for a provider's own hosted service.
 For your own server, Swival uses the cost the server reports, or marks the call as unpriced.</p>
 <p>Calls time out after 30 seconds, or sooner if <code>--provider-timeout</code> is lower.
@@ -253,6 +255,61 @@ Isolated workers, such as the <code>/audit</code> and <code>/simplify</code> rev
 <p><code>--network provider-only</code> allows decision requests, because Swival makes them itself rather than through a sandboxed command.
 <code>--network none</code> refuses to start with a decision model, because it is a network service.</p>
 <p>If you set the chat <code>--model</code> to a decision model by mistake, the server refuses to chat, and Swival suggests <code>--decision-model</code> instead.</p>
+<h2 id="model-routing">Model Routing</h2>
+<p>Model routing uses a decision model to choose a <a href="customization.html#profiles">profile</a> for each task before the first chat request.
+It is off by default.
+To enable it, configure a decision model and at least two profiles with descriptions:</p>
+<pre><code class="language-toml">decision_model = &quot;mlx-community/clef-8bit&quot;
+decision_base_url = &quot;http://localhost:11234/v1&quot;
+model_routing = true
+active_profile = &quot;gpt&quot;
+
+[profiles.localfast]
+provider = &quot;lmstudio&quot;
+description = &quot;Fast local model for simple edits and short questions.&quot;
+
+[profiles.gpt]
+provider = &quot;chatgpt&quot;
+model = &quot;gpt-6.1-sol&quot;
+description = &quot;General coding model for features, bug fixes, and tests.&quot;
+</code></pre>
+<p>Write descriptions that help distinguish the profiles.
+Only profiles with descriptions are candidates; <code>command</code> profiles are excluded.
+See <a href="customization.html#profiles">Profiles</a> for more guidance.
+Use <code>--model-routing</code> or <code>--no-model-routing</code> to override the setting for a run.</p>
+<p>Routing sends the new request and an excerpt of the conversation to the decision service.
+After a switch, the conversation history goes to the new chat provider, just as it does after <code>/profile</code>.
+Routing requests also go through the <a href="llm-filter.html">outbound filter</a> and <a href="secrets.html">secret encryption</a>.</p>
+<h3 id="restricting-profiles">Restricting Profiles</h3>
+<p>To limit which profiles may run tasks, list them in your config:</p>
+<pre><code class="language-toml">routing_profiles = [&quot;localfast&quot;, &quot;gpt&quot;]
+</code></pre>
+<p>If routing cannot choose, Swival uses the current profile when allowed, or the first usable listed profile in config order.
+If none is usable, the task stops with an error.
+An explicit choice such as <code>--profile</code> or <code>/profile</code> overrides the list.</p>
+<h3 id="when-routing-runs">When Routing Runs</h3>
+<p>Routing runs once at the start of a task, including REPL prompts, one-shot prompts, and subagent tasks.
+It does not switch profiles between a task's tool calls.
+Reviewers and continuations stay on the current profile.</p>
+<p>Routing favors the profile you are on, so the provider can reuse its prompt cache: another profile has to be clearly better to take over.
+After <code>/clear</code> or <code>/new</code> there is nothing left to reuse, so the next task goes straight to the best profile.</p>
+<p>Instruction files (<code>CLAUDE.md</code> and <code>AGENTS.md</code>) are checked against the starting profile's context window at startup, before routing runs.
+If they only fit a larger profile, Swival stops there, even though routing could have picked that profile.
+To avoid this, start on a profile whose window fits them by setting <code>active_profile</code>.
+<code>--profile</code> works too, but it pauses routing for the run; <code>/route on</code> resumes it in the REPL.</p>
+<p>The <a href="python-api.html">Python API</a>, <a href="acp.html">ACP</a>, and <a href="a2a.html">A2A</a> also support routing.
+<code>Session.run()</code> starts each call from the starting profile; <code>Session.ask()</code> keeps the selected profile for the conversation.</p>
+<h3 id="controls-and-status">Controls and Status</h3>
+<p>An explicit <code>--profile</code>, <code>--model</code>, or <code>--provider</code> pauses routing for the run.
+In the REPL, <code>/profile NAME</code> and <code>/model ID</code> pause routing; <code>/route on</code> resumes it, <code>/route off</code> pauses it, and <code>/route</code> shows the status and last decision.</p>
+<p>Swival lists routing candidates at startup and reports switches in verbose mode.
+<code>--list-profiles</code> and <code>/profile</code> mark candidates with <code>[routing]</code>.
+<a href="reports.html">Reports</a> include routing decisions and their probabilities.</p>
+<h3 id="when-routing-fails">When Routing Fails</h3>
+<p>If the decision service is unavailable, Swival warns and turns routing off for the session; <code>/route on</code> retries it.
+Other routing errors normally skip routing for that task.
+Swival stays on the current profile when it can handle the task, or uses an eligible fallback.
+The <code>routing_profiles</code> restriction still applies, and chat requests remain subject to the outbound filter.</p>
             <nav class="page-nav" aria-label="Page navigation"><a class="nav-prev" href="llm-filter.html"><span class="nav-label">&larr; Previous</span><span class="nav-title">Outbound LLM Filter</span></a><a class="nav-next" href="command-middleware.html"><span class="nav-label">Next &rarr;</span><span class="nav-title">Command Middleware</span></a></nav>
         </article>
         <aside class="page-toc" aria-label="On this page">

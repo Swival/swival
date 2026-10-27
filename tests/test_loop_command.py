@@ -327,6 +327,14 @@ class _Recorder:
             return True
 
         monkeypatch.setattr(agent, "execute_input", fake_execute_input)
+        # One-shot iterations run the plain body without the executor.
+        monkeypatch.setattr(
+            agent,
+            "_run_agent_step",
+            lambda content, label, ctx, **kw: fake_execute_input(
+                parse_input_line(content), ctx
+            ),
+        )
         monkeypatch.setattr(
             agent, "_loop_interruptible_sleep", fake_interruptible_sleep
         )
@@ -381,13 +389,13 @@ class TestLoopDispatch:
         responses = [StepResult(kind="agent_turn", text=f"iter {i}") for i in range(5)]
         call_log: list[str] = []
 
-        def fake_execute_input(parsed, ctx, *, mode="repl"):
-            call_log.append(parsed.raw)
+        def fake_run_agent_step(content, label, ctx, **kwargs):
+            call_log.append(content)
             if len(call_log) == 2:
                 os.kill(os.getpid(), signal.SIGTERM)
             return responses[len(call_log) - 1]
 
-        monkeypatch.setattr(agent, "execute_input", fake_execute_input)
+        monkeypatch.setattr(agent, "_run_agent_step", fake_run_agent_step)
         monkeypatch.setattr(
             agent,
             "_loop_interruptible_sleep",
@@ -433,13 +441,13 @@ class TestLoopDispatch:
         # within the same iteration to trigger the force-exit path.
         call_log: list[str] = []
 
-        def fake_execute_input(parsed, ctx_arg, *, mode="oneshot"):
-            call_log.append(parsed.raw)
+        def fake_run_agent_step(content, label, ctx_arg, **kwargs):
+            call_log.append(content)
             os.kill(os.getpid(), signal.SIGTERM)
             os.kill(os.getpid(), signal.SIGTERM)
             return StepResult(kind="agent_turn", text="never seen")
 
-        monkeypatch.setattr(agent, "execute_input", fake_execute_input)
+        monkeypatch.setattr(agent, "_run_agent_step", fake_run_agent_step)
         monkeypatch.setattr(
             agent,
             "_loop_interruptible_sleep",

@@ -47,6 +47,12 @@ class InputContext:
     startup_profile: str | None = None
     raw_llm_baseline: dict = field(default_factory=dict)
     pre_profile_baseline: dict = field(default_factory=dict)
+    # True while the session runs on its startup settings (CLI flags included),
+    # not on a profile picked by /profile or by routing.
+    on_startup_runtime: bool = True
+    # Model routing (a RoutingState), or None when it is not configured.
+    # Contexts that must not switch the runtime, such as /btw, carry None.
+    routing: object = None
     # (provider, model_id) the session ran before the last /model switch
     # (for /model -). Self-validating: ignored when the provider changes.
     last_model: "tuple[str, str] | None" = None

@@ -164,6 +164,9 @@ Switches are transactional: the new model is fully resolved (including context-w
 
 Catalogs are available for LM Studio (all downloaded models, loaded ones first), llama.cpp, OpenAI-compatible servers, Apple Foundation Models, HuggingFace, OpenRouter, Google Gemini, and ChatGPT. For bedrock, GEAP, and the command provider there is no listing, but `/model ID` still works. Favorites and recents live in `$XDG_CONFIG_HOME/swival/models.toml` (usually `~/.config/swival/models.toml`), a plain TOML file that is safe to edit by hand.
 
+`/route` shows the state of [model routing](decision-models.md#model-routing): whether it is on, the candidate profiles, and the last decision with its probabilities.
+`/route on` resumes routing after `/profile` or `/model` paused it, and `/route off` pauses it.
+
 `/reasoning` shows the reasoning effort the session currently runs with, together with the valid levels. `/reasoning LEVEL` changes it on the spot for models that support tunable reasoning (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `default` to stop sending the parameter), which is handy when a task turns out to need more or less thinking than you planned for at startup. `/reasoning -` goes back to the level in force before the last switch. The change applies to the next turn and to subagents spawned afterwards; `/profile` still resets the effort to whatever the profile says.
 
 `/init` scans your project for build/test/lint/format commands and cross-cutting conventions, then generates a structured `AGENTS.md` file with a `## Workflow` section (exact commands including an after-every-edit reflex) followed by a `## Conventions` section. Validates the output and retries once if the structure is wrong.
@@ -187,6 +190,7 @@ swival --profile gpt5 "review this patch"
 ```
 
 `--list-profiles` prints available profiles and exits. The active profile is marked with an arrow and shows which layer selected it (CLI flag, project config, or global config).
+Each description is shown under its profile, and with model routing on, the candidates are marked with `[routing]`.
 
 `--provider` chooses the backend provider and defaults to `lmstudio`. Valid values are `lmstudio`, `llamacpp`, `huggingface`, `openrouter`, `generic`, `applefm` (experimental Apple Foundation Models local server; defaults to `--model pcc`), `google`, `geap` (Gemini Enterprise / Vertex AI; `vertexai` is an accepted alias), `chatgpt` (for ChatGPT Plus/Pro subscriptions), `bedrock` (AWS Bedrock), and `command` (shells out to an external program).
 
@@ -459,7 +463,12 @@ These setup flags do not require a question argument. Config generation never ov
 
 `--no-decisions` turns off a decision model set in a config file.
 
-See [Decision Models](decision-models.md) for details.
+`--model-routing` lets the decision model pick a profile for each task, among profiles with a `description`, like `model_routing = true` in a config file.
+`--no-model-routing` turns it off for one run.
+
+With routing on, the `routing_profiles` config key lists the only profiles tasks may run on, unless you pick one yourself.
+
+See [Decision Models](decision-models.md) and [Model Routing](decision-models.md#model-routing) for details.
 
 ### Encryption And Sanitization Flags
 

@@ -138,12 +138,15 @@ def list_models(
     return catalog
 
 
-def _context_for(entries: list[ModelEntry], model_id: str) -> int | None:
+def find_entry(entries, model_id: str) -> ModelEntry | None:
+    """The entry for *model_id*, whatever its case."""
     wanted = model_id.lower()
-    for e in entries:
-        if e.id.lower() == wanted:
-            return e.context_length
-    return None
+    return next((e for e in entries if e.id.lower() == wanted), None)
+
+
+def _context_for(entries: list[ModelEntry], model_id: str) -> int | None:
+    entry = find_entry(entries, model_id)
+    return entry.context_length if entry is not None else None
 
 
 def cached_context_length(

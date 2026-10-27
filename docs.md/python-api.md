@@ -107,6 +107,11 @@ Session(
     storm_breaker: bool = True,
     flatten_mcp_schemas: bool = True,
     defer_mcp_schemas: bool = True,
+    profiles: dict | None = None,
+    active_profile: str | None = None,
+    profile_baseline: dict | None = None,
+    model_routing: bool = False,
+    routing_profiles: list[str] | None = None,
 )
 ```
 
@@ -138,6 +143,11 @@ All parameters are keyword-only. The important ones:
 | `llm_filter`            | Path to a filter script that can redact or block outbound LLM requests (see [Outbound LLM Filter](llm-filter.html)).                                                                                                                                                                   |
 | `decision_model`        | Decision model for the optional `decide` tool, with `decision_base_url` and `decision_api_key` (see [Decision Models](decision-models.html)). An empty string turns it off.                                                                                                            |
 | `subagents`             | Enable parallel subagent support (`spawn_subagent` / `check_subagents` tools).                                                                                                                                                                                                         |
+| `profiles`              | Named profile configurations (see [Profiles](customization.md#profiles)). Enables `/profile` with `parse_commands=True` and model routing. |
+| `active_profile`        | Profile to start with. Explicit provider arguments take precedence. |
+| `profile_baseline`      | Defaults inherited by profiles. If provided, the provider arguments must already include the active profile's settings. |
+| `model_routing`         | Let the decision model choose a profile for each task (see [Model Routing](decision-models.md#model-routing)). Requires `decision_model` and at least two profiles with descriptions. |
+| `routing_profiles`      | Limit automatic routing to these profiles. You can still select another profile manually. |
 | `encrypt_secrets`       | Enable format-preserving secret encryption (see [Secret Encryption](secrets.html)).                                                                                                                                                                                                    |
 | `retries`               | Maximum attempts per LLM call, for network errors and usage-policy prompt rejections. Must be >= 1.                                                                                                                                                                                    |
 | `history`               | Write `HISTORY.md` after successful runs.                                                                                                                                                                                                                                              |

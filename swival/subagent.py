@@ -160,6 +160,17 @@ class _CompositeCancelFlag:
             self._own.wait(min(remaining, 0.05))
 
 
+@dataclass(frozen=True)
+class SpawnRoute:
+    """The profile routing picked for one subagent."""
+
+    # Loop kwargs the worker uses instead of the template's.
+    runtime: dict
+    # Called on the worker thread when the task fails, with the error and
+    # the session_id its requests carried.
+    on_failure: Callable[[Exception, str], None] | None = None
+
+
 @dataclass
 class SubagentHandle:
     id: str
@@ -196,8 +207,13 @@ class SubagentManager:
         notify_user: Callable[[str], None] | None = None,
         proactive_summaries: bool = False,
         resolved_system_spans: list | None = None,
+        router: Callable[[str, str], SpawnRoute | None] | None = None,
     ):
         self._template = loop_kwargs_template
+        # Picks the profile for each new subagent from its task and system
+        # prompt, returning a SpawnRoute, or None to use the template as is.
+        # It never changes the template itself.
+        self.router = router
         self._tools = [
             t
             for t in tools
@@ -282,6 +298,17 @@ class SubagentManager:
             self._counter += 1
             sid = f"sub_{self._counter}"
 
+        route = None
+        if self.router is not None:
+            try:
+                system, _offset = _build_subagent_system(
+                    self._system_content, system_hint
+                )
+                route = self.router(task, system)
+            except BaseException:
+                self._slots.release()
+                raise
+
         own_cancel = threading.Event()
         composite_cancel = _CompositeCancelFlag(self._parent_cancel_flag, own_cancel)
         handle = SubagentHandle(id=sid, task=task, cancel_flag=own_cancel)
@@ -299,7 +326,7 @@ class SubagentManager:
                 self._slots,
                 self._proactive_summaries,
             ),
-            kwargs={"system_spans": self._system_spans},
+            kwargs={"system_spans": self._system_spans, "route": route},
             name=f"swival-subagent-{sid}",
             daemon=True,
         )
@@ -433,6 +460,7 @@ class SubagentManager:
             notify_user=self._notify_user,
             proactive_summaries=self._proactive_summaries,
             resolved_system_spans=self._system_spans,
+            router=self.router,
         )
 
 
@@ -472,7 +500,9 @@ def _subagent_thread_fn(
     proactive_summaries: bool = False,
     *,
     system_spans: list | None = None,
+    route: SpawnRoute | None = None,
 ):
+    session_id = None
     try:
         from .agent import run_agent_loop, CompactionState
         import uuid
@@ -492,11 +522,17 @@ def _subagent_thread_fn(
         messages: list[dict] = [sys_msg]
         messages.append({"role": "user", "content": task})
 
-        kwargs = {**template}
+        kwargs = {**template, **(route.runtime if route is not None else {})}
+        session_id = str(uuid.uuid4())
         kwargs["llm_kwargs"] = {
-            **template.get("llm_kwargs", {}),
-            "session_id": str(uuid.uuid4()),
+            **kwargs.get("llm_kwargs", {}),
+            "session_id": session_id,
         }
+        if route is not None:
+            from .agent import _responses
+
+            # Routing judges this worker by its responses, so count them.
+            _responses(session_id)
         if template.get("deferred_tools") is not None:
             kwargs["deferred_tools"] = template["deferred_tools"].fresh()
         kwargs.update(
@@ -528,6 +564,12 @@ def _subagent_thread_fn(
     except Exception as e:
         from .report import ContextOverflowError
 
+        if route is not None and route.on_failure is not None and session_id:
+            try:
+                route.on_failure(e, session_id)
+            except Exception:
+                pass
+
         if isinstance(e, ContextOverflowError):
             last_text = None
             for m in reversed(messages):
@@ -546,5 +588,9 @@ def _subagent_thread_fn(
         else:
             handle.error = f"error: subagent crashed: {e}"
     finally:
+        if session_id is not None:
+            from .agent import _forget_responses
+
+            _forget_responses(session_id)
         handle.done.set()
         slot.release()

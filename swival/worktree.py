@@ -583,7 +583,7 @@ def call_llm_text(
     sync.
     """
     from ._msg import _msg_content
-    from .agent import call_llm
+    from .agent import _provider_extra_kwargs, call_llm
 
     llm_kwargs = loop_kwargs.get("llm_kwargs", {})
     meter = loop_kwargs.get("exposure_meter")
@@ -602,13 +602,9 @@ def call_llm_text(
         user_agent=llm_kwargs.get("user_agent"),
         provider_timeout=llm_kwargs.get("provider_timeout", 900),
         prompt_cache=True,
-        aws_profile=llm_kwargs.get("aws_profile"),
-        vertex_project=llm_kwargs.get("vertex_project"),
-        vertex_location=llm_kwargs.get("vertex_location"),
-        pricing_provider=llm_kwargs.get("pricing_provider"),
         session_cost=loop_kwargs.get("session_cost"),
-        session_id=llm_kwargs.get("session_id"),
         exposure=meter.recorder("auxiliary") if meter is not None else None,
+        **_provider_extra_kwargs(llm_kwargs),
     )
     return _msg_content(msg) or "", cache_stats
 

@@ -1,4 +1,5 @@
 import argparse
+import collections
 from collections.abc import Callable
 import contextlib
 import contextvars
@@ -7,6 +8,7 @@ import copy
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 import functools
+import itertools
 import json
 from typing import Literal
 import os
@@ -51,6 +53,7 @@ from ._msg import (
 from .config import (
     _UNSET,
     INITIAL_TOOL_CHOICES,
+    _overlay_profile,
     ONESHOT_MAX_TURNS,
     REASONING_LEVELS,
     REPL_MAX_TURNS,
@@ -542,6 +545,26 @@ def _decision_model_hint(error_text: str) -> str:
 # Lets later call_llm() invocations skip the failing round-trip after an
 # automatic substitution.
 _MODEL_AUTOFIX: dict[tuple[str | None, str], str] = {}
+
+# For each loop routing is watching, when its provider last answered.
+# This is how routing tells a silent provider from a reply the loop threw away.
+# The numbers only grow, so an id that was dropped and answers again still
+# looks newer.
+_RESPONSES: collections.OrderedDict[str, int] = collections.OrderedDict()
+_RESPONSES_LIMIT = 65536
+_RESPONSE_SEQ = itertools.count(1)
+
+
+def _count_response(session_id: str | None) -> None:
+    if session_id in _RESPONSES:
+        _RESPONSES.pop(session_id, None)
+        _RESPONSES[session_id] = next(_RESPONSE_SEQ)
+
+
+def _forget_responses(session_id: str | None) -> None:
+    if session_id is not None:
+        _RESPONSES.pop(session_id, None)
+
 
 _MODEL_LIST_LIMIT = 20
 
@@ -3584,6 +3607,7 @@ def _provider_extra_kwargs(llm_kwargs):
             "vertex_location",
             "pricing_provider",
             "session_id",
+            "model_autofix",
         )
         if llm_kwargs.get(key) is not None
     }
@@ -5891,6 +5915,19 @@ def _log_cache_stats(response, verbose) -> tuple[int, int]:
     return cached, written
 
 
+def _chat_api_key(provider: str, api_key: str | None) -> str | None:
+    """The API key a chat request actually sends.
+
+    LM Studio ignores keys but the client needs one, and OpenAI-compatible
+    servers get a placeholder when none is set.
+    """
+    if provider == "lmstudio":
+        return "lm-studio"
+    if provider in ("generic", "llamacpp", "applefm"):
+        return api_key or "none"
+    return api_key
+
+
 def call_llm(
     base_url,
     model_id,
@@ -5927,6 +5964,7 @@ def call_llm(
     tool_choice="auto",
     provider_timeout=900,
     exposure=None,
+    model_autofix=True,
 ):
     """Call LiteLLM with the appropriate provider.
 
@@ -5937,6 +5975,9 @@ def call_llm(
     cache_stats is (cached_tokens, cache_write_tokens); both 0 for command provider
     and SQLite cache-hit paths.
     *exposure* is an ``ExposureRecorder`` that sees every request actually sent.
+    *model_autofix* lets a server that serves a single other model stand in
+    for an unknown one.
+    Routing turns it off.
     """
     # Internal keys are stripped before sending, so capture synthetic
     # scaffolding flags and result names while they are still there.
@@ -6047,12 +6088,16 @@ def call_llm(
 
     model_str = _resolve_model_str(provider, model_id)
     model_key = (base_url, model_str)
-    model_str = _MODEL_AUTOFIX.get(model_key, model_str)
+    if model_autofix:
+        model_str = _MODEL_AUTOFIX.get(model_key, model_str)
     if provider == "chatgpt":
         _ensure_chatgpt_responses_model_registered(litellm, model_str)
 
     if provider == "lmstudio":
-        kwargs = {"api_base": f"{base_url}/v1", "api_key": "lm-studio"}
+        kwargs = {
+            "api_base": f"{base_url}/v1",
+            "api_key": _chat_api_key(provider, api_key),
+        }
     elif provider == "huggingface":
         kwargs = {"api_key": api_key}
         if base_url:
@@ -6073,7 +6118,7 @@ def call_llm(
     elif provider in ("generic", "llamacpp", "applefm"):
         kwargs = {
             "api_base": base_url,
-            "api_key": api_key or "none",
+            "api_key": _chat_api_key(provider, api_key),
             "extra_headers": {"User-Agent": _swival_user_agent(user_agent)},
         }
         if (
@@ -6256,6 +6301,7 @@ def call_llm(
         provider already served (and may bill) a response even when Swival
         repairs it and continues.
         """
+        _count_response(session_id)
         observation = None
         if session_cost is not None or exposure is not None:
             observation = _response_cost_observation(
@@ -6335,7 +6381,7 @@ def call_llm(
         if not available or model_id in available:
             return None
         first_retries = _retries_from_exc(e)
-        if len(available) > 1:
+        if len(available) > 1 or not model_autofix:
             ae = AgentError(_format_model_not_found(model_id, available))
             ae._provider_retries = first_retries
             _raise_with_retries(ae)
@@ -6420,6 +6466,7 @@ def call_llm(
                 )
             )
             # Remote call, but no LiteLLM completion response to price.
+            _count_response(session_id)
             if session_cost is not None:
                 session_cost.record(CostObservation("unavailable"))
             if exposure is not None:
@@ -6596,11 +6643,28 @@ _PROVIDER_KEY_ENV: dict[str, str] = {
 
 
 def _build_self_review_cmd(
-    args: argparse.Namespace, *, files_mode: str = "some"
+    args: argparse.Namespace, *, files_mode: str = "some", profile: str | None = None
 ) -> str:
-    """Build a reviewer command that mirrors the current invocation's settings."""
+    """Build a reviewer command that mirrors the current invocation's settings.
+
+    With *profile*, the one routing moved the task to, the reviewer runs on that
+    profile instead of the startup provider flags.
+    """
     import shlex
 
+    if profile is not None:
+        args = copy.copy(args)
+        for name in (
+            "provider",
+            "model",
+            "base_url",
+            "max_context_tokens",
+            "max_output_tokens",
+            "aws_profile",
+            "gcp_project",
+            "location",
+        ):
+            setattr(args, name, None)
     parts = [sys.executable, "-m", "swival.agent", "--reviewer-mode", "--quiet"]
 
     if files_mode != "some":
@@ -6641,6 +6705,8 @@ def _build_self_review_cmd(
         parts.extend(["--gcp-project", args.gcp_project])
     if getattr(args, "location", None):
         parts.extend(["--location", args.location])
+    if profile is not None:
+        parts.extend(["--profile", profile])
 
     return shlex.join(parts)
 
@@ -7015,6 +7081,22 @@ def build_parser():
         help="API key for the decision model. Without it, an explicit "
         "--decision-base-url gets no key and a hosted provider uses its "
         "environment variable.",
+    )
+    routing_group = provider_group.add_mutually_exclusive_group()
+    routing_group.add_argument(
+        "--model-routing",
+        dest="model_routing",
+        action="store_true",
+        default=_UNSET,
+        help="Before each task, let the decision model pick the profile that "
+        "runs it, among profiles with a description.",
+    )
+    routing_group.add_argument(
+        "--no-model-routing",
+        dest="model_routing",
+        action="store_false",
+        default=_UNSET,
+        help="Turn off model routing set in a config file.",
     )
     provider_group.add_argument(
         "--initial-tool-choice",
@@ -7580,6 +7662,7 @@ def _format_profile_line(
     body: dict,
     active_name: str | None,
     active_source: str = "",
+    candidate: bool = False,
 ) -> str:
     provider = body.get("provider", "?")
     model = body.get("model", "(auto)")
@@ -7602,7 +7685,19 @@ def _format_profile_line(
     if extras:
         line += f"  {', '.join(extras)}"
     line += suffix
+    if candidate:
+        line += "  [routing]"
+    description = body.get("description")
+    if isinstance(description, str) and description.strip():
+        line += "\n    " + " ".join(description.split())
     return line
+
+
+def _routing_marks(profiles: dict, allowlist) -> set:
+    """Profiles to mark with [routing] in a profile listing."""
+    from .routing import routing_candidates
+
+    return set(routing_candidates(profiles, {}, allowlist=allowlist))
 
 
 def _handle_list_profiles(config: dict, args) -> None:
@@ -7626,8 +7721,22 @@ def _handle_list_profiles(config: dict, args) -> None:
         )
         return
 
+    routing_on = getattr(args, "model_routing", _UNSET)
+    if routing_on is _UNSET:
+        routing_on = config.get("model_routing", False)
+    marks = set()
+    if routing_on:
+        marks = _routing_marks(profiles, config.get("routing_profiles"))
     for name in sorted(profiles):
-        print(_format_profile_line(name, profiles[name], active_name, active_source))
+        print(
+            _format_profile_line(
+                name,
+                profiles[name],
+                active_name,
+                active_source,
+                candidate=name in marks,
+            )
+        )
 
 
 def main():
@@ -7771,6 +7880,14 @@ def main():
     args._serve_skills_config = file_config.pop("serve_skills", None)
 
     # Capture explicitness before apply_config_to_args sweeps _UNSET → defaults
+    # Choosing the model on the command line pauses model routing.
+    args._model_from_cli = (
+        getattr(args, "model", _UNSET) is not _UNSET
+        or getattr(args, "provider", _UNSET) is not _UNSET
+    )
+    args._llm_from_cli = (
+        getattr(args, "profile", None) is not None or args._model_from_cli
+    )
     _files_explicit = args.files is not _UNSET
     _commands_explicit = args.commands is not _UNSET
     _network_cli = getattr(args, "network", _UNSET) is not _UNSET
@@ -8179,7 +8296,7 @@ def main():
         report.finalize(
             task=task or args.question or "",
             model=model_id,
-            provider=args.provider,
+            provider=getattr(args, "_routed_provider", args.provider),
             settings=_report_settings(model_id, skills_catalog, instructions_loaded),
             outcome=outcome,
             answer=answer,
@@ -8266,7 +8383,7 @@ def main():
                     str(Path(args.base_dir).resolve()),
                     timeout=getattr(args, "_lifecycle_timeout", 300),
                     fail_closed=getattr(args, "_lifecycle_fail_closed", False),
-                    provider=args.provider,
+                    provider=getattr(args, "_routed_provider", args.provider),
                     model=getattr(args, "_resolved_model_id", None),
                     git_meta=getattr(args, "_lifecycle_git_meta", None),
                     report_path=_lc_report_path
@@ -9800,6 +9917,9 @@ def _run_main(args, report, _write_report, parser):
     )
     if _decisions is not None and args.verbose:
         fmt.info(_decisions.startup_line())
+    _routing = _routing_startup(
+        args, provider=llm_kwargs.get("provider"), verbose=args.verbose
+    )
 
     # Initialize MCP servers
     mcp_manager = None
@@ -10071,6 +10191,14 @@ def _run_main(args, report, _write_report, parser):
             verbose=args.verbose,
             proactive_summaries=getattr(args, "proactive_summaries", False),
         )
+        if _routing is not None:
+            _attach_router(
+                subagent_manager,
+                _routing,
+                messages=messages,
+                loop_kwargs=loop_kwargs,
+                report=report,
+            )
         loop_kwargs["subagent_manager"] = subagent_manager
 
     no_history = getattr(args, "no_history", False)
@@ -10155,6 +10283,7 @@ def _run_main(args, report, _write_report, parser):
                     startup_profile=_active_profile,
                     raw_llm_baseline=getattr(args, "_raw_llm_baseline", {}),
                     pre_profile_baseline=getattr(args, "_pre_profile_baseline", {}),
+                    routing=_routing,
                     mcp_manager=loop_kwargs.get("mcp_manager"),
                     a2a_manager=loop_kwargs.get("a2a_manager"),
                     subagent_manager=subagent_manager,
@@ -10165,7 +10294,16 @@ def _run_main(args, report, _write_report, parser):
                     instructions_enabled=_instructions_enabled,
                     instructions_full=_instructions_full,
                 )
-                result = run_input_script(args.question, ctx, mode="oneshot")
+                try:
+                    result = run_input_script(args.question, ctx, mode="oneshot")
+                finally:
+                    # Report the runtime the script ended on, not the one it
+                    # started with.
+                    model_id = ctx.loop_kwargs.get("model_id") or model_id
+                    args._resolved_model_id = model_id
+                    if not ctx.on_startup_runtime:
+                        profile = ctx.profiles[ctx.current_profile]
+                        args._routed_provider = profile["provider"]
                 answer = result.text
                 exhausted = result.exhausted
                 # Per-step history is already written by _finalize_agent_step
@@ -10198,6 +10336,27 @@ def _run_main(args, report, _write_report, parser):
                 return
 
             messages.append({"role": "user", "content": args.question})
+            switched = False
+            if _routing is not None:
+                # Route once: the review rounds below belong to the same task.
+                routed, switched = _route_task(
+                    _routing,
+                    args.question,
+                    current=getattr(args, "_active_profile", None),
+                    history=messages[:-1],
+                    tools=tools,
+                    loop_kwargs=loop_kwargs,
+                    subagent_manager=subagent_manager,
+                    report=report,
+                )
+                model_id = loop_kwargs["model_id"]
+                args._resolved_model_id = model_id
+                if switched:
+                    args._routed_provider = _routing.profiles[routed]["provider"]
+                    if reviewer_cmd and args.self_review:
+                        reviewer_cmd = _build_self_review_cmd(
+                            args, files_mode=args._resolved_files_mode, profile=routed
+                        )
             review_round = 0
             turn_offset = 0
 
@@ -10209,7 +10368,7 @@ def _run_main(args, report, _write_report, parser):
                 if model_id:
                     reviewer_env["SWIVAL_MODEL"] = model_id
                 # Pass API key via provider-specific env var (avoid CLI exposure)
-                if args.self_review and args.api_key:
+                if args.self_review and args.api_key and not switched:
                     env_var = _PROVIDER_KEY_ENV.get(args.provider)
                     if env_var:
                         reviewer_env[env_var] = args.api_key
@@ -10339,11 +10498,25 @@ def _run_main(args, report, _write_report, parser):
     if report:
         loop_kwargs["report"] = report
     _sa_holder = [subagent_manager]
+    _current_profile = getattr(args, "_active_profile", None)
+    _initial_switched = False
     try:
         if args.question:
             messages.append({"role": "user", "content": args.question})
             try:
-                answer, exhausted = run_agent_loop(messages, tools, **loop_kwargs)
+                with _settling(_routing, loop_kwargs):
+                    if _routing is not None:
+                        _current_profile, _initial_switched = _route_task(
+                            _routing,
+                            args.question,
+                            current=_current_profile,
+                            history=messages[:-1],
+                            tools=tools,
+                            loop_kwargs=loop_kwargs,
+                            subagent_manager=subagent_manager,
+                            report=report,
+                        )
+                    answer, exhausted = run_agent_loop(messages, tools, **loop_kwargs)
             except KeyboardInterrupt:
                 if subagent_manager is not None:
                     try:
@@ -10420,6 +10593,9 @@ def _run_main(args, report, _write_report, parser):
             startup_profile=getattr(args, "_active_profile", None),
             raw_llm_baseline=getattr(args, "_raw_llm_baseline", None),
             pre_profile_baseline=getattr(args, "_pre_profile_baseline", None),
+            routing=_routing,
+            current_profile=_current_profile,
+            on_startup_runtime=not _initial_switched,
             on_exit=_on_repl_exit if report else None,
             start_dir=start_dir,
             trace_dir=getattr(args, "trace_dir", None),
@@ -11224,9 +11400,17 @@ def _run_agent_loop(
                     # Propagate into metaskill sub-loops so they inherit the
                     # learned window instead of re-discovering it themselves.
                     _metaskill_loop_kwargs["context_length"] = _learned
+                    # Only for the session's own runtime. A routed one can have
+                    # a different window.
                     if (
                         session is not None
                         and getattr(session, "_context_length", None) is None
+                        and getattr(session, "_model_id", None) == model_id
+                        and getattr(session, "_api_base", None) == api_base
+                        and (getattr(session, "_llm_kwargs", None) or {}).get(
+                            "provider"
+                        )
+                        == (llm_kwargs or {}).get("provider")
                     ):
                         try:
                             session._context_length = _learned
@@ -12545,6 +12729,7 @@ def _repl_status(
     current_profile: str | None = None,
     goal_state=None,
     loop_registry=None,
+    routing=None,
 ) -> str:
     """Build a compact session overview."""
     from .continue_here import load_continue_file
@@ -12590,7 +12775,14 @@ def _repl_status(
     )
 
     state_lines = []
-    for obj in (thinking_state, todo_state, snapshot_state, goal_state, loop_registry):
+    for obj in (
+        thinking_state,
+        todo_state,
+        snapshot_state,
+        goal_state,
+        loop_registry,
+        routing,
+    ):
         if obj:
             s = obj.summary_line()
             if s:
@@ -12622,21 +12814,6 @@ def _repl_status(
     return "\n".join(lines)
 
 
-def _overlay_profile(pre_profile_baseline: dict | None, profile_body: dict) -> dict:
-    """Overlay a profile body onto the pre-profile top-level config.
-
-    Matches startup semantics: profiles that omit e.g. api_key inherit it
-    from top-level config, not from the previous profile.
-    """
-    from .config import _PROFILE_METADATA_KEYS
-
-    merged = dict(pre_profile_baseline or {})
-    for k, v in profile_body.items():
-        if k not in _PROFILE_METADATA_KEYS:
-            merged[k] = v
-    return merged
-
-
 def _commit_llm_runtime(repl_kwargs: dict, subagent_manager, updates: dict) -> None:
     """Commit resolved LLM runtime values into the live loop kwargs and mirror
     them into the subagent template so newly spawned subagents inherit them."""
@@ -12644,6 +12821,76 @@ def _commit_llm_runtime(repl_kwargs: dict, subagent_manager, updates: dict) -> N
     if subagent_manager is not None:
         for k in updates:
             subagent_manager._template[k] = repl_kwargs[k]
+
+
+# Settings a profile decides.
+# The rest of the session's llm_kwargs (session_id, prompt_cache,
+# max_retries...) stay the same across a switch.
+_PROFILE_LLM_KEYS = frozenset(
+    {
+        "provider",
+        "api_key",
+        "user_agent",
+        "aws_profile",
+        "vertex_project",
+        "vertex_location",
+        "extra_body",
+        "reasoning_effort",
+        "sanitize_thinking",
+        "show_thinking",
+        "pricing_provider",
+        "model_autofix",
+    }
+)
+
+
+def _resolve_profile_runtime(merged: dict, verbose: bool) -> dict:
+    """Resolve a profile into the values _commit_llm_runtime() takes.
+
+    Its llm_kwargs only hold what the profile decides, so merge in the session's
+    with _with_session_llm_kwargs() before switching.
+    Raises ConfigError or AgentError when the profile cannot be resolved.
+    """
+    model_id, api_base, _resolved_key, context_length, llm_kwargs = resolve_provider(
+        provider=merged["provider"],
+        model=merged.get("model"),
+        api_key=merged.get("api_key"),
+        base_url=merged.get("base_url"),
+        max_context_tokens=merged.get("max_context_tokens"),
+        verbose=verbose,
+        aws_profile=merged.get("aws_profile"),
+        project=merged.get("project"),
+        location=merged.get("location"),
+    )
+    for key in (
+        "user_agent",
+        "extra_body",
+        "reasoning_effort",
+        "sanitize_thinking",
+        "show_thinking",
+    ):
+        val = merged.get(key)
+        if val is not None:
+            llm_kwargs[key] = val
+    return {
+        "model_id": model_id,
+        "api_base": api_base,
+        "context_length": context_length,
+        "llm_kwargs": llm_kwargs,
+        "max_output_tokens": merged.get("max_output_tokens"),
+        "temperature": merged.get("temperature"),
+        "top_p": merged.get("top_p"),
+        "seed": merged.get("seed"),
+    }
+
+
+def _with_session_llm_kwargs(runtime: dict, session_llm_kwargs: dict) -> dict:
+    """Return *runtime* with the session-level llm_kwargs carried over."""
+    llm_kwargs = dict(runtime["llm_kwargs"])
+    for key, val in session_llm_kwargs.items():
+        if key not in _PROFILE_LLM_KEYS and key not in llm_kwargs:
+            llm_kwargs[key] = val
+    return {**runtime, "llm_kwargs": llm_kwargs}
 
 
 def _repl_profile(
@@ -12656,6 +12903,7 @@ def _repl_profile(
     repl_kwargs: dict | None = None,
     subagent_manager=None,
     verbose: bool = False,
+    routing=None,
 ) -> tuple[str | None, str, bool]:
     """Handle /profile command.
 
@@ -12674,8 +12922,13 @@ def _repl_profile(
                 False,
             )
 
+        marks = set()
+        if routing is not None:
+            marks = _routing_marks(profiles, routing.allowlist)
         lines = [
-            _format_profile_line(pname, profiles[pname], current_profile)
+            _format_profile_line(
+                pname, profiles[pname], current_profile, candidate=pname in marks
+            )
             for pname in sorted(profiles)
         ]
         return current_profile, "\n".join(lines), False
@@ -12701,73 +12954,743 @@ def _repl_profile(
         merged = dict(raw_baseline)
 
     try:
-        model_id, api_base, resolved_key, context_length, llm_kwargs = resolve_provider(
-            provider=merged["provider"],
-            model=merged.get("model"),
-            api_key=merged.get("api_key"),
-            base_url=merged.get("base_url"),
-            max_context_tokens=merged.get("max_context_tokens"),
-            verbose=verbose,
-            aws_profile=merged.get("aws_profile"),
-            project=merged.get("project"),
-            location=merged.get("location"),
-        )
+        runtime = _resolve_profile_runtime(merged, verbose)
     except (ConfigError, AgentError) as exc:
         return current_profile, f"profile switch failed: {exc}", True
 
-    for key in (
-        "user_agent",
-        "extra_body",
-        "reasoning_effort",
-        "sanitize_thinking",
-        "show_thinking",
-    ):
-        val = merged.get(key)
-        if val is not None:
-            llm_kwargs[key] = val
+    runtime = _with_session_llm_kwargs(runtime, repl_kwargs.get("llm_kwargs", {}))
+    _commit_llm_runtime(repl_kwargs, subagent_manager, runtime)
+    if routing is not None:
+        routing.catalog_key = _catalog_key(merged)
 
-    # Carry over session-level llm_kwargs (e.g. prompt_cache, max_retries)
-    # but NOT profile-controlled keys which are already set above.
-    _PROFILE_LLM_KEYS = {
-        "provider",
-        "api_key",
-        "user_agent",
-        "aws_profile",
-        "vertex_project",
-        "vertex_location",
-        "extra_body",
-        "reasoning_effort",
-        "sanitize_thinking",
-        "show_thinking",
-        "pricing_provider",
-    }
-    old_llm_kwargs = repl_kwargs.get("llm_kwargs", {})
-    for key, val in old_llm_kwargs.items():
-        if key not in _PROFILE_LLM_KEYS and key not in llm_kwargs:
-            llm_kwargs[key] = val
-
-    _commit_llm_runtime(
-        repl_kwargs,
-        subagent_manager,
-        {
-            "model_id": model_id,
-            "api_base": api_base,
-            "context_length": context_length,
-            "llm_kwargs": llm_kwargs,
-            "max_output_tokens": merged.get("max_output_tokens"),
-            "temperature": merged.get("temperature"),
-            "top_p": merged.get("top_p"),
-            "seed": merged.get("seed"),
-        },
-    )
-
+    llm_kwargs = runtime["llm_kwargs"]
     label = f"profile: {new_name}" if new_name else "profile: (baseline)"
     lines = [
         label,
-        f"model: {llm_kwargs.get('provider', '')} / {model_id}",
-        f"endpoint: {api_base}",
+        f"model: {llm_kwargs.get('provider', '')} / {runtime['model_id']}",
+        f"endpoint: {runtime['api_base']}",
     ]
+    if routing is not None and routing.pin(new_name):
+        lines.append("routing: paused, /route on to resume")
     return new_name, "\n".join(lines), False
+
+
+class _RoutingStop(AgentError):
+    """No profile allowed by routing_profiles can run this task."""
+
+
+# Servers whose model list comes from the profile's own endpoint and key.
+# For other providers the list comes from a registry or a public URL, so it
+# proves nothing about the profile.
+_PROBED_PROVIDERS = ("lmstudio", "llamacpp", "generic")
+
+
+def _probe_profile(runtime: dict, merged: dict) -> str | None:
+    """Check that the server answers and lists the model, using the chat key.
+
+    Returns why the profile cannot be used, or None.
+    """
+    from .model_catalog import CatalogUnavailable, find_entry, list_models
+
+    provider, base_url = _catalog_key(merged)
+    if provider not in _PROBED_PROVIDERS:
+        return None
+    key = _chat_api_key(provider, runtime["llm_kwargs"].get("api_key"))
+    try:
+        # A cached list would not notice a server that has gone down.
+        catalog = list_models(provider, base_url, key, refresh=True)
+    except CatalogUnavailable as e:
+        return e.reason
+    named = merged.get("model")
+    if named and find_entry(catalog.entries, named) is None:
+        return f"the server does not list {named!r}"
+    return None
+
+
+def _runtime_facts(
+    provider: str,
+    model_id: str | None,
+    api_base: str | None,
+    context_length: int | None,
+    max_output_tokens: int | None,
+    *,
+    catalog_provider: str,
+    base_url: str | None,
+    has_images: bool,
+):
+    """What is known about a runtime, mostly from caches."""
+    from .model_catalog import cached_entries, find_entry
+    from .routing import Facts
+
+    tools = None
+    if model_id:
+        entry = find_entry(cached_entries(catalog_provider, base_url) or (), model_id)
+        if entry is not None:
+            tools = entry.supports_tools
+    # Checking vision support can take a network request, so only do it for
+    # tasks with images.
+    vision = None
+    if has_images and model_id:
+        if _vision_unsupported(provider, model_id, api_base):
+            vision = False
+        elif api_base is None and provider != "command":
+            # An unresolved profile has no endpoint yet, so a refusal by the
+            # same model on any endpoint counts.
+            model_str = _resolve_model_str(provider, model_id)
+            if any(rejected == model_str for _, rejected in _VISION_REJECTED_MODELS):
+                vision = False
+    budget = None
+    if context_length:
+        budget = _prompt_budget(context_length, max_output_tokens)
+    return Facts(vision=vision, tools=tools, budget=budget)
+
+
+def _profile_facts(routing, name: str, has_images: bool):
+    """Facts about a profile, from its resolved runtime once there is one."""
+    from .model_catalog import cached_context_length
+
+    merged = _overlay_profile(routing.pre_profile_baseline, routing.profiles[name])
+    provider, base_url = _catalog_key(merged)
+    runtime = routing.runtimes.get(name)
+    if runtime is not None:
+        return _runtime_facts(
+            runtime["llm_kwargs"].get("provider", provider),
+            runtime["model_id"],
+            runtime["api_base"],
+            runtime["context_length"],
+            runtime["max_output_tokens"],
+            catalog_provider=provider,
+            base_url=base_url,
+            has_images=has_images,
+        )
+    model = merged.get("model")
+    window = merged.get("max_context_tokens")
+    if window is None and model:
+        window = cached_context_length(provider, model, base_url)
+    return _runtime_facts(
+        "generic" if provider == _GOOGLE_PROVIDER else provider,
+        model,
+        None,
+        window,
+        merged.get("max_output_tokens"),
+        catalog_provider=provider,
+        base_url=base_url,
+        has_images=has_images,
+    )
+
+
+def _catalog_key(settings: dict) -> tuple:
+    """Key of the cached model list for a runtime built from *settings*."""
+    from .model_catalog import normalize_provider
+
+    provider = normalize_provider(settings.get("provider") or "lmstudio")
+    return provider, settings.get("base_url")
+
+
+def _live_facts(routing, loop_kwargs: dict, has_images: bool):
+    """Facts about the runtime the session is using right now."""
+    llm_kwargs = loop_kwargs.get("llm_kwargs", {})
+    provider = llm_kwargs.get("provider", "lmstudio")
+    catalog_provider, base_url = routing.catalog_key or (provider, None)
+    return _runtime_facts(
+        provider,
+        loop_kwargs.get("model_id"),
+        loop_kwargs.get("api_base"),
+        loop_kwargs.get("context_length"),
+        loop_kwargs.get("max_output_tokens"),
+        catalog_provider=catalog_provider,
+        base_url=base_url,
+        has_images=has_images,
+    )
+
+
+def _next_request_tokens(
+    history: list, request, tools: list, loop_kwargs: dict
+) -> int | None:
+    """Estimate the task's first request, the way the loop will build it.
+
+    That includes loaded MCP schemas and any skills the request mentions with
+    $skill.
+    Returns None without tokenizer data, since a byte count cannot be compared
+    with a context window.
+    """
+    if encoder_is_fallback():
+        return None
+    messages = list(history)
+    if request is not None:
+        messages.append({"role": "user", "content": request})
+        text = _msg_content(messages[-1])
+        catalog = loop_kwargs.get("skills_catalog")
+        if catalog and "$" in text:
+            from .skills import inject_skill_mentions
+
+            for _name, body in inject_skill_mentions(
+                text,
+                catalog,
+                list(loop_kwargs.get("skill_read_roots") or ()),
+                enabled_metaskills=loop_kwargs.get("enabled_metaskills"),
+            ):
+                messages.append({"role": "tool", "content": body})
+    deferred = loop_kwargs.get("deferred_tools")
+    if deferred is not None:
+        tools = deferred.with_loaded(tools)
+    return estimate_tokens(messages, tools)
+
+
+def _routed_runtime(routing, name: str, *, has_images, needed_tokens, verbose):
+    """Resolve and check a profile for this task, or raise routing.Unusable.
+
+    A profile that cannot be resolved or fails the check is skipped for the rest
+    of the session.
+    One that resolves but cannot take this task, say because its context window
+    is too small, stays cached for later tasks.
+    """
+    from .routing import Unusable, unfit
+
+    runtime = routing.runtimes.get(name)
+    if runtime is None:
+        merged = _overlay_profile(routing.pre_profile_baseline, routing.profiles[name])
+        try:
+            runtime = _resolve_profile_runtime(merged, verbose)
+            reason = _probe_profile(runtime, merged)
+        except (ConfigError, AgentError) as e:
+            reason = str(e)
+        if reason is not None:
+            routing.unavailable.add(name)
+            routing.warn_once(
+                f"unavailable:{name}",
+                fmt.warning,
+                f"routing: profile {name} is unavailable for this session: {reason}",
+            )
+            raise Unusable(reason)
+        if runtime["context_length"] is None:
+            # The check above uses the profile's key, so its model list may know
+            # the context window when resolving the profile did not.
+            from .model_catalog import cached_context_length
+
+            provider, base_url = _catalog_key(merged)
+            runtime["context_length"] = cached_context_length(
+                provider, runtime["model_id"], base_url
+            )
+        # The autofix could swap in a model none of these checks has seen.
+        runtime["llm_kwargs"]["model_autofix"] = False
+        routing.runtimes[name] = runtime
+    problem = unfit(
+        _profile_facts(routing, name, has_images),
+        has_images=has_images,
+        needed_tokens=needed_tokens,
+    )
+    if problem is not None:
+        raise Unusable(problem)
+    return runtime
+
+
+def _commit_route(
+    routing, name: str, runtime: dict, loop_kwargs: dict, subagent_manager
+):
+    updates = _with_session_llm_kwargs(runtime, loop_kwargs.get("llm_kwargs", {}))
+    _commit_llm_runtime(loop_kwargs, subagent_manager, updates)
+    routing.moved()
+    routing.watch = name
+    routing.catalog_key = _catalog_key(
+        _overlay_profile(routing.pre_profile_baseline, routing.profiles[name])
+    )
+
+
+def _routing_request_kwargs(loop_kwargs: dict) -> dict:
+    from .decisions import MAX_TIMEOUT
+
+    meter = loop_kwargs.get("exposure_meter")
+    return {
+        "llm_filter": loop_kwargs.get("llm_filter"),
+        "secret_shield": loop_kwargs.get("secret_shield"),
+        "session_cost": loop_kwargs.get("session_cost"),
+        "exposure": meter.recorder("routing") if meter is not None else None,
+        "timeout": min(
+            loop_kwargs.get("llm_kwargs", {}).get("provider_timeout", 900), MAX_TIMEOUT
+        ),
+        "cancel_flag": loop_kwargs.get("cancel_flag"),
+    }
+
+
+def _watch_retry(routing, current: str | None) -> None:
+    """Watch a retried profile that was marked unavailable, so an answer clears it."""
+    if current is not None and not routing.override and current in routing.unavailable:
+        routing.watch = current
+
+
+def _needs_admission(routing, current: str | None) -> bool:
+    return (
+        routing.allowlist is not None
+        and not routing.explicit
+        and current not in routing.allowlist
+    )
+
+
+def _route_task(
+    routing,
+    request,
+    *,
+    current: str | None,
+    history: list,
+    tools: list,
+    loop_kwargs: dict,
+    subagent_manager=None,
+    goal_state=None,
+    decide: bool = True,
+    report=None,
+    first_message=None,
+) -> tuple[str | None, bool]:
+    """Pick the profile for the next task and switch to it.
+
+    *history* is the transcript without *request*.
+    *first_message* is what the loop sends first instead of *request*, as for
+    a /goal launch; the size check uses it.
+    With *decide*, the decision model may be asked.
+    Without it, only the routing_profiles check runs, which also applies when
+    routing itself is off.
+    Returns (profile, switched), or raises _RoutingStop when no allowed profile
+    can run the task.
+    """
+    from . import routing as routing_mod
+    from .decisions import DecisionCancelled
+
+    _drain_spawn_failures(routing)
+    deciding = decide and routing.active
+    if not deciding and not _needs_admission(routing, current):
+        _watch_retry(routing, current)
+        return current, False
+
+    verbose = loop_kwargs.get("verbose", False)
+    before = current or loop_kwargs.get("model_id")
+    has_images = _has_image_content(history) or _has_image_content(
+        [{"content": request}]
+    )
+    needed = _next_request_tokens(
+        history, request if first_message is None else first_message, tools, loop_kwargs
+    )
+    facts, filters, choice = _routing_view(
+        routing, current, loop_kwargs, has_images=has_images, needed=needed
+    )
+
+    final = None
+    if deciding:
+        goal = None
+        if goal_state is not None and goal_state.has_active():
+            goal = goal_state.current.objective
+            if goal == request:
+                goal = None
+        margin = 0.0 if routing.cleared else routing_mod.MARGIN
+        try:
+            final = routing_mod.choose_profile(
+                routing, history, request, goal=goal, margin=margin, **choice
+            )
+        except DecisionCancelled:
+            # The loop sees the cancel flag and stops before its first request.
+            return current, False
+        if final.switched:
+            _commit_route(
+                routing, final.profile, final.runtime, loop_kwargs, subagent_manager
+            )
+            current = final.profile
+
+    if _needs_admission(routing, current):
+        if routing.command_session:
+            raise _RoutingStop(
+                "routing_profiles does not list the current runtime, and a session "
+                "started on a command provider cannot switch; use --profile"
+            )
+        for name in routing_mod.routing_candidates(
+            routing.profiles, facts, require_description=False, **filters
+        ):
+            try:
+                runtime = choice["resolve"](name)
+            except routing_mod.Unusable:
+                continue
+            _commit_route(routing, name, runtime, loop_kwargs, subagent_manager)
+            moved = dict(
+                profile=name,
+                previous=current,
+                switched=True,
+                reason="not in routing_profiles",
+            )
+            # Keep the decision's probabilities and timing for the report.
+            final = (
+                replace(final, **moved)
+                if final is not None
+                else routing_mod.RouteDecision(**moved)
+            )
+            current = name
+            break
+        else:
+            raise _RoutingStop(
+                "routing_profiles: no listed profile can run this task. "
+                "Pick one with /profile, or fix the listed profiles."
+            )
+
+    routing.current = current
+    _watch_retry(routing, current)
+    if final is not None:
+        routing.last = final
+        if report is not None:
+            report.record_routing(final.report_entry())
+        if final.switched and verbose:
+            _show_route(final, before)
+    return current, bool(final is not None and final.switched)
+
+
+def _routing_view(routing, current, loop_kwargs, *, has_images, needed):
+    """Gather what one decision needs, mostly from caches.
+
+    Returns (facts, filters, choice), where *choice* holds the arguments for
+    routing.choose_profile().
+    """
+    from .routing import classify_current, routing_candidates
+
+    as_profile = None if routing.override else current
+    facts = {
+        name: _profile_facts(routing, name, has_images) for name in routing.profiles
+    }
+    current_facts = _live_facts(routing, loop_kwargs, has_images)
+    if as_profile is not None:
+        facts[as_profile] = current_facts
+    filters = dict(
+        allowlist=routing.allowlist,
+        unavailable=routing.unavailable,
+        has_images=has_images,
+        needed_tokens=needed,
+    )
+    candidates = routing_candidates(routing.profiles, facts, **filters)
+    state, reason = classify_current(
+        as_profile, current_facts, candidates, explicit=routing.explicit, **filters
+    )
+    verbose = loop_kwargs.get("verbose", False)
+    choice = dict(
+        candidates=candidates,
+        current=as_profile,
+        state=state,
+        reason=reason,
+        resolve=lambda name: _routed_runtime(
+            routing, name, has_images=has_images, needed_tokens=needed, verbose=verbose
+        ),
+        warn=fmt.warning,
+        **_routing_request_kwargs(loop_kwargs),
+    )
+    return facts, filters, choice
+
+
+def _show_route(decision, before, label: str = "") -> None:
+    p = (decision.probabilities or {}).get(decision.profile)
+    detail = f"{p:.2f}" if p is not None else decision.reason
+    fmt.route(f"route: {label}{before} -> {decision.profile} ({detail})")
+
+
+def _blames_provider(error) -> bool:
+    """Whether a failed task can be the provider's fault at all."""
+    from .filter import FilterError
+
+    if isinstance(error, (_RoutingStop, ContextOverflowError)):
+        return False
+    # A request the filter refused never reached the provider.
+    return not isinstance(error.__cause__, FilterError)
+
+
+def _went_unanswered(error, session_id: str) -> bool:
+    """Whether a subagent failed before any response from its provider."""
+    return (
+        isinstance(error, AgentError)
+        and _blames_provider(error)
+        and not _RESPONSES.get(session_id)
+    )
+
+
+def _responses(session_id: str | None) -> int:
+    """When *session_id* last got a provider response, as a sequence number.
+
+    Responses only count once this has been called for the id.
+    """
+    if session_id is None:
+        return 0
+    # Asking moves the id to the back, so an active loop is never the one
+    # dropped when the table is full.
+    seq = _RESPONSES.pop(session_id, 0)
+    _RESPONSES[session_id] = seq
+    if len(_RESPONSES) > _RESPONSES_LIMIT:
+        _RESPONSES.popitem(last=False)
+    return seq
+
+
+@contextlib.contextmanager
+def _settling(routing, loop_kwargs: dict):
+    """Run a task, then judge the profile routing moved it to, if any."""
+    if routing is None:
+        yield
+        return
+    session_id = (loop_kwargs.get("llm_kwargs") or {}).get("session_id")
+    before = _responses(session_id)
+    error = None
+    try:
+        yield
+    except AgentError as e:
+        error = e
+        raise
+    finally:
+        _settle_route(routing, error, _responses(session_id) > before)
+
+
+def _settle_route(routing, error, replied: bool) -> None:
+    """After a task, check whether the profile routing switched to ever answered.
+
+    One that never did is skipped for the rest of the session, and one retried
+    after an outage gets its mark cleared once it works.
+    *replied* says whether its provider answered during the task.
+    A reply also brings back the margin that /clear dropped.
+    """
+    name = routing.watch
+    if replied:
+        # It answered, so it is reachable, even if a later request failed.
+        routing.cleared = False
+        routing.watch = None
+        routing.unavailable.discard(name)
+        return
+    if name is None or error is None or not _blames_provider(error):
+        # Cancelled, interrupted or refused before any request: keep watching.
+        return
+    routing.watch = None
+    routing.unavailable.add(name)
+    fmt.warning(f"routing: profile {name} did not answer; unavailable for this session")
+
+
+def _route_ctx(
+    ctx, request, *, decide: bool, history: list | None = None, first_message=None
+) -> None:
+    profile, switched = _route_task(
+        ctx.routing,
+        request,
+        current=ctx.current_profile,
+        history=ctx.messages if history is None else history,
+        tools=ctx.tools,
+        loop_kwargs=ctx.loop_kwargs,
+        subagent_manager=ctx.subagent_manager,
+        goal_state=ctx.goal_state,
+        decide=decide,
+        report=ctx.loop_kwargs.get("report"),
+        first_message=first_message,
+    )
+    ctx.current_profile = profile
+    if switched:
+        # The new profile decides the reasoning effort, as after /profile.
+        ctx.last_reasoning_effort = None
+        ctx.on_startup_runtime = False
+
+
+def _route_input(
+    ctx, request, *, decide: bool = True, first_message=None, history=None
+) -> "StepResult | None":
+    """Route a task before its content is appended.
+
+    Returns a StepResult when the task must not run.
+    """
+    if ctx.routing is None:
+        return None
+    try:
+        _route_ctx(
+            ctx, request, decide=decide, history=history, first_message=first_message
+        )
+    except KeyboardInterrupt:
+        fmt.warning("interrupted, question aborted.")
+        return StepResult(kind="agent_turn", interrupted=True)
+    except AgentError as e:
+        if not ctx.interactive:
+            raise
+        return StepResult(kind="info", text=f"error: {e}", is_error=True)
+    return None
+
+
+def _route_spawn(
+    routing,
+    task: str,
+    system: str,
+    *,
+    messages: list,
+    loop_kwargs: dict,
+    tools: list,
+    report=None,
+):
+    """Pick the profile a new subagent runs on, without moving the parent.
+
+    The parent's conversation gives the context, but what has to fit is the
+    subagent's own first request: its system prompt and the task.
+    Returns a SpawnRoute, or None to run on the parent's profile.
+    """
+    from . import routing as routing_mod
+    from .decisions import DecisionCancelled
+    from .subagent import SpawnRoute
+
+    _drain_spawn_failures(routing)
+    if not routing.active:
+        return None
+    verbose = loop_kwargs.get("verbose", False)
+    current = routing.current
+    deferred = loop_kwargs.get("deferred_tools")
+    needed = _next_request_tokens(
+        [{"role": "system", "content": system}],
+        task,
+        tools,
+        # The worker starts with none of the parent's loaded MCP schemas.
+        {**loop_kwargs, "deferred_tools": deferred.fresh() if deferred else None},
+    )
+    _, _, choice = _routing_view(
+        routing, current, loop_kwargs, has_images=False, needed=needed
+    )
+    try:
+        decision = routing_mod.choose_profile(routing, messages, task, **choice)
+    except DecisionCancelled:
+        return None
+    if report is not None:
+        report.record_routing({**decision.report_entry(), "subagent": True})
+    if not decision.switched:
+        return None
+    if verbose:
+        _show_route(decision, current or loop_kwargs.get("model_id"), "subagent ")
+    runtime = _with_session_llm_kwargs(
+        decision.runtime, loop_kwargs.get("llm_kwargs", {})
+    )
+    name = decision.profile
+
+    def on_failure(error, session_id):
+        # This runs on the worker thread, so only queue it for the main thread.
+        if _went_unanswered(error, session_id):
+            routing.failed_spawns.append(name)
+
+    return SpawnRoute(runtime=runtime, on_failure=on_failure)
+
+
+def _attach_router(subagent_manager, routing, *, messages, loop_kwargs, report):
+    """Route each subagent the manager spawns, sized with the tools workers get."""
+    subagent_manager.router = functools.partial(
+        _route_spawn,
+        routing,
+        messages=messages,
+        loop_kwargs=loop_kwargs,
+        tools=subagent_manager._tools,
+        report=report,
+    )
+
+
+def _drain_spawn_failures(routing) -> None:
+    """Mark the profiles routed subagents could not reach as unavailable."""
+    while routing.failed_spawns:
+        name = routing.failed_spawns.pop()
+        if name not in routing.unavailable:
+            routing.unavailable.add(name)
+            fmt.warning(
+                f"routing: profile {name} did not answer a subagent; "
+                "unavailable for this session"
+            )
+
+
+def _routing_startup(args, provider: str | None, verbose: bool):
+    """Build the session's RoutingState, or None without model_routing."""
+    from .routing import (
+        STATE_BUDGET,
+        RoutingState,
+        description_units,
+        routing_candidates,
+    )
+
+    if getattr(args, "model_routing", False) is not True:
+        return None
+    profiles = getattr(args, "_all_profiles", None) or {}
+    routing = RoutingState(
+        profiles=profiles,
+        pre_profile_baseline=getattr(args, "_pre_profile_baseline", None) or {},
+        settings=getattr(args, "_decisions", None),
+        allowlist=getattr(args, "routing_profiles", None),
+    )
+    names = routing_candidates(profiles, {}, allowlist=routing.allowlist)
+    if provider == "command":
+        routing.command_session = True
+        routing.off_reason = "the session started on a command provider"
+    elif routing.settings is None:
+        routing.off_reason = "no decision model is configured"
+    elif len(names) < 2:
+        which = "listed profile" if routing.allowlist is not None else "profile"
+        count = "only one" if names else "no"
+        routing.off_reason = f"{count} {which} has a description"
+    else:
+        routing.enabled = True
+    routing.current = getattr(args, "_active_profile", None)
+    routing.catalog_key = _catalog_key(getattr(args, "_raw_llm_baseline", None) or {})
+    if getattr(args, "_llm_from_cli", False):
+        routing.pin(routing.current, override=getattr(args, "_model_from_cli", False))
+    if verbose:
+        if routing.off_reason is not None:
+            fmt.info(f"routing: off, {routing.off_reason}")
+        elif routing.paused:
+            fmt.info(
+                f"routing: {', '.join(names)} (paused by the command line, "
+                "/route on to resume)"
+            )
+        else:
+            fmt.info(f"routing: {', '.join(names)}")
+    if routing.enabled:
+        criteria = routing.criteria(names)
+        if description_units(criteria) > STATE_BUDGET // 2:
+            longest = sorted(criteria, key=lambda n: len(criteria[n]), reverse=True)
+            fmt.warning(
+                "routing: the profile descriptions take more than half of the "
+                f"routing request; the longest are {', '.join(longest[:3])}"
+            )
+    return routing
+
+
+def _repl_route(cmd_arg: str, ctx) -> tuple[str, bool]:
+    """Handle /route: show the routing status, or turn it on or off."""
+    routing = ctx.routing
+    arg = cmd_arg.strip().lower()
+    if routing is None:
+        return (
+            "model routing is not configured (set model_routing = true)",
+            bool(arg),
+        )
+    if arg == "on":
+        if not routing.enabled:
+            return f"routing cannot run: {routing.off_reason}", True
+        routing.paused = False
+        routing.off_reason = None
+        return "routing: on", False
+    if arg == "off":
+        routing.paused = True
+        return "routing: paused", False
+    if arg:
+        return "usage: /route [on|off]", True
+
+    from .routing import describe, routing_candidates
+
+    lines = [f"routing: {routing.status()}"]
+    candidates = routing_candidates(
+        routing.profiles,
+        {},
+        allowlist=routing.allowlist,
+        unavailable=routing.unavailable,
+    )
+    lines.append(f"candidates: {', '.join(candidates) or '(none)'}")
+    if routing.allowlist is not None:
+        lines.append(f"routing_profiles: {', '.join(routing.allowlist)}")
+    if routing.unavailable:
+        lines.append(f"unavailable: {', '.join(sorted(routing.unavailable))}")
+    current = ctx.current_profile or "(no profile)"
+    if routing.override:
+        current += " (changed by /model)"
+    lines.append(f"current: {current}")
+    last = routing.last
+    if last is not None:
+        lines.append(f"last: {describe(last)}")
+        if last.probabilities:
+            probs = "  ".join(f"{k} {v:.2f}" for k, v in last.probabilities.items())
+            lines.append(f"  {probs}")
+    return "\n".join(lines), False
 
 
 def _current_llm_settings(
@@ -12776,6 +13699,7 @@ def _current_llm_settings(
     startup_profile: str | None,
     raw_baseline: dict,
     pre_profile_baseline: dict | None,
+    on_startup_runtime: bool | None = None,
 ) -> dict:
     """Return the provider settings the session currently runs under.
 
@@ -12783,11 +13707,9 @@ def _current_llm_settings(
     startup args are authoritative; after a /profile switch the profile body
     overlays the pre-profile top-level config.
     """
-    if (
-        current_profile
-        and current_profile != startup_profile
-        and current_profile in profiles
-    ):
+    if on_startup_runtime is None:
+        on_startup_runtime = current_profile == startup_profile
+    if current_profile and not on_startup_runtime and current_profile in profiles:
         return _overlay_profile(pre_profile_baseline, profiles[current_profile])
     return dict(raw_baseline or {})
 
@@ -12805,6 +13727,7 @@ def _repl_model(
     last_model: tuple[str, str] | None = None,
     interactive: bool = True,
     verbose: bool = False,
+    on_startup_runtime: bool | None = None,
 ) -> tuple[tuple[str, str] | None, str, bool]:
     """Handle /model.
 
@@ -12820,7 +13743,12 @@ def _repl_model(
         repl_kwargs = {}
 
     settings = _current_llm_settings(
-        profiles, current_profile, startup_profile, raw_baseline, pre_profile_baseline
+        profiles,
+        current_profile,
+        startup_profile,
+        raw_baseline,
+        pre_profile_baseline,
+        on_startup_runtime,
     )
     provider = normalize_provider(settings.get("provider") or "lmstudio")
     settings["provider"] = provider
@@ -12916,6 +13844,8 @@ def _model_switch(
 
     previous = repl_kwargs.get("model_id")
     if new_model == previous:
+        # Picking a model by hand, even the same one, turns the autofix back on.
+        repl_kwargs.get("llm_kwargs", {}).pop("model_autofix", None)
         return last_model, f"already using {new_model}", False
 
     try:
@@ -12942,6 +13872,8 @@ def _model_switch(
     # The provider is unchanged, so the session llm_kwargs (reasoning effort,
     # extra_body, caching, auth) carry over; only the resolved key can move.
     llm_kwargs = dict(repl_kwargs.get("llm_kwargs", {}))
+    # A model picked by hand gets the autofix back.
+    llm_kwargs.pop("model_autofix", None)
     if resolved_key is not None:
         llm_kwargs["api_key"] = resolved_key
 
@@ -13157,6 +14089,7 @@ def _model_completion_candidates(ctx) -> list[str]:
         ctx.startup_profile,
         ctx.raw_llm_baseline,
         ctx.pre_profile_baseline,
+        ctx.on_startup_runtime,
     )
     provider = normalize_provider(settings.get("provider") or "lmstudio")
     names = load_prefs().preferred_for(provider)
@@ -13366,6 +14299,11 @@ _ONESHOT_GOAL_SLASH_REFUSAL = (
 )
 
 
+def _leading_system(messages: list) -> list:
+    """The system messages at the start of *messages*, which /clear keeps."""
+    return list(itertools.takewhile(lambda m: _msg_role(m) == "system", messages))
+
+
 def _repl_clear(
     messages: list,
     thinking_state: ThinkingState,
@@ -13378,13 +14316,7 @@ def _repl_clear(
     deferred_tools: DeferredTools | None = None,
 ) -> str:
     """Clear conversation history, keeping only the leading system messages."""
-    leading = []
-    for msg in messages:
-        if _msg_role(msg) == "system":
-            leading.append(msg)
-        else:
-            break
-
+    leading = _leading_system(messages)
     dropped = len(messages) - len(leading)
     messages[:] = leading
 
@@ -13848,8 +14780,13 @@ def _invoke_agent_turn(
     ctx: InputContext,
     *,
     goal_launch: bool = False,
+    route: bool = False,
 ) -> tuple[str | None, bool, bool]:
     """Append content and run the agent loop.
+
+    With *route*, the decision model may move the task to another profile
+    first.
+    The routing_profiles check runs either way.
 
     Returns ``(answer, exhausted, interrupted)``.
 
@@ -13863,13 +14800,17 @@ def _invoke_agent_turn(
     if content is not None:
         ctx.messages.append({"role": "user", "content": content})
     try:
-        answer, exhausted = run_agent_loop(
-            ctx.messages,
-            ctx.tools,
-            max_turns=ctx.turn_state["max_turns"],
-            goal_launch_turn=goal_launch,
-            **ctx.loop_kwargs,
-        )
+        with _settling(ctx.routing, ctx.loop_kwargs):
+            if ctx.routing is not None:
+                history = ctx.messages[:-1] if content is not None else ctx.messages
+                _route_ctx(ctx, content, decide=route, history=history)
+            answer, exhausted = run_agent_loop(
+                ctx.messages,
+                ctx.tools,
+                max_turns=ctx.turn_state["max_turns"],
+                goal_launch_turn=goal_launch,
+                **ctx.loop_kwargs,
+            )
     except KeyboardInterrupt:
         _reset_subagent(ctx)
         # Pause any active goal so subsequent `/continue` can resume from a
@@ -13938,11 +14879,12 @@ def _run_agent_step(
     interruption_message: str | None = None,
     exhaustion_message: str | None = None,
     goal_launch: bool = False,
+    route: bool = False,
 ) -> StepResult:
     """Invoke the agent loop and return its normalized result."""
     try:
         answer, exhausted, interrupted = _invoke_agent_turn(
-            content, ctx, goal_launch=goal_launch
+            content, ctx, goal_launch=goal_launch, route=route
         )
     except _InstructionsPending as pending:
         return pending.step
@@ -14077,6 +15019,11 @@ def execute_input(
         if result is None:
             return StepResult(kind="state_change")
         cmd_name, prompt_content, inline_path = result
+        # Route on the full output, so the chosen model's context window decides
+        # how much of it is kept.
+        blocked = _route_input(ctx, prompt_content)
+        if blocked is not None:
+            return blocked
         prompt_content = _truncate_for_context(
             prompt_content,
             ctx.messages,
@@ -14172,6 +15119,8 @@ def execute_input(
             )
             _teardown_goal(ctx)
             ctx.last_answer = None
+            if ctx.routing is not None:
+                ctx.routing.reset()
             _rpt = ctx.loop_kwargs.get("report")
             if _rpt is not None:
                 _rpt.record_session_clear()
@@ -14189,6 +15138,10 @@ def execute_input(
             return StepResult(kind="state_change", text=msg)
 
         if cmd == "/continue":
+            # Check first, so a refused turn leaves the goal paused.
+            blocked = _route_input(ctx, None, decide=False)
+            if blocked is not None:
+                return blocked
             fmt.info("continuing agent loop...")
             if ctx.goal_state is not None:
                 rec = ctx.goal_state.get()
@@ -14225,14 +15178,23 @@ def execute_input(
                 )
             if result.text:
                 fmt.info(result.text)
+            # Route on the objective, but size the task by what the loop sends.
             _ensure_goal_tools_enabled(ctx.tools)
+            launch = ctx.goal_state.start_prompt()
+            # A refused launch pauses the goal, so no later turn picks it up.
+            try:
+                blocked = _route_input(
+                    ctx, ctx.goal_state.current.objective, first_message=launch
+                )
+            except Exception:
+                ctx.goal_state.pause()
+                raise
+            if blocked is not None:
+                ctx.goal_state.pause()
+                return blocked
             _raise_goal_default_max_turns(ctx.turn_state)
             ctx.messages.append(
-                {
-                    "role": "user",
-                    "content": ctx.goal_state.start_prompt(),
-                    "_swival_synthetic": True,
-                }
+                {"role": "user", "content": launch, "_swival_synthetic": True}
             )
             return _run_agent_step(
                 None,
@@ -14253,15 +15215,19 @@ def execute_input(
                 repl_kwargs=ctx.loop_kwargs,
                 subagent_manager=ctx.subagent_manager,
                 verbose=ctx.verbose,
+                routing=ctx.routing,
             )
             ctx.current_profile = new_profile
             if not err:
                 # The profile decides the effort from here on, so a stale
                 # /reasoning - must not drag the old one back.
                 ctx.last_reasoning_effort = None
+                if cmd_arg.strip():
+                    ctx.on_startup_runtime = cmd_arg.strip() == "-"
             return StepResult(kind="state_change", text=msg, is_error=err)
 
         if cmd == "/model":
+            model_before = ctx.loop_kwargs.get("model_id")
             new_last, msg, err = _repl_model(
                 cmd_arg,
                 profiles=ctx.profiles,
@@ -14279,8 +15245,20 @@ def execute_input(
                     and sys.stderr.isatty()
                 ),
                 verbose=ctx.verbose,
+                on_startup_runtime=ctx.on_startup_runtime,
             )
             ctx.last_model = new_last
+            changed = ctx.loop_kwargs.get("model_id") != model_before
+            chose_model = not err and (changed or msg.startswith("already using "))
+            if ctx.routing is not None and chose_model:
+                if ctx.routing.pin(
+                    ctx.current_profile, override=ctx.routing.override or changed
+                ):
+                    msg += "\nrouting: paused, /route on to resume"
+            return StepResult(kind="state_change", text=msg, is_error=err)
+
+        if cmd == "/route":
+            msg, err = _repl_route(cmd_arg, ctx)
             return StepResult(kind="state_change", text=msg, is_error=err)
 
         if cmd == "/reasoning":
@@ -14298,6 +15276,9 @@ def execute_input(
             return StepResult(kind="state_change", text=msg, is_error=err)
 
         if cmd == "/restore":
+            blocked = _route_input(ctx, None, decide=False)
+            if blocked is not None:
+                return blocked
             provider_kwargs = _provider_extra_kwargs(ctx.loop_kwargs["llm_kwargs"])
             if ctx.loop_kwargs.get("session_cost") is not None:
                 provider_kwargs["session_cost"] = ctx.loop_kwargs["session_cost"]
@@ -14352,6 +15333,7 @@ def execute_input(
                 current_profile=ctx.current_profile,
                 goal_state=ctx.goal_state,
                 loop_registry=ctx.loop_registry,
+                routing=ctx.routing,
             )
             return StepResult(kind="info", text=msg)
 
@@ -14405,7 +15387,9 @@ def execute_input(
         )
 
     # Plain text. _run_agent_step holds it back if an update is still pending.
-    return _run_agent_step(parsed.raw, parsed.raw, ctx, interrupt_label="question")
+    return _run_agent_step(
+        parsed.raw, parsed.raw, ctx, interrupt_label="question", route=True
+    )
 
 
 class _InstructionsPending(Exception):
@@ -14460,10 +15444,19 @@ def _revalidate_pending_instructions(ctx: InputContext) -> "StepResult | None":
 def _execute_init(cmd_arg: str, ctx: InputContext) -> StepResult:
     """Handle the multi-pass /init command.
 
-    The check runs before the body, which clears the conversation: refusing
+    The checks run before the body, which clears the conversation: refusing
     afterwards would cost the user their context for a turn we never ran.
     """
     blocked = _revalidate_pending_instructions(ctx)
+    if blocked is not None:
+        return blocked
+    blocked = _route_input(
+        ctx,
+        None,
+        decide=False,
+        history=_leading_system(ctx.messages),
+        first_message=_init_prompt(),
+    )
     if blocked is not None:
         return blocked
     try:
@@ -14582,6 +15575,9 @@ def _execute_simplify(cmd_arg: str, ctx: InputContext) -> StepResult:
     """Collect four prose reviews, then let the main agent apply them."""
     from .simplify import prepare_simplify_prompt
 
+    blocked = _route_input(ctx, None, decide=False)
+    if blocked is not None:
+        return blocked
     try:
         prompt = prepare_simplify_prompt(cmd_arg, ctx)
     except KeyboardInterrupt:
@@ -14601,6 +15597,9 @@ def _execute_audit(cmd_arg: str, ctx: InputContext) -> StepResult:
     from .audit import run_audit_command
 
     blocked = _revalidate_pending_instructions(ctx)
+    if blocked is not None:
+        return blocked
+    blocked = _route_input(ctx, None, decide=False)
     if blocked is not None:
         return blocked
     return _execute_delegated_command(cmd_arg, ctx, "/audit", run_audit_command)
@@ -14886,6 +15885,10 @@ def _execute_loop_oneshot(cmd_arg: str, ctx: InputContext) -> StepResult:
     if isinstance(prepared, StepResult):
         return prepared
     interval_seconds, prompt, parsed_prompt = prepared
+    # A loop that routing_profiles refuses must not start.
+    blocked = _route_input(ctx, parsed_prompt.raw, decide=False)
+    if blocked is not None:
+        return blocked
 
     prompt_preview = _loop_prompt_preview(prompt)
     interval_label = _format_loop_duration(interval_seconds)
@@ -14924,7 +15927,14 @@ def _execute_loop_oneshot(cmd_arg: str, ctx: InputContext) -> StepResult:
             )
 
             try:
-                step = execute_input(parsed_prompt, ctx, mode="oneshot")
+                # Run the body directly: execute_input would route it, and loop
+                # iterations share this context, so they must not switch.
+                step = _run_agent_step(
+                    parsed_prompt.raw,
+                    parsed_prompt.raw,
+                    ctx,
+                    interrupt_label="question",
+                )
             except KeyboardInterrupt:
                 if _is_double_tap():
                     fmt.warning("[loop] double-tap interrupt, exiting.")
@@ -15004,6 +16014,10 @@ def _execute_loop_repl(cmd_arg: str, ctx: InputContext) -> StepResult:
             text=(f"error: already {MAX_ACTIVE_LOOPS} active loops, /unloop one first"),
             is_error=True,
         )
+    # A loop that routing_profiles refuses must not be registered.
+    blocked = _route_input(ctx, parsed_prompt.raw, decide=False)
+    if blocked is not None:
+        return blocked
 
     reg = ctx.loop_registry.register(
         interval_seconds=interval_seconds,
@@ -15037,7 +16051,16 @@ def _fork_messages(messages: list) -> list:
 
 
 def _build_isolated_ctx(ctx: InputContext, kind: _IsolatedTurnKind) -> InputContext:
-    """Build a detached context for a loop or a side question."""
+    """Build a detached context for a loop or a side question.
+
+    It never switches profiles, since its subagent manager shares the parent's
+    template and a switch would leak into the parent.
+    The routing_profiles check runs on the parent first instead.
+    """
+    if ctx.routing is not None:
+        _route_ctx(ctx, None, decide=False)
+        # Answers here say nothing about the parent's own profile.
+        ctx.routing.watch = None
     messages = _fork_messages(ctx.messages)
 
     tools = list(ctx.tools)
@@ -15077,6 +16100,7 @@ def _build_isolated_ctx(ctx: InputContext, kind: _IsolatedTurnKind) -> InputCont
 
     if ctx.subagent_manager is not None and hasattr(ctx.subagent_manager, "fresh_copy"):
         subagent = ctx.subagent_manager.fresh_copy()
+        subagent.router = None
     else:
         subagent = None
     skill_read_roots = list(ctx.skill_read_roots)
@@ -15108,6 +16132,7 @@ def _build_isolated_ctx(ctx: InputContext, kind: _IsolatedTurnKind) -> InputCont
         loop_registry=None,
         last_answer=None,
         loop_kwargs=loop_kwargs,
+        routing=None,
         **loop_overrides,
     )
 
@@ -15448,6 +16473,9 @@ def repl_loop(
     startup_profile: str | None = None,
     raw_llm_baseline: dict | None = None,
     pre_profile_baseline: dict | None = None,
+    routing=None,
+    current_profile: str | None = None,
+    on_startup_runtime: bool = True,
     report: "ReportCollector | None" = None,
     turn_offset: int = 0,
     on_exit=None,
@@ -15557,6 +16585,9 @@ def repl_loop(
                 parts.append((_S, f" {total_tok} tok"))
             _sep()
         parts.append((_S, f"ctx {_toolbar_state['ctx_pct']}%"))
+        if routing is not None and routing.active and ctx.current_profile:
+            _sep()
+            parts.append((_S_MODEL, ctx.current_profile))
 
         dirty = _toolbar_state["git_dirty"]
         if dirty:
@@ -15671,11 +16702,15 @@ def repl_loop(
         continue_here=continue_here,
         verbose=verbose,
         loop_kwargs=_repl_loop_kwargs,
-        current_profile=startup_profile,
+        current_profile=(
+            startup_profile if current_profile is None else current_profile
+        ),
         profiles=profiles or {},
         startup_profile=startup_profile,
         raw_llm_baseline=raw_llm_baseline or {},
         pre_profile_baseline=pre_profile_baseline or {},
+        routing=routing,
+        on_startup_runtime=on_startup_runtime,
         mcp_manager=mcp_manager,
         a2a_manager=a2a_manager,
         subagent_manager=subagent_manager,
@@ -15691,6 +16726,15 @@ def repl_loop(
     )
 
     completer.model_candidates = lambda: _model_completion_candidates(ctx)
+    if routing is not None and subagent_manager is not None:
+        # repl_loop switches profiles on its own copy of the kwargs.
+        _attach_router(
+            subagent_manager,
+            routing,
+            messages=messages,
+            loop_kwargs=_repl_loop_kwargs,
+            report=report,
+        )
 
     def _write_continue_state():
         if continue_here and _has_conversation():

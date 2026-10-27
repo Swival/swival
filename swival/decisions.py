@@ -1,4 +1,4 @@
-"""The optional ``decide`` tool.
+"""Decision model requests, for the optional ``decide`` tool and model routing.
 
 A decision model answers questions about a short text with probabilities.
 Requests use LiteLLM's System One API and go through the same filter,
@@ -125,6 +125,11 @@ def _compact(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
 
+def encrypt_envelope(envelope: dict, secret_shield) -> dict:
+    """The envelope as request() sends it, with its secrets encrypted."""
+    return _parse_envelope(secret_shield.encrypt_text(_compact(envelope)))
+
+
 def _parse_envelope(text: str) -> dict:
     envelope = json.loads(text)
     if not isinstance(envelope, dict) or set(envelope) != {"state", "questions"}:
@@ -170,6 +175,14 @@ def _describe_invalid(error) -> str:
     return "; ".join(problems[:5])
 
 
+def _units(payload: str, questions: int, options: int) -> int:
+    return (
+        len(payload.encode("utf-8", "surrogatepass"))
+        + QUESTION_UNITS * questions
+        + OPTION_UNITS * options
+    )
+
+
 def request_units(questions, payload: str) -> int:
     """Weighted size of a request, compared with MAX_REQUEST_UNITS."""
     options = sum(
@@ -177,11 +190,18 @@ def request_units(questions, payload: str) -> int:
         for question in questions.values()
         if question.type != "noul"
     )
-    return (
-        len(payload.encode("utf-8", "surrogatepass"))
-        + QUESTION_UNITS * len(questions)
-        + OPTION_UNITS * options
+    return _units(payload, len(questions), options)
+
+
+def envelope_units(envelope: dict) -> int:
+    """request_units() for an envelope that has not been validated yet."""
+    questions = envelope["questions"]
+    options = sum(
+        len(question.get("criteria") or ())
+        for question in questions.values()
+        if question.get("type") != "noul"
     )
+    return _units(_compact(envelope), len(questions), options)
 
 
 def _number(name: str, field_name: str, value) -> float:
@@ -313,6 +333,147 @@ def _exposure_usage(response) -> dict | None:
     }
 
 
+class DecisionFailure(Exception):
+    """A decision request that produced no usable answers."""
+
+
+class DecisionUnavailable(DecisionFailure):
+    """The service could not be reached, timed out, or said it was unavailable."""
+
+
+class DecisionCancelled(DecisionFailure):
+    """The cancel flag was set before the answers were ready."""
+
+
+class DecisionBlocked(DecisionFailure):
+    """The outbound filter refused the request, so nothing was sent."""
+
+
+class DecisionNotSent(DecisionFailure):
+    """Secret encryption broke the request, or it is over the hard size cap."""
+
+
+class DecisionError(DecisionFailure):
+    """The request was invalid, failed, or came back with unusable answers."""
+
+
+@dataclass(frozen=True)
+class DecisionResult:
+    model: str
+    answers: dict
+    usage: dict | None = None
+
+
+def request(
+    settings: DecisionSettings,
+    envelope: dict,
+    *,
+    llm_filter: str | None = None,
+    secret_shield=None,
+    session_cost=None,
+    exposure=None,
+    timeout: float = MAX_TIMEOUT,
+    cancel_flag=None,
+) -> DecisionResult:
+    """Send one decision request and return its validated answers.
+
+    *envelope* holds ``state`` and ``questions``.
+    Each way of failing raises its own ``DecisionFailure`` subclass.
+    Error messages may still hold encrypted secrets; callers that show them
+    must pass them through ``secret_shield.reverse_known()``.
+    """
+
+    def check_cancelled() -> None:
+        if cancel_flag is not None and cancel_flag.is_set():
+            raise DecisionCancelled("decide cancelled")
+
+    check_cancelled()
+
+    from pydantic import ValidationError
+
+    from .filter import FilterError
+    from litellm.types.decisions import DecisionsRequestBody
+
+    envelope = {"state": envelope.get("state"), "questions": envelope.get("questions")}
+    if llm_filter is not None:
+        try:
+            envelope = _filter_envelope(llm_filter, envelope, settings)
+        except FilterError as e:
+            raise DecisionBlocked(
+                f"LLM filter blocked the decision request: {e}"
+            ) from e
+    if secret_shield is not None:
+        try:
+            envelope = encrypt_envelope(envelope, secret_shield)
+        except ValueError as e:
+            raise DecisionNotSent(
+                f"secret encryption broke the decision request: {e}"
+            ) from e
+
+    try:
+        body = DecisionsRequestBody.model_validate(envelope)
+    except ValidationError as e:
+        raise DecisionError(f"invalid decide arguments: {_describe_invalid(e)}") from e
+
+    payload = _compact(envelope)
+    units = request_units(body.questions, payload)
+    if units > MAX_REQUEST_UNITS:
+        raise DecisionNotSent(
+            f"decide request too large ({units} of {MAX_REQUEST_UNITS} units: "
+            f"JSON bytes + {QUESTION_UNITS} per question + {OPTION_UNITS} per label "
+            "or level). Shorten the state, or ask fewer questions."
+        )
+
+    import litellm
+
+    litellm.suppress_debug_info = True
+    # Only count requests that are actually sent.
+    check_cancelled()
+    if exposure is not None:
+        exposure.request([{"role": "user", "content": payload}])
+    try:
+        response = litellm.systemone(
+            model=settings.model,
+            api_base=settings.api_base,
+            api_key=settings.api_key,
+            state=envelope["state"],
+            questions=envelope["questions"],
+            num_retries=0,
+            timeout=timeout,
+        )
+    except Exception as e:
+        check_cancelled()
+        if isinstance(
+            e,
+            (
+                litellm.APIConnectionError,
+                litellm.Timeout,
+                litellm.ServiceUnavailableError,
+            ),
+        ):
+            raise DecisionUnavailable(str(e)) from e
+        raise DecisionError(f"decision model request failed: {e}") from e
+
+    # Record the cost before checking the answers, since the service may bill
+    # for them anyway.
+    usage = _usage(response)
+    observation = _cost_observation(response, settings, usage)
+    if session_cost is not None:
+        session_cost.record(observation)
+    if exposure is not None:
+        exposure.response(_exposure_usage(response), observation)
+    check_cancelled()
+
+    try:
+        answers = validated_answers(body.questions, response.answers)
+    except ValueError as e:
+        raise DecisionError(f"decision model returned an unusable response: {e}") from e
+
+    return DecisionResult(
+        model=response.model or settings.model, answers=answers, usage=usage
+    )
+
+
 def decide(
     settings: DecisionSettings,
     args: dict,
@@ -330,99 +491,32 @@ def decide(
     so the chat model can explain them and continue.
     """
 
-    def cancelled() -> bool:
-        return cancel_flag is not None and cancel_flag.is_set()
-
     def reveal(text: str) -> str:
         return secret_shield.reverse_known(text) if secret_shield else text
 
-    if cancelled():
-        return "error: decide cancelled"
-
-    from pydantic import ValidationError
-
-    from .filter import FilterError
-    from litellm.types.decisions import DecisionsRequestBody
-
-    envelope = {"state": args.get("state"), "questions": args.get("questions")}
-    if llm_filter is not None:
-        try:
-            envelope = _filter_envelope(llm_filter, envelope, settings)
-        except FilterError as e:
-            return f"error: LLM filter blocked the decision request: {e}"
-    if secret_shield is not None:
-        try:
-            envelope = _parse_envelope(secret_shield.encrypt_text(_compact(envelope)))
-        except ValueError as e:
-            return f"error: secret encryption broke the decision request: {e}"
-
     try:
-        request = DecisionsRequestBody.model_validate(envelope)
-    except ValidationError as e:
-        return reveal(f"error: invalid decide arguments: {_describe_invalid(e)}")
-
-    payload = _compact(envelope)
-    units = request_units(request.questions, payload)
-    if units > MAX_REQUEST_UNITS:
-        return (
-            f"error: decide request too large ({units} of {MAX_REQUEST_UNITS} units: "
-            f"JSON bytes + {QUESTION_UNITS} per question + {OPTION_UNITS} per label "
-            "or level). Shorten the state, or ask fewer questions."
-        )
-
-    import litellm
-
-    litellm.suppress_debug_info = True
-    # Only count requests that are actually sent.
-    if cancelled():
-        return "error: decide cancelled"
-    if exposure is not None:
-        exposure.request([{"role": "user", "content": payload}])
-    try:
-        response = litellm.systemone(
-            model=settings.model,
-            api_base=settings.api_base,
-            api_key=settings.api_key,
-            state=envelope["state"],
-            questions=envelope["questions"],
-            num_retries=0,
+        result = request(
+            settings,
+            args,
+            llm_filter=llm_filter,
+            secret_shield=secret_shield,
+            session_cost=session_cost,
+            exposure=exposure,
             timeout=timeout,
+            cancel_flag=cancel_flag,
         )
-    except Exception as e:
-        if cancelled():
-            return "error: decide cancelled"
-        if isinstance(
-            e,
-            (
-                litellm.APIConnectionError,
-                litellm.Timeout,
-                litellm.ServiceUnavailableError,
-            ),
-        ):
-            return reveal(
-                "warning: decision model unavailable. Continue this session without "
-                "the decision model; do not retry or invent model probabilities. "
-                f"Details: {e}"
-            )
-        return reveal(f"error: decision model request failed: {e}")
+    except DecisionUnavailable as e:
+        return reveal(
+            "warning: decision model unavailable. Continue this session without "
+            "the decision model; do not retry or invent model probabilities. "
+            f"Details: {e}"
+        )
+    except (DecisionCancelled, DecisionBlocked, DecisionNotSent) as e:
+        return f"error: {e}"
+    except DecisionError as e:
+        return reveal(f"error: {e}")
 
-    # Record the cost before checking the answers, since the service may bill
-    # for them anyway.
-    usage = _usage(response)
-    observation = _cost_observation(response, settings, usage)
-    if session_cost is not None:
-        session_cost.record(observation)
-    if exposure is not None:
-        exposure.response(_exposure_usage(response), observation)
-    if cancelled():
-        return "error: decide cancelled"
-
-    try:
-        answers = validated_answers(request.questions, response.answers)
-    except ValueError as e:
-        return reveal(f"error: decision model returned an unusable response: {e}")
-
-    result = {"model": response.model or settings.model, "answers": answers}
-    if usage is not None:
-        result["usage"] = usage
-    return reveal(_compact(result))
+    out = {"model": result.model, "answers": result.answers}
+    if result.usage is not None:
+        out["usage"] = result.usage
+    return reveal(_compact(out))

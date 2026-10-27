@@ -145,7 +145,7 @@ class TestTranscriptIsolation:
 
         before = copy_mod.deepcopy(ctx.messages)
 
-        def fake_invoke(content, ctx_arg, *, goal_launch=False):
+        def fake_invoke(content, ctx_arg, *, goal_launch=False, route=False):
             # _execute_btw hands us a detached copy of the live transcript;
             # the question itself gets appended inside _invoke_agent_turn.
             roles = [m["role"] for m in ctx_arg.messages]
@@ -194,7 +194,7 @@ class TestTranscriptIsolation:
         ctx.messages.append({"role": "user", "content": "live q"})
         before = list(map(dict, ctx.messages))
 
-        def fake_invoke(content, ctx_arg, *, goal_launch=False):
+        def fake_invoke(content, ctx_arg, *, goal_launch=False, route=False):
             ctx_arg.messages[:] = [{"role": "system", "content": "compacted"}]
             return "done", False, False
 
@@ -222,7 +222,7 @@ class TestStateIsolation:
     def test_disabled_file_tracker_stays_disabled(self, monkeypatch):
         ctx = _make_ctx(file_tracker=None)
 
-        def fake_invoke(content, iso_ctx, *, goal_launch=False):
+        def fake_invoke(content, iso_ctx, *, goal_launch=False, route=False):
             assert iso_ctx.file_tracker is None
             assert iso_ctx.loop_kwargs["file_tracker"] is None
             return "ok", False, False
@@ -248,7 +248,7 @@ class TestStateIsolation:
             },
         )
 
-        def fake_invoke(content, iso_ctx, *, goal_launch=False):
+        def fake_invoke(content, iso_ctx, *, goal_launch=False, route=False):
             assert iso_ctx.goal_state is not None
             assert not iso_ctx.goal_state.has_active()
             assert iso_ctx.turn_state == {"max_turns": 100, "turns_used": 0}
@@ -314,7 +314,7 @@ class TestStateIsolation:
             goal_state=live_goal, turn_state={"max_turns": 500, "turns_used": 3}
         )
 
-        def fake_invoke(content, iso_ctx, *, goal_launch=False):
+        def fake_invoke(content, iso_ctx, *, goal_launch=False, route=False):
             assert iso_ctx.turn_state == {"max_turns": 500, "turns_used": 0}
             return "ok", False, False
 
@@ -330,7 +330,7 @@ class TestStateIsolation:
         ctx = _make_ctx(file_tracker=tracker, thinking_state=live_thinking)
         seen: dict = {}
 
-        def fake_invoke(content, iso_ctx, *, goal_launch=False):
+        def fake_invoke(content, iso_ctx, *, goal_launch=False, route=False):
             seen["reads"] = set(iso_ctx.file_tracker.read_files)
             seen["thinks"] = iso_ctx.thinking_state.think_calls
             iso_ctx.file_tracker.record_read("/tmp/btw-only.py")
@@ -355,7 +355,7 @@ class TestStateIsolation:
         todo_summary_before = live_todo.summary_line()
         snapshot_summary_before = live_snapshot.summary_line()
 
-        def fake_invoke(content, iso_ctx, *, goal_launch=False):
+        def fake_invoke(content, iso_ctx, *, goal_launch=False, route=False):
             iso_ctx.todo_state.process({"action": "add", "tasks": ["injected task"]})
             iso_ctx.snapshot_state.mark_dirty("write_file")
             return "ok", False, False
@@ -382,7 +382,7 @@ class TestStateIsolation:
 
         observed: dict = {}
 
-        def fake_invoke(content, iso_ctx, *, goal_launch=False):
+        def fake_invoke(content, iso_ctx, *, goal_launch=False, route=False):
             observed["has_active"] = iso_ctx.goal_state.has_active()
             observed["iso_goal_record"] = iso_ctx.goal_state.get()
             observed["iso_tool_names"] = [
@@ -410,7 +410,7 @@ class TestStateIsolation:
     def test_turn_counts_do_not_leak_back(self, monkeypatch):
         ctx = _make_ctx()
 
-        def fake_invoke(content, iso_ctx, *, goal_launch=False):
+        def fake_invoke(content, iso_ctx, *, goal_launch=False, route=False):
             iso_ctx.turn_state["turns_used"] = 9
             iso_ctx.tools.append({"type": "function", "function": {"name": "extra"}})
             return "ok", False, False
@@ -424,7 +424,7 @@ class TestStateIsolation:
         live_roots = ["/skills/root"]
         ctx = _make_ctx(skill_read_roots=live_roots)
 
-        def fake_invoke(content, iso_ctx, *, goal_launch=False):
+        def fake_invoke(content, iso_ctx, *, goal_launch=False, route=False):
             assert iso_ctx.skill_read_roots == ["/skills/root"]
             iso_ctx.skill_read_roots.append("/tmp/btw-only-skill")
             return "ok", False, False
@@ -442,7 +442,7 @@ class TestStateIsolation:
         # Real REPL loop kwargs do not include this function argument.
         ctx.loop_kwargs.pop("continue_here", None)
 
-        def fake_invoke(content, iso_ctx, *, goal_launch=False):
+        def fake_invoke(content, iso_ctx, *, goal_launch=False, route=False):
             assert iso_ctx.no_history is True
             assert iso_ctx.continue_here is False
             assert iso_ctx.loop_kwargs["continue_here"] is False
@@ -460,7 +460,7 @@ class TestStateIsolation:
         ctx = _make_ctx()
         ctx.loop_kwargs["compaction_state"] = compaction_state
 
-        def fake_invoke(content, iso_ctx, *, goal_launch=False):
+        def fake_invoke(content, iso_ctx, *, goal_launch=False, route=False):
             assert iso_ctx.loop_kwargs["compaction_state"] is None
             return "answer", False, False
 
@@ -562,7 +562,9 @@ class TestCleanupAndAccounting:
                 lambda mgr, cost, verbose: reconciled.append(mgr),
             )
 
-            def fake_invoke(content, iso_ctx, *, goal_launch=False, _o=outcome):
+            def fake_invoke(
+                content, iso_ctx, *, goal_launch=False, route=False, _o=outcome
+            ):
                 seen.append(iso_ctx.subagent_manager)
                 if _o == "interrupt":
                     # Real contract: KI is folded into the return value.
@@ -607,7 +609,7 @@ class TestCleanupAndAccounting:
         ctx.last_answer = "old answer"
         ctx.messages.append({"role": "assistant", "content": "new answer"})
 
-        def interrupted_turn(content, isolated, *, goal_launch=False):
+        def interrupted_turn(content, isolated, *, goal_launch=False, route=False):
             isolated.messages.append({"role": "assistant", "content": "new answer"})
             return None, False, True
 
@@ -642,7 +644,7 @@ class TestCleanupAndAccounting:
         ctx.messages.append({"role": "assistant", "content": "stale live answer"})
         warnings: list[str] = []
 
-        def fake_invoke(content, iso_ctx, *, goal_launch=False):
+        def fake_invoke(content, iso_ctx, *, goal_launch=False, route=False):
             iso_ctx.messages[:] = [{"role": "system", "content": "compacted"}]
             return "answer retained after compaction", True, False
 
@@ -674,7 +676,7 @@ class TestCleanupAndAccounting:
             }
         )
 
-        def fake_invoke(content, iso_ctx, *, goal_launch=False):
+        def fake_invoke(content, iso_ctx, *, goal_launch=False, route=False):
             assert iso_ctx.loop_kwargs["session_cost"] is session_cost
             assert iso_ctx.loop_kwargs["report"] is report
             report.events.append("llm_call")

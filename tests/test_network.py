@@ -894,6 +894,7 @@ class TestLiveEnforcement:
                 "--no-skills",
                 "--no-history",
                 "--no-memory",
+                "--no-decisions",
                 "probe",
             ],
             cwd=str(tmp_path),

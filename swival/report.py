@@ -331,6 +331,10 @@ class ReportCollector:
         """Record a /clear or /new command in the timeline."""
         self.events.append({"type": "session_clear"})
 
+    def record_routing(self, entry: dict):
+        """Record which profile a task was routed to, and why."""
+        self.events.append({**entry, "turn_offset": self.max_turn_seen})
+
     def build_report(
         self,
         *,

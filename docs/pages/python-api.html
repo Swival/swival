@@ -198,6 +198,11 @@ print(answer)
     storm_breaker: bool = True,
     flatten_mcp_schemas: bool = True,
     defer_mcp_schemas: bool = True,
+    profiles: dict | None = None,
+    active_profile: str | None = None,
+    profile_baseline: dict | None = None,
+    model_routing: bool = False,
+    routing_profiles: list[str] | None = None,
 )
 </code></pre>
 <p>All parameters are keyword-only. The important ones:</p>
@@ -304,6 +309,26 @@ print(answer)
 <tr>
 <td><code>subagents</code></td>
 <td>Enable parallel subagent support (<code>spawn_subagent</code> / <code>check_subagents</code> tools).</td>
+</tr>
+<tr>
+<td><code>profiles</code></td>
+<td>Named profile configurations (see <a href="customization.html#profiles">Profiles</a>). Enables <code>/profile</code> with <code>parse_commands=True</code> and model routing.</td>
+</tr>
+<tr>
+<td><code>active_profile</code></td>
+<td>Profile to start with. Explicit provider arguments take precedence.</td>
+</tr>
+<tr>
+<td><code>profile_baseline</code></td>
+<td>Defaults inherited by profiles. If provided, the provider arguments must already include the active profile's settings.</td>
+</tr>
+<tr>
+<td><code>model_routing</code></td>
+<td>Let the decision model choose a profile for each task (see <a href="decision-models.html#model-routing">Model Routing</a>). Requires <code>decision_model</code> and at least two profiles with descriptions.</td>
+</tr>
+<tr>
+<td><code>routing_profiles</code></td>
+<td>Limit automatic routing to these profiles. You can still select another profile manually.</td>
 </tr>
 <tr>
 <td><code>encrypt_secrets</code></td>

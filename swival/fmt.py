@@ -1401,6 +1401,10 @@ def info(msg: str) -> None:
 model_info = info
 
 
+def route(msg: str) -> None:
+    _console.print(Text(f"  {msg}", style="bright_blue"))
+
+
 def context_stats(label: str, tokens: int) -> None:
     _console.print(Text(f"  {label}: ~{tokens} tokens", style="dim"))
 

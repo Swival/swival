@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import copy
+import functools
 import threading
+import types
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -12,14 +14,19 @@ from pathlib import Path
 
 from . import tools
 from .agent import (
+    _catalog_key,
     _InteractionPolicy,
     _shutdown_and_reconcile,
 )
 from .config import (
+    _PROFILE_METADATA_KEYS,
     _UNSET,
     INITIAL_TOOL_CHOICES,
     NETWORK_MODES,
     ONESHOT_MAX_TURNS,
+    PROFILE_KEYS,
+    _validate_profiles,
+    check_routing_profiles,
     first_remote_integration,
 )
 from .cost import SessionCost
@@ -45,6 +52,30 @@ def _resolve_dir_list(dirs: list, label: str) -> list[Path]:
     return result
 
 
+# Routing flags that belong to one conversation, and how each one starts.
+_ROUTING_FLAGS = {
+    "current": None,
+    "paused": False,
+    "explicit": False,
+    "override": False,
+    "watch": None,
+    "last": None,
+    "cleared": False,
+    "catalog_key": None,
+}
+
+# What a profile switch changes in the loop kwargs, besides llm_kwargs.
+_RUNTIME_KEYS = (
+    "model_id",
+    "api_base",
+    "context_length",
+    "max_output_tokens",
+    "temperature",
+    "top_p",
+    "seed",
+)
+
+
 @dataclass
 class Result:
     """Result of a session run or ask call."""
@@ -55,6 +86,17 @@ class Result:
     report: dict | None
 
 
+def _note_arguments(init):
+    """Record the arguments the caller passed, even those equal to a default."""
+
+    @functools.wraps(init)
+    def wrapper(self, **kwargs):
+        self._passed = frozenset(kwargs)
+        init(self, **kwargs)
+
+    return wrapper
+
+
 class Session:
     """Programmatic interface to the swival agent loop.
 
@@ -62,6 +104,7 @@ class Session:
     questions or .ask() for multi-turn conversations.
     """
 
+    @_note_arguments
     def __init__(
         self,
         *,
@@ -146,6 +189,11 @@ class Session:
         storm_breaker: bool = True,
         flatten_mcp_schemas: bool = True,
         defer_mcp_schemas: bool = True,
+        profiles: dict | None = None,
+        active_profile: str | None = None,
+        profile_baseline: dict | None = None,
+        model_routing: bool = False,
+        routing_profiles: list[str] | None = None,
     ):
         self.base_dir = base_dir
         self.scratch_dir = scratch_dir
@@ -255,6 +303,41 @@ class Session:
         self.defer_mcp_schemas = defer_mcp_schemas
         self._mcp_flattened_schemas: dict[str, object] = {}
 
+        # A profile that leaves out a setting gets it from these arguments, the
+        # way --profile falls back on the top-level config.
+        self.profiles = dict(profiles or {})
+        if self.profiles:
+            _validate_profiles(self.profiles, "Session profiles")
+            for name, body in self.profiles.items():
+                if "provider" not in body:
+                    raise ConfigError(f"profiles.{name}: 'provider' is required")
+        self.active_profile = active_profile
+        self.model_routing = model_routing
+        check_routing_profiles(routing_profiles, self.profiles)
+        self.routing_profiles = routing_profiles
+        resolved = profile_baseline is not None
+        if profile_baseline is None:
+            profile_baseline = {
+                key: getattr(self, key)
+                for key in PROFILE_KEYS - _PROFILE_METADATA_KEYS
+                if getattr(self, key) is not None
+            }
+        self._profile_baseline = dict(profile_baseline)
+        if active_profile is not None:
+            if active_profile not in self.profiles:
+                known = ", ".join(sorted(self.profiles)) or "(none defined)"
+                raise ConfigError(
+                    f"profile {active_profile!r} not found. Known profiles: {known}"
+                )
+            # A caller that passes the baseline, like the CLI bridge, has
+            # already applied the profile, so it is not applied twice.
+            # Otherwise the arguments the caller set win, as CLI flags win over
+            # --profile.
+            if not resolved:
+                for key, value in self.profiles[active_profile].items():
+                    if key not in _PROFILE_METADATA_KEYS and key not in self._passed:
+                        setattr(self, key, value)
+
         # Streaming / cancellation hooks (set externally, e.g. by A2A server).
         # event_callback receives (kind, data) where kind is one of the
         # EVENT_* constants from a2a_types (text_chunk, tool_start,
@@ -298,6 +381,8 @@ class Session:
 
         # Decision model (resolved in _setup)
         self._decisions = None
+        # Model routing (built in _setup when model_routing is on)
+        self._routing = None
 
         # Lifecycle hook state
         self._lifecycle_git_meta: dict | None = None
@@ -432,6 +517,22 @@ class Session:
             self._llm_kwargs["prompt_cache"] = False
         self._llm_kwargs["max_retries"] = self.retries
         self._llm_kwargs["provider_timeout"] = self.provider_timeout
+
+        if self.model_routing:
+            from .agent import _routing_startup
+
+            self._routing = _routing_startup(
+                types.SimpleNamespace(
+                    model_routing=True,
+                    _all_profiles=self.profiles,
+                    _pre_profile_baseline=self._profile_baseline,
+                    _decisions=self._decisions,
+                    routing_profiles=self.routing_profiles,
+                    _active_profile=self.active_profile,
+                ),
+                provider=self._llm_kwargs.get("provider"),
+                verbose=self.verbose,
+            )
 
         # Resolve --add-dir and --add-dir-ro paths
         self._allowed_dir_paths = _resolve_dir_list(self.allowed_dirs, "allowed_dirs")
@@ -776,6 +877,42 @@ class Session:
             "pending_instruction_failure": None,
         }
 
+    def _shut_down(self, manager, state: dict) -> None:
+        """Join the call's subagents and let its loop kwargs go."""
+        _shutdown_and_reconcile(manager, state["session_cost"], self.verbose)
+        if manager is not None:
+            # The router holds the call's kwargs, which hold the manager, so
+            # drop it and let them be freed right away.
+            manager.router = None
+
+    def _run_routed(self, state: dict, question, loop_kwargs: dict):
+        """Route the task, run it, then check the profile routing switched to."""
+        from .agent import _route_task, _settling, run_agent_loop
+
+        with self._routing_flags(state), _settling(self._routing, loop_kwargs):
+            if self._routing is not None:
+                profile, switched = _route_task(
+                    self._routing,
+                    question,
+                    current=state.get("current_profile", self.active_profile),
+                    history=state["messages"][:-1],
+                    tools=self._tools,
+                    loop_kwargs=loop_kwargs,
+                    subagent_manager=loop_kwargs.get("subagent_manager"),
+                    goal_state=state.get("goal_state"),
+                    report=state.get("report"),
+                )
+                state["current_profile"] = profile
+                if switched:
+                    state["on_startup_runtime"] = False
+                    self._keep_runtime(state, loop_kwargs)
+            return run_agent_loop(
+                state["messages"],
+                self._tools,
+                **loop_kwargs,
+                report=state.get("report"),
+            )
+
     def _build_loop_kwargs(self, state: dict) -> dict:
         """Build kwargs for run_agent_loop() from setup + per-run state."""
         kwargs = dict(
@@ -819,6 +956,8 @@ class Session:
             net_jail=self._net_jail,
             decisions=self._decisions,
         )
+        # The profile this conversation moved to with /profile or routing.
+        kwargs.update(state.get("runtime") or {})
         if state.get("compaction_state") is not None:
             kwargs["compaction_state"] = state["compaction_state"]
         if self._mcp_manager is not None:
@@ -858,13 +997,63 @@ class Session:
                 notify_user=notify,
                 proactive_summaries=self.proactive_summaries,
             )
+            if self._routing is not None:
+                from .agent import _attach_router
+
+                _attach_router(
+                    kwargs["subagent_manager"],
+                    self._routing,
+                    messages=state["messages"],
+                    loop_kwargs=kwargs,
+                    report=state.get("report"),
+                )
         return kwargs
+
+    @contextmanager
+    def _routing_flags(self, state: dict) -> "Iterator[None]":
+        """Load this conversation's routing flags, and save them back afterward.
+
+        Each run() and ask() conversation has its own runtime, so the profile the
+        user picked, and whether routing is paused, belong to it.
+        """
+        if self._routing is None:
+            yield
+            return
+        flags = state.get("routing_flags") or {
+            **_ROUTING_FLAGS,
+            "current": self.active_profile,
+            "catalog_key": _catalog_key(
+                {"provider": self.provider, "base_url": self.base_url}
+            ),
+        }
+        for key, value in flags.items():
+            setattr(self._routing, key, value)
+        try:
+            yield
+        finally:
+            state["routing_flags"] = {
+                key: getattr(self._routing, key) for key in _ROUTING_FLAGS
+            }
+
+    @staticmethod
+    def _keep_runtime(state: dict, loop_kwargs: dict, before: dict | None = None):
+        """Remember the runtime *loop_kwargs* carries for later calls.
+
+        With *before*, only the values that changed are kept, so the others
+        still follow the session's attributes.
+        """
+        runtime = dict(state.get("runtime") or {})
+        for key in _RUNTIME_KEYS:
+            if before is None or loop_kwargs.get(key) != before[key]:
+                runtime[key] = loop_kwargs.get(key)
+        state["runtime"] = runtime
+        state["llm_kwargs"] = loop_kwargs["llm_kwargs"]
 
     def run(self, question: str, *, report: bool = False) -> Result:
         """Single-shot: run a question with fresh state. Each call is independent."""
         self._setup()
 
-        from .agent import run_agent_loop, append_history
+        from .agent import append_history
 
         collector = ReportCollector() if report else None
         try:
@@ -881,6 +1070,7 @@ class Session:
         )
         if collector is not None:
             state["exposure_meter"] = collector.exposure
+            state["report"] = collector
         messages = state["messages"]
         messages.append({"role": "user", "content": question})
         loop_kwargs = self._build_loop_kwargs(state)
@@ -891,9 +1081,7 @@ class Session:
         exit_code = 1
         _subagent_mgr = loop_kwargs.get("subagent_manager")
         try:
-            answer, exhausted = run_agent_loop(
-                messages, self._tools, **loop_kwargs, report=collector
-            )
+            answer, exhausted = self._run_routed(state, question, loop_kwargs)
             outcome = "exhausted" if exhausted else "success"
             exit_code = 2 if exhausted else 0
 
@@ -902,10 +1090,17 @@ class Session:
                     self.base_dir, question, answer, diagnostics=self.verbose
                 )
         finally:
-            _shutdown_and_reconcile(_subagent_mgr, state["session_cost"], self.verbose)
-            self._run_lifecycle_exit(outcome=outcome, exit_code=exit_code)
+            self._shut_down(_subagent_mgr, state)
+            # Each run has its own session_id, and routing is done with it.
+            from .agent import _forget_responses
+
+            _forget_responses(loop_kwargs["llm_kwargs"].get("session_id"))
+            provider, model = self._ran_on(state, loop_kwargs)
+            self._run_lifecycle_exit(
+                outcome=outcome, exit_code=exit_code, provider=provider, model=model
+            )
             if self.trace_dir and messages:
-                self._write_trace(messages, question)
+                self._write_trace(messages, question, model=model)
 
         report_dict = None
         if collector:
@@ -927,8 +1122,8 @@ class Session:
                         goal_stats["current"] = payload
             report_dict = collector.build_report(
                 task=question,
-                model=self._model_id or "unknown",
-                provider=self.provider,
+                model=model or "unknown",
+                provider=provider,
                 settings=self._report_settings(),
                 outcome=outcome,
                 answer=answer,
@@ -1021,6 +1216,15 @@ class Session:
             instructions_enabled=self.instructions_enabled,
             instructions_full=self.instructions_full,
             pending_instruction_failure=state.get("pending_instruction_failure"),
+            profiles=self.profiles,
+            current_profile=state.get("current_profile", self.active_profile),
+            startup_profile=self.active_profile,
+            raw_llm_baseline={
+                key: getattr(self, key) for key in PROFILE_KEYS - _PROFILE_METADATA_KEYS
+            },
+            pre_profile_baseline=self._profile_baseline,
+            routing=self._routing,
+            on_startup_runtime=state.get("on_startup_runtime", True),
         )
 
     @staticmethod
@@ -1045,15 +1249,26 @@ class Session:
 
         ctx = self._make_input_context(state)
         messages = state["messages"]
+        before = {key: ctx.loop_kwargs.get(key) for key in _RUNTIME_KEYS}
+        pending = state.get("pending_instruction_failure")
         # Match ask()'s failure contract: propagate (e.g. AgentError to ACP) but
         # leave the transcript usable.
-        with self._transcript_rollback(messages):
+        with self._routing_flags(state), self._transcript_rollback(messages):
             try:
                 step = execute_input(parsed, ctx, mode="repl")
             finally:
+                # The command context is rebuilt on every call, so keep what
+                # /profile, /model or routing changed, even if the command failed.
+                state["current_profile"] = ctx.current_profile
+                state["on_startup_runtime"] = ctx.on_startup_runtime
+                self._keep_runtime(state, ctx.loop_kwargs, before)
                 # Carry any saved-but-inactive update back onto the
                 # conversation, so the next call sees it too.
-                state["pending_instruction_failure"] = ctx.pending_instruction_failure
+                # On failure the transcript is rolled back, so an update the
+                # command activated is pending again.
+                state["pending_instruction_failure"] = (
+                    ctx.pending_instruction_failure or pending
+                )
                 # Drop the cache after *every* command, not just the two that
                 # write instruction files themselves. This looks like a missed
                 # optimisation and is not one: an agent turn can write
@@ -1062,9 +1277,9 @@ class Session:
                 # copy the model has already replaced. The cost is re-reading
                 # a handful of small files.
                 self._instruction_set = None
-                _shutdown_and_reconcile(
-                    ctx.subagent_manager, state["session_cost"], self.verbose
-                )
+                self._shut_down(ctx.subagent_manager, state)
+            # The command succeeded, so an update it activated is in effect.
+            state["pending_instruction_failure"] = ctx.pending_instruction_failure
 
         # Agent-turn commands stream their answer through event_callback while
         # the loop runs. Info and state-change commands produce text only here,
@@ -1141,7 +1356,7 @@ class Session:
         """
         self._setup()
 
-        from .agent import run_agent_loop, append_history
+        from .agent import append_history
 
         if self._conv_state is None:
             prompt = self._assemble_prompt(question, policy="interactive")
@@ -1174,11 +1389,9 @@ class Session:
             loop_kwargs["turn_state"] = turn_state
 
             try:
-                answer, exhausted = run_agent_loop(messages, self._tools, **loop_kwargs)
+                answer, exhausted = self._run_routed(state, question, loop_kwargs)
             finally:
-                _shutdown_and_reconcile(
-                    _subagent_mgr, state["session_cost"], self.verbose
-                )
+                self._shut_down(_subagent_mgr, state)
 
         if self.history and answer:
             append_history(self.base_dir, question, answer, diagnostics=self.verbose)
@@ -1197,12 +1410,20 @@ class Session:
             report=None,
         )
 
+    def _ran_on(self, state: dict, loop_kwargs: dict) -> tuple[str, str | None]:
+        """The provider and model a run() call ended up on, after any routing."""
+        model = loop_kwargs.get("model_id") or self._model_id
+        if state.get("on_startup_runtime", True):
+            return self.provider, model
+        return self.profiles[state["current_profile"]]["provider"], model
+
     def _write_trace(
         self,
         messages: list,
         task: str | None = None,
         *,
         session_id: str | None = None,
+        model: str | None = None,
     ) -> None:
         from .traces import write_trace_to_dir
 
@@ -1210,7 +1431,7 @@ class Session:
             messages,
             trace_dir=self.trace_dir,
             base_dir=self.base_dir,
-            model=self._model_id or "unknown",
+            model=model or self._model_id or "unknown",
             task=task,
             session_id=session_id,
             verbose=self.verbose,
@@ -1222,6 +1443,8 @@ class Session:
         *,
         outcome: str | None = None,
         exit_code: int | None = None,
+        provider: str | None = None,
+        model: str | None = None,
     ) -> None:
         """Run the lifecycle exit hook if configured and not already run."""
         if self._lifecycle_exit_ran:
@@ -1239,8 +1462,8 @@ class Session:
             self.base_dir,
             timeout=self.lifecycle_timeout,
             fail_closed=self.lifecycle_fail_closed,
-            provider=self.provider,
-            model=self._model_id,
+            provider=provider or self.provider,
+            model=model or self._model_id,
             git_meta=self._lifecycle_git_meta,
             outcome=outcome,
             exit_code=exit_code,

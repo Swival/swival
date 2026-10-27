@@ -634,7 +634,7 @@ class TestGoalCommand:
         ctx.goal_state.create("ship")
         _ensure_goal_tools_enabled(ctx.tools)
 
-        def _fake_invoke(content, ctx_arg, *, goal_launch=False):
+        def _fake_invoke(content, ctx_arg, *, goal_launch=False, route=False):
             ctx_arg.goal_state.set_status(GoalStatus.COMPLETE)
             return "done", False, False
 
