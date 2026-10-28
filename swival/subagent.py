@@ -2,6 +2,7 @@
 
 import threading
 import time
+from contextlib import ExitStack
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -375,42 +376,51 @@ class SubagentManager:
         return handle.result or "(no result)"
 
     def _wait_for(self, handle: SubagentHandle, timeout: float) -> str | None:
-        """Wait for a subagent to finish, or return an error on timeout or cancel.
-
-        The main agent does nothing while it waits, so tell the user what it
-        is waiting for, then remind them now and then that work goes on.
-        """
+        """Wait with a transient terminal status and periodic API notifications."""
         start = time.monotonic()
         deadline = start + timeout
         next_update = None
-        while True:
-            # Read the clock first, so a subagent that finishes right at the
-            # deadline is not reported as timed out.
-            now = time.monotonic()
-            if handle.done.is_set():
-                return None
-            if now >= deadline:
-                return f"error: subagent {handle.id} still running after {timeout}s timeout"
-            if self._parent_cancelled():
-                return f"error: cancelled while waiting for subagent {handle.id}"
-            if next_update is None:
-                self._notify(
-                    f"Waiting for subagent {handle.id} to finish (up to {timeout:g}s)."
-                )
-                next_update = now + _COLLECT_UPDATE_INTERVAL
-            elif now >= next_update:
-                running = self.running_count
-                working = (
-                    "1 background agent is"
-                    if running == 1
-                    else f"{running} background agents are"
-                )
-                self._notify(
-                    f"Still waiting for subagent {handle.id} after "
-                    f"{int(now - start)}s; {working} working."
-                )
-                next_update = now + _COLLECT_UPDATE_INTERVAL
-            handle.done.wait(min(_WAIT_POLL_INTERVAL, deadline - now))
+        live = self._verbose and fmt.get_console().is_terminal
+        update = None
+        last_label = None
+        with ExitStack() as display:
+            while True:
+                # Read the clock first, so completion at the deadline wins.
+                now = time.monotonic()
+                if handle.done.is_set():
+                    return None
+                if now >= deadline:
+                    return f"error: subagent {handle.id} still running after {timeout}s timeout"
+                if self._parent_cancelled():
+                    return f"error: cancelled while waiting for subagent {handle.id}"
+                if live:
+                    running = self.running_count
+                    agents = "agent" if running == 1 else "agents"
+                    label = f"Waiting for {handle.id} · {running} {agents} working"
+                    if update is None:
+                        update = display.enter_context(fmt.step_spinner(label))
+                    elif label != last_label:
+                        update(label)
+                    last_label = label
+                if next_update is None:
+                    if self._notify_user is not None or not live:
+                        self._notify(
+                            f"Waiting for subagent {handle.id} to finish (up to {timeout:g}s)."
+                        )
+                    next_update = now + _COLLECT_UPDATE_INTERVAL
+                elif now >= next_update and self._notify_user is not None:
+                    running = self.running_count
+                    working = (
+                        "1 background agent is"
+                        if running == 1
+                        else f"{running} background agents are"
+                    )
+                    self._notify(
+                        f"Still waiting for subagent {handle.id} after "
+                        f"{int(now - start)}s; {working} working."
+                    )
+                    next_update = now + _COLLECT_UPDATE_INTERVAL
+                handle.done.wait(min(_WAIT_POLL_INTERVAL, deadline - now))
 
     def cancel(self, subagent_id: str) -> str:
         with self._lock:

@@ -682,6 +682,91 @@ class TestCollectWaitFeedback:
             mgr._handles[sid] = SubagentHandle(id=sid, task="task", result="finished")
         return mgr
 
+    def test_live_wait_updates_in_place_and_cleans_up(self, monkeypatch):
+        from contextlib import contextmanager
+
+        for outcome in ("done", "timeout", "cancelled", "exception"):
+            parent = threading.Event()
+            mgr = self._make_manager(None, "sub_1", "sub_2", parent_cancel_flag=parent)
+            mgr._verbose = True
+            labels = []
+            closed = []
+            notes = []
+
+            @contextmanager
+            def spinner(label):
+                labels.append(label)
+                try:
+                    yield labels.append
+                finally:
+                    closed.append(True)
+
+            monkeypatch.setattr("swival.subagent.fmt.step_spinner", spinner)
+            monkeypatch.setattr(
+                "swival.subagent.fmt.get_console",
+                lambda: types.SimpleNamespace(is_terminal=True),
+            )
+            monkeypatch.setattr("swival.subagent.fmt.info", notes.append)
+            _script_clock(monkeypatch, 0, 0, 1, 30)
+            handle = mgr._handles["sub_1"]
+            waits = []
+
+            def advance(_timeout):
+                waits.append(True)
+                if len(waits) == 1:
+                    mgr._handles["sub_2"].done.set()
+                elif outcome == "done":
+                    handle.done.set()
+                elif outcome == "cancelled":
+                    parent.set()
+                elif outcome == "exception":
+                    raise RuntimeError("interrupted")
+
+            monkeypatch.setattr(handle.done, "wait", advance)
+            try:
+                result = mgr.collect(
+                    "sub_1", timeout=60 if outcome == "cancelled" else 30
+                )
+            except RuntimeError as exc:
+                assert outcome == "exception"
+                assert str(exc) == "interrupted"
+            else:
+                if outcome == "done":
+                    assert result == "finished"
+                else:
+                    assert result.startswith("error:")
+                    assert outcome in result or "timeout" in result
+            assert labels == [
+                "Waiting for sub_1 · 2 agents working",
+                "Waiting for sub_1 · 1 agent working",
+            ]
+            assert closed == [True]
+            assert notes == []
+
+    def test_redirected_output_has_one_notice(self, monkeypatch):
+        mgr = self._make_manager(None, "sub_1")
+        mgr._verbose = True
+        notes = []
+        monkeypatch.setattr(
+            "swival.subagent.fmt.get_console",
+            lambda: types.SimpleNamespace(is_terminal=False),
+        )
+        monkeypatch.setattr("swival.subagent.fmt.info", notes.append)
+        _script_clock(monkeypatch, 0, 0, 15, 30, 45)
+        assert "timeout" in mgr.collect("sub_1", timeout=45)
+        assert notes == ["Waiting for subagent sub_1 to finish (up to 45s)."]
+
+    def test_quiet_wait_does_not_start_display(self, monkeypatch):
+        mgr = self._make_manager(None, "sub_1")
+
+        def unexpected(*args):
+            raise AssertionError("quiet wait must not render")
+
+        monkeypatch.setattr("swival.subagent.fmt.step_spinner", unexpected)
+        monkeypatch.setattr("swival.subagent.fmt.info", unexpected)
+        _script_clock(monkeypatch, 0, 0, 15, 30)
+        assert "timeout" in mgr.collect("sub_1", timeout=30)
+
     def test_notes_while_waiting(self, monkeypatch):
         notes = []
         mgr = self._make_manager(notes.append, "sub_1", "sub_2")
