@@ -74,6 +74,10 @@ _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "filename": ("file_path",),
     "filepath": ("file_path",),
     "cmd": ("command",),
+    "q": ("query",),
+    "search_query": ("query",),
+    "search_term": ("query",),
+    "keywords": ("query",),
 }
 
 
@@ -350,6 +354,7 @@ def format_repair_feedback(
     repaired_args: dict[str, Any],
     repairs: list[dict[str, Any]],
     schema: dict[str, Any] | None = None,
+    max_bytes: int | None = None,
 ) -> str:
     """Build a short corrective note that is appended to the tool result.
 
@@ -369,6 +374,9 @@ def format_repair_feedback(
     schema:
         Optional tool parameter schema.  When provided, the "Corrected"
         display upgrades string values to arrays where the schema says so.
+    max_bytes:
+        Optional size limit in UTF-8 bytes.  Long argument values are shown
+        shorter to fit, so the line naming the right parameter survives.
     """
     structural = [r for r in repairs if r["type"] in _STRUCTURAL_REPAIRS]
     if not structural:
@@ -394,9 +402,7 @@ def format_repair_feedback(
             ):
                 ideal[field] = value.split() if value.strip() else []
 
-    lines: list[str] = [f"\n[Syntax correction] Your {name} call was auto-corrected:"]
-    lines.append(f"  Received:  {_argument_preview(original)}")
-    lines.append(f"  Corrected: {_argument_preview(ideal)}")
+    lines: list[str] = []
 
     stripped = sum(r["type"] == "strip_unknown" for r in structural)
     if stripped:
@@ -432,7 +438,33 @@ def format_repair_feedback(
                 )
 
     lines.append("  Use this corrected format for subsequent calls.")
-    return "\n".join(lines)
+
+    for chars in (None, 40, 8, 0):
+        shown_original = original if chars is None else _shorten(original, chars)
+        shown_ideal = ideal if chars is None else _shorten(ideal, chars)
+        feedback = "\n".join(
+            [
+                f"\n[Syntax correction] Your {name} call was auto-corrected:",
+                f"  Received:  {_argument_preview(shown_original)}",
+                f"  Corrected: {_argument_preview(shown_ideal)}",
+                *lines,
+            ]
+        )
+        size = len(feedback.encode("utf-8", errors="replace"))
+        if max_bytes is None or size <= max_bytes:
+            return feedback
+    cut = feedback.encode("utf-8", errors="replace")[:max_bytes]
+    return cut.decode("utf-8", errors="ignore")
+
+
+def _shorten(value: Any, limit: int) -> Any:
+    if isinstance(value, str):
+        return value if len(value) <= limit else value[:limit] + "..."
+    if isinstance(value, dict):
+        return {k: _shorten(v, limit) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_shorten(v, limit) for v in value[:5]]
+    return value
 
 
 def validate_required_args(

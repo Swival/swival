@@ -2,6 +2,14 @@
 
 All notable user-facing changes to Swival.
 
+## Unreleased
+
+- Added a built-in `web_search` tool that works without an account or API key.
+  It returns a few results with the passages that best match the query, small enough for small context windows.
+  Queries go to free search services: Parallel, Keenable, Exa and Tavily.
+  Turn it off with `--no-web-search` or `web_search = false`, or pick the services with `web_search_providers`.
+  `llm_filter` sees every query, and queries that look like they contain a credential are refused.
+
 ## 1.0.48
 
 - Added optional decision models alongside the chat model through `--decision-model`, including hosted Jev and local Clef servers.

@@ -1,5 +1,8 @@
 # Web Browsing
 
+To look something up, the built-in [`web_search`](tools.md#web_search) tool needs no setup.
+The approaches below are for interacting with pages.
+
 Swival can browse the web, interact with pages, fill forms, take screenshots, and extract content. There are four ways to set this up, each with different tradeoffs.
 
 | Approach                                                      | How it works                                   | Best for                                      |

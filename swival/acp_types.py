@@ -87,6 +87,7 @@ _TOOL_NAME_TO_KIND: dict[str, str] = {
     "run_command": TOOL_KIND_EXECUTE,
     "run_shell_command": TOOL_KIND_EXECUTE,
     "fetch_url": TOOL_KIND_FETCH,
+    "web_search": TOOL_KIND_FETCH,
     "think": TOOL_KIND_THINK,
 }
 
@@ -125,6 +126,14 @@ def tool_title_for(name: str, arguments: Any) -> str:
         url = arguments.get("url")
         if url:
             return f"fetch: {url}"
+    if name == "web_search":
+        from .websearch import query_from_args
+
+        query = query_from_args(arguments)
+        if query:
+            if len(query) > 80:
+                query = query[:77] + "..."
+            return f"search: {query}"
     if name == "grep":
         pattern = arguments.get("pattern")
         if pattern:

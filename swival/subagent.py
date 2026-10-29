@@ -215,10 +215,12 @@ class SubagentManager:
         # prompt, returning a SpawnRoute, or None to use the template as is.
         # It never changes the template itself.
         self.router = router
+        omitted = set(_SUBAGENT_OMITTED_TOOLS)
+        # A worker without the parent's search policy can't use the tool.
+        if loop_kwargs_template.get("web_search_policy") is None:
+            omitted.add("web_search")
         self._tools = [
-            t
-            for t in tools
-            if t.get("function", {}).get("name") not in _SUBAGENT_OMITTED_TOOLS
+            t for t in tools if t.get("function", {}).get("name") not in omitted
         ]
         self._system_content = resolved_system_content
         self._system_spans = resolved_system_spans or []

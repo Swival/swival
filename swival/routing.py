@@ -57,6 +57,7 @@ _MAIN_ARGS = (
     "image_path",
     "command",
     "url",
+    "query",
     "pattern",
     "path",
     "task",

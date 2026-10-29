@@ -12,13 +12,40 @@ import threading
 from contextlib import contextmanager
 from typing import Any
 
-from fast_cipher.tokens import TokenEncryptor
+from fast_cipher.tokens import TokenEncryptor, scan
 from fast_cipher.tokens.alphabets import ALPHANUMERIC
+from fast_cipher.tokens.registry import BUILTIN_PATTERNS
 from fast_cipher.tokens.types import SimpleTokenPattern
 
 from .report import ConfigError
 
 ENCRYPT_KEY_ENV = "SWIVAL_ENCRYPT_KEY"
+
+
+def build_token_patterns(extra_patterns: list | None) -> list[SimpleTokenPattern]:
+    """Turn ``encrypt_secrets_patterns`` config entries into token patterns."""
+    patterns = []
+    for pat in extra_patterns or ():
+        pat = dict(pat)
+        pat.setdefault("body_alphabet", ALPHANUMERIC)
+        pat.setdefault("min_body_length", len(pat.get("prefix", "")) + 8)
+        try:
+            patterns.append(SimpleTokenPattern(**pat))
+        except TypeError as exc:
+            raise ConfigError(
+                f"invalid encrypt_secrets_patterns entry {pat.get('name')!r}: {exc}"
+            ) from exc
+    return patterns
+
+
+def contains_secret(text: str, extra_patterns: list | tuple = ()) -> bool:
+    """Tell whether *text* holds a token that SecretShield would encrypt.
+
+    Works whether or not encryption is enabled.
+    *extra_patterns* come from `build_token_patterns`.
+    """
+    patterns = [*extra_patterns, *BUILTIN_PATTERNS]
+    return bool(scan(text, patterns, patterns))
 
 
 class SecretShield:
@@ -39,18 +66,8 @@ class SecretShield:
         self._lock = threading.Lock()
         self._destroyed = False
 
-        if extra_patterns:
-            for pat in extra_patterns:
-                pat = dict(pat)
-                pat.setdefault("body_alphabet", ALPHANUMERIC)
-                pat.setdefault("min_body_length", len(pat.get("prefix", "")) + 8)
-                try:
-                    pattern = SimpleTokenPattern(**pat)
-                except TypeError as exc:
-                    raise ConfigError(
-                        f"invalid encrypt_secrets_patterns entry {pat.get('name')!r}: {exc}"
-                    ) from exc
-                self._encryptor.register(pattern)
+        for pattern in build_token_patterns(extra_patterns):
+            self._encryptor.register(pattern)
 
     @classmethod
     def from_config(

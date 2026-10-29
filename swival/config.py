@@ -140,6 +140,8 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "storm_breaker": bool,
     "flatten_mcp_schemas": bool,
     "defer_mcp_schemas": bool,
+    "web_search": bool,
+    "web_search_providers": list,
 }
 
 _LIST_OF_STR_KEYS = {
@@ -149,6 +151,7 @@ _LIST_OF_STR_KEYS = {
     "approved_buckets",
     "nono_allow_domain",
     "nono_credential",
+    "web_search_providers",
 }
 
 # Config key -> argparse dest (only where they differ)
@@ -269,6 +272,8 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "storm_breaker": True,
     "flatten_mcp_schemas": True,
     "defer_mcp_schemas": True,
+    "web_search": True,
+    "web_search_providers": None,
 }
 
 
@@ -364,6 +369,13 @@ def _validate_config(config: dict, source: str) -> None:
         raise ConfigError(
             f"{source}: 'sandbox' must be one of {SANDBOX_MODES!r}, "
             f"got {config['sandbox']!r}"
+        )
+
+    if "web_search_providers" in config:
+        from .websearch import validate_providers
+
+        validate_providers(
+            config["web_search_providers"], f"{source}: web_search_providers"
         )
 
     # Validate network enum value
@@ -1300,6 +1312,8 @@ def args_to_session_kwargs(args, base_dir: str) -> dict:
         "flatten_mcp_schemas",
         "defer_mcp_schemas",
         "location",
+        "web_search",
+        "web_search_providers",
     ]
 
     kwargs: dict = {"base_dir": base_dir}
@@ -1584,6 +1598,8 @@ def generate_config(
         "",
         "# --- Sandbox / security ---",
         '# network = "full"                # "full" | "provider-only" (agent commands cannot reach the network) | "none" (air-gapped, command provider only)',
+        "# web_search = true               # web_search tool; queries go to third-party search providers",
+        '# web_search_providers = ["parallel", "keenable", "exa", "tavily"]  # providers web_search may use',
         '# sandbox = "builtin"             # "builtin" | "agentfs" | "nono"',
         '# sandbox_session = "my-session"  # agentfs session ID (optional)',
         "# sandbox_strict_read = false",

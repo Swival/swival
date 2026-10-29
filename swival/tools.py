@@ -496,6 +496,16 @@ _TOOL_ALIASES = {
     "file_edit": "edit_file",
     "code_outline": "outline",
     "file_outline": "outline",
+    "websearch": "web_search",
+    "search_web": "web_search",
+    "google_search": "web_search",
+    "internet_search": "web_search",
+    "duckduckgo_search": "web_search",
+    "brave_search": "web_search",
+    "bing_search": "web_search",
+    # gpt-oss models are trained with a "browser" tool.
+    "browser.search": "web_search",
+    "browser.open": "fetch_url",
 }
 
 DELETE_FILE_TOOL = {
@@ -554,10 +564,36 @@ FETCH_URL_TOOL = {
 
 TOOLS.append(FETCH_URL_TOOL)
 
+WEB_SEARCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": (
+            "Search the web. Returns numbered results with title, URL and the "
+            "passages most relevant to the query. Read a full page with fetch_url."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search terms, e.g. 'httpx follow_redirects default'.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+# Only offered, and only allowed, with the caller's WebSearchPolicy.
+TOOLS.append(WEB_SEARCH_TOOL)
+
 # Tools that reach the network from inside the Swival process. Restricted
 # network modes remove these from the schema (build_tools) and reject them
 # in dispatch(); both checks key off this set.
-NETWORK_TOOLS = frozenset({FETCH_URL_TOOL["function"]["name"]})
+NETWORK_TOOLS = frozenset(
+    {FETCH_URL_TOOL["function"]["name"], WEB_SEARCH_TOOL["function"]["name"]}
+)
 
 SNAPSHOT_TOOL = {
     "type": "function",
@@ -1038,6 +1074,8 @@ def set_output_caps(max_lines: int, max_kb: int) -> None:
     Mutates the module-level caps used by read_file, read_multiple_files,
     list_files, grep, outline, and fetch_url, and keeps the LLM-visible
     schema defaults in sync.
+    web_search ignores it, because another Session can change it at any
+    time; its limit comes with the caller's WebSearchPolicy.
     """
     global MAX_READ_LINES, MAX_OUTPUT_BYTES
     if max_lines < 1:
@@ -4382,6 +4420,16 @@ def dispatch(name: str, args: dict, base_dir: str, **kwargs) -> str:
         if _report is not None:
             _report.record_untrusted_input("fetch_url", origin=url)
         return _wrap_untrusted(fetch_result.body, "fetch_url", origin=url)
+    elif name == "web_search":
+        from .websearch import run_web_search
+
+        return run_web_search(
+            args,
+            kwargs.get("web_search_policy"),
+            report=_report,
+            verbose=kwargs.get("verbose", False),
+            cancel_flag=kwargs.get("cancel_flag"),
+        )
     elif name == "decide":
         decide_call = kwargs.get("decide_call")
         if decide_call is None:

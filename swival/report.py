@@ -56,6 +56,7 @@ class ReportCollector:
         self.scavenged_calls = 0
         self.stormed_calls = 0
         self.python_bridge: dict[str, int | float] = {}
+        self.web_search: dict = {}
         self.exposure = ExposureMeter()
 
     def record_goal_event(self, action: str, goal_payload: dict | None) -> None:
@@ -300,6 +301,45 @@ class ReportCollector:
             {"type": "untrusted_input", "source": source, "origin": origin}
         )
 
+    def record_web_search(
+        self,
+        *,
+        vendor: str,
+        requests: int,
+        latency: float,
+        cache_hit: bool,
+        results: int,
+        error: str | None = None,
+    ):
+        """Record one web_search call: who answered, and at what cost."""
+        failovers = max(0, requests - 1)
+        totals = self.web_search
+        totals["searches"] = totals.get("searches", 0) + 1
+        totals["vendor_requests"] = totals.get("vendor_requests", 0) + requests
+        totals["failovers"] = totals.get("failovers", 0) + failovers
+        if cache_hit:
+            totals["cache_hits"] = totals.get("cache_hits", 0) + 1
+        if error is not None:
+            totals["errors"] = totals.get("errors", 0) + 1
+        if vendor:
+            by_vendor = totals.setdefault("by_vendor", {})
+            by_vendor[vendor] = by_vendor.get(vendor, 0) + 1
+        totals["total_latency_s"] = round(
+            totals.get("total_latency_s", 0.0) + latency, 3
+        )
+        event = {
+            "type": "web_search",
+            "vendor": vendor,
+            "requests": requests,
+            "failovers": failovers,
+            "latency_s": round(latency, 3),
+            "cache_hit": cache_hit,
+            "results": results,
+        }
+        if error is not None:
+            event["error"] = error
+        self.events.append(event)
+
     def record_python_bridge(self, execution: dict):
         """Record one run_python run that could call tools.
 
@@ -452,6 +492,7 @@ class ReportCollector:
                     if self.python_bridge
                     else {}
                 ),
+                **({"web_search": dict(self.web_search)} if self.web_search else {}),
             },
             "timeline": self.events,
         }

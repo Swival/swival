@@ -135,6 +135,25 @@ All `fetch_url` output is wrapped with an `[UNTRUSTED EXTERNAL CONTENT]` header 
 
 SSRF protections are built in. Swival resolves every URL in the redirect chain and blocks private, loopback, link-local, and reserved addresses. The exception is explicit loopback: URLs that name `localhost`, `127.0.0.1`, or `::1` directly are allowed, so local development servers stay reachable.
 
+## `web_search`
+
+`web_search` searches the web and returns up to five results.
+Each one has a title, a URL and the passages that best match the query.
+That is usually enough to answer a question, and when it isn't, the model reads the page with `fetch_url`.
+
+It works out of the box, with no account or API key.
+Queries are sent to free search services (Parallel, Keenable, Exa and Tavily), and if one is unavailable the next one is used.
+Queries that look like they contain a credential are refused, and an [`llm_filter`](llm-filter.md) sees every query before it is sent.
+
+To turn it off, or to choose which services receive your queries:
+
+```toml
+web_search = false
+web_search_providers = ["tavily", "exa"]
+```
+
+`--no-web-search` also removes it, and so do `--network provider-only` and `--network none`.
+
 ## `run_command`
 
 `run_command` executes a command given as an array of strings and returns its output. It is available in all command modes except `--commands none`.
@@ -222,7 +241,7 @@ Calling `save` before `restore` is not required. The system automatically create
 
 ### Dirty Scopes
 
-Tools are classified as read-only or mutating. Read-only tools (`read_file`, `read_multiple_files`, `list_files`, `grep`, `outline`, `fetch_url`, `view_image`, `think`, `todo`, `snapshot`) are safe to collapse because they don't change anything on disk. Mutating tools (`write_file`, `edit_file`, `delete_file`, `run_command`, `run_shell_command`, `run_python`, unknown MCP tools, and A2A tools) dirty the scope.
+Tools are classified as read-only or mutating. Read-only tools (`read_file`, `read_multiple_files`, `list_files`, `grep`, `outline`, `fetch_url`, `web_search`, `view_image`, `think`, `todo`, `snapshot`) are safe to collapse because they don't change anything on disk. Mutating tools (`write_file`, `edit_file`, `delete_file`, `run_command`, `run_shell_command`, `run_python`, unknown MCP tools, and A2A tools) dirty the scope.
 
 If the scope contains mutating tool calls, `restore` fails with a list of the dirty tools. Pass `force=true` to override when you are confident the summary captures the mutations.
 

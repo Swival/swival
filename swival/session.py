@@ -194,6 +194,8 @@ class Session:
         profile_baseline: dict | None = None,
         model_routing: bool = False,
         routing_profiles: list[str] | None = None,
+        web_search: bool = True,
+        web_search_providers: list[str] | None = None,
     ):
         self.base_dir = base_dir
         self.scratch_dir = scratch_dir
@@ -251,6 +253,13 @@ class Session:
                 f"'network' must be one of {NETWORK_MODES!r}, got {network!r}"
             )
         self.network = network
+        self.web_search = web_search
+        if web_search_providers is not None:
+            from .websearch import validate_providers
+
+            web_search_providers = list(validate_providers(web_search_providers))
+        self.web_search_providers = web_search_providers
+        self._web_search_policy = None
         self._net_jail: list[str] | None = None
         self.sandbox = sandbox
         self.sandbox_session = sandbox_session
@@ -607,6 +616,16 @@ class Session:
                 self._skills_catalog, self._metaskills_policy
             )
 
+        if self.web_search and self.network == "full":
+            from .websearch import make_policy
+
+            self._web_search_policy = make_policy(
+                providers=self.web_search_providers,
+                llm_filter=self.llm_filter,
+                secret_patterns=self.encrypt_secrets_patterns,
+                max_output_kb=self.max_output_kb,
+            )
+
         # Build tools
         self._tools = build_tools(
             self._resolved_commands,
@@ -617,6 +636,7 @@ class Session:
             metaskill_names=self._metaskill_names,
             network=self.network,
             decide=self._decisions is not None,
+            web_search_policy=self._web_search_policy,
         )
         if self._decisions is not None and self.verbose:
             from . import fmt
@@ -955,6 +975,7 @@ class Session:
             network_mode=self.network,
             net_jail=self._net_jail,
             decisions=self._decisions,
+            web_search_policy=self._web_search_policy,
         )
         # The profile this conversation moved to with /profile or routing.
         kwargs.update(state.get("runtime") or {})

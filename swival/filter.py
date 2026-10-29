@@ -11,6 +11,10 @@ class FilterError(Exception):
     """Raised when the filter script rejects or fails."""
 
 
+class FilterTimeout(FilterError):
+    """Raised when the filter script runs out of time."""
+
+
 def _message_to_dict(msg) -> dict:
     """Normalize a message (dict or namespace) to a plain dict for JSON serialization."""
     d: dict = {}
@@ -96,21 +100,23 @@ def run_llm_filter(
     provider: str,
     tools: list | None = None,
     call_kind: str = "agent",
-    timeout: int = 30,
+    timeout: float = 30,
+    extra: dict | None = None,
 ) -> list:
     """Run the user-defined filter script and return the (possibly modified) messages.
+
+    *extra* adds payload fields, such as the destinations of a web search.
+    It can't replace the standard fields.
 
     Raises FilterError if the script blocks, fails, or returns invalid output.
     The original *messages* list is never mutated.
     """
     parts = shlex.split(llm_filter)
 
-    payload = {
-        "provider": provider,
-        "model": model,
-        "call_kind": call_kind,
-        "messages": [_message_to_dict(m) for m in messages],
-    }
+    payload = {"provider": provider, "model": model, "call_kind": call_kind}
+    for key, value in (extra or {}).items():
+        payload.setdefault(key, value)
+    payload["messages"] = [_message_to_dict(m) for m in messages]
     if tools is not None:
         payload["tools"] = tools
 
@@ -125,7 +131,7 @@ def run_llm_filter(
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        raise FilterError(f"filter command timed out after {timeout}s: {llm_filter}")
+        raise FilterTimeout(f"filter command timed out after {timeout}s: {llm_filter}")
     except FileNotFoundError:
         raise FilterError(f"filter command not found: {parts[0]}")
     except OSError as e:

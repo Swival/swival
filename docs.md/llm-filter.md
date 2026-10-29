@@ -3,6 +3,7 @@
 Swival can run a user-defined script before every outbound LLM request. The script receives the message list as JSON, and can modify messages, redact content, or block the request entirely. This is useful for stripping internal URLs, project names, customer identifiers, or any other text that should not reach an external provider.
 
 The filter covers all Swival-managed LLM call paths: normal agent turns, REPL turns, the Session API, compaction summaries, and decision model requests.
+It also sees every [`web_search`](tools.md#web_search) query before the query leaves for a search provider.
 
 ## Enabling a Filter
 
@@ -63,6 +64,27 @@ The script writes a JSON object to stdout. Two response shapes are supported:
 ```json
 {"allow": false, "reason": "contains internal hostname"}
 ```
+
+## Web Search Queries
+
+`web_search` queries reach the filter as a single user message.
+`provider` and `model` are both `"web_search"`, so a rule that trusts a local model won't approve text that is about to go to a search service.
+`destinations` lists the services the query may be sent to, and `origin` names the session's model:
+
+```json
+{
+  "provider": "web_search",
+  "model": "web_search",
+  "call_kind": "web_search",
+  "destinations": ["parallel", "keenable", "exa", "tavily"],
+  "origin": {"provider": "lmstudio", "model": "qwen3-8b"},
+  "messages": [{"role": "user", "content": "httpx follow_redirects default"}]
+}
+```
+
+Return one user message with string content to send the query, edited or not.
+Anything else blocks the search.
+The model then gets an error, and the session goes on.
 
 ## Behavior Rules
 

@@ -1121,6 +1121,33 @@ def tool_fetch(result) -> None:
     _framed(output, title=result.final_url, subtitle=subtitle, border_style=border)
 
 
+def tool_web_search(query: str, outcome, *, results: int, elapsed: float) -> None:
+    """One dim line under the web_search result: vendor, count, failovers."""
+    if outcome.cache_hit:
+        source = "cache"
+    elif outcome.joined:
+        source = "shared request"
+    else:
+        source = outcome.vendor or "no provider"
+    parts = [f"{results} result{'s' if results != 1 else ''} via {source}"]
+    parts.append(format_duration(elapsed))
+    failovers = outcome.failovers
+    if failovers:
+        parts.append(f"{failovers} failover{'s' if failovers != 1 else ''}")
+    tried = [f"{a.vendor} {a.outcome}" for a in outcome.attempts if a.outcome != "ok"]
+    if tried:
+        parts.append("tried " + ", ".join(tried))
+    line = Text(f"    search: {query[:80]}", style="dim")
+    line.append(f"  ({'; '.join(parts)})", style="dim")
+    _console.print(line)
+    for attempt in outcome.attempts:
+        if attempt.outcome == "drift":
+            warning(
+                f"web_search: {attempt.vendor} rejected the request; "
+                "its adapter may need an update"
+            )
+
+
 def tool_error(name: str, msg: str) -> None:
     header = Text()
     header.append(f"  \u2717 {name}", style="bold red")

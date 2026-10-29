@@ -112,7 +112,7 @@ Inside that wrapped process, `Session(sandbox="nono")` detects the sandbox and p
 
 `full` is the default and today's behavior: no network restrictions beyond whatever sandbox you chose.
 
-`provider-only` is the practical restricted mode. Swival's own process keeps normal network access, so provider calls work unchanged — hosted APIs, LM Studio, llama.cpp, anything. What changes is the agent's reach: every subprocess the agent can start (`run_command`, `run_shell_command`, the `run_python` tool, stdio MCP servers, and anything those spawn) is launched through `nono run --block-net`, so the operating system denies its entire subtree any outbound connection, loopback included. In-process network capability is removed at the application layer: `fetch_url` disappears from the tool schema and is rejected by dispatch even if the model hallucinates it, and URL-backed MCP servers and A2A clients are refused at startup. The result is an agent that can talk to its model but cannot browse, download, or exfiltrate through commands.
+`provider-only` is the practical restricted mode. Swival's own process keeps normal network access, so provider calls work unchanged — hosted APIs, LM Studio, llama.cpp, anything. What changes is the agent's reach: every subprocess the agent can start (`run_command`, `run_shell_command`, the `run_python` tool, stdio MCP servers, and anything those spawn) is launched through `nono run --block-net`, so the operating system denies its entire subtree any outbound connection, loopback included. In-process network capability is removed at the application layer: `fetch_url` and `web_search` disappear from the tool schema and are rejected by dispatch even if the model hallucinates them, and URL-backed MCP servers and A2A clients are refused at startup. The result is an agent that can talk to its model but cannot browse, download, or exfiltrate through commands.
 
 ```sh
 swival --network provider-only --provider openrouter --model qwen/qwen3-coder "Review this repo"
@@ -225,12 +225,19 @@ In interactive mode, the user is typing directly, so commands are always enabled
 
 ## Untrusted Content Labels
 
-Output from external sources — `fetch_url`, MCP tools, and A2A tools — is wrapped with a deterministic `[UNTRUSTED EXTERNAL CONTENT]` header before the model sees it. This header instructs the model to treat the content as data, not instructions, and to avoid changing tool-selection behavior based on it.
+Output from external sources (`fetch_url`, `web_search`, MCP tools, and A2A tools) is wrapped with a deterministic `[UNTRUSTED EXTERNAL CONTENT]` header before the model sees it. This header instructs the model to treat the content as data, not instructions, and to avoid changing tool-selection behavior based on it.
 
 Failures reported by MCP servers get the same treatment.
 Swival writes the leading `error:` line, and the server's own error text follows under the header, so a failing tool cannot slip instructions past the label.
 
 The label is baked into spill files too. When an external tool produces output too large for inline context (over 20 KB for MCP/A2A, over 50 KB for fetch_url), the content is saved to a temp file under `.swival/`. The untrusted header is prepended to the file contents, so the label survives when the agent reads the file back via `read_file`.
+
+## Web Search Privacy
+
+[`web_search`](tools.md#web_search) sends queries to third-party search services (Parallel, Keenable, Exa and Tavily), which see the query and your IP address.
+A query can go to more than one of them when one is unavailable.
+Queries that look like they contain a credential are refused, and an `llm_filter` can redact or block them.
+Set `web_search = false` or pass `--no-web-search` to turn the tool off, or use `web_search_providers` to choose which services may receive queries.
 
 ## Filesystem Access Policy
 
@@ -272,7 +279,7 @@ Binary MIME types are rejected. Response bodies are capped at 5 MB before conver
 
 ## Output Caps
 
-Several hard caps keep the conversation bounded. File reads are limited to 50 KB per call and lines are truncated at 2,000 characters. Directory and grep-style listings are capped at 100 results. The 50 KB cap (which also bounds listings, grep, outline, and URL fetches) and the default 2000-line read limit can be changed with the `max_output_kb` and `max_output_lines` settings.
+Several hard caps keep the conversation bounded. File reads are limited to 50 KB per call and lines are truncated at 2,000 characters. Directory and grep-style listings are capped at 100 results. The 50 KB cap (which also bounds listings, grep, outline, URL fetches, and web search results) and the default 2000-line read limit can be changed with the `max_output_kb` and `max_output_lines` settings.
 
 Command output is capped at 10 KB inline, with larger output written to `.swival/` (hard-capped at 1 MB) for paginated reads and auto-cleaned after roughly ten minutes.
 

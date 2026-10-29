@@ -103,7 +103,8 @@
         <article class="docs-content">
             <h1 id="outbound-llm-filter">Outbound LLM Filter</h1>
 <p>Swival can run a user-defined script before every outbound LLM request. The script receives the message list as JSON, and can modify messages, redact content, or block the request entirely. This is useful for stripping internal URLs, project names, customer identifiers, or any other text that should not reach an external provider.</p>
-<p>The filter covers all Swival-managed LLM call paths: normal agent turns, REPL turns, the Session API, compaction summaries, and decision model requests.</p>
+<p>The filter covers all Swival-managed LLM call paths: normal agent turns, REPL turns, the Session API, compaction summaries, and decision model requests.
+It also sees every <a href="tools.html#web_search"><code>web_search</code></a> query before the query leaves for a search provider.</p>
 <h2 id="enabling-a-filter">Enabling a Filter</h2>
 <p>On the command line:</p>
 <pre><code class="language-sh">swival --llm-filter &quot;./scripts/redact.py&quot; &quot;task&quot;
@@ -141,6 +142,20 @@ The filter must return exactly one user message with a valid request, or the cal
 <p><strong>Block:</strong></p>
 <pre><code class="language-json">{&quot;allow&quot;: false, &quot;reason&quot;: &quot;contains internal hostname&quot;}
 </code></pre>
+<h2 id="web-search-queries">Web Search Queries</h2>
+<p><code>web_search</code> queries reach the filter as a single user message.
+<code>provider</code> and <code>model</code> are both <code>"web_search"</code>, so a rule that trusts a local model doesn't approve text bound for a search service, <code>destinations</code> lists the services the query may be sent to, and <code>origin</code> names the session's model:</p>
+<pre><code class="language-json">{
+  &quot;provider&quot;: &quot;web_search&quot;,
+  &quot;model&quot;: &quot;web_search&quot;,
+  &quot;call_kind&quot;: &quot;web_search&quot;,
+  &quot;destinations&quot;: [&quot;parallel&quot;, &quot;keenable&quot;, &quot;exa&quot;, &quot;tavily&quot;],
+  &quot;origin&quot;: {&quot;provider&quot;: &quot;lmstudio&quot;, &quot;model&quot;: &quot;qwen3-8b&quot;},
+  &quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;httpx follow_redirects default&quot;}]
+}
+</code></pre>
+<p>Return one user message with string content to send the (possibly edited) query.
+Anything else blocks the search; the model gets an error and the session continues.</p>
 <h2 id="behavior-rules">Behavior Rules</h2>
 <table>
 <thead>

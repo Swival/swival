@@ -166,7 +166,7 @@ The same breakdowns appear under `by_source`, so you can see which parts of the 
 - `summary` covers compaction summaries, checkpoints, and continue files.
 - `auxiliary` covers other model calls, such as `/audit` phases.
 
-`security` appears when at least one security-relevant event occurred during the run. It is an object with `command_policy_blocks` (commands denied by policy or by user), `command_policy_approvals` (commands approved by user or config), and `untrusted_inputs` (external content ingested from `fetch_url`, MCP, or A2A). All fields are integers. Absent when all counters are zero.
+`security` appears when at least one security-relevant event occurred during the run. It is an object with `command_policy_blocks` (commands denied by policy or by user), `command_policy_approvals` (commands approved by user or config), and `untrusted_inputs` (external content ingested from `fetch_url`, `web_search`, MCP, or A2A). All fields are integers. Absent when all counters are zero.
 
 `lifecycle` appears when lifecycle hooks ran and is an array mirroring the timeline's `lifecycle` events.
 
@@ -174,6 +174,11 @@ The same breakdowns appear under `by_source`, so you can see which parts of the 
 It adds up `executions`, `child_calls`, `child_failures`, `bytes_in`, `bytes_out`, and `child_time_s` across those runs.
 `stops` counts the runs that were stopped early.
 The time spent in these calls is not added to `total_tool_time_s`, which already includes the `run_python` call.
+
+`web_search` appears when the model searched the web.
+It counts `searches`, `cache_hits`, `errors`, `vendor_requests` and `failovers`.
+`total_latency_s` is the time spent searching, and `by_vendor` counts how often each service answered.
+Searches made by subagents are not included.
 
 ### `timeline`
 
@@ -204,7 +209,9 @@ For `lifecycle`, fields include `event` (`startup` or `exit`), `exit_code`, `dur
 
 For `command_policy`, fields include `bucket` (the normalized command bucket) and `decision` (`allow`, `persist`, `once`, `always_ask`, `deny`, or `block`). The interactive decisions come from `--commands ask` approval prompts; a `block` decision is also recorded whenever any restricted policy (`none`, an allowlist, or a denied bucket) rejects a command.
 
-For `untrusted_input`, fields include `source` (the tool name, e.g. `fetch_url` or `mcp__server__tool`) and `origin` (the URL or empty string). These events are emitted when external content is successfully ingested.
+For `untrusted_input`, fields include `source` (the tool name, e.g. `fetch_url` or `mcp__server__tool`) and `origin` (the URL, the search service for `web_search`, or an empty string). These events are emitted when external content is successfully ingested.
+
+For `web_search`, fields include `vendor` (empty when no service answered), `requests`, `failovers`, `latency_s`, `cache_hit`, `results`, and `error` when the search failed.
 
 For `python_bridge`, fields include `execution_id`, `tool_call_id`, `exit_code` (negative when the snippet was killed), `elapsed_s`, `child_calls`, `child_failures`, `bytes_in`, `bytes_out`, and `child_time_s`.
 `execution_id` is unique to each run, since providers can reuse tool-call IDs.

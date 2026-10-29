@@ -2214,6 +2214,11 @@ def compact_tool_result(name: str, args: dict | None, content: str) -> str:
         url = args.get("url", "?")
         return f"[fetch_url: {url}, {len(content)} chars — content compacted]"
 
+    if name == "web_search":
+        from .websearch import compact_result
+
+        return compact_result(args, content)
+
     if name.startswith("mcp__"):
         head = content[:300]
         return f"[{name}: {len(content)} chars — compacted]\nFirst 300 chars:\n{head}"
@@ -4333,6 +4338,7 @@ def handle_tool_call(
     tool_policy=None,
     deferred_tools=None,
     decide_call=None,
+    web_search_policy=None,
 ):
     """Execute a single tool call and return (tool_msg, metadata).
 
@@ -4386,6 +4392,23 @@ def handle_tool_call(
                 "succeeded": False,
                 "repairs": repairs,
             },
+        )
+
+    # Corrective feedback for structural repairs, so the model sees its mistake.
+    # A web search result and this note share one size limit.
+    feedback = ""
+    limit = None
+    if name == "web_search" and web_search_policy is not None:
+        limit = web_search_policy.max_output_bytes // 4
+    if repairs:
+        feedback = format_repair_feedback(
+            name, raw_args, parsed_args, repairs, schema, max_bytes=limit
+        )
+    if feedback and limit is not None:
+        web_search_policy = replace(
+            web_search_policy,
+            max_output_bytes=web_search_policy.max_output_bytes
+            - len(feedback.encode("utf-8", errors="replace")),
         )
 
     _is_cmd = name in ("run_command", "run_shell_command")
@@ -4450,6 +4473,7 @@ def handle_tool_call(
                 tool_policy=tool_policy,
                 deferred_tools=deferred_tools,
                 decide_call=decide_call,
+                web_search_policy=web_search_policy,
                 tool_meta=tool_meta,
             )
     except McpShutdownError:
@@ -4467,12 +4491,7 @@ def handle_tool_call(
         else:
             fmt.tool_result(name, elapsed, result[:500])
 
-    # Append corrective feedback for structural repairs so the LLM sees
-    # what it got wrong and what the correct syntax looks like.
-    if repairs:
-        feedback = format_repair_feedback(name, raw_args, parsed_args, repairs, schema)
-        if feedback:
-            result = result + feedback
+    result += feedback
 
     tool_msg = {
         "role": "tool",
@@ -7023,7 +7042,7 @@ def build_parser():
         type=int,
         default=_UNSET,
         help="Size cap in KB for tool output sent to the model: file reads, "
-        "grep, listings, outline, fetch_url (default: 50).",
+        "grep, listings, outline, fetch_url, web_search (default: 50).",
     )
     review_group.add_argument(
         "--max-review-rounds",
@@ -7228,6 +7247,14 @@ def build_parser():
         "reachable, agent commands/python/MCP subprocesses are network-blocked "
         'via nono), or "none" (air-gapped under nono --block-net, command '
         "provider only).",
+    )
+    access_group.add_argument(
+        "--no-web-search",
+        dest="web_search",
+        action="store_false",
+        default=_UNSET,
+        help="Remove the web_search tool, which sends queries to third-party "
+        "search providers.",
     )
     access_group.add_argument(
         "--sandbox",
@@ -8823,6 +8850,7 @@ def build_tools(
     python_tool: bool = False,
     network: str = "full",
     decide: bool = False,
+    web_search_policy=None,
 ) -> list:
     """Construct the tools list from base + conditionals.
 
@@ -8830,12 +8858,18 @@ def build_tools(
     it out until the user starts `/goal`; subagents also keep it disabled since
     v1 keeps goals parent-session-only.
 
-    A restricted ``network`` mode omits ``fetch_url`` from the schema. The
-    real enforcement lives in nono and in the ``dispatch()`` guard; the
-    filter just keeps the model from burning turns on a tool that cannot
-    succeed.
+    A restricted ``network`` mode omits ``fetch_url`` and ``web_search`` from
+    the schema. The real enforcement lives in nono and in the ``dispatch()``
+    guard; the filter just keeps the model from burning turns on a tool that
+    cannot succeed.
+
+    ``web_search`` is only offered with a ``web_search_policy``, so a caller
+    that doesn't pass one loses the tool instead of searching without its
+    rules.
     """
     tools = list(TOOLS)
+    if web_search_policy is None:
+        tools = [t for t in tools if t.get("function", {}).get("name") != "web_search"]
     if network != "full":
         from .tools import NETWORK_TOOLS
 
@@ -9904,6 +9938,17 @@ def _run_main(args, report, _write_report, parser):
             read_dirs=skill_read_roots,
         )
 
+    _web_search_policy = None
+    if getattr(args, "web_search", True) and _network_mode == "full":
+        from .websearch import make_policy
+
+        _web_search_policy = make_policy(
+            providers=getattr(args, "web_search_providers", None),
+            llm_filter=getattr(args, "llm_filter", None),
+            secret_patterns=getattr(args, "encrypt_secrets_patterns", None),
+            max_output_kb=args.max_output_kb,
+        )
+
     tools = build_tools(
         resolved_commands,
         skills_catalog,
@@ -9914,6 +9959,7 @@ def _run_main(args, report, _write_report, parser):
         python_tool=_python_tool,
         network=_network_mode,
         decide=_decisions is not None,
+        web_search_policy=_web_search_policy,
     )
     if _decisions is not None and args.verbose:
         fmt.info(_decisions.startup_line())
@@ -10159,6 +10205,7 @@ def _run_main(args, report, _write_report, parser):
         exposure_meter=report.exposure if report is not None else None,
         deferred_tools=deferred_tools,
         decisions=_decisions,
+        web_search_policy=_web_search_policy,
     )
 
     # Validate and thread llm_filter
@@ -10686,6 +10733,7 @@ def _run_agent_loop(
     instructions_full: bool = False,
     initial_tool_choice: str = "auto",
     decisions=None,
+    web_search_policy=None,
 ) -> tuple[str | None, bool]:
     """Run the tool-calling loop until a final answer or max turns.
 
@@ -10696,6 +10744,12 @@ def _run_agent_loop(
     """
     if initial_tool_choice not in INITIAL_TOOL_CHOICES:
         raise ValueError(f"initial_tool_choice must be one of {INITIAL_TOOL_CHOICES!r}")
+    if web_search_policy is not None:
+        web_search_policy = web_search_policy.for_runtime(
+            provider=llm_kwargs.get("provider"),
+            model=model_id,
+            context_length=context_length,
+        )
     # Keep one routing ID across turns, retries, and compaction calls.
     if "session_id" not in llm_kwargs:
         llm_kwargs["session_id"] = str(_uuid.uuid4())
@@ -10797,6 +10851,7 @@ def _run_agent_loop(
         "exposure_meter": exposure_meter,
         "tool_policy": tool_policy,
         "decisions": decisions,
+        "web_search_policy": web_search_policy,
     }
 
     # True until the model acts on the last goal continuation prompt.
@@ -11029,6 +11084,7 @@ def _run_agent_loop(
             net_jail=net_jail,
             tool_policy=tool_policy,
             decide_call=decide_call,
+            web_search_policy=web_search_policy,
         )
         llm_kwargs = {
             **llm_kwargs,
@@ -12204,6 +12260,7 @@ def _run_agent_loop(
                 tool_policy=tool_policy,
                 deferred_tools=deferred_tools,
                 decide_call=decide_call,
+                web_search_policy=web_search_policy,
             )
             messages.append(tool_msg)
 
@@ -16493,6 +16550,7 @@ def repl_loop(
     instructions_full: bool = False,
     initial_tool_choice: str = "auto",
     decisions=None,
+    web_search_policy=None,
 ):
     """Interactive read-eval-print loop.
 
@@ -16685,6 +16743,7 @@ def repl_loop(
         continue_here=continue_here,
         instructions_full=instructions_full,
         decisions=decisions,
+        web_search_policy=web_search_policy,
     )
 
     ctx = InputContext(
