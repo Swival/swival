@@ -663,6 +663,18 @@ class TestVendorAnswers:
             asyncio.run(adapter(transport, "q"))
         assert exc.value.kind == "throttled" and exc.value.retry_after == 900
 
+    def test_rate_limit_during_mcp_handshake(self):
+        limited = {"jsonrpc": "2.0", "id": 0, "error": {"message": "Rate limit hit"}}
+        transport = FakeTransport(
+            [
+                (400, {}, b"No valid session ID provided"),
+                (200, {**JSON_TYPE, "Retry-After": "900"}, limited),
+            ]
+        )
+        with pytest.raises(VendorError) as exc:
+            asyncio.run(ws.search_exa(transport, "q"))
+        assert exc.value.kind == "throttled" and exc.value.retry_after == 900
+
     def test_rate_limit_words_in_results_are_just_results(self):
         text = "Title: Rate limiting\nURL: https://e.com/rl\nHighlights:\nToo many requests use a quota."
         message = {"jsonrpc": "2.0", "id": 1, "result": {"content": [{"text": text}]}}

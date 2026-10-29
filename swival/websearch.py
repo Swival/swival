@@ -1066,7 +1066,8 @@ class Transport:
             },
         }
         status, headers, body = await self.post(url, payload, _mcp_headers())
-        _rpc_response(status, headers, body)
+        with _retry_hint(headers):
+            _rpc_response(status, headers, body)
         session = headers.get("mcp-session-id")
         if not session:
             raise VendorError("drift", "initialize returned no session id")
