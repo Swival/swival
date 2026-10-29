@@ -103,6 +103,14 @@ def ok(hits=None):
 
 
 ALL_OK = {name: ok() for name in ws.PROVIDERS}
+JSON_TYPE = {"content-type": "application/json"}
+MCP_OK = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+        "content": [{"text": "Title: A\nURL: https://e.com/a\nHighlights:\nhi"}]
+    },
+}
 
 
 def gated(gate, result=None):
@@ -230,8 +238,15 @@ class TestText:
         )
         assert ws.split_passages(text) == [
             "The TaskGroup cancels the remaining tasks when one fails, see the "
-            "docs and https://peps.python.org/pep-0654/ for details."
+            "docs and https://peps.python.org/pep-0654/ for **details**."
         ]
+        code = (
+            "print(2**3, f(**kwargs) + n**.5, {**a, **b})\nx = funcs[0](arg)\n"
+            "# compute the root\n>>> import asyncio\nreturn handlers[kind](event"
+        )
+        assert ws._normalize_text(code) == [" ".join(code.splitlines())]
+        cjk = "参照[説明](https://example.jp/docs)を読む。\n続きは[次](https://example.jp/ne"
+        assert ws._normalize_text(cjk) == ["参照説明を読む。 続きは次"]
 
     def test_control_characters_and_escapes_removed(self):
         text = "Evil \x1b[31mred\x1b[0m text\u202e with \ud800 controls\x07 " * 4
@@ -434,6 +449,16 @@ class TestFormat:
         assert len(out.encode()) <= 1800 and out.endswith(ws.FOOTER)
         assert all(f"https://e.com/{i}" in out for i in range(5))
 
+    def test_url_that_does_not_fit_is_left_out(self):
+        url = "https://e.com/" + "a" * 1500
+        out = ws.format_results(
+            QUERY, [Hit("T", url, "x")], origin="exa", max_bytes=1024
+        )
+        assert len(out.encode()) <= 1024 and "https://e.com/" not in out
+        assert ws.compact_result({"query": QUERY}, out).startswith(
+            f'[web_search: "{QUERY}", 0 results'
+        )
+
     def test_byte_cap_with_multibyte_text(self):
         text = "非同期処理のタスクグループについての説明です。" * 40
         hits = [Hit("タスク" * 30, f"https://e.jp/{i}", text) for i in range(5)]
@@ -480,6 +505,8 @@ class TestFormat:
         assert "https://evil.example/a" in installed
         assert "default httpx" not in installed and "[Syntax" not in installed
         assert compacted[-1]["content"] == content
+        # Compacting again keeps the titles and URLs.
+        assert ws.compact_result({"q": QUERY}, installed) == installed
 
 
 class TestVendorAnswers:
@@ -581,6 +608,7 @@ class TestVendorAnswers:
         transport = FakeTransport([(200, headers, fixture("keenable_ok.json"))])
         response = asyncio.run(ws.search_keenable(transport, "q"))
         assert len(response.hits) == 4 and response.cooldown is None
+        assert response.hits[1].published == "2024-05-09"
         assert transport.requests[0][2]["X-Keenable-Title"] == "swival"
 
         reset = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 120))
@@ -611,16 +639,29 @@ class TestVendorAnswers:
                 },
             ),
             (
+                ws.search_exa,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": {
+                        "isError": True,
+                        "content": [{"text": "Rate limit exceeded"}],
+                    },
+                },
+            ),
+            (
                 ws.search_tavily,
                 {"detail": {"error": "Keyless access is rate limited."}},
             ),
+            (ws.search_keenable, {"error": "Rate limit exceeded"}),
         ],
     )
     def test_rate_limit_messages(self, adapter, body):
-        transport = FakeTransport([(200, {"content-type": "application/json"}, body)])
+        headers = {**JSON_TYPE, "Retry-After": "900"}
+        transport = FakeTransport([(200, headers, body)])
         with pytest.raises(VendorError) as exc:
             asyncio.run(adapter(transport, "q"))
-        assert exc.value.kind == "throttled"
+        assert exc.value.kind == "throttled" and exc.value.retry_after == 900
 
     def test_rate_limit_words_in_results_are_just_results(self):
         text = "Title: Rate limiting\nURL: https://e.com/rl\nHighlights:\nToo many requests use a quota."
@@ -680,28 +721,29 @@ class TestVendorAnswers:
         assert "残りのタスクはキャンセルされます" in out
         assert "остальные задачи отменяются" in out
 
-    def test_mcp_session_is_set_up_once_and_reused(self):
-        rpc_ok = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "result": {
-                "content": [{"text": "Title: A\nURL: https://e.com/a\nHighlights:\nhi"}]
-            },
-        }
-        json_type = {"content-type": "application/json"}
+    @pytest.mark.parametrize(
+        "stored, refusal",
+        [
+            (None, (400, {}, b'{"error": {"message": "No valid session ID"}}')),
+            ("s-old", (404, {}, b"Session not found")),
+        ],
+    )
+    def test_mcp_session_is_set_up_once_and_reused(self, stored, refusal):
         transport = FakeTransport(
             [
-                (400, {}, b'{"error": {"message": "No valid session ID provided"}}'),
+                refusal,
                 (
                     200,
-                    {"mcp-session-id": "s-123", **json_type},
+                    {"mcp-session-id": "s-123", **JSON_TYPE},
                     {"jsonrpc": "2.0", "id": 0, "result": {}},
                 ),
                 (202, {}, b""),
-                (200, json_type, rpc_ok),
-                (200, json_type, rpc_ok),
+                (200, JSON_TYPE, MCP_OK),
+                (200, JSON_TYPE, MCP_OK),
             ]
         )
+        if stored:
+            transport.mcp_sessions["exa"] = stored
         assert len(asyncio.run(ws.search_exa(transport, "q")).hits) == 1
         asyncio.run(ws.search_exa(transport, "q"))
         methods = [p.get("method") for _, p, _ in transport.requests]
@@ -714,6 +756,53 @@ class TestVendorAnswers:
         ]
         assert transport.requests[3][2]["Mcp-Session-Id"] == "s-123"
         assert transport.requests[4][2]["Mcp-Session-Id"] == "s-123"
+
+    def test_concurrent_calls_wait_for_the_mcp_handshake(self):
+
+        class McpServer(ws.Transport):
+            """Accepts calls only once the handshake is finished."""
+
+            def __init__(self):
+                super().__init__(client=None)
+                self.handshakes = 0
+                self.ready = False
+                self.in_handshake = asyncio.Event()
+                self.release = asyncio.Event()
+
+            async def post(self, url, payload, headers=None):
+                if payload["method"] == "initialize":
+                    self.handshakes += 1
+                    answer = {"jsonrpc": "2.0", "id": 0, "result": {}}
+                    response_headers = {"mcp-session-id": "s-1", **JSON_TYPE}
+                    return (
+                        200,
+                        httpx2.Headers(response_headers),
+                        json.dumps(answer).encode(),
+                    )
+                if payload["method"] == "notifications/initialized":
+                    self.in_handshake.set()
+                    await self.release.wait()
+                    self.ready = True
+                    return 202, httpx2.Headers(), b""
+                if "Mcp-Session-Id" not in headers:
+                    return 400, httpx2.Headers(), b"No valid session ID provided"
+                if not self.ready:
+                    return 400, httpx2.Headers(), b"Client not initialized"
+                return 200, httpx2.Headers(JSON_TYPE), json.dumps(MCP_OK).encode()
+
+        transport = McpServer()
+
+        async def two_calls():
+            first = asyncio.create_task(ws.search_exa(transport, "q"))
+            await transport.in_handshake.wait()
+            second = asyncio.create_task(ws.search_exa(transport, "q"))
+            # One turn of the loop takes the second call to the handshake.
+            await asyncio.sleep(0)
+            transport.release.set()
+            return await asyncio.gather(first, second)
+
+        assert all(len(r.hits) == 1 for r in asyncio.run(two_calls()))
+        assert transport.handshakes == 1
 
 
 class TestEngine:
@@ -912,12 +1001,16 @@ class TestEngine:
         both = ("parallel", "keenable")
 
         async def scenario():
-            first = asyncio.ensure_future(engine._search(QUERY, both, both))
+            first = asyncio.ensure_future(
+                engine._search(QUERY, both, both, threading.Event())
+            )
             await asyncio.sleep(0.05)
             engine._flights[QUERY][0].task.cancel()
             # Starts right away, while the first request is still cancelling.
             second = asyncio.Task(
-                engine._search(QUERY, both, both), loop=loop, eager_start=True
+                engine._search(QUERY, both, both, threading.Event()),
+                loop=loop,
+                eager_start=True,
             )
             gate.set()
             await asyncio.gather(first, return_exceptions=True)
@@ -993,13 +1086,54 @@ class TestSearchResults:
         assert result.startswith("error: web_search is disabled in this session (net")
 
     def test_cancel_flag(self):
-        use_engine({"parallel": gated(threading.Event())})
-        flag = threading.Event()
-        threading.Timer(0.2, flag.set).start()
-        started = time.monotonic()
+        entered, release = threading.Event(), threading.Event()
+
+        async def waits(query):
+            entered.set()
+            await asyncio.sleep(10)
+
+        engine, calls = use_engine({"parallel": waits})
         policy = ws.make_policy(providers=["parallel"])
+        flag = threading.Event()
+        flag.set()
         result = ws.run_web_search({"query": QUERY}, policy, cancel_flag=flag)
+        assert result == ws.CANCELLED and calls == []
+
+        flag.clear()
+
+        def cancel():
+            entered.wait(5)
+            # Hold the engine loop, so its cleanup runs after the flag is reused.
+            engine._loop.call_soon_threadsafe(release.wait, 5)
+            flag.set()
+
+        threading.Thread(target=cancel, daemon=True).start()
+        started = time.monotonic()
+        result = ws.run_web_search({"query": QUERY}, policy, cancel_flag=flag)
+        flag.clear()
+        release.set()
         assert result == ws.CANCELLED and time.monotonic() - started < 2
+        # A user cancel doesn't cool the service.
+        assert settle(engine) == 0
+        assert engine.plan(["parallel"]) == ["parallel"]
+
+    def test_deadline_counts_even_if_the_user_cancels_during_cleanup(self, monkeypatch):
+        monkeypatch.setattr(ws, "DEADLINE", 0.05)
+        flag = threading.Event()
+
+        async def slow_to_stop(query):
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                flag.set()
+                # Stops only when the user's cancel reaches it.
+                await asyncio.sleep(10)
+
+        engine, _ = make_engine({"parallel": slow_to_stop})
+        with pytest.raises(ws.Cancelled):
+            engine.search(QUERY, ["parallel"], ["parallel"], 5.0, flag)
+        assert settle(engine) == 0
+        assert engine._health["parallel"].kind == "vendor_error"
 
     def test_cache_respects_allowed_providers(self):
         _, calls = use_engine(dict(ALL_OK))

@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import concurrent.futures
+import contextlib
 import json
 import logging
 import random
@@ -247,9 +248,10 @@ _ANSI_RE = re.compile(
 _CONTROL_RE = re.compile(
     r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069\ufeff\ud800-\udfff]"
 )
+# Brackets right after a name are code, not a link: handlers[kind](event).
+_LINK_OPEN = r"(?<![A-Za-z0-9_])\[([^\]\n]{0,300})\]\("
 _LINK = (
-    r"\[([^\]\n]{0,300})\]\((?:[^()\s]|\([^()\s]{0,100}\)){0,2000}"
-    r"(?:\s+\"[^\"\n]{0,200}\")?\)"
+    _LINK_OPEN + r"(?:[^()\s]|\([^()\s]{0,100}\)){0,2000}(?:\s+\"[^\"\n]{0,200}\")?\)"
 )
 _IMAGE_RE = re.compile("!" + _LINK)
 _LINK_RE = re.compile(_LINK)
@@ -267,7 +269,7 @@ _RUN_CHARS = r"A-Za-z0-9+/=%._~:?&#@!-"
 _LONG_RUN_RE = re.compile(rf"(?<![{_RUN_CHARS}])[{_RUN_CHARS}]{{1000,}}")
 _ANGLE_URL_RE = re.compile(r"<(https?://[^>\s]{1,2000})>")
 # Services cut excerpts anywhere, even in the middle of a link.
-_CUT_LINK_RE = re.compile(r"\[([^\]\n]{0,300})\]\([^)\s]{0,2000}$")
+_CUT_LINK_RE = re.compile(_LINK_OPEN + r"[^)\s]{0,2000}$")
 _NAV_LINE_RE = re.compile(
     r"^[\s*+\-|]*(?:" + _LINK.replace("([^", "(?:[^", 1) + r"[\s*+\-|,\u00b7]*)+$"
 )
@@ -395,8 +397,8 @@ def _normalize_text(text: str) -> list[str]:
         line = _LINK_RE.sub(r"\1", line)
         line = _CUT_LINK_RE.sub(r"\1", line)
         line = _ANGLE_URL_RE.sub(r"\1", line)
-        line = re.sub(r"^(?:#{1,6}\s+|>\s?)", "", line)
-        line = line.replace("**", "")
+        # Bold, headings and quotes are left alone.
+        # In code they are 2**3, comments and >>> prompts.
         if line.strip():
             current.append(line)
     flush()
@@ -577,9 +579,17 @@ def format_results(
         size += cost
         chars += sum(len(p) for p in kept)
     if not blocks:
+        # A cut URL would look fetchable but point somewhere else.
         first = hits[0]
-        return truncate_utf8(header + f"1. {first.title}\n   {first.url}", max_bytes)
+        text = f"{header}1. {first.title}\n   {first.url}"
+        if len(text.encode("utf-8")) > max_bytes:
+            text = f"{header}1. {first.title}"
+        return truncate_utf8(text, max_bytes)
     return header + "\n\n".join(blocks) + footer
+
+
+# Ends the first line of a compacted result, so it is never compacted twice.
+_COMPACTED = ", passages compacted]"
 
 
 def compact_result(args, content: str) -> str:
@@ -590,6 +600,9 @@ def compact_result(args, content: str) -> str:
     """
     from .tools import UNTRUSTED_MARKER
 
+    first_line = content.partition("\n")[0]
+    if first_line.startswith("[web_search: ") and first_line.endswith(_COMPACTED):
+        return content
     query = json.dumps(query_from_args(args) or "?", ensure_ascii=False)
     if not content.startswith(UNTRUSTED_MARKER):
         return f"[web_search: {query}, {len(content)} chars, compacted]"
@@ -600,7 +613,7 @@ def compact_result(args, content: str) -> str:
             origin = line[len("origin: ") :]
     results = re.findall(r"(?m)^(\d+\. .*)\n   (https?://\S+)$", body)
     lines = "\n\n".join(f"{title}\n   {url}" for title, url in results)
-    first = f"[web_search: {query}, {len(results)} results, passages compacted]"
+    first = f"[web_search: {query}, {len(results)} results{_COMPACTED}"
     return f"{first}\n{_untrusted_header(origin)}{lines}"
 
 
@@ -695,6 +708,17 @@ def _rpc_error(error) -> VendorError:
     data = error.get("data")
     text = f"{message} {data}" if data else message
     return _envelope_error(text, drift=error.get("code") == -32602)
+
+
+@contextlib.contextmanager
+def _retry_hint(headers):
+    """Make a rate limit reported inside a successful answer honor Retry-After."""
+    try:
+        yield
+    except VendorError as exc:
+        if exc.kind == "throttled" and exc.retry_after is None:
+            exc.retry_after = _retry_after(headers)
+        raise
 
 
 def _split_lines(text: str) -> list[str]:
@@ -898,7 +922,9 @@ def parse_exa(text: str) -> list:
 
 
 def parse_keenable(data) -> list:
-    return _parse_results(data, lambda r: r.get("snippet") or r.get("description"))
+    return _parse_results(
+        data, lambda r: r.get("snippet") or r.get("description"), "published_at"
+    )
 
 
 def parse_tavily(data) -> list:
@@ -949,6 +975,7 @@ class Transport:
         # Random per process, so Parallel can't link searches across processes.
         self.session_id = uuid.uuid4().hex
         self.mcp_sessions: dict[str, str] = {}
+        self._handshakes: dict[str, asyncio.Lock] = {}
 
     async def post(self, url: str, payload, headers: dict | None = None):
         import httpx2
@@ -1001,18 +1028,31 @@ class Transport:
             session = self.mcp_sessions.get(vendor)
             status, headers, body = await self.post(url, payload, _mcp_headers(session))
             if not retried and _wants_session(status, body, session is not None):
-                self.mcp_sessions.pop(vendor, None)
-                await self._initialize(vendor, url)
+                await self._initialize(vendor, url, stale=session)
                 retried = True
                 continue
-            result = _rpc_response(status, headers, body).get("result")
-            if not isinstance(result, dict):
-                raise VendorError("malformed", "JSON-RPC result is not an object")
-            if result.get("isError"):
-                raise _envelope_error(_mcp_text(result))
+            with _retry_hint(headers):
+                result = _rpc_response(status, headers, body).get("result")
+                if not isinstance(result, dict):
+                    raise VendorError("malformed", "JSON-RPC result is not an object")
+                if result.get("isError"):
+                    raise _envelope_error(_mcp_text(result))
             return result, headers
 
-    async def _initialize(self, vendor: str, url: str) -> None:
+    async def _initialize(self, vendor: str, url: str, stale: str | None) -> None:
+        """Replace the *stale* session.
+
+        Calls that need a session at the same time share one handshake,
+        and none of them uses it before the handshake is finished.
+        """
+        async with self._handshakes.setdefault(vendor, asyncio.Lock()):
+            current = self.mcp_sessions.get(vendor)
+            if current is not None and current != stale:
+                return
+            self.mcp_sessions.pop(vendor, None)
+            self.mcp_sessions[vendor] = await self._handshake(url)
+
+    async def _handshake(self, url: str) -> str:
         from .agent import _swival_version
 
         payload = {
@@ -1030,12 +1070,12 @@ class Transport:
         session = headers.get("mcp-session-id")
         if not session:
             raise VendorError("drift", "initialize returned no session id")
-        self.mcp_sessions[vendor] = session
         await self.post(
             url,
             {"jsonrpc": "2.0", "method": "notifications/initialized"},
             _mcp_headers(session),
         )
+        return session
 
 
 def _wants_session(status: int, body: bytes, had_session: bool) -> bool:
@@ -1074,7 +1114,9 @@ async def search_keenable(transport: Transport, query: str) -> VendorResponse:
         {"query": query, "max_results": VENDOR_RESULTS},
         {"X-Keenable-Title": "swival"},
     )
-    return VendorResponse(parse_keenable(data), _quota_cooldown(headers))
+    with _retry_hint(headers):
+        hits = parse_keenable(data)
+    return VendorResponse(hits, _quota_cooldown(headers))
 
 
 async def search_tavily(transport: Transport, query: str) -> VendorResponse:
@@ -1088,7 +1130,9 @@ async def search_tavily(transport: Transport, query: str) -> VendorResponse:
         },
         {"X-Tavily-Access-Mode": "keyless"},
     )
-    return VendorResponse(parse_tavily(data), _quota_cooldown(headers))
+    with _retry_hint(headers):
+        hits = parse_tavily(data)
+    return VendorResponse(hits, _quota_cooldown(headers))
 
 
 ADAPTERS = {
@@ -1110,9 +1154,11 @@ class _Health:
 
 @dataclass
 class _Flight:
-    task: asyncio.Task
     destinations: tuple
+    task: asyncio.Task | None = None
     waiters: int = 0
+    # The user cancelled, so the service isn't to blame.
+    abandoned: bool = False
 
 
 @dataclass(frozen=True)
@@ -1259,10 +1305,15 @@ class Engine:
         self, query, destinations, allowed, timeout: float, cancel_flag=None
     ) -> Outcome:
         """Run one search on the engine loop, giving up after *timeout* seconds."""
+        if cancel_flag is not None and cancel_flag.is_set():
+            raise Cancelled
         loop = self._ensure_started()
+        # Callers may clear and reuse their flag, so keep our own record.
+        user_cancel = threading.Event()
         future = asyncio.run_coroutine_threadsafe(
             asyncio.wait_for(
-                self._search(query, tuple(destinations), tuple(allowed)), timeout
+                self._search(query, tuple(destinations), tuple(allowed), user_cancel),
+                timeout,
             ),
             loop,
         )
@@ -1278,6 +1329,7 @@ class Engine:
                 if future.done():
                     raise
                 if cancel_flag is not None and cancel_flag.is_set():
+                    user_cancel.set()
                     future.cancel()
                     raise Cancelled from None
             except concurrent.futures.CancelledError:
@@ -1340,7 +1392,7 @@ class Engine:
             self._loop, self._thread = loop, thread
             return loop
 
-    async def _search(self, query, destinations, allowed) -> Outcome:
+    async def _search(self, query, destinations, allowed, user_cancel) -> Outcome:
         cached = self._cache_get(query, allowed)
         if cached is not None:
             return cached
@@ -1361,10 +1413,10 @@ class Engine:
         if not joined:
             # The engine owns the request, so the callers sharing it keep it
             # when the one who started it times out.
-            task = asyncio.ensure_future(self._lead(query, destinations))
-            flight = _Flight(task, destinations)
+            flight = _Flight(destinations)
+            flight.task = asyncio.ensure_future(self._lead(query, flight))
             self._flights.setdefault(query, []).append(flight)
-            task.add_done_callback(
+            flight.task.add_done_callback(
                 lambda _t, q=query, f=flight: self._forget_flight(q, f)
             )
         flight.waiters += 1
@@ -1373,6 +1425,8 @@ class Engine:
         finally:
             flight.waiters -= 1
             if flight.waiters == 0 and not flight.task.done():
+                # A deadline that already hit still counts against the service.
+                flight.abandoned = user_cancel.is_set() and not flight.task.cancelling()
                 flight.task.cancel()
                 self._forget_flight(query, flight)
         return replace(outcome, joined=True, attempts=()) if joined else outcome
@@ -1384,21 +1438,21 @@ class Engine:
         if not flights:
             self._flights.pop(query, None)
 
-    async def _lead(self, query, destinations) -> Outcome:
+    async def _lead(self, query, flight: _Flight) -> Outcome:
         async with asyncio.timeout(DEADLINE):
             async with self._slots:
-                outcome = await self._walk(query, destinations)
+                outcome = await self._walk(query, flight)
         if outcome.hits and not outcome.error:
             self._cache_put(query, outcome)
         return outcome
 
-    async def _walk(self, query, destinations) -> Outcome:
+    async def _walk(self, query, flight: _Flight) -> Outcome:
         attempts: list[Attempt] = []
         failures: list[str] = []
         best: tuple[float, list, str] | None = None
         soft_misses = 0
         ceiling = False
-        for name in destinations:
+        for name in flight.destinations:
             if self._cooling(name):
                 attempts.append(Attempt(name, "cooling"))
                 failures.append(self._health[name].kind or "vendor_error")
@@ -1413,10 +1467,11 @@ class Engine:
                 async with asyncio.timeout(REQUEST_TIMEOUT):
                     response = await self._adapters[name](self._transport, query)
             except asyncio.CancelledError:
-                # Cut off by the caller's deadline: count it like any stall.
-                self._failed(
-                    name, VendorError("vendor_error", "cut off at the deadline")
-                )
+                # Being cut off at the deadline counts as a stall.
+                if not flight.abandoned:
+                    self._failed(
+                        name, VendorError("vendor_error", "cut off at the deadline")
+                    )
                 raise
             except Exception as exc:
                 error = _as_vendor_error(exc, name)
