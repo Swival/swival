@@ -4,11 +4,23 @@ All notable user-facing changes to Swival.
 
 ## Unreleased
 
+- Added the `anthropic` provider for Claude through the Anthropic API.
+  Use `--provider anthropic --model MODEL` with `ANTHROPIC_API_KEY` or `--api-key`.
+  It supports model browsing, context-window discovery, prompt caching, cost reporting, and extended thinking through `--reasoning-effort`.
+- Added optional automatic model routing with `--model-routing` or `model_routing = true`.
+  A configured decision model chooses among at least two profiles with descriptions at the start of each task, including subagent tasks.
+  Limit the choices with `routing_profiles`, and control routing in the REPL with `/route`, `/route on`, and `/route off`.
+  Explicit model, provider, or profile choices pause routing.
+  Routing sends the request and a conversation excerpt to the decision service; switching profiles sends the conversation history to the selected chat provider.
 - Added a built-in `web_search` tool that works without an account or API key.
   It returns a few results with the passages that best match the query, small enough for small context windows.
   Queries go to free search services: Parallel, Keenable, Exa and Tavily.
   Turn it off with `--no-web-search` or `web_search = false`, or pick the services with `web_search_providers`.
   `llm_filter` sees every query, and queries that look like they contain a credential are refused.
+- Token counting now uses bundled tokenizer data by default and falls back to estimates after a two-second loading timeout, avoiding startup stalls on slow or offline connections.
+- When a decision request fails because the service cannot be reached, times out, or is unavailable, `decide` now asks the agent to continue without decision-model results.
+- `--reviewer-mode` now hides `.swival/HISTORY.md` from its tools and does not append to it, keeping past agent answers out of the review evidence.
+  This also applies to `--self-review`.
 
 ## 1.0.48
 
