@@ -2,7 +2,7 @@
 
 All notable user-facing changes to Swival.
 
-## Unreleased
+## 1.9.0
 
 - Added the `anthropic` provider for Claude through the Anthropic API.
   Use `--provider anthropic --model MODEL` with `ANTHROPIC_API_KEY` or `--api-key`.
