@@ -39,6 +39,7 @@ from ._msg import (
     _canonicalize_tool_calls,
     _complete_orphaned_tool_calls,
     _estimate_tokens,
+    _find_current_turn_boundary,
     _has_image_content,
     _marquee_text_for_turn,
     _msg_get,
@@ -677,6 +678,24 @@ _GEAP_AUTH_HINT = (
     "    --location us-central1 \\\n"
     '    --model gemini-3.1-pro "task"'
 )
+
+
+_ANTHROPIC_AUTH_RE = re.compile(r"authentication_error|invalid x-api-key|\b401\b", re.I)
+
+_ANTHROPIC_AUTH_HINT = (
+    "\n\nThe Anthropic API rejected the API key.\n"
+    "Set ANTHROPIC_API_KEY (or pass --api-key) to a key from "
+    "https://platform.claude.com/settings/keys.\n"
+    "Signing in with a Claude plan is not supported; to use the monthly API "
+    "credits of a Max or Team plan, create the key in the Console organization "
+    "linked to that plan."
+)
+
+
+def _anthropic_auth_hint(provider: str, error_text: str) -> str:
+    if provider != "anthropic" or not _ANTHROPIC_AUTH_RE.search(error_text):
+        return ""
+    return _ANTHROPIC_AUTH_HINT
 
 
 def _geap_auth_hint(provider: str, error_text: str) -> str:
@@ -1968,6 +1987,14 @@ def _canonical_error(error: str) -> str:
     return f"{first}\n{detail_line}" if detail_line else first
 
 
+def _thinking_blocks_text(blocks) -> str:
+    if not isinstance(blocks, list):
+        return ""
+    return "".join(
+        b.get("thinking") or b.get("data") or "" for b in blocks if isinstance(b, dict)
+    )
+
+
 def estimate_tokens(messages: list, tools: list | None = None) -> int:
     """Count tokens across all messages using tiktoken."""
     total = 0
@@ -1993,7 +2020,9 @@ def estimate_tokens(messages: list, tools: list | None = None) -> int:
                 elif isinstance(tc, dict):
                     fn = tc.get("function", {})
                     content += fn.get("name", "") + (fn.get("arguments", "") or "")
-        reasoning_content = _msg_get(m, "reasoning_content")
+        # Thinking blocks repeat the reasoning_content text, so count only one.
+        thinking = _thinking_blocks_text(_msg_get(m, "thinking_blocks"))
+        reasoning_content = thinking or _msg_get(m, "reasoning_content")
         if reasoning_content:
             content += str(reasoning_content)
         total += count_tokens(content)
@@ -3073,8 +3102,20 @@ def _set_msg_key(msg, key: str, value) -> None:
         setattr(msg, key, value)
 
 
+def _stale_thinking_messages(messages: list) -> list:
+    """Assistant messages from earlier turns that still carry thinking blocks."""
+    boundary = _find_current_turn_boundary(messages)
+    return [
+        m
+        for m in messages[:boundary]
+        if _msg_role(m) == "assistant" and _msg_get(m, "thinking_blocks")
+    ]
+
+
 def _has_reasoning_payload(messages: list) -> bool:
-    return any(_msg_get(m, "reasoning_content") for m in messages)
+    return any(_msg_get(m, "reasoning_content") for m in messages) or bool(
+        _stale_thinking_messages(messages)
+    )
 
 
 def _messages_compaction_signature(messages: list) -> tuple:
@@ -3196,6 +3237,10 @@ def _strip_reasoning_content_for_compaction(
     provider-routing code.
     """
     changed = False
+    # Anthropic only requires thinking blocks from the current turn.
+    for msg in _stale_thinking_messages(messages):
+        _delete_msg_key(msg, "thinking_blocks")
+        changed = True
     for msg in messages:
         if _msg_role(msg) != "assistant":
             continue
@@ -4729,6 +4774,8 @@ def _resolve_model_str(provider: str, model_id: str) -> str:
     elif provider == "chatgpt":
         bare = model_id.removeprefix("chatgpt/").removeprefix("chatgpt/")
         return f"chatgpt/{bare}"
+    elif provider == "anthropic":
+        return f"anthropic/{model_id.removeprefix('anthropic/')}"
     elif provider == "bedrock":
         return f"bedrock/{model_id.removeprefix('bedrock/')}"
     elif provider == "geap":
@@ -5573,6 +5620,120 @@ class _InlineThinkSplitter:
         return ("", pending) if self._in_think else (pending, "")
 
 
+# Providers whose LiteLLM adapter reads thinking blocks back.
+# Other servers see an unknown field and may reject the request.
+_THINKING_BLOCK_PROVIDERS = frozenset({"anthropic", "bedrock", "geap"})
+
+
+def _anthropic_sent_params(kwargs: dict) -> dict | None:
+    """What LiteLLM will really send for these arguments, or None on error.
+
+    LiteLLM changes thinking settings depending on the model, and sometimes
+    drops them, so we ask it instead of guessing.
+    """
+    try:
+        from litellm.utils import get_optional_params
+
+        return get_optional_params(
+            model=kwargs["model"].removeprefix("anthropic/"),
+            custom_llm_provider="anthropic",
+            drop_params=True,
+            **{
+                key: kwargs[key]
+                for key in (
+                    "max_tokens",
+                    "max_completion_tokens",
+                    "temperature",
+                    "top_p",
+                    "reasoning_effort",
+                    "thinking",
+                    "additional_drop_params",
+                )
+                if key in kwargs
+            },
+        )
+    except Exception:
+        # Let the real call report the error.
+        return None
+
+
+def _adapt_anthropic_kwargs(kw: dict) -> None:
+    """Fix up the request so the Anthropic API accepts it.
+
+    LiteLLM would send extra_body as a field of its own, so its keys are
+    moved to the top level first.
+
+    A thinking budget has to stay below the output limit.
+    When it doesn't, we shrink it, or turn thinking off if even the minimum
+    is too big.
+    Thinking also rules out custom sampling and a forced tool choice, and
+    without it Claude still won't take temperature and top_p together.
+
+    This runs after the cache lookup, so the cache key sees the original
+    arguments.
+    """
+    for key, val in (kw.pop("extra_body", None) or {}).items():
+        kw.setdefault(key, val)
+
+    sent = _anthropic_sent_params(kw)
+    if sent is None:
+        return
+    thinking = sent.get("thinking")
+    if thinking and thinking.get("type") == "enabled":
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        fitted = AnthropicConfig.cap_thinking_budget_to_max_tokens(
+            thinking, sent.get("max_tokens")
+        )
+        if fitted is not thinking:
+            # Only older models use a fixed budget, and LiteLLM passes an
+            # explicit one through unchanged.
+            kw.pop("reasoning_effort", None)
+            if fitted:
+                kw["thinking"] = fitted
+            else:
+                kw.pop("thinking", None)
+            thinking = fitted
+
+    if thinking and thinking.get("type") in ("enabled", "adaptive"):
+        kw.pop("temperature", None)
+        kw.pop("top_p", None)
+        if kw.get("tool_choice") not in (None, "auto", "none"):
+            del kw["tool_choice"]
+    elif sent.get("temperature") is not None and sent.get("top_p") is not None:
+        del kw["top_p"]
+
+
+def _restore_streamed_thinking_blocks(response, chunks) -> None:
+    """Fix Anthropic thinking blocks that get doubled when a stream is merged.
+
+    LiteLLM streams each piece of thinking as its own block, then sends the
+    full text again along with the signature.
+    Merging the chunks repeats the text, and Anthropic then rejects the
+    signature on the next turn.
+
+    Only signed and redacted blocks are complete, so we keep just those.
+    """
+    messages = [
+        _msg_get(choice, "message") for choice in _msg_get(response, "choices") or ()
+    ]
+    messages = [m for m in messages if _msg_get(m, "thinking_blocks")]
+    if not messages:
+        return
+
+    blocks = [
+        dict(block)
+        for chunk in chunks
+        for choice in _msg_get(chunk, "choices") or ()
+        for block in _msg_get(_msg_get(choice, "delta"), "thinking_blocks") or ()
+        if isinstance(block, dict)
+        and (block.get("type") == "redacted_thinking" or block.get("signature"))
+    ]
+    if blocks:
+        for message in messages:
+            _set_msg_key(message, "thinking_blocks", blocks)
+
+
 def _restore_streamed_tool_call_extras(response, chunks) -> None:
     """Put back the per-tool-call ``extra_content`` that reassembly drops.
 
@@ -5727,6 +5888,7 @@ def _completion_via_stream(
         chunks, messages=completion_kwargs.get("messages")
     )
     _restore_streamed_tool_call_extras(response, chunks)
+    _restore_streamed_thinking_blocks(response, chunks)
     return response
 
 
@@ -6058,11 +6220,18 @@ def call_llm(
     _escape_special_tokens_in_messages(messages)
 
     # --- Outbound: strip internal metadata that strict providers reject ---
+    _keeps_thinking_blocks = provider in _THINKING_BLOCK_PROVIDERS
+
+    def _is_internal(key):
+        return key.startswith("_") or (
+            key == "thinking_blocks" and not _keeps_thinking_blocks
+        )
+
     def _strip_internal(m):
         if not isinstance(m, dict):
             return m
-        if any(k.startswith("_") for k in m):
-            return {k: v for k, v in m.items() if not k.startswith("_")}
+        if any(_is_internal(k) for k in m):
+            return {k: v for k, v in m.items() if not _is_internal(k)}
         return m
 
     messages = [_strip_internal(m) for m in messages]
@@ -6163,6 +6332,13 @@ def call_llm(
             kwargs["api_key"] = api_key
         if base_url:
             kwargs["api_base"] = base_url
+    elif provider == "anthropic":
+        kwargs = {
+            "api_key": api_key,
+            "extra_headers": {"User-Agent": _swival_user_agent(user_agent)},
+        }
+        if base_url:
+            kwargs["api_base"] = base_url
     elif provider == "bedrock":
         kwargs = {}
         litellm.modify_params = True
@@ -6226,23 +6402,34 @@ def call_llm(
     if reasoning_effort is not None and reasoning_effort != "default":
         completion_kwargs["reasoning_effort"] = reasoning_effort
 
-    # --- Prompt caching ---
-    # For providers that support explicit cache_control (Anthropic, Gemini,
-    # Bedrock), tell LiteLLM to auto-inject cache breakpoints on the system
-    # message. OpenAI/Deepseek cache automatically (>1024 token prompts).
-    # lmstudio is local — no caching benefit.
-    # geap (Vertex AI) rejects cached content when tools or system
-    # instructions are present in the same request.
-    if prompt_cache and provider not in ("lmstudio", "geap"):
-        try:
-            from litellm.utils import supports_prompt_caching
+    request_base = dict(completion_kwargs)
 
-            if supports_prompt_caching(model=model_str):
-                completion_kwargs["cache_control_injection_points"] = [
-                    {"location": "message", "role": "system"},
-                ]
-        except Exception:
-            pass  # old LiteLLM version or unsupported model — skip silently
+    def _build_request(model):
+        # Everything here depends on the model, so a model switch starts over
+        # from the original arguments.
+        completion_kwargs.clear()
+        completion_kwargs.update(request_base, model=model)
+
+        # --- Prompt caching ---
+        # For providers that support explicit cache_control (Anthropic, Gemini,
+        # Bedrock), tell LiteLLM to auto-inject cache breakpoints on the system
+        # message. OpenAI/Deepseek cache automatically (>1024 token prompts).
+        # lmstudio is local — no caching benefit.
+        # geap (Vertex AI) rejects cached content when tools or system
+        # instructions are present in the same request.
+        if prompt_cache and provider not in ("lmstudio", "geap"):
+            try:
+                from litellm.utils import supports_prompt_caching
+
+                if supports_prompt_caching(model=model):
+                    completion_kwargs["cache_control_injection_points"] = [
+                        {"location": "message", "role": "system"},
+                    ]
+            except Exception:
+                pass  # old LiteLLM version or unsupported model — skip silently
+
+        if provider == "anthropic":
+            _adapt_anthropic_kwargs(completion_kwargs)
 
     # --- Cache lookup ---
     # Skip cache for vision requests — base64 payloads would bloat the DB
@@ -6279,6 +6466,8 @@ def call_llm(
                 # decrypt is needed here; guarded defensively in case the
                 # logic changes
                 return msg, finish_reason, [], 0, (0, 0)
+
+    _build_request(model_str)
 
     def _cache_store(choice):
         if cache is None:
@@ -6360,7 +6549,15 @@ def call_llm(
 
     _show_stream = (
         provider
-        in ("generic", "llamacpp", "lmstudio", "huggingface", "openrouter", "applefm")
+        in (
+            "generic",
+            "llamacpp",
+            "lmstudio",
+            "huggingface",
+            "openrouter",
+            "anthropic",
+            "applefm",
+        )
         and verbose
         and call_kind == "agent"
         and sys.stderr.isatty()
@@ -6411,7 +6608,7 @@ def call_llm(
             f"Model {model_id!r} not found; the server only serves "
             f"{replacement!r}, using it instead"
         )
-        completion_kwargs["model"] = new_model_str
+        _build_request(new_model_str)
         if cache_kwargs is not None:
             cache_kwargs["model"] = new_model_str
         try:
@@ -6641,6 +6838,7 @@ def call_llm(
             )
         else:
             msg += _geap_auth_hint(provider, msg_text)
+            msg += _anthropic_auth_hint(provider, msg_text)
         msg += _decision_model_hint(msg_text)
         msg += _prompt_rejection_hint(e)
         ae = AgentError(msg)
@@ -6655,6 +6853,7 @@ def call_llm(
 _PROVIDER_KEY_ENV: dict[str, str] = {
     "huggingface": "HF_TOKEN",
     "openrouter": "OPENROUTER_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
     "generic": "OPENAI_API_KEY",
     "google": "GEMINI_API_KEY",
     "chatgpt": "CHATGPT_API_KEY",
@@ -6854,7 +7053,8 @@ def build_parser():
         type=str,
         default=_UNSET,
         help="API key for the provider (overrides env var: HF_TOKEN, "
-        "OPENROUTER_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or CHATGPT_API_KEY).",
+        "OPENROUTER_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, "
+        "or CHATGPT_API_KEY).",
     )
     provider_group.add_argument(
         "--user-agent",
@@ -7387,11 +7587,12 @@ def build_parser():
             "geap",
             "vertexai",
             "chatgpt",
+            "anthropic",
             "bedrock",
             "command",
         ],
         default=_UNSET,
-        help="LLM provider: lmstudio (local), llamacpp (llama.cpp server, auto-discovers model), huggingface (HF API), openrouter (multi-provider API), generic (any OpenAI-compatible server), applefm (experimental: Apple Foundation Models local server, defaults to --model pcc / Private Cloud Compute; on-device 'system' has a tiny context window; server at http://127.0.0.1:1976/v1), google (Gemini via OpenAI-compatible endpoint), geap (Gemini Enterprise Agent Platform / Vertex AI, auth via Google Cloud credentials), chatgpt (ChatGPT Plus/Pro subscription via OAuth), bedrock (AWS Bedrock, auth via AWS credential chain), command (external command as LLM, --model is the command to run). 'vertexai' is an alias for 'geap'.",
+        help="LLM provider: lmstudio (local), llamacpp (llama.cpp server, auto-discovers model), huggingface (HF API), openrouter (multi-provider API), anthropic (Anthropic Messages API with an API key), generic (any OpenAI-compatible server), applefm (experimental: Apple Foundation Models local server, defaults to --model pcc / Private Cloud Compute; on-device 'system' has a tiny context window; server at http://127.0.0.1:1976/v1), google (Gemini via OpenAI-compatible endpoint), geap (Gemini Enterprise Agent Platform / Vertex AI, auth via Google Cloud credentials), chatgpt (ChatGPT Plus/Pro subscription via OAuth), bedrock (AWS Bedrock, auth via AWS credential chain), command (external command as LLM, --model is the command to run). 'vertexai' is an alias for 'geap'.",
     )
     output_group.add_argument(
         "-q",
@@ -8626,6 +8827,28 @@ def resolve_provider(
                     base_url,
                     resolved_key,
                 )
+    elif provider == "anthropic":
+        if not model:
+            raise ConfigError("--model is required when --provider is anthropic")
+        model_id = model.removeprefix("anthropic/")
+        resolved_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        if not resolved_key:
+            raise ConfigError(
+                "--api-key or ANTHROPIC_API_KEY env var required for anthropic provider"
+            )
+        from .model_catalog import anthropic_base, catalog_context_length
+
+        api_base = anthropic_base(base_url) if base_url else None
+        context_length = max_context_tokens
+        if context_length is None:
+            context_length = _litellm_context_length(
+                _resolve_model_str("anthropic", model_id)
+            )
+        if context_length is None:
+            # The Models API knows the context window of models LiteLLM doesn't.
+            context_length = catalog_context_length(
+                "anthropic", model_id, base_url, resolved_key
+            )
     elif provider == "llamacpp":
         api_base = _normalize_openai_base(base_url or "http://127.0.0.1:8080")
         if model:
@@ -9902,7 +10125,8 @@ def _run_main(args, report, _write_report, parser):
         _subagents = False
     else:
         _subagents = (
-            args.provider in ("google", "geap", "chatgpt", "bedrock") or _large_context
+            args.provider in ("google", "geap", "chatgpt", "anthropic", "bedrock")
+            or _large_context
         )
 
     # The run_python tool runs arbitrary code, so it also requires the
@@ -13995,6 +14219,8 @@ def _resolve_model_arg(
     )
     from .picker import match_score, rank_entries
 
+    if provider == "anthropic":
+        arg = arg.removeprefix("anthropic/")
     try:
         catalog = list_models(provider, base_url, api_key)
     except CatalogUnavailable:

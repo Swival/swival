@@ -123,6 +123,7 @@
     --reviewer &quot;swival --reviewer-mode&quot;
 </code></pre>
 <p>When <code>--reviewer-mode</code> is active, Swival reads the base directory from the first positional argument (as passed by the outer instance), reads the agent's answer from standard input, and reads the task from <code>SWIVAL_TASK</code> (or a <code>--objective</code> file). The reviewer can read, list, search, and outline files under the base directory before returning its verdict. It cannot edit files, run commands or tests, or call external tools. These restrictions apply even with <code>--yolo</code> or broader file and command permissions in config.</p>
+<p>Reviewer mode ignores the history file. The reviewer tools act as if <code>.swival/HISTORY.md</code> does not exist. Past answers are claims from the agent, not evidence. The review also adds no entry to the history file, even if the config enables history.</p>
 <p>Other agents and applications can call it directly:</p>
 <pre><code class="language-sh">SWIVAL_TASK=&quot;Fix the login bug&quot; swival --reviewer-mode . &lt; answer.txt
 swival --reviewer-mode --objective task.md . &lt; answer.txt
@@ -144,7 +145,7 @@ swival --reviewer-mode --objective task.md . &lt; answer.txt
     &quot;task&quot;
 </code></pre>
 <p>The synthesized reviewer command inherits <code>--provider</code>, <code>--model</code>, <code>--base-url</code>, <code>--files</code>, <code>--commands</code>, <code>--skills-dir</code>, <code>--max-context-tokens</code>, <code>--max-output-tokens</code>, <code>--max-output-lines</code>, <code>--max-output-kb</code>, <code>--encrypt-secrets</code>, <code>--retries</code>, <code>--aws-profile</code>, <code>--gcp-project</code>, and <code>--location</code> from the outer invocation (each only when it differs from the default). It always adds <code>--reviewer-mode</code> and <code>--quiet</code>.</p>
-<p>API keys are not placed on the reviewer command line to avoid exposing secrets in process listings. If <code>--api-key</code> was set on the outer invocation, Swival passes it to the reviewer subprocess via the provider-specific environment variable (<code>HF_TOKEN</code>, <code>OPENROUTER_API_KEY</code>, <code>OPENAI_API_KEY</code> for generic, <code>GEMINI_API_KEY</code> for google, <code>CHATGPT_API_KEY</code> for chatgpt).</p>
+<p>API keys are not placed on the reviewer command line to avoid exposing secrets in process listings. If <code>--api-key</code> was set on the outer invocation, Swival passes it to the reviewer subprocess via the provider-specific environment variable (<code>HF_TOKEN</code>, <code>OPENROUTER_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>, <code>OPENAI_API_KEY</code> for generic, <code>GEMINI_API_KEY</code> for google, <code>CHATGPT_API_KEY</code> for chatgpt).</p>
 <p>Bedrock uses the AWS credential chain and needs no API key. Keys already set via environment variables are inherited automatically.</p>
 <p><code>--report</code> and <code>--cache</code> are not mirrored because reviewer mode does not initialize report or cache infrastructure.</p>
 <p><code>--self-review</code> is incompatible with <code>--reviewer</code>, <code>--repl</code>, and <code>--reviewer-mode</code>. It can be set in <code>swival.toml</code>:</p>

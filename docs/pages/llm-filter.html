@@ -144,7 +144,8 @@ The filter must return exactly one user message with a valid request, or the cal
 </code></pre>
 <h2 id="web-search-queries">Web Search Queries</h2>
 <p><code>web_search</code> queries reach the filter as a single user message.
-<code>provider</code> and <code>model</code> are both <code>"web_search"</code>, so a rule that trusts a local model doesn't approve text bound for a search service, <code>destinations</code> lists the services the query may be sent to, and <code>origin</code> names the session's model:</p>
+<code>provider</code> and <code>model</code> are both <code>"web_search"</code>, so a rule that trusts a local model won't approve text that is about to go to a search service.
+<code>destinations</code> lists the services the query may be sent to, and <code>origin</code> names the session's model:</p>
 <pre><code class="language-json">{
   &quot;provider&quot;: &quot;web_search&quot;,
   &quot;model&quot;: &quot;web_search&quot;,
@@ -154,8 +155,9 @@ The filter must return exactly one user message with a valid request, or the cal
   &quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;httpx follow_redirects default&quot;}]
 }
 </code></pre>
-<p>Return one user message with string content to send the (possibly edited) query.
-Anything else blocks the search; the model gets an error and the session continues.</p>
+<p>Return one user message with string content to send the query, edited or not.
+Anything else blocks the search.
+The model then gets an error, and the session goes on.</p>
 <h2 id="behavior-rules">Behavior Rules</h2>
 <table>
 <thead>

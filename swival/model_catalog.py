@@ -22,6 +22,9 @@ HF_ROUTER_MODELS_URL = "https://router.huggingface.co/v1/models"
 HF_HUB_MODELS_URL = "https://huggingface.co/api/models"
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 GOOGLE_OPENAI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
+ANTHROPIC_API_BASE = "https://api.anthropic.com"
+# Only used to list models. LiteLLM sets its own version for chat requests.
+ANTHROPIC_API_VERSION = "2026-10-21"
 
 LMSTUDIO_DEFAULT_BASE = "http://127.0.0.1:1234"
 LLAMACPP_DEFAULT_BASE = "http://127.0.0.1:8080"
@@ -289,11 +292,25 @@ def _openai_base(url: str) -> str:
     return f"{stripped}/v1"
 
 
-def _get_json(url: str, api_key: str | None, timeout: float):
-    headers = {"User-Agent": "swival"}
+def anthropic_base(url: str) -> str:
+    """Strip a trailing slash or /v1, which callers add back themselves."""
+    return url.rstrip("/").removesuffix("/v1")
+
+
+def _get_json(
+    url: str, api_key: str | None, timeout: float, headers: dict | None = None
+):
+    """Fetch url and parse it as JSON.
+
+    api_key is sent as a Bearer token.
+    Providers that authenticate differently pass None and their own headers.
+    """
+    request_headers = {"User-Agent": "swival"}
     if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-    req = urllib.request.Request(url, headers=headers)
+        request_headers["Authorization"] = f"Bearer {api_key}"
+    if headers:
+        request_headers.update(headers)
+    req = urllib.request.Request(url, headers=request_headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode())
@@ -634,6 +651,53 @@ def _fetch_google(base_url: str | None, api_key: str | None, timeout: float):
     return Catalog(entries, source="Google Gemini")
 
 
+def _fetch_anthropic(base_url: str | None, api_key: str | None, timeout: float):
+    """List Claude models.
+
+    Prices and tool support come from LiteLLM's registry, which also fills in
+    a context window or vision flag the API leaves out.
+    """
+    key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        raise CatalogUnavailable(
+            "listing Claude models requires an Anthropic API key",
+            hint="set ANTHROPIC_API_KEY or api_key in your config",
+        )
+    base = anthropic_base(base_url or ANTHROPIC_API_BASE)
+    headers = {"x-api-key": key, "anthropic-version": ANTHROPIC_API_VERSION}
+
+    # A single page of 1000, the API maximum, covers every listed model.
+    data = _get_json(f"{base}/v1/models?limit=1000", None, timeout, headers=headers)
+
+    registry = _litellm_registry()
+    entries = []
+    for m in data.get("data") or []:
+        model_id = m.get("id")
+        if not isinstance(model_id, str):
+            continue
+        info = registry.get(model_id) or {}
+        vision = ((m.get("capabilities") or {}).get("image_input") or {}).get(
+            "supported"
+        )
+        if vision is None:
+            vision = info.get("supports_vision")
+        entries.append(
+            ModelEntry(
+                id=model_id,
+                display_name=m.get("display_name"),
+                context_length=m.get("max_input_tokens")
+                or info.get("max_input_tokens"),
+                supports_tools=info.get("supports_function_calling"),
+                price_in=_per_million(info.get("input_cost_per_token")),
+                price_out=_per_million(info.get("output_cost_per_token")),
+                tags=("vision",) if vision else (),
+            )
+        )
+    if not entries:
+        raise CatalogUnavailable("the Anthropic API reports no models")
+    return Catalog(entries, source="Anthropic")
+
+
 _EXTRA_CHATGPT_MODELS = (
     "gpt-5.6-terra",
     "gpt-5.6-luna",
@@ -696,4 +760,5 @@ _FETCHERS = {
     "openrouter": _fetch_openrouter,
     "google": _fetch_google,
     "chatgpt": _fetch_chatgpt,
+    "anthropic": _fetch_anthropic,
 }

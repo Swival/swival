@@ -454,3 +454,23 @@ class TestModelDispatch:
         text = _repl_help()
         assert "/model" in text
         assert "--fav" in text
+
+
+def test_anthropic_prefix_is_stripped_before_catalog_match(monkeypatch):
+    from swival.agent import _resolve_model_arg
+
+    catalog = Catalog(
+        entries=[ModelEntry(id="claude-opus-5-5"), ModelEntry(id="claude-sonnet-5")],
+        source="Anthropic",
+    )
+    monkeypatch.setattr(mc, "list_models", lambda *a, **k: catalog)
+    model_id, entry = _resolve_model_arg(
+        "anthropic/claude-opus-5-5",
+        provider="anthropic",
+        base_url=None,
+        api_key="k",
+        interactive=False,
+        current_model=None,
+    )
+    assert model_id == "claude-opus-5-5"
+    assert entry is catalog.entries[0]

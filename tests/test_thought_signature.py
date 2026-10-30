@@ -8,7 +8,11 @@ serialization.
 import types
 
 from swival._msg import _canonicalize_tool_calls, _find_current_turn_boundary
-from swival.agent import _msg_to_dict, _restore_streamed_tool_call_extras
+from swival.agent import (
+    _msg_to_dict,
+    _restore_streamed_thinking_blocks,
+    _restore_streamed_tool_call_extras,
+)
 from swival.filter import _message_to_dict as _filter_message_to_dict
 
 
@@ -826,3 +830,34 @@ class TestStreamReassemblyPreservesToolCallExtras:
         response = _rebuild(chunks)
         _restore_streamed_tool_call_extras(response, chunks)
         assert response.choices[0].message.content == "done"
+
+
+def _thinking_delta(**block):
+    return _chunk({"role": "assistant", "thinking_blocks": [block]})
+
+
+class TestStreamReassemblyRepairsThinkingBlocks:
+    """litellm's stream_chunk_builder joins every thinking fragment, including
+    the one that repeats the whole text with the signature, so the rebuilt
+    block holds the text twice and Anthropic rejects its signature."""
+
+    def test_signed_and_redacted_blocks_survive(self):
+        chunks = [
+            _thinking_delta(type="thinking", thinking="A"),
+            _thinking_delta(type="thinking", thinking="B"),
+            _thinking_delta(type="thinking", thinking="AB", signature="S1"),
+            _thinking_delta(type="redacted_thinking", data="opaque"),
+            _finish("stop"),
+        ]
+        response = _rebuild(chunks)
+        _restore_streamed_thinking_blocks(response, chunks)
+        assert response.choices[0].message.thinking_blocks == [
+            {"type": "thinking", "thinking": "AB", "signature": "S1"},
+            {"type": "redacted_thinking", "data": "opaque"},
+        ]
+
+    def test_plain_stream_is_left_alone(self):
+        chunks = [_chunk({"role": "assistant", "content": "hi"}), _finish("stop")]
+        response = _rebuild(chunks)
+        _restore_streamed_thinking_blocks(response, chunks)
+        assert getattr(response.choices[0].message, "thinking_blocks", None) is None

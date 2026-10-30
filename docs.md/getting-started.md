@@ -56,6 +56,7 @@ The first time you run `swival` on an interactive terminal with no config, a sho
 | `applefm`     | none                                                 | `--provider applefm` (experimental)                                |
 | `huggingface` | `HF_TOKEN` or `--api-key`                            | `--provider huggingface --model ORG/MODEL`                         |
 | `openrouter`  | `OPENROUTER_API_KEY` or `--api-key`                  | `--provider openrouter --model MODEL`                              |
+| `anthropic`   | `ANTHROPIC_API_KEY` or `--api-key`                   | `--provider anthropic --model MODEL`                               |
 | `google`      | `--api-key`, `GEMINI_API_KEY`, or `OPENAI_API_KEY`   | `--provider google --model MODEL`                                  |
 | `geap`        | Google Cloud ADC or `GOOGLE_APPLICATION_CREDENTIALS` | `--provider geap --gcp-project ID --location REGION --model MODEL` |
 | `chatgpt`     | browser auth on first run or `CHATGPT_API_KEY`       | `--provider chatgpt --model MODEL`                                 |
@@ -149,6 +150,21 @@ swival "Hello world" \
 ```
 
 For a deeper look at OpenRouter-specific options, see [Providers](providers.md).
+
+## Running with Anthropic
+
+To use Claude models directly, create an API key in the [Claude Console](https://platform.claude.com/settings/keys) and export it.
+
+On a Max or Team plan, create the key in the Console organization linked to your plan, so its included monthly API credits pay for it.
+
+Otherwise, usage is billed per token.
+
+```sh
+export ANTHROPIC_API_KEY=sk-ant-your-key-here
+swival "Hello world" --provider anthropic --model claude-opus-5-5
+```
+
+See [Providers](providers.md#anthropic) for extended thinking, gateways, and billing details.
 
 ## Running with Google Gemini
 

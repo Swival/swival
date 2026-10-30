@@ -162,7 +162,7 @@
 <h2 id="report-structure">Report Structure</h2>
 <h3 id="top-level-fields">Top-Level Fields</h3>
 <p><code>version</code> is the schema version and is currently <code>1</code>. <code>mode</code> is <code>"oneshot"</code> for single-task runs or <code>"repl"</code> for interactive sessions. <code>timestamp</code> is the run completion time in UTC ISO 8601 format.</p>
-<p><code>task</code> is the original question string passed on the command line, or <code>"repl session (&lt;N&gt; turns)"</code> for REPL sessions. <code>model</code> is the resolved model identifier that was actually used. <code>provider</code> is one of <code>lmstudio</code>, <code>llamacpp</code>, <code>huggingface</code>, <code>openrouter</code>, <code>generic</code>, <code>applefm</code>, <code>chatgpt</code>, <code>google</code>, <code>geap</code> (<code>vertexai</code> is an accepted alias), <code>bedrock</code>, or <code>command</code>.</p>
+<p><code>task</code> is the original question string passed on the command line, or <code>"repl session (&lt;N&gt; turns)"</code> for REPL sessions. <code>model</code> is the resolved model identifier that was actually used. <code>provider</code> is one of <code>lmstudio</code>, <code>llamacpp</code>, <code>huggingface</code>, <code>openrouter</code>, <code>anthropic</code>, <code>generic</code>, <code>applefm</code>, <code>chatgpt</code>, <code>google</code>, <code>geap</code> (<code>vertexai</code> is an accepted alias), <code>bedrock</code>, or <code>command</code>.</p>
 <p><code>settings</code> captures run configuration. <code>sandbox</code> captures the sandbox backend in use. <code>result</code> captures outcome and exit semantics. <code>stats</code> captures aggregate counters. <code>timeline</code> captures ordered event records.</p>
 <h3 id="settings"><code>settings</code></h3>
 <p><code>temperature</code> stores the sampling temperature or <code>null</code> when omitted. <code>top_p</code> stores nucleus sampling. <code>seed</code> stores the random seed or <code>null</code>. <code>max_turns</code> and <code>max_output_tokens</code> store turn and output-token limits.</p>
@@ -236,7 +236,8 @@ It adds up <code>executions</code>, <code>child_calls</code>, <code>child_failur
 <code>stops</code> counts the runs that were stopped early.
 The time spent in these calls is not added to <code>total_tool_time_s</code>, which already includes the <code>run_python</code> call.</p>
 <p><code>web_search</code> appears when the model searched the web.
-It counts <code>searches</code>, <code>cache_hits</code>, <code>errors</code>, <code>vendor_requests</code> and <code>failovers</code>, sums <code>total_latency_s</code>, and counts answers per service in <code>by_vendor</code>.
+It counts <code>searches</code>, <code>cache_hits</code>, <code>errors</code>, <code>vendor_requests</code> and <code>failovers</code>.
+<code>total_latency_s</code> is the time spent searching, and <code>by_vendor</code> counts how often each service answered.
 Searches made by subagents are not included.</p>
 <h3 id="timeline"><code>timeline</code></h3>
 <p><code>timeline</code> is an ordered array of event objects. Each event includes <code>type</code>, and most include <code>turn</code> (the turn number when the event occurred). Review events are an exception — they include <code>round</code> instead of <code>turn</code> since they occur between agent loop iterations.</p>

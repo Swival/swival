@@ -163,6 +163,11 @@ brew uninstall swival     # if installed with Homebrew
 <td><code>--provider openrouter --model MODEL</code></td>
 </tr>
 <tr>
+<td><code>anthropic</code></td>
+<td><code>ANTHROPIC_API_KEY</code> or <code>--api-key</code></td>
+<td><code>--provider anthropic --model MODEL</code></td>
+</tr>
+<tr>
 <td><code>google</code></td>
 <td><code>--api-key</code>, <code>GEMINI_API_KEY</code>, or <code>OPENAI_API_KEY</code></td>
 <td><code>--provider google --model MODEL</code></td>
@@ -242,6 +247,14 @@ cat prompts/review.md | swival --provider huggingface --model zai-org/GLM-5.2
     --max-context-tokens 131072
 </code></pre>
 <p>For a deeper look at OpenRouter-specific options, see <a href="providers.html">Providers</a>.</p>
+<h2 id="running-with-anthropic">Running with Anthropic</h2>
+<p>To use Claude models directly, create an API key in the <a href="https://platform.claude.com/settings/keys">Claude Console</a> and export it.</p>
+<p>On a Max or Team plan, create the key in the Console organization linked to your plan, so its included monthly API credits pay for it.</p>
+<p>Otherwise, usage is billed per token.</p>
+<pre><code class="language-sh">export ANTHROPIC_API_KEY=sk-ant-your-key-here
+swival &quot;Hello world&quot; --provider anthropic --model claude-opus-5-5
+</code></pre>
+<p>See <a href="providers.html#anthropic">Providers</a> for extended thinking, gateways, and billing details.</p>
 <h2 id="running-with-google-gemini">Running with Google Gemini</h2>
 <p>If you want to use Gemini through Google's API, use the <code>google</code> provider. Authentication comes from <code>--api-key</code>, <code>GEMINI_API_KEY</code>, or <code>OPENAI_API_KEY</code>.</p>
 <pre><code class="language-sh">export GEMINI_API_KEY=...

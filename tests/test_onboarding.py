@@ -16,6 +16,7 @@ from swival.onboarding import (
     _ask_lmstudio,
     _ask_llamacpp,
     _ask_openrouter,
+    _ask_anthropic,
     _ask_google,
     _ask_generic,
     _ask_bedrock,
@@ -384,7 +385,7 @@ class TestRunOnboarding:
             monkeypatch,
             [
                 "2",  # Quick setup
-                "5",  # OpenRouter
+                "6",  # OpenRouter
                 "2",  # Type a model id
                 "openai/gpt-5.5",  # model
                 "1",  # I'll set OPENROUTER_API_KEY myself
@@ -398,6 +399,29 @@ class TestRunOnboarding:
         assert profile["provider"] == "openrouter"
         assert profile["model"] == "openai/gpt-5.5"
         assert "api_key" not in profile
+
+    def test_successful_anthropic(self, tmp_path, monkeypatch):
+        cfg_dir = tmp_path / "cfg"
+        monkeypatch.setattr("swival.onboarding.global_config_dir", lambda: cfg_dir)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        _patch_prompt_sequence(
+            monkeypatch,
+            [
+                "2",  # Quick setup
+                "5",  # Anthropic
+                "claude-opus-5-5",  # model
+                "2",  # Enter API key now
+                "sk-ant-test",  # the key
+                "",  # skip context window
+                "1",  # Yes, write config
+            ],
+        )
+        result = run_onboarding()
+        assert result is not None
+        profile = _parse_default_profile(result.read_text())
+        assert profile["provider"] == "anthropic"
+        assert profile["model"] == "claude-opus-5-5"
+        assert profile["api_key"] == "sk-ant-test"
 
     def test_successful_llamacpp_with_optional_model(self, tmp_path, monkeypatch):
         cfg_dir = tmp_path / "cfg"
@@ -427,7 +451,7 @@ class TestRunOnboarding:
             monkeypatch,
             [
                 "2",  # Quick setup
-                "7",  # Generic OpenAI-compatible
+                "8",  # Generic OpenAI-compatible
                 "http://localhost:11434",  # base URL
                 "qwen3:32b",  # model
                 "2",  # Enter API key now
@@ -960,6 +984,40 @@ class TestModelExplorerIntegration:
         s = {}
         _ask_openrouter(s)
         assert s["max_context_tokens"] == 131072
+
+    def test_ask_anthropic_browse_skips_context_when_catalog_knows(self, monkeypatch):
+        from swival.model_catalog import ModelEntry
+
+        buf = _capture_stderr(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env")
+        browsed = []
+
+        def fake_browse(provider, base_url=None, api_key=None, **kw):
+            browsed.append((provider, api_key))
+            return "claude-opus-5-5"
+
+        monkeypatch.setattr("swival.onboarding._browse_models", fake_browse)
+        monkeypatch.setattr(
+            "swival.model_catalog.cached_entries",
+            lambda provider, base_url: [
+                ModelEntry(id="claude-opus-5-5", context_length=1_000_000)
+            ],
+        )
+        _patch_prompt_sequence(
+            monkeypatch,
+            [
+                "1",  # browse available Claude models
+                "1",  # use the ANTHROPIC_API_KEY already set
+            ],
+        )
+        s = {}
+        _ask_anthropic(s)
+        assert browsed == [("anthropic", "sk-ant-env")]
+        assert s["model"] == "claude-opus-5-5"
+        assert "api_key" not in s
+        assert "max_context_tokens" not in s
+        assert "1,000,000" in buf.getvalue()
+        assert "monthly API credits" in buf.getvalue()
 
     def test_ask_generic_skips_context_prompt_when_catalog_knows(self, monkeypatch):
         from swival.model_catalog import ModelEntry

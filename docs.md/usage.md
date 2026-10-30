@@ -192,13 +192,13 @@ swival --profile gpt5 "review this patch"
 `--list-profiles` prints available profiles and exits. The active profile is marked with an arrow and shows which layer selected it (CLI flag, project config, or global config).
 Each description is shown under its profile, and with model routing on, the candidates are marked with `[routing]`.
 
-`--provider` chooses the backend provider and defaults to `lmstudio`. Valid values are `lmstudio`, `llamacpp`, `huggingface`, `openrouter`, `generic`, `applefm` (experimental Apple Foundation Models local server; defaults to `--model pcc`), `google`, `geap` (Gemini Enterprise / Vertex AI; `vertexai` is an accepted alias), `chatgpt` (for ChatGPT Plus/Pro subscriptions), `bedrock` (AWS Bedrock), and `command` (shells out to an external program).
+`--provider` chooses the backend provider and defaults to `lmstudio`. Valid values are `lmstudio`, `llamacpp`, `huggingface`, `openrouter`, `anthropic` (Anthropic API with an API key), `generic`, `applefm` (experimental Apple Foundation Models local server; defaults to `--model pcc`), `google`, `geap` (Gemini Enterprise / Vertex AI; `vertexai` is an accepted alias), `chatgpt` (for ChatGPT Plus/Pro subscriptions), `bedrock` (AWS Bedrock), and `command` (shells out to an external program).
 
 `--model` overrides auto-discovery with a fixed model identifier.
 
 `--base-url` sets a custom API base URL. For LM Studio, the default is `http://127.0.0.1:1234`; for llamacpp, the default is `http://127.0.0.1:8080`.
 
-`--api-key` provides a key directly on the command line and takes precedence over provider environment variables (`HF_TOKEN` for huggingface, `OPENROUTER_API_KEY` for openrouter, `OPENAI_API_KEY` for generic, `GEMINI_API_KEY` for google, `CHATGPT_API_KEY` for chatgpt). Bedrock uses the AWS credential chain instead (`AWS_PROFILE`, env vars, or IAM roles). Local providers (`lmstudio`, `llamacpp`) need no key.
+`--api-key` provides a key directly on the command line and takes precedence over provider environment variables (`HF_TOKEN` for huggingface, `OPENROUTER_API_KEY` for openrouter, `ANTHROPIC_API_KEY` for anthropic, `OPENAI_API_KEY` for generic, `GEMINI_API_KEY` for google, `CHATGPT_API_KEY` for chatgpt). Bedrock uses the AWS credential chain instead (`AWS_PROFILE`, env vars, or IAM roles). Local providers (`lmstudio`, `llamacpp`) need no key.
 
 `--user-agent` sets the `User-Agent` header sent with LLM API requests. Defaults to `Swival/<version>`. Useful when a provider requires a specific agent string (e.g. `--user-agent 'KimiCLI/Swival'` for Kimi's API).
 

@@ -9,10 +9,15 @@ import pytest
 from swival import model_catalog as mc
 
 
-def _fake_get_json(responses):
-    """Return a _get_json stand-in serving canned payloads keyed by URL substring."""
+def _fake_get_json(responses, calls=None):
+    """Return a _get_json stand-in serving canned payloads keyed by URL substring.
 
-    def fake(url, api_key, timeout):
+    Each request is appended to *calls* when a list is given.
+    """
+
+    def fake(url, api_key, timeout, headers=None):
+        if calls is not None:
+            calls.append((url, api_key, headers))
         for fragment, payload in responses.items():
             if fragment in url:
                 if isinstance(payload, Exception):
@@ -444,9 +449,84 @@ def test_get_json_parses_and_sends_auth(monkeypatch):
             return False
 
     def fake_urlopen(req, timeout):
-        seen["auth"] = req.headers.get("Authorization")
+        seen.clear()
+        seen.update({k.lower(): v for k, v in req.header_items()})
         return FakeResp(json.dumps({"ok": True}).encode())
 
     monkeypatch.setattr(mc.urllib.request, "urlopen", fake_urlopen)
     assert mc._get_json("http://x", "sekrit", 1.0) == {"ok": True}
-    assert seen["auth"] == "Bearer sekrit"
+    assert seen["authorization"] == "Bearer sekrit"
+
+    mc._get_json("http://x", None, 1.0, headers={"x-api-key": "k"})
+    assert seen["x-api-key"] == "k"
+    assert "authorization" not in seen
+
+
+def test_anthropic_requires_key(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    with pytest.raises(mc.CatalogUnavailable) as exc:
+        mc.list_models("anthropic")
+    assert "ANTHROPIC_API_KEY" in exc.value.hint
+
+
+def test_anthropic_catalog_merges_live_and_litellm_data(monkeypatch):
+    calls = []
+    listing = {
+        "data": [
+            {"id": "claude-opus-5-5", "display_name": "Claude Opus 5.5"},
+            {
+                "id": "claude-brand-new",
+                "display_name": "Claude New",
+                "max_input_tokens": 500_000,
+                "capabilities": {"image_input": {"supported": True}},
+            },
+        ]
+    }
+    monkeypatch.setattr(mc, "_get_json", _fake_get_json({"/v1/models": listing}, calls))
+    monkeypatch.setattr(
+        mc,
+        "_litellm_registry",
+        lambda: {
+            "claude-opus-5-5": {
+                "max_input_tokens": 1_000_000,
+                "input_cost_per_token": 4e-06,
+                "output_cost_per_token": 2e-05,
+                "supports_function_calling": True,
+                "supports_vision": True,
+            }
+        },
+    )
+    catalog = mc.list_models("anthropic", api_key="sk-ant")
+
+    assert calls == [
+        (
+            "https://api.anthropic.com/v1/models?limit=1000",
+            None,
+            {"x-api-key": "sk-ant", "anthropic-version": mc.ANTHROPIC_API_VERSION},
+        )
+    ]
+    known, new = catalog.entries
+    assert known.id == "claude-opus-5-5"
+    assert known.display_name == "Claude Opus 5.5"
+    assert known.context_length == 1_000_000
+    assert known.price_in == pytest.approx(4.0)
+    assert known.price_out == pytest.approx(20.0)
+    assert known.supports_tools is True
+    assert known.tags == ("vision",)
+    assert new.id == "claude-brand-new"
+    assert new.context_length == 500_000
+    assert new.tags == ("vision",)
+    assert new.price_in is None
+    assert catalog.source == "Anthropic"
+
+
+def test_anthropic_catalog_uses_env_key_and_base_url(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env")
+    calls = []
+    listing = {"data": [{"id": "claude-x"}]}
+    monkeypatch.setattr(mc, "_get_json", _fake_get_json({"/v1/models": listing}, calls))
+    monkeypatch.setattr(mc, "_litellm_registry", lambda: {})
+    mc.list_models("anthropic", base_url="https://gw.example/v1/")
+    url, _, headers = calls[0]
+    assert url == "https://gw.example/v1/models?limit=1000"
+    assert headers["x-api-key"] == "sk-env"

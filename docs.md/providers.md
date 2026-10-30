@@ -6,6 +6,7 @@ Swival supports local, hosted, and API-based model providers:
 - [llama.cpp](#llamacpp) — local llama.cpp server
 - [HuggingFace Inference API](#huggingface-inference-api) — hosted inference
 - [OpenRouter](#openrouter) — multi-provider access through a single API
+- [Anthropic](#anthropic) — Claude models through the Anthropic API with an API key
 - [Generic (OpenAI-compatible)](#generic-openai-compatible) — any OpenAI-compatible server
 - [Apple Foundation Models](#apple-foundation-models) — experimental, local Apple Foundation Models server
 - [Google Gemini API](#google-gemini-api) — Google's models via API key
@@ -27,6 +28,10 @@ model = "qwen3-coder-next"
 provider = "chatgpt"
 model = "gpt-5.5"
 reasoning_effort = "high"
+
+[profiles.claude]
+provider = "anthropic"
+model = "claude-opus-5-5"
 ```
 
 Then switch with `--profile` at startup, or `/profile` mid-session:
@@ -34,6 +39,7 @@ Then switch with `--profile` at startup, or `/profile` mid-session:
 ```sh
 swival --profile local "quick task"
 swival --profile gpt5 "hard task"
+swival --profile claude "review this patch"
 ```
 
 ```
@@ -144,6 +150,66 @@ swival --provider openrouter --model z-ai/glm-5.2 \
 ```
 
 Pass bare model identifiers like `z-ai/glm-5.2`. If you accidentally include a provider prefix (e.g. `openrouter/z-ai/glm-5.2`), Swival detects and corrects the double prefix.
+
+## Anthropic
+
+The `anthropic` provider uses the Anthropic API directly with an API key.
+`--model` is required, and the key comes from `ANTHROPIC_API_KEY` or `--api-key`.
+Create a key in the [Claude Console](https://platform.claude.com/settings/keys).
+
+```sh
+export ANTHROPIC_API_KEY=sk-ant-your-key-here
+swival --provider anthropic --model claude-opus-5-5 "task"
+```
+
+The same setup as a profile:
+
+```toml
+[profiles.claude]
+provider = "anthropic"
+model = "claude-opus-5-5"
+reasoning_effort = "medium"
+```
+
+Pass bare model names like `claude-opus-5-5`.
+An `anthropic/` prefix is accepted and stripped.
+With a key set, `/model` in the REPL lists the models your key can use.
+
+Usage is billed to the Claude Console organization that owns the key.
+Max and Team plans come with monthly API credits.
+To use them, link a Console organization in your claude.ai billing settings and create the key there.
+Pro plans don't include API credits, so usage is billed per token.
+See Anthropic's [monthly API credits](https://support.claude.com/en/articles/17154008-monthly-api-credits-for-max-and-team-plans) page for the details.
+
+Only API keys work.
+You can't sign in with your Claude account the way Claude Code does.
+
+The session cost Swival shows uses list prices, even when monthly credits cover the usage.
+
+If you used `--provider generic --base-url https://api.anthropic.com` before, switch to `--provider anthropic`.
+You get cost reporting, automatic [prompt caching](#prompt-caching), and the right context window without passing `--max-context-tokens`.
+
+`--reasoning-effort` turns on extended thinking.
+While thinking is on, Anthropic doesn't allow custom sampling or a forced tool choice.
+Swival then ignores `--temperature` and `--top-p` and lets the model pick its tools.
+
+Older models think within a fixed budget, which has to stay below `--max-output-tokens`.
+If it doesn't fit, Swival shrinks it, or turns thinking off when the limit is too small for any budget.
+
+Without thinking, Claude still won't take `temperature` and `top_p` together, so only `--temperature` is sent when you set both.
+The newest models, such as `claude-opus-5-5`, accept neither sampling settings nor a forced tool choice, so those are always left out.
+`--seed` isn't supported and is ignored.
+
+Keys in `extra_body`, such as `metadata` or `thinking`, are added to the request as top-level fields.
+The rules above apply to them too, and an explicit `thinking` setting wins over `--reasoning-effort`.
+
+To use a proxy or gateway that speaks the Anthropic API, set `--base-url` to its root URL.
+Swival adds `/v1/messages` itself and drops a trailing `/v1`.
+
+```sh
+swival --provider anthropic --model claude-opus-5-5 \
+    --base-url https://llm-gateway.example.com "task"
+```
 
 ## llama.cpp
 
@@ -452,15 +518,15 @@ Because the external program handles all model routing, there is no auto-discove
 
 For providers that support explicit cache annotations, Swival automatically marks the system message as cacheable each turn. This avoids re-processing the system prompt and tool schemas on every call, which typically saves 30–60% of input token costs in long sessions.
 
-| Provider                      | Caching mechanism                           | Notes                                                                                                |
-| ----------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Anthropic (via OpenRouter)    | Explicit `cache_control` injected by Swival | System message cached; tool schemas not cached in Phase 1                                            |
-| Google Gemini                 | Explicit `cache_control` injected by Swival | Via `openrouter/google/...` or native `google` provider                                              |
-| AWS Bedrock                   | Explicit `cache_control` injected by Swival | Supported for Anthropic models on Bedrock                                                            |
-| OpenAI / Deepseek             | Automatic (provider-side)                   | No annotation needed; prompts >1024 tokens cached automatically                                      |
-| LM Studio                     | None                                        | Local inference, no server-side cache                                                                |
-| Vertex AI (`geap`/`vertexai`) | None                                        | Excluded: Vertex AI rejects cached content when tools or system instructions are in the same request |
-| Generic with custom base_url  | Best effort                                 | Annotation injected only when LiteLLM recognizes the model as cache-capable                          |
+| Provider                             | Caching mechanism                           | Notes                                                                                                |
+| ------------------------------------ | ------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Anthropic (native or via OpenRouter) | Explicit `cache_control` injected by Swival | System message cached; tool schemas not cached in Phase 1                                            |
+| Google Gemini                        | Explicit `cache_control` injected by Swival | Via `openrouter/google/...` or native `google` provider                                              |
+| AWS Bedrock                          | Explicit `cache_control` injected by Swival | Supported for Anthropic models on Bedrock                                                            |
+| OpenAI / Deepseek                    | Automatic (provider-side)                   | No annotation needed; prompts >1024 tokens cached automatically                                      |
+| LM Studio                            | None                                        | Local inference, no server-side cache                                                                |
+| Vertex AI (`geap`/`vertexai`)        | None                                        | Excluded: Vertex AI rejects cached content when tools or system instructions are in the same request |
+| Generic with custom base_url         | Best effort                                 | Annotation injected only when LiteLLM recognizes the model as cache-capable                          |
 
 Cache annotation is applied automatically when the model is known to support it (Swival defers to LiteLLM's `supports_prompt_caching` check). It is injected for every provider except LM Studio and Vertex AI; if the call succeeds with a provider that ignores the annotation, the extra field is silently dropped.
 

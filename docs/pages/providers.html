@@ -108,6 +108,7 @@
 <li><a href="#llamacpp">llama.cpp</a> — local llama.cpp server</li>
 <li><a href="#huggingface-inference-api">HuggingFace Inference API</a> — hosted inference</li>
 <li><a href="#openrouter">OpenRouter</a> — multi-provider access through a single API</li>
+<li><a href="#anthropic">Anthropic</a> — Claude models through the Anthropic API with an API key</li>
 <li><a href="#generic-openai-compatible">Generic (OpenAI-compatible)</a> — any OpenAI-compatible server</li>
 <li><a href="#apple-foundation-models">Apple Foundation Models</a> — experimental, local Apple Foundation Models server</li>
 <li><a href="#google-gemini-api">Google Gemini API</a> — Google's models via API key</li>
@@ -126,10 +127,15 @@ model = &quot;qwen3-coder-next&quot;
 provider = &quot;chatgpt&quot;
 model = &quot;gpt-5.5&quot;
 reasoning_effort = &quot;high&quot;
+
+[profiles.claude]
+provider = &quot;anthropic&quot;
+model = &quot;claude-opus-5-5&quot;
 </code></pre>
 <p>Then switch with <code>--profile</code> at startup, or <code>/profile</code> mid-session:</p>
 <pre><code class="language-sh">swival --profile local &quot;quick task&quot;
 swival --profile gpt5 &quot;hard task&quot;
+swival --profile claude &quot;review this patch&quot;
 </code></pre>
 <pre><code>swival&gt; /profile gpt5
 </code></pre>
@@ -192,6 +198,47 @@ swival --provider openrouter --model z-ai/glm-5.2 &quot;task&quot;
     --max-context-tokens 131072 &quot;task&quot;
 </code></pre>
 <p>Pass bare model identifiers like <code>z-ai/glm-5.2</code>. If you accidentally include a provider prefix (e.g. <code>openrouter/z-ai/glm-5.2</code>), Swival detects and corrects the double prefix.</p>
+<h2 id="anthropic">Anthropic</h2>
+<p>The <code>anthropic</code> provider uses the Anthropic API directly with an API key.
+<code>--model</code> is required, and the key comes from <code>ANTHROPIC_API_KEY</code> or <code>--api-key</code>.
+Create a key in the <a href="https://platform.claude.com/settings/keys">Claude Console</a>.</p>
+<pre><code class="language-sh">export ANTHROPIC_API_KEY=sk-ant-your-key-here
+swival --provider anthropic --model claude-opus-5-5 &quot;task&quot;
+</code></pre>
+<p>The same setup as a profile:</p>
+<pre><code class="language-toml">[profiles.claude]
+provider = &quot;anthropic&quot;
+model = &quot;claude-opus-5-5&quot;
+reasoning_effort = &quot;medium&quot;
+</code></pre>
+<p>Pass bare model names like <code>claude-opus-5-5</code>.
+An <code>anthropic/</code> prefix is accepted and stripped.
+With a key set, <code>/model</code> in the REPL lists the models your key can use.</p>
+<p>Usage is billed to the Claude Console organization that owns the key.
+Max and Team plans come with monthly API credits.
+To use them, link a Console organization in your claude.ai billing settings and create the key there.
+Pro plans don't include API credits, so usage is billed per token.
+See Anthropic's <a href="https://support.claude.com/en/articles/17154008-monthly-api-credits-for-max-and-team-plans">monthly API credits</a> page for the details.</p>
+<p>Only API keys work.
+You can't sign in with your Claude account the way Claude Code does.</p>
+<p>The session cost Swival shows uses list prices, even when monthly credits cover the usage.</p>
+<p>If you used <code>--provider generic --base-url https://api.anthropic.com</code> before, switch to <code>--provider anthropic</code>.
+You get cost reporting, automatic <a href="#prompt-caching">prompt caching</a>, and the right context window without passing <code>--max-context-tokens</code>.</p>
+<p><code>--reasoning-effort</code> turns on extended thinking.
+While thinking is on, Anthropic doesn't allow custom sampling or a forced tool choice.
+Swival then ignores <code>--temperature</code> and <code>--top-p</code> and lets the model pick its tools.</p>
+<p>Older models think within a fixed budget, which has to stay below <code>--max-output-tokens</code>.
+If it doesn't fit, Swival shrinks it, or turns thinking off when the limit is too small for any budget.</p>
+<p>Without thinking, Claude still won't take <code>temperature</code> and <code>top_p</code> together, so only <code>--temperature</code> is sent when you set both.
+The newest models, such as <code>claude-opus-5-5</code>, accept neither sampling settings nor a forced tool choice, so those are always left out.
+<code>--seed</code> isn't supported and is ignored.</p>
+<p>Keys in <code>extra_body</code>, such as <code>metadata</code> or <code>thinking</code>, are added to the request as top-level fields.
+The rules above apply to them too, and an explicit <code>thinking</code> setting wins over <code>--reasoning-effort</code>.</p>
+<p>To use a proxy or gateway that speaks the Anthropic API, set <code>--base-url</code> to its root URL.
+Swival adds <code>/v1/messages</code> itself and drops a trailing <code>/v1</code>.</p>
+<pre><code class="language-sh">swival --provider anthropic --model claude-opus-5-5 \
+    --base-url https://llm-gateway.example.com &quot;task&quot;
+</code></pre>
 <h2 id="llamacpp">llama.cpp</h2>
 <p><a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> runs GGUF models locally through <code>llama-server</code>, which exposes an OpenAI-compatible API. Start the server first, then point Swival at it.</p>
 <p>Start <code>llama-server</code> with a model from HuggingFace:</p>
@@ -390,7 +437,7 @@ model = &quot;codex exec --skip-git-repo-check --full-auto --ephemeral&quot;
 </thead>
 <tbody>
 <tr>
-<td>Anthropic (via OpenRouter)</td>
+<td>Anthropic (native or via OpenRouter)</td>
 <td>Explicit <code>cache_control</code> injected by Swival</td>
 <td>System message cached; tool schemas not cached in Phase 1</td>
 </tr>

@@ -1295,13 +1295,27 @@ class TestDiscoverLlamacppContextLength:
         assert discover_llamacpp_context_length("http://h:8080", False) is None
 
 
-class TestOpenrouterContextFallback:
-    """The OpenRouter catalog fills in the context window when litellm can't."""
+_WITH_CATALOG_FALLBACK = pytest.mark.parametrize(
+    "provider, model",
+    [("openrouter", "qwen/new-model"), ("anthropic", "claude-future")],
+)
 
-    def _resolve(self, monkeypatch, litellm_ctx, catalog_ctx, max_context_tokens=None):
+
+class TestCatalogContextFallback:
+    """The provider catalog fills in the context window when litellm can't."""
+
+    def _resolve(
+        self,
+        monkeypatch,
+        provider,
+        model,
+        litellm_ctx,
+        catalog_ctx,
+        max_context_tokens=None,
+    ):
         from swival import agent
 
-        monkeypatch.setenv("OPENROUTER_API_KEY", "sk_or_test")
+        monkeypatch.setenv(agent._PROVIDER_KEY_ENV[provider], "sk_test")
         monkeypatch.setattr(agent, "_litellm_context_length", lambda s: litellm_ctx)
         seen = {}
 
@@ -1311,31 +1325,46 @@ class TestOpenrouterContextFallback:
 
         monkeypatch.setattr("swival.model_catalog.catalog_context_length", fake_catalog)
         _, _, _, ctx, _ = resolve_provider(
-            "openrouter", "qwen/new-model", None, None, max_context_tokens, False
+            provider, model, None, None, max_context_tokens, False
         )
         return ctx, seen
 
-    def test_catalog_fallback_when_litellm_unknown(self, monkeypatch):
-        ctx, seen = self._resolve(monkeypatch, litellm_ctx=None, catalog_ctx=262144)
+    @_WITH_CATALOG_FALLBACK
+    def test_catalog_fallback_when_litellm_unknown(self, monkeypatch, provider, model):
+        ctx, seen = self._resolve(
+            monkeypatch, provider, model, litellm_ctx=None, catalog_ctx=262144
+        )
         assert ctx == 262144
-        assert seen["args"] == ("openrouter", "qwen/new-model", None, "sk_or_test")
+        assert seen["args"] == (provider, model, None, "sk_test")
 
-    def test_litellm_value_wins_over_catalog(self, monkeypatch):
-        ctx, seen = self._resolve(monkeypatch, litellm_ctx=100000, catalog_ctx=262144)
+    @_WITH_CATALOG_FALLBACK
+    def test_litellm_value_wins_over_catalog(self, monkeypatch, provider, model):
+        ctx, seen = self._resolve(
+            monkeypatch, provider, model, litellm_ctx=100000, catalog_ctx=262144
+        )
         assert ctx == 100000
         assert "args" not in seen
 
-    def test_explicit_max_context_tokens_wins(self, monkeypatch):
+    @_WITH_CATALOG_FALLBACK
+    def test_explicit_max_context_tokens_wins(self, monkeypatch, provider, model):
         ctx, seen = self._resolve(
-            monkeypatch, litellm_ctx=None, catalog_ctx=262144, max_context_tokens=50000
+            monkeypatch,
+            provider,
+            model,
+            litellm_ctx=None,
+            catalog_ctx=262144,
+            max_context_tokens=50000,
         )
         assert ctx == 50000
         assert "args" not in seen
 
-    def test_catalog_miss_leaves_context_unknown(self, monkeypatch):
-        ctx, seen = self._resolve(monkeypatch, litellm_ctx=None, catalog_ctx=None)
+    @_WITH_CATALOG_FALLBACK
+    def test_catalog_miss_leaves_context_unknown(self, monkeypatch, provider, model):
+        ctx, seen = self._resolve(
+            monkeypatch, provider, model, litellm_ctx=None, catalog_ctx=None
+        )
         assert ctx is None
-        assert seen["args"] == ("openrouter", "qwen/new-model", None, "sk_or_test")
+        assert seen["args"] == (provider, model, None, "sk_test")
 
     @pytest.mark.parametrize(
         "model, expected",
@@ -4598,14 +4627,18 @@ class TestResponseCostObservation:
         assert obs.status == "known"
         assert obs.usd == 0.001
 
-    def test_fallback_to_completion_cost_with_resolved_model(self):
+    @pytest.mark.parametrize(
+        "model_str, provider",
+        [("openrouter/m", "openrouter"), ("anthropic/claude-opus-5-5", "anthropic")],
+    )
+    def test_fallback_to_completion_cost_with_resolved_model(self, model_str, provider):
         resp = self._response()
         with patch("litellm.completion_cost", return_value=0.002) as cc:
-            obs = agent._response_cost_observation(resp, "openrouter/m", "openrouter")
+            obs = agent._response_cost_observation(resp, model_str, provider)
         assert obs.status == "known"
         assert obs.usd == 0.002
         assert cc.call_args.kwargs["completion_response"] is resp
-        assert cc.call_args.kwargs["model"] == "openrouter/m"
+        assert cc.call_args.kwargs["model"] == model_str
 
     def test_calculation_exception_is_unavailable(self):
         resp = self._response()
@@ -4892,3 +4925,421 @@ class TestGooglePricingMarker:
             verbose=False,
         )
         assert "pricing_provider" not in llm_kwargs
+
+
+_ANTHROPIC_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "read",
+            "parameters": {
+                "type": "object",
+                "properties": {"file_path": {"type": "string"}},
+            },
+        },
+    }
+]
+
+
+def _mock_response():
+    choice = MagicMock()
+    choice.message = MagicMock(content="ok", tool_calls=None)
+    choice.finish_reason = "stop"
+    resp = MagicMock()
+    resp.choices = [choice]
+    return resp
+
+
+def _anthropic_reply(*content, stop_reason="end_turn"):
+    return {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-5-5",
+        "content": list(content) or [{"type": "text", "text": "ok"}],
+        "stop_reason": stop_reason,
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+
+
+@pytest.fixture
+def anthropic_wire(monkeypatch):
+    """Record the HTTP requests LiteLLM sends, answering with queued replies."""
+    import httpx
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    replies, sent = [], []
+
+    def fake_post(self, url, data=None, headers=None, **kw):
+        body = json.loads(data) if data is not None else kw.get("json")
+        sent.append({"url": url, "headers": dict(headers or {}), "body": body})
+        status, reply = replies.pop(0) if replies else (200, _anthropic_reply())
+        return httpx.Response(status, json=reply, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(HTTPHandler, "post", fake_post)
+    return replies, sent
+
+
+def _call_anthropic(
+    messages=None,
+    model="claude-opus-5-5",
+    max_tokens=8192,
+    *,
+    base_url=None,
+    temperature=None,
+    top_p=None,
+    seed=None,
+    tools=None,
+    **kw,
+):
+    msg, *_ = call_llm(
+        base_url,
+        model,
+        messages or [{"role": "user", "content": "hi"}],
+        max_tokens,
+        temperature,
+        top_p,
+        seed,
+        tools,
+        False,
+        provider="anthropic",
+        api_key="sk-ant-test",
+        **kw,
+    )
+    return msg
+
+
+class TestAnthropicProvider:
+    def _call(self, **kw):
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = _mock_response()
+            _call_anthropic(**kw)
+            return mock_comp.call_args.kwargs
+
+    def test_call_routing(self):
+        kwargs = self._call(model="anthropic/claude-opus-5-5")
+        assert kwargs["model"] == "anthropic/claude-opus-5-5"
+        assert kwargs["api_key"] == "sk-ant-test"
+        assert kwargs["extra_headers"]["User-Agent"].startswith("Swival/")
+        assert "api_base" not in kwargs
+
+        kwargs = self._call(base_url="https://gateway.example", user_agent="my/1")
+        assert kwargs["api_base"] == "https://gateway.example"
+        assert kwargs["extra_headers"]["User-Agent"] == "my/1"
+
+    def test_top_p_only_dropped_alongside_temperature(self):
+        kwargs = self._call(model="claude-sonnet-4-5", temperature=0.3, top_p=0.9)
+        assert kwargs["temperature"] == 0.3
+        assert "top_p" not in kwargs
+        assert self._call(model="claude-sonnet-4-5", top_p=0.9)["top_p"] == 0.9
+
+    @pytest.mark.parametrize(
+        "model, env, match",
+        [(None, "k", "--model is required"), ("claude-x", None, "ANTHROPIC_API_KEY")],
+    )
+    def test_resolve_errors(self, monkeypatch, model, env, match):
+        if env:
+            monkeypatch.setenv("ANTHROPIC_API_KEY", env)
+        else:
+            monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        with pytest.raises(ConfigError, match=match):
+            resolve_provider("anthropic", model, None, None, None, False)
+
+    def test_resolve(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env")
+        model_id, api_base, key, ctx, llm_kwargs = resolve_provider(
+            "anthropic", "anthropic/claude-opus-5-5", None, None, None, False
+        )
+        assert model_id == "claude-opus-5-5"
+        assert api_base is None
+        assert key == "sk-ant-env"
+        assert ctx >= 200_000
+        assert llm_kwargs == {"provider": "anthropic", "api_key": "sk-ant-env"}
+
+        _, _, key, ctx, _ = resolve_provider(
+            "anthropic", "claude-opus-5-5", "sk-ant-cli", None, 64000, False
+        )
+        assert key == "sk-ant-cli"
+        assert ctx == 64000
+
+    @pytest.mark.parametrize(
+        "base_url",
+        ["https://gw.example", "https://gw.example/", "https://gw.example/v1/"],
+    )
+    def test_resolve_normalizes_base_url(self, monkeypatch, base_url):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        _, api_base, _, _, _ = resolve_provider(
+            "anthropic", "claude-opus-5-5", None, base_url, None, False
+        )
+        assert api_base == "https://gw.example"
+
+    def test_parser_accepts_anthropic(self):
+        from swival.agent import build_parser
+
+        args = build_parser().parse_args(
+            ["--provider", "anthropic", "--model", "claude-opus-5-5", "task"]
+        )
+        assert args.provider == "anthropic"
+
+    def test_auth_hint_only_for_anthropic_auth_errors(self):
+        assert agent._anthropic_auth_hint("openrouter", "authentication_error") == ""
+        assert agent._anthropic_auth_hint("anthropic", "overloaded_error") == ""
+
+    def test_auth_error_surfaces_hint(self):
+        import litellm
+
+        err = litellm.AuthenticationError(
+            message='{"type":"error","error":{"type":"authentication_error"}}',
+            llm_provider="anthropic",
+            model="claude-opus-5-5",
+        )
+        with patch("litellm.completion", side_effect=err):
+            with pytest.raises(AgentError, match="ANTHROPIC_API_KEY"):
+                _call_anthropic()
+
+
+class TestAnthropicWire:
+    """Check the JSON LiteLLM actually sends to the Messages API."""
+
+    def test_round_trip_replays_signed_thinking(self, anthropic_wire):
+        replies, sent = anthropic_wire
+        replies.append(
+            (
+                200,
+                _anthropic_reply(
+                    {"type": "thinking", "thinking": "plan", "signature": "SIG"},
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": "read_file",
+                        "input": {"file_path": "x"},
+                    },
+                    stop_reason="tool_use",
+                ),
+            )
+        )
+        replies.append((200, _anthropic_reply({"type": "text", "text": "done"})))
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "go"},
+        ]
+        kw = dict(temperature=0.5, tools=_ANTHROPIC_TOOLS, reasoning_effort="high")
+
+        messages.append(_msg_to_dict(_call_anthropic(messages, **kw)))
+        messages.append({"role": "tool", "tool_call_id": "toolu_1", "content": "c"})
+        assert _call_anthropic(messages, **kw).content == "done"
+
+        first, second = (s["body"] for s in sent)
+        assert sent[0]["url"] == "https://api.anthropic.com/v1/messages"
+        assert sent[0]["headers"]["x-api-key"] == "sk-ant-test"
+        assert first["thinking"]["type"] in ("enabled", "adaptive")
+        assert "temperature" not in first
+        assert first["system"][0]["cache_control"] == {"type": "ephemeral"}
+        assert second["messages"][1]["content"][0] == {
+            "type": "thinking",
+            "thinking": "plan",
+            "signature": "SIG",
+        }
+
+    @pytest.mark.parametrize(
+        "kw, expected",
+        [
+            (dict(max_tokens=32000), {"type": "enabled", "budget_tokens": 4096}),
+            (dict(max_tokens=2048), {"type": "enabled", "budget_tokens": 2047}),
+            (dict(max_tokens=1024), None),
+            (
+                dict(max_tokens=8192, extra_body={"max_completion_tokens": 2048}),
+                {"type": "enabled", "budget_tokens": 2047},
+            ),
+            (
+                dict(max_tokens=2048, extra_body={"thinking": {"type": "disabled"}}),
+                {"type": "disabled"},
+            ),
+            (
+                dict(
+                    max_tokens=2048,
+                    extra_body={"additional_drop_params": ["reasoning_effort"]},
+                ),
+                None,
+            ),
+            (
+                dict(
+                    max_tokens=2048,
+                    extra_body={"thinking": {"type": "enabled", "budget_tokens": 1024}},
+                ),
+                {"type": "enabled", "budget_tokens": 1024},
+            ),
+        ],
+    )
+    def test_thinking_budget_fits_the_effective_request(
+        self, anthropic_wire, kw, expected
+    ):
+        _, sent = anthropic_wire
+        _call_anthropic(model="claude-sonnet-4-5", reasoning_effort="high", **kw)
+        body = sent[0]["body"]
+        assert body.get("thinking") == expected
+        if expected and "budget_tokens" in expected:
+            assert expected["budget_tokens"] < body["max_tokens"]
+
+    def test_thinking_litellm_drops_keeps_sampling_and_tool_choice(
+        self, anthropic_wire
+    ):
+        # Sonnet 4.5 has no adaptive thinking, and LiteLLM drops the budget it
+        # converts that to when the output limit is this small.
+        _, sent = anthropic_wire
+        _call_anthropic(
+            model="claude-sonnet-4-5",
+            max_tokens=1024,
+            tools=_ANTHROPIC_TOOLS,
+            tool_choice="required",
+            extra_body={"thinking": {"type": "adaptive"}, "temperature": 0.3},
+        )
+        body = sent[0]["body"]
+        assert "thinking" not in body
+        assert body["temperature"] == 0.3
+        assert body["tool_choice"] == {"type": "any"}
+
+    @pytest.mark.parametrize("max_tokens", [2048, 1024])
+    def test_explicit_budget_on_adaptive_model_is_left_to_litellm(
+        self, anthropic_wire, max_tokens
+    ):
+        _, sent = anthropic_wire
+        _call_anthropic(
+            max_tokens=max_tokens,
+            extra_body={"thinking": {"type": "enabled", "budget_tokens": 4096}},
+        )
+        body = sent[0]["body"]
+        assert body["thinking"]["type"] == "adaptive"
+        assert body["output_config"] == {"effort": "high"}
+
+    def test_model_switch_rebuilds_the_request(self, anthropic_wire, monkeypatch):
+        replies, sent = anthropic_wire
+        not_found = {
+            "type": "error",
+            "error": {"type": "not_found_error", "message": "model: claude-opus-5-5"},
+        }
+        replies.append((404, not_found))
+        monkeypatch.setattr(agent, "_MODEL_AUTOFIX", {})
+        monkeypatch.setattr(
+            agent, "_list_server_models", lambda *a: ["claude-sonnet-4-5"]
+        )
+        _call_anthropic(max_tokens=2048, reasoning_effort="high")
+        retry = sent[1]["body"]
+        assert retry["model"] == "claude-sonnet-4-5"
+        assert retry["thinking"] == {"type": "enabled", "budget_tokens": 2047}
+
+    @pytest.mark.parametrize("in_extra_body", [False, True])
+    def test_thinking_drops_sampling_and_forced_tools(
+        self, anthropic_wire, in_extra_body
+    ):
+        _, sent = anthropic_wire
+        settings = {"reasoning_effort": "high", "temperature": 0.3, "top_p": 0.9}
+        _call_anthropic(
+            model="claude-sonnet-4-5",
+            tools=_ANTHROPIC_TOOLS,
+            tool_choice="required",
+            **({"extra_body": settings} if in_extra_body else settings),
+        )
+        body = sent[0]["body"]
+        assert body["thinking"]["type"] == "enabled"
+        for key in ("temperature", "top_p", "tool_choice"):
+            assert key not in body
+
+    def test_cache_key_keeps_the_original_arguments(self, anthropic_wire, tmp_path):
+        from swival.cache import LLMCache
+
+        _, sent = anthropic_wire
+        cache = LLMCache(tmp_path / "cache.db")
+        cache.open()
+        for kw in (
+            {},
+            {"extra_body": {"metadata": {"user_id": "u1"}}},
+            {"extra_body": {"metadata": {"user_id": "u2"}}},
+            {"reasoning_effort": "high"},
+        ):
+            _call_anthropic(
+                model="claude-sonnet-4-5", max_tokens=2048, cache=cache, **kw
+            )
+        _call_anthropic(model="claude-sonnet-4-5", max_tokens=2048, cache=cache)
+        cache.close()
+        assert len(sent) == 4
+        assert sent[1]["body"]["metadata"] == {"user_id": "u1"}
+        assert "extra_body" not in sent[1]["body"]
+
+
+class TestAnthropicThinkingBlocks:
+    """Signed thinking blocks must reach the next request unchanged."""
+
+    def _history(self):
+        block = {"type": "thinking", "thinking": "x" * 400, "signature": "S"}
+        tc = {
+            "id": "t1",
+            "type": "function",
+            "function": {"name": "read_file", "arguments": "{}"},
+        }
+        return [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "first task"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [tc],
+                "thinking_blocks": [dict(block)],
+            },
+            {"role": "tool", "tool_call_id": "t1", "content": "r"},
+            {"role": "assistant", "content": "done"},
+            {"role": "user", "content": "second task"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [dict(tc, id="t2")],
+                "thinking_blocks": [dict(block)],
+            },
+            {"role": "tool", "tool_call_id": "t2", "content": "r"},
+        ]
+
+    def test_compaction_drops_only_previous_turn_blocks(self):
+        messages = self._history()
+        assert agent._has_reasoning_payload(messages)
+        assert agent._compact_reasoning_payloads(messages, base_url=None)
+        assert "thinking_blocks" not in messages[2]
+        assert messages[6]["thinking_blocks"][0]["signature"] == "S"
+        assert not agent._has_reasoning_payload(messages)
+
+    def test_estimate_counts_thinking_once(self):
+        with_blocks = self._history()
+        without = self._history()
+        for m in without:
+            m.pop("thinking_blocks", None)
+        assert agent.estimate_tokens(with_blocks) > agent.estimate_tokens(without)
+        both = self._history()
+        both[2]["reasoning_content"] = "x" * 400
+        assert agent.estimate_tokens(both) == agent.estimate_tokens(with_blocks)
+
+    @pytest.mark.parametrize(
+        "provider, base_url, kept",
+        [("anthropic", None, True), ("generic", "http://127.0.0.1:8000/v1", False)],
+    )
+    def test_switching_providers_drops_blocks_from_the_request(
+        self, provider, base_url, kept
+    ):
+        history = self._history()
+        with patch("litellm.completion") as mock_comp:
+            mock_comp.return_value = _mock_response()
+            call_llm(
+                base_url,
+                "some-model",
+                history,
+                100,
+                None,
+                None,
+                None,
+                None,
+                False,
+                provider=provider,
+                api_key="k",
+            )
+        sent = mock_comp.call_args.kwargs["messages"]
+        assert ("thinking_blocks" in sent[6]) is kept
+        assert "thinking_blocks" in history[6]

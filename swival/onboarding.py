@@ -49,6 +49,12 @@ _PROVIDERS = [
         "getting started fast with an existing subscription",
     ),
     (
+        "anthropic",
+        "Anthropic",
+        "Claude models with an Anthropic API key",
+        "Claude models through the API, using Max/Team monthly credits or per-token billing",
+    ),
+    (
         "openrouter",
         "OpenRouter",
         "Hosted models with one API key",
@@ -345,6 +351,8 @@ def _collect_settings() -> dict | None:
         _ask_mlx(settings)
     elif provider_name == "chatgpt":
         _ask_chatgpt(settings)
+    elif provider_name == "anthropic":
+        _ask_anthropic(settings)
     elif provider_name == "openrouter":
         _ask_openrouter(settings)
     elif provider_name == "google":
@@ -649,21 +657,46 @@ def _ask_openrouter(s: dict) -> None:
     _ask_max_context(s, "openrouter")
 
 
-def _ask_google(s: dict) -> None:
-    # Listing Gemini models needs a key, so the explorer is only offered when
-    # one is already in the environment.
-    key = os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY")
+def _ask_model_browse_or_type(
+    s: dict, provider: str, key: str | None, family: str, example: str
+) -> None:
+    # Browsing models needs a key, so only offer it when one is already set.
     model = None
     if key:
         idx = _prompt_choice(
             "Model",
-            ["Browse available Gemini models", "Type a model name"],
+            [f"Browse available {family} models", "Type a model name"],
         )
         if idx == 0:
-            model = _browse_models("google", None, key)
-    s["model"] = model or _prompt_text_required("Model (e.g. gemini-3-flash)")
+            model = _browse_models(provider, None, key)
+    s["model"] = model or _prompt_text_required(f"Model (e.g. {example})")
+
+
+def _ask_google(s: dict) -> None:
+    key = os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    _ask_model_browse_or_type(s, "google", key, "Gemini", "gemini-3-flash")
 
     _ask_api_key(s, env_var="GEMINI_API_KEY or OPENAI_API_KEY")
+
+
+def _ask_anthropic(s: dict) -> None:
+    _console.print(
+        Text(
+            "This uses an API key from a Claude Console organization.\n"
+            "Max and Team plans include monthly API credits once you link that\n"
+            "organization in claude.ai billing settings; otherwise usage is\n"
+            "billed per token. Pro plans don't include API credits.",
+            style="dim",
+        )
+    )
+    _console.print()
+
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    _ask_model_browse_or_type(s, "anthropic", key, "Claude", "claude-opus-5-5")
+
+    _ask_api_key(s, env_var="ANTHROPIC_API_KEY")
+
+    _ask_max_context(s, "anthropic")
 
 
 def _ask_generic(s: dict) -> None:

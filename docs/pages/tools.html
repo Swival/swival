@@ -176,8 +176,9 @@ This also holds for files that contain form feeds or other Unicode line separato
 <p>All <code>fetch_url</code> output is wrapped with an <code>[UNTRUSTED EXTERNAL CONTENT]</code> header before the model sees it. This label is also baked into spill files so it survives when the agent reads large results back via <code>read_file</code>. Failed fetches (errors) are not wrapped or counted.</p>
 <p>SSRF protections are built in. Swival resolves every URL in the redirect chain and blocks private, loopback, link-local, and reserved addresses. The exception is explicit loopback: URLs that name <code>localhost</code>, <code>127.0.0.1</code>, or <code>::1</code> directly are allowed, so local development servers stay reachable.</p>
 <h2 id="web_search"><code>web_search</code></h2>
-<p><code>web_search</code> searches the web and returns up to five results, each with a title, a URL and the passages most relevant to the query.
-That is usually enough to answer a question; when it isn't, the model reads the page with <code>fetch_url</code>.</p>
+<p><code>web_search</code> searches the web and returns up to five results.
+Each one has a title, a URL and the passages that best match the query.
+That is usually enough to answer a question, and when it isn't, the model reads the page with <code>fetch_url</code>.</p>
 <p>It works out of the box, with no account or API key.
 Queries are sent to free search services (Parallel, Keenable, Exa and Tavily), and if one is unavailable the next one is used.
 Queries that look like they contain a credential are refused, and an <a href="llm-filter.html"><code>llm_filter</code></a> sees every query before it is sent.</p>
@@ -258,7 +259,7 @@ See <a href="decision-models.html">Decision Models</a> for setup, the question f
 <p><code>spawn_subagent</code> launches an independent subagent in a background thread to work on a task in parallel. The subagent runs its own <code>run_agent_loop()</code> with isolated state (messages, thinking, todo, snapshot) but shares the parent's LLM config, MCP/A2A connections, secret encryption, and LLM filter.</p>
 <p>Subagents inherit the parent's full system prompt (instructions, memory, AGENTS.md) but have no access to the parent's conversation history. The <code>task</code> parameter must include all necessary context.</p>
 <p>Subagents cannot spawn their own subagents — the tool is removed from their tool list to prevent recursion. Up to 4 subagents can run concurrently.</p>
-<p>Subagents are auto-enabled for the <code>google</code>, <code>geap</code>, <code>chatgpt</code>, and <code>bedrock</code> providers, or when the detected context window is at least 100,000 tokens. Pass <code>--subagents</code> or <code>--no-subagents</code> on the CLI (or <code>subagents=True</code>/<code>False</code> in Session or config) to override the default.</p>
+<p>Subagents are auto-enabled for the <code>google</code>, <code>geap</code>, <code>chatgpt</code>, <code>anthropic</code>, and <code>bedrock</code> providers, or when the detected context window is at least 100,000 tokens. Pass <code>--subagents</code> or <code>--no-subagents</code> on the CLI (or <code>subagents=True</code>/<code>False</code> in Session or config) to override the default.</p>
 <h2 id="check_subagents"><code>check_subagents</code></h2>
 <p><code>check_subagents</code> monitors and manages spawned subagents. It supports three actions:</p>
 <p><code>poll</code> returns the status of all subagents: running, done, failed, or cancelled. Done subagents include a preview of their result (first 500 characters). Failed subagents include the error message.</p>
