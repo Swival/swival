@@ -416,14 +416,54 @@ class TestRecordedRegions:
         assert ps.spans_valid(clone["content"], ps.get_spans(clone))
         assert _instruction_block(clone) == _instruction_block(message)
 
-    def test_metadata_key_is_stripped_before_the_provider(self):
-        # call_llm drops every key starting with an underscore from the
-        # outbound payload, which is what keeps this metadata local.
-        assert ps.SPAN_KEY.startswith("_")
-        import inspect
+    def test_metadata_key_is_stripped_before_the_provider(self, tmp_path, monkeypatch):
+        import copy
 
-        source = inspect.getsource(agent.call_llm)
-        assert 'k.startswith("_")' in source
+        (tmp_path / "CLAUDE.md").write_text("Rule.", encoding="utf-8")
+        result = _assemble(tmp_path)
+        messages = [
+            _system_message(result),
+            {"role": "user", "content": "Hello.", "_swival_synthetic": True},
+        ]
+        before = copy.deepcopy(messages)
+        sent = []
+
+        def fake_completion(**kwargs):
+            sent.append(kwargs["messages"])
+            return types.SimpleNamespace(
+                choices=[
+                    types.SimpleNamespace(
+                        message=_make_message("ok"), finish_reason="stop"
+                    )
+                ],
+                usage=None,
+            )
+
+        monkeypatch.setattr("litellm.completion", fake_completion)
+        agent.call_llm(
+            base_url="http://localhost:1234/v1",
+            model_id="test-model",
+            messages=messages,
+            max_output_tokens=100,
+            temperature=None,
+            top_p=None,
+            seed=None,
+            tools=None,
+            verbose=False,
+            provider="generic",
+            api_key="test",
+            prompt_cache=False,
+        )
+
+        assert sent == [
+            [
+                {"role": "system", "content": result.content},
+                {"role": "user", "content": "Hello."},
+            ]
+        ]
+        assert messages == before
+        assert ps.get_spans(messages[0])
+        assert ps.spans_valid(result.content, ps.get_spans(messages[0]))
 
 
 # ---------------------------------------------------------------------------
