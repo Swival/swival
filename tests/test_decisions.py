@@ -468,15 +468,10 @@ def _through_litellm(answer):
     name = "clarity" if answer["type"] == "score" else "install_tool"
     payload = {"model": "clef", "answers": {name: answer}}
 
-    class Client:
-        def post(self, url, **kwargs):
-            request = httpx.Request("POST", url)
-            return httpx.Response(200, json=payload, request=request)
+    def send(client, request, **kwargs):
+        return httpx.Response(200, json=payload, request=request)
 
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
-        return_value=Client(),
-    ):
+    with patch("httpx.Client.send", autospec=True, side_effect=send):
         return decide(_local(), _args(questions={name: QUESTIONS[name]}))
 
 
