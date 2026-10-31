@@ -283,6 +283,26 @@ class TestCallLlmRetry:
         assert provider_retries == 0
         assert cache_stats == (0, 0)
 
+    def test_disables_litellm_streaming_logging(self, monkeypatch):
+        import litellm
+
+        monkeypatch.setattr(litellm, "disable_streaming_logging", False)
+        with patch("litellm.completion", return_value=_make_response()):
+            call_llm(
+                "http://localhost:8080/v1",
+                "my-model",
+                [{"role": "user", "content": "hi"}],
+                100,
+                0.5,
+                1.0,
+                None,
+                None,
+                False,
+                provider="generic",
+                api_key="test",
+            )
+        assert litellm.disable_streaming_logging is True
+
     def test_provider_retries_reported(self):
         import litellm
 

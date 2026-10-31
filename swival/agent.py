@@ -6263,6 +6263,10 @@ def call_llm(
 
     litellm.suppress_debug_info = True
     litellm.drop_params = True
+    # LiteLLM otherwise spins up a fresh event loop per streamed chunk on up to
+    # 100 logging threads, which exhausts the default 256 fd limit on macOS.
+    # We register no LiteLLM callbacks, so that logging has nothing to do.
+    litellm.disable_streaming_logging = True
     _patch_chatgpt_responses_empty_output()
     if provider == "chatgpt":
         _patch_chatgpt_identity_hooks()
