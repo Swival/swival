@@ -2,6 +2,11 @@
 
 All notable user-facing changes to Swival.
 
+## 1.9.1
+
+- Fixed file-descriptor exhaustion and repeated event-loop cleanup tracebacks during streamed replies, especially on macOS with its default open-file limit.
+  Swival now disables unused LiteLLM per-chunk streaming logging.
+
 ## 1.9.0
 
 - Added the `anthropic` provider for Claude through the Anthropic API.
