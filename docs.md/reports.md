@@ -56,6 +56,7 @@ The JSON below is from a verified local run using `--model dummy-model --max-tur
     "truncation_repairs": 0,
     "scavenged_calls": 0,
     "stormed_calls": 0,
+    "skipped_calls": 0,
     "llm_calls": 0,
     "total_llm_time_s": 0.0,
     "total_tool_time_s": 0.0,
@@ -104,7 +105,11 @@ A `success` outcome means the model produced a final non-tool response. An `exha
 
 `compactions` counts history-mutating compaction passes. Because a single proactive or reactive pass walks the ladder and can apply several rungs at once, the recorded `strategy` may be a `+`-joined combination such as `gc_scaffolding+compact_messages` or `compact_messages+strip_reasoning_content`. `turn_drops` counts passes that dropped middle turns — any pass whose `strategy` includes the `drop_middle_turns` rung, on its own or combined with others — and those passes are not also counted under `compactions`. Request-local tool drops are reported on the retrying `llm_call`, not as history compactions. `guardrail_interventions` counts injected correction prompts for repeated tool failures. `recovered_responses` counts model outputs that could not be used as emitted and triggered a recovery step, such as output cut off by the token limit, tool calls with malformed JSON arguments, tool-call markup leaked into the text channel, or a reply that announced an action without making the tool call.
 
-`truncation_repairs` counts tool calls whose truncated or unbalanced JSON arguments were structurally repaired and salvaged instead of being discarded. `scavenged_calls` counts tool calls recovered from the plain-text content channel when the model emitted them as text rather than as structured calls. `stormed_calls` counts repeat tool calls that the storm breaker suppressed to stop the model looping on an identical invocation. All three are always present in `stats`.
+`truncation_repairs` counts tool calls whose truncated or unbalanced JSON arguments were structurally repaired and salvaged instead of being discarded.
+`scavenged_calls` counts tool calls recovered from the plain-text content channel when the model emitted them as text rather than as structured calls.
+`stormed_calls` counts repeat tool calls that the storm breaker suppressed to stop the model looping on an identical invocation.
+`skipped_calls` counts tool calls that were not run because a write, edit, or delete sent before them in the same response failed.
+These four counters are always present in `stats`.
 
 `skills_used` records skill names successfully activated through `use_skill`. `review_rounds` records how many reviewer passes occurred when `--reviewer` is active.
 
@@ -204,6 +209,9 @@ For `truncation_repair`, the event records a salvaged tool-call payload. Fields 
 For `scavenged_call`, fields include `name` (the recovered tool) and `source` (where the call text was found).
 
 For `storm_suppression`, fields include `name`, `args_hash` (a hash of the canonical arguments), and `count` (how many identical calls were suppressed).
+
+For `skipped_call`, fields include `name` (the tool that was not run) and `after` (the write, edit, or delete that failed before it).
+Skipped calls are not `tool_call` events and are not part of the tool counters.
 
 For `lifecycle`, fields include `event` (`startup` or `exit`), `exit_code`, `duration_s`, and optionally `error`. Lifecycle events appear when `--lifecycle-command` is configured. See [Lifecycle Hooks](lifecycle-hooks.md) for details.
 
