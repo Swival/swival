@@ -6,6 +6,8 @@ All notable user-facing changes to Swival.
 
 - Long Claude sessions are now cheaper. Once the model has replied, Swival now caches the conversation so far, not just the system prompt, on Anthropic, OpenRouter, Bedrock, and Vertex AI.
 - Claude models on Vertex AI (`geap`) now use prompt caching.
+- With the Anthropic API, tool definitions are now cached separately, so new sessions and subagents can reuse them.
+- When a file write, edit, or delete fails, Swival now skips the tool calls the model sent after it, since they assumed the change worked.
 
 ## 1.9.1
 
