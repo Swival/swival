@@ -5010,6 +5010,49 @@ def _call_anthropic(
     return msg
 
 
+def _cache_test_messages(*, follow_up=True):
+    """A conversation before or after the model's first reply."""
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "first"},
+    ]
+    if follow_up:
+        messages += [
+            {"role": "assistant", "content": "answer"},
+            {"role": "user", "content": "follow-up"},
+        ]
+    return messages
+
+
+def _cache_marks(body):
+    """Where a Messages API request body carries cache_control."""
+    marks = ["top"] if "cache_control" in body else []
+    for key in ("tools", "system"):
+        marks += [
+            f"{key}[{i}]"
+            for i, block in enumerate(body.get(key) or [])
+            if "cache_control" in block
+        ]
+    for i, message in enumerate(body["messages"]):
+        marks += [
+            f"messages[{i}][{j}]"
+            for j, block in enumerate(message["content"])
+            if "cache_control" in block
+        ]
+    return marks
+
+
+_SYSTEM_POINT = {"location": "message", "role": "system"}
+_AUTOMATIC = {"enable_prompt_caching": True}
+_SYSTEM_ONLY = {"cache_control_injection_points": [_SYSTEM_POINT]}
+_WITH_TAIL = {
+    "cache_control_injection_points": [
+        _SYSTEM_POINT,
+        {"location": "message", "index": -1},
+    ]
+}
+
+
 class TestAnthropicProvider:
     def _call(self, **kw):
         with patch("litellm.completion") as mock_comp:
@@ -5099,6 +5142,76 @@ class TestAnthropicProvider:
                 _call_anthropic()
 
 
+class TestPromptCacheKwargs:
+    @pytest.mark.parametrize("follow_up", [True, False])
+    @pytest.mark.parametrize(
+        "provider, model, base_url, expected",
+        [
+            ("anthropic", "claude-opus-5-5", None, _AUTOMATIC),
+            (
+                "anthropic",
+                "claude-opus-5-5",
+                "https://api.anthropic.com/v1/",
+                _AUTOMATIC,
+            ),
+            ("anthropic", "claude-opus-5-5", "https://gateway.example", _SYSTEM_ONLY),
+            ("bedrock", "global.anthropic.claude-opus-5-5", "us-east-1", _AUTOMATIC),
+            (
+                "bedrock",
+                "global.anthropic.claude-opus-5-5",
+                "https://gateway.example",
+                _SYSTEM_ONLY,
+            ),
+            ("geap", "claude-opus-5-5", None, _AUTOMATIC),
+            (
+                "geap",
+                "claude-opus-5-5",
+                "https://us-east5-aiplatform.googleapis.com",
+                _AUTOMATIC,
+            ),
+            (
+                "geap",
+                "claude-opus-5-5",
+                "https://googleapis.com.gateway.example",
+                _SYSTEM_ONLY,
+            ),
+            ("geap", "gemini-3.8-flash", None, {}),
+            ("openrouter", "anthropic/claude-opus-5.5", None, _WITH_TAIL),
+            (
+                "openrouter",
+                "anthropic/claude-opus-5.5",
+                "https://gateway.example",
+                _SYSTEM_ONLY,
+            ),
+            ("openrouter", "google/gemini-3.8-flash", None, _SYSTEM_ONLY),
+            ("generic", "claude-opus-5-5", "http://localhost:11234", {}),
+        ],
+    )
+    def test_conversation_cache_uses_provider_capabilities(
+        self, provider, model, base_url, expected, follow_up
+    ):
+        with patch("litellm.completion", return_value=_mock_response()) as completion:
+            call_llm(
+                base_url,
+                model,
+                _cache_test_messages(follow_up=follow_up),
+                8192,
+                None,
+                None,
+                None,
+                None,
+                False,
+                provider=provider,
+                api_key="test",
+            )
+        params = completion.call_args.kwargs
+        # Before the first reply, only the system prompt is worth caching.
+        if not follow_up and expected:
+            expected = _SYSTEM_ONLY
+        keys = ("enable_prompt_caching", "cache_control_injection_points")
+        assert {k: params[k] for k in keys if k in params} == expected
+
+
 class TestAnthropicWire:
     """Check the JSON LiteLLM actually sends to the Messages API."""
 
@@ -5136,11 +5249,49 @@ class TestAnthropicWire:
         assert first["thinking"]["type"] in ("enabled", "adaptive")
         assert "temperature" not in first
         assert first["system"][0]["cache_control"] == {"type": "ephemeral"}
+        assert _cache_marks(first) == ["system[0]"]
+        assert _cache_marks(second) == ["system[0]", "messages[2][0]"]
         assert second["messages"][1]["content"][0] == {
             "type": "thinking",
             "thinking": "plan",
             "signature": "SIG",
         }
+
+    @pytest.mark.parametrize("follow_up", [True, False])
+    @pytest.mark.parametrize(
+        "kw, expected",
+        [
+            ({"prompt_cache": False}, []),
+            (
+                {"extra_body": {"cache_control": {"type": "ephemeral", "ttl": "1h"}}},
+                ["top"],
+            ),
+        ],
+    )
+    def test_cache_marks_respect_user_settings(
+        self, anthropic_wire, kw, expected, follow_up
+    ):
+        _, sent = anthropic_wire
+        _call_anthropic(_cache_test_messages(follow_up=follow_up), **kw)
+        assert _cache_marks(sent[0]["body"]) == expected
+
+    @pytest.mark.parametrize(
+        "location, expected", [("message", ["messages[0][0]"]), ("tool", ["tools[0]"])]
+    )
+    def test_cache_marks_preserve_explicit_breakpoints(
+        self, anthropic_wire, location, expected
+    ):
+        _, sent = anthropic_wire
+        messages, tools = _cache_test_messages(), _ANTHROPIC_TOOLS
+        mark = {"type": "ephemeral"}
+        if location == "message":
+            messages[1]["content"] = [
+                {"type": "text", "text": "first", "cache_control": mark}
+            ]
+        else:
+            tools = [{**tools[0], "cache_control": mark}]
+        _call_anthropic(messages, tools=tools)
+        assert _cache_marks(sent[0]["body"]) == expected
 
     @pytest.mark.parametrize(
         "kw, expected",

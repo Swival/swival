@@ -6109,6 +6109,91 @@ def _chat_api_key(provider: str, api_key: str | None) -> str | None:
     return api_key
 
 
+def _is_provider_endpoint(provider: str, base_url: str | None) -> bool:
+    if not base_url:
+        return True
+    if provider == "bedrock":
+        # For Bedrock this is usually a region name, not a URL.
+        return not base_url.startswith("http")
+    if provider == "anthropic":
+        from .model_catalog import ANTHROPIC_API_BASE, anthropic_base
+
+        return anthropic_base(base_url) == ANTHROPIC_API_BASE
+    if provider == "openrouter":
+        from .model_catalog import OPENROUTER_API_BASE
+
+        return base_url.rstrip("/") == OPENROUTER_API_BASE
+    if provider == "geap":
+        host = urllib.parse.urlsplit(base_url).hostname or ""
+        return host == "googleapis.com" or host.endswith(".googleapis.com")
+    return False
+
+
+def _prompt_cache_kwargs(
+    provider: str,
+    model: str,
+    base_url: str | None,
+    messages: list,
+    extra_body: dict | None,
+) -> dict:
+    """Extra LiteLLM arguments that turn on prompt caching.
+
+    We cache the system prompt whenever the model supports it.
+
+    For Claude, once the model has replied, we also cache the latest message,
+    so each call can reuse the whole conversation so far.
+    """
+    # LM Studio runs locally, so there is nothing to save.
+    # Gemini on Vertex rejects cached content when the request also has tools
+    # or a system prompt.
+    if provider == "lmstudio" or (
+        provider == "geap" and not model.startswith("vertex_ai/claude-")
+    ):
+        return {}
+    # The user set up caching themselves, so we stay out of the way.
+    # Adding our own marks on top can get the request rejected.
+    if "cache_control" in (extra_body or {}):
+        return {}
+    try:
+        from litellm.utils import supports_prompt_caching
+
+        if not supports_prompt_caching(model=model):
+            return {}
+    except Exception:
+        # Older LiteLLM, or a model it doesn't know.
+        return {}
+
+    points = [{"location": "message", "role": "system"}]
+    # Caching the latest message costs a bit extra on every call.
+    # It only pays off if the next call reuses it, which won't happen after a
+    # one-shot answer, and we can't count on it behind a custom gateway.
+    if _is_provider_endpoint(provider, base_url) and any(
+        _msg_role(m) == "assistant" for m in messages
+    ):
+        try:
+            from litellm.llms.anthropic.common_utils import (
+                supports_anthropic_cache_control,
+            )
+
+            # Only ask about these providers: for a ChatGPT model, LiteLLM's
+            # lookup fetches a token and can even start the login flow.
+            automatic = provider in (
+                "anthropic",
+                "bedrock",
+                "geap",
+            ) and supports_anthropic_cache_control(model, None)
+        except Exception:
+            automatic = False
+        if automatic:
+            # LiteLLM caches the system prompt and the latest message.
+            return {"enable_prompt_caching": True}
+        if provider == "openrouter" and model.startswith(
+            "openrouter/anthropic/claude-"
+        ):
+            points.append({"location": "message", "index": -1})
+    return {"cache_control_injection_points": points}
+
+
 def call_llm(
     base_url,
     model_id,
@@ -6414,23 +6499,10 @@ def call_llm(
         completion_kwargs.clear()
         completion_kwargs.update(request_base, model=model)
 
-        # --- Prompt caching ---
-        # For providers that support explicit cache_control (Anthropic, Gemini,
-        # Bedrock), tell LiteLLM to auto-inject cache breakpoints on the system
-        # message. OpenAI/Deepseek cache automatically (>1024 token prompts).
-        # lmstudio is local — no caching benefit.
-        # geap (Vertex AI) rejects cached content when tools or system
-        # instructions are present in the same request.
-        if prompt_cache and provider not in ("lmstudio", "geap"):
-            try:
-                from litellm.utils import supports_prompt_caching
-
-                if supports_prompt_caching(model=model):
-                    completion_kwargs["cache_control_injection_points"] = [
-                        {"location": "message", "role": "system"},
-                    ]
-            except Exception:
-                pass  # old LiteLLM version or unsupported model — skip silently
+        if prompt_cache:
+            completion_kwargs.update(
+                _prompt_cache_kwargs(provider, model, base_url, messages, extra_body)
+            )
 
         if provider == "anthropic":
             _adapt_anthropic_kwargs(completion_kwargs)
@@ -7151,8 +7223,8 @@ def build_parser():
         dest="prompt_cache",
         action="store_false",
         default=_UNSET,
-        help="Disable explicit cache_control annotations (Anthropic/Gemini/Bedrock). "
-        "Providers that auto-cache (OpenAI, Deepseek) are unaffected.",
+        help="Don't add prompt cache marks (Anthropic, Gemini, Bedrock, Claude on "
+        "Vertex AI). Providers that cache on their own (OpenAI, Deepseek) still do.",
     )
 
     behavior_group.add_argument(

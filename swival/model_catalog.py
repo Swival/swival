@@ -20,7 +20,8 @@ from dataclasses import dataclass
 
 HF_ROUTER_MODELS_URL = "https://router.huggingface.co/v1/models"
 HF_HUB_MODELS_URL = "https://huggingface.co/api/models"
-OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
+OPENROUTER_MODELS_URL = f"{OPENROUTER_API_BASE}/models"
 GOOGLE_OPENAI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
 ANTHROPIC_API_BASE = "https://api.anthropic.com"
 # Only used to list models. LiteLLM sets its own version for chat requests.
