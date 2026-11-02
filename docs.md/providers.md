@@ -24,9 +24,9 @@ If you use more than one provider regularly, define named profiles in your confi
 provider = "lmstudio"
 model = "qwen3-coder-next"
 
-[profiles.gpt5]
+[profiles.gpt]
 provider = "chatgpt"
-model = "gpt-5.5"
+model = "gpt-6.1-sol"
 reasoning_effort = "high"
 
 [profiles.claude]
@@ -38,12 +38,12 @@ Then switch with `--profile` at startup, or `/profile` mid-session:
 
 ```sh
 swival --profile local "quick task"
-swival --profile gpt5 "hard task"
+swival --profile gpt "hard task"
 swival --profile claude "review this patch"
 ```
 
 ```
-swival> /profile gpt5
+swival> /profile gpt
 ```
 
 Profiles switch the whole stack at once. To change only the model within the current provider, use the `/model` command in the REPL: with no argument it opens an interactive picker over the models the provider can serve right now, `/model NAME` switches directly, and favorites you star in the picker are remembered across sessions. Bedrock, GEAP, and the command provider have no model listing, but `/model ID` still works. See [Usage](usage.md) for the details.
@@ -329,7 +329,7 @@ The `google` provider connects to Google's Gemini API through its OpenAI-compati
 ```sh
 export GEMINI_API_KEY=...
 swival --provider google \
-    --model gemini-3-flash \
+    --model gemini-3.8-flash \
     "task"
 ```
 
@@ -396,7 +396,7 @@ If you need to pass an API key explicitly (for example, when using `--self-revie
 `--model` is required. There is no default model.
 
 ```sh
-swival --provider chatgpt --model gpt-5.5 "task"
+swival --provider chatgpt --model gpt-6.1-sol "task"
 ```
 
 On the first run, you will see a device-code prompt with a URL and a code to enter in your browser. Once you complete the flow, the OAuth tokens are stored locally and refreshed automatically. To remove the cached tokens and force the device-code flow on the next run, use `swival --logout`.
@@ -409,16 +409,16 @@ Two environment variables are available for advanced use. `CHATGPT_TOKEN_DIR` ov
 
 ```sh
 export CHATGPT_TOKEN_DIR=/path/to/tokens
-swival --provider chatgpt --model gpt-5.5 "task"
+swival --provider chatgpt --model gpt-6.1-sol "task"
 swival --logout
 ```
 
 The `--top-p`, `--seed`, and `tool_choice` parameters are not supported by the ChatGPT Plus/Pro backend. Swival drops them automatically when using this provider.
 
-Models like `gpt-5.5` support tunable reasoning effort. Use `--reasoning-effort` to control how much the model thinks before responding:
+Models like `gpt-6.1-sol` support tunable reasoning effort. Use `--reasoning-effort` to control how much the model thinks before responding:
 
 ```sh
-swival --provider chatgpt --model gpt-5.5 --reasoning-effort high "task"
+swival --provider chatgpt --model gpt-6.1-sol --reasoning-effort high "task"
 ```
 
 You can also combine reasoning effort with **priority processing** (`service_tier: "priority"`) for faster responses without sacrificing quality. See the [Service Tiers](usage.md#service-tiers) section.
@@ -435,20 +435,20 @@ The `bedrock` provider connects to AWS Bedrock. It uses your existing AWS creden
 export AWS_ACCESS_KEY_ID=AKIA...
 export AWS_SECRET_ACCESS_KEY=...
 export AWS_REGION_NAME=us-east-2
-swival --provider bedrock --model global.anthropic.claude-opus-4-6-v1 "task"
+swival --provider bedrock --model global.anthropic.claude-opus-5-5 "task"
 ```
 
 Swival picks up credentials from environment variables, `~/.aws/credentials`, `~/.aws/config`, IAM roles, and SSO. To use a named profile, pass `--aws-profile` or set `AWS_PROFILE`.
 
 ```sh
-swival --provider bedrock --model global.anthropic.claude-opus-4-6-v1 \
+swival --provider bedrock --model global.anthropic.claude-opus-5-5 \
     --aws-profile bedrock "task"
 ```
 
 Use `--base-url` to set the region, or pass a custom endpoint URL.
 
 ```sh
-swival --provider bedrock --model global.anthropic.claude-opus-4-6-v1 \
+swival --provider bedrock --model global.anthropic.claude-opus-5-5 \
     --base-url us-east-2 "task"
 ```
 
@@ -459,7 +459,7 @@ When `--max-context-tokens` is not set, Swival reads the window from LiteLLM's m
 For cross-region inference, use the regional prefix in the model ID (e.g. `us.`, `eu.`, `apac.`).
 
 ```sh
-swival --provider bedrock --model us.anthropic.claude-opus-4-6-v1 "task"
+swival --provider bedrock --model us.anthropic.claude-opus-5-5 "task"
 ```
 
 ## Extra Provider Parameters
@@ -516,19 +516,29 @@ Because the external program handles all model routing, there is no auto-discove
 
 ## Prompt Caching
 
-For providers that support explicit cache annotations, Swival automatically marks the system message as cacheable each turn. This avoids re-processing the system prompt and tool schemas on every call, which typically saves 30–60% of input token costs in long sessions.
+When the model supports it, Swival marks the system prompt as cacheable.
+The system prompt and tool schemas then don't have to be processed again on every call.
 
-| Provider                             | Caching mechanism                           | Notes                                                                                                |
-| ------------------------------------ | ------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Anthropic (native or via OpenRouter) | Explicit `cache_control` injected by Swival | System message cached; tool schemas not cached in Phase 1                                            |
-| Google Gemini                        | Explicit `cache_control` injected by Swival | Via `openrouter/google/...` or native `google` provider                                              |
-| AWS Bedrock                          | Explicit `cache_control` injected by Swival | Supported for Anthropic models on Bedrock                                                            |
-| OpenAI / Deepseek                    | Automatic (provider-side)                   | No annotation needed; prompts >1024 tokens cached automatically                                      |
-| LM Studio                            | None                                        | Local inference, no server-side cache                                                                |
-| Vertex AI (`geap`/`vertexai`)        | None                                        | Excluded: Vertex AI rejects cached content when tools or system instructions are in the same request |
-| Generic with custom base_url         | Best effort                                 | Annotation injected only when LiteLLM recognizes the model as cache-capable                          |
+For Claude, once the model has replied, Swival also marks the latest message.
+The next call can then read the conversation so far from the cache.
+That costs much less than sending it fresh, and it adds up quickly in long tool loops.
 
-Cache annotation is applied automatically when the model is known to support it (Swival defers to LiteLLM's `supports_prompt_caching` check). It is injected for every provider except LM Studio and Vertex AI; if the call succeeds with a provider that ignores the annotation, the extra field is silently dropped.
+This only happens when requests go straight to Anthropic, OpenRouter, Bedrock (by region), or Vertex AI.
+Through a custom gateway, Swival only caches the system prompt, since it can't tell whether the gateway serves cached reads.
+
+| Provider                             | Caching mechanism                           | Notes                                                                                          |
+| ------------------------------------ | ------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Anthropic (native or via OpenRouter) | Explicit `cache_control` injected by Swival | System prompt, plus the latest message once the model has replied                              |
+| Google Gemini                        | Explicit `cache_control` injected by Swival | Via `openrouter/google/...` or native `google` provider                                        |
+| AWS Bedrock                          | Explicit `cache_control` injected by Swival | Claude models also get the latest message cached                                               |
+| Vertex AI (`geap`/`vertexai`)        | Explicit `cache_control` injected by Swival | Claude only. Gemini is skipped: Vertex AI rejects cached content with tools or a system prompt |
+| OpenAI / Deepseek                    | Automatic (provider-side)                   | No annotation needed; prompts >1024 tokens cached automatically                                |
+| LM Studio                            | None                                        | Local inference, no server-side cache                                                          |
+| Generic with custom base_url         | Best effort                                 | Annotation injected only when LiteLLM recognizes the model as cache-capable                    |
+
+Swival only adds cache marks when LiteLLM knows the model supports caching (its `supports_prompt_caching` check).
+They're added for every provider except LM Studio and Gemini on Vertex AI.
+A provider that doesn't use them simply ignores them.
 
 When diagnostics are enabled (the default unless `--quiet` is set), Swival prints cache hit and write stats to stderr after each turn:
 
@@ -537,4 +547,7 @@ Prompt cache: 4821 tokens cached
 Prompt cache: 6103 tokens written to cache
 ```
 
-To opt out of explicit cache annotations, pass `--no-prompt-cache`. This only suppresses the injection; providers that cache automatically are unaffected.
+To turn off Swival's cache marks, pass `--no-prompt-cache`.
+Providers that cache automatically keep doing so.
+
+If you set your own top-level `cache_control` through `extra_body`, Swival leaves caching to you and adds no marks of its own.

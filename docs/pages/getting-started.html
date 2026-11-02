@@ -258,7 +258,7 @@ swival &quot;Hello world&quot; --provider anthropic --model claude-opus-5-5
 <h2 id="running-with-google-gemini">Running with Google Gemini</h2>
 <p>If you want to use Gemini through Google's API, use the <code>google</code> provider. Authentication comes from <code>--api-key</code>, <code>GEMINI_API_KEY</code>, or <code>OPENAI_API_KEY</code>.</p>
 <pre><code class="language-sh">export GEMINI_API_KEY=...
-swival &quot;Hello world&quot; --provider google --model gemini-2.5-flash
+swival &quot;Hello world&quot; --provider google --model gemini-3.8-flash
 </code></pre>
 <p>Swival routes this through Google's OpenAI-compatible endpoint and will try to auto-detect the context window when <code>--max-context-tokens</code> is not set.</p>
 <p>For a deeper look at Google-specific options, see <a href="providers.html">Providers</a>.</p>
@@ -288,7 +288,7 @@ swival &quot;Hello world&quot; \
 <p>For a deeper look at provider options and server-specific examples, see <a href="providers.html">Providers</a>.</p>
 <h2 id="running-with-chatgpt-pluspro">Running with ChatGPT Plus/Pro</h2>
 <p>If you have a ChatGPT Plus or ChatGPT Pro subscription and want to use OpenAI's models without a separate API key, the <code>chatgpt</code> provider authenticates through an OAuth device-code flow using your existing subscription.</p>
-<pre><code class="language-sh">swival &quot;Hello world&quot; --provider chatgpt --model gpt-5.5
+<pre><code class="language-sh">swival &quot;Hello world&quot; --provider chatgpt --model gpt-6.1-sol
 </code></pre>
 <p>On the first run, Swival will print a URL and a code. Open the URL in your browser, enter the code, and authorize. After that, tokens are cached locally and you won't be prompted again.</p>
 <p><code>--model</code> is required -- there is no default. Supported model names can change over time, so check <a href="providers.html">Providers</a> if you need the current naming.</p>
@@ -296,7 +296,7 @@ swival &quot;Hello world&quot; \
 <h2 id="running-with-aws-bedrock">Running with AWS Bedrock</h2>
 <p>If you use AWS, the <code>bedrock</code> provider connects to models hosted on Bedrock using your existing AWS credentials. No API key is needed — Swival picks up credentials from environment variables, <code>~/.aws/credentials</code>, IAM roles, and SSO.</p>
 <pre><code class="language-sh">export AWS_REGION_NAME=us-east-2
-swival &quot;Hello world&quot; --provider bedrock --model global.anthropic.claude-opus-4-6-v1
+swival &quot;Hello world&quot; --provider bedrock --model global.anthropic.claude-opus-5-5
 </code></pre>
 <p>To use a named profile, pass <code>--aws-profile</code> or set <code>AWS_PROFILE</code>. Note: the region env var is <code>AWS_REGION_NAME</code>, not <code>AWS_DEFAULT_REGION</code>.</p>
 <p>For a deeper look at Bedrock-specific options, see <a href="providers.html">Providers</a>.</p>

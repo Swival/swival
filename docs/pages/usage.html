@@ -200,7 +200,7 @@ swival --oneshot-commands '/loop 30 sec check git status and report unusual acti
 <p><code>swival --help</code> uses the same grouping below and ends with copy-paste examples.</p>
 <h3 id="model-and-provider-flags">Model And Provider Flags</h3>
 <p><code>--profile NAME</code> selects a named LLM profile from config. Profiles bundle provider, model, and related settings under a short name so you can switch setups without retyping flags. See <a href="customization.html#profiles">Profiles</a> for how to define them.</p>
-<pre><code class="language-sh">swival --profile gpt5 &quot;review this patch&quot;
+<pre><code class="language-sh">swival --profile gpt &quot;review this patch&quot;
 </code></pre>
 <p><code>--list-profiles</code> prints available profiles and exits. The active profile is marked with an arrow and shows which layer selected it (CLI flag, project config, or global config).
 Each description is shown under its profile, and with model routing on, the candidates are marked with <code>[routing]</code>.</p>
@@ -228,8 +228,8 @@ It defaults to <code>5</code>, and <code>1</code> disables retries.</p>
 <p>Network errors are retried, and so are prompts the provider flags as "potentially violating our usage policy".
 Some OpenAI models return that for perfectly harmless requests, and sending the same request again often works.
 If it keeps failing, try another model.</p>
-<p><code>--reasoning-effort LEVEL</code> sets the reasoning effort for models that support tunable reasoning (e.g. gpt-5.5). Valid levels are <code>none</code>, <code>minimal</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, and <code>default</code>.</p>
-<pre><code class="language-sh">swival --provider chatgpt --model gpt-5.5 --reasoning-effort high &quot;task&quot;
+<p><code>--reasoning-effort LEVEL</code> sets the reasoning effort for models that support tunable reasoning (e.g. gpt-6.1-sol). Valid levels are <code>none</code>, <code>minimal</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, and <code>default</code>.</p>
+<pre><code class="language-sh">swival --provider chatgpt --model gpt-6.1-sol --reasoning-effort high &quot;task&quot;
 </code></pre>
 <p><code>--show-thinking</code> keeps the model's streamed thinking in your terminal scrollback after the answer is printed, instead of wiping it when the live stream ends. It only affects the display (the thinking goes to stderr, never into stdout, history, traces, or reports) and it needs a verbose, interactive terminal with a provider that streams reasoning. Without it, a collapsed one-line note (<code>thinking: N lines / ~M tokens, hidden</code>) is shown instead. The config-file equivalent is <code>show_thinking = true</code>.</p>
 <h3 id="service-tiers">Service Tiers</h3>
@@ -237,17 +237,17 @@ If it keeps failing, try another model.</p>
 <p><strong>Flex processing</strong> is the opposite — cheaper but with variable latency, as requests may be deferred when capacity is low. Use it for batch jobs, evals, or other asynchronous workloads.</p>
 <p>Service tier is not exposed as a dedicated CLI flag. Pass it via <code>--extra-body</code>:</p>
 <pre><code class="language-sh"># Priority (&quot;fast&quot; mode — like Codex's fast setting)
-swival --provider chatgpt --model gpt-5.5 \
+swival --provider chatgpt --model gpt-6.1-sol \
     --extra-body '{&quot;service_tier&quot;: &quot;priority&quot;}' &quot;task&quot;
 </code></pre>
 <p>In config:</p>
 <pre><code class="language-toml">[chatgpt]
-model = &quot;gpt-5.5&quot;
+model = &quot;gpt-6.1-sol&quot;
 extra_body = { service_tier = &quot;priority&quot; }
 </code></pre>
 <p><code>reasoning_effort</code> and <code>service_tier</code> are independent knobs — you can combine them to tune both how deeply the model thinks and how fast the response arrives:</p>
 <pre><code class="language-sh"># Fast response + moderate reasoning
-swival --provider chatgpt --model gpt-5.5 \
+swival --provider chatgpt --model gpt-6.1-sol \
     --reasoning-effort medium \
     --extra-body '{&quot;service_tier&quot;: &quot;priority&quot;}' &quot;task&quot;
 </code></pre>
@@ -339,7 +339,9 @@ A new CLI process starts from zero.</p>
 <h3 id="caching-flags">Caching Flags</h3>
 <p><code>--cache</code> enables LLM response caching. When an identical request is seen again, the cached response is returned without contacting the LLM. The cache is stored in a SQLite database at <code>.swival/cache.db</code> by default. Off by default.</p>
 <p><code>--cache-dir PATH</code> overrides the default cache database directory. Useful for sharing a cache across projects.</p>
-<p><code>--no-prompt-cache</code> disables the explicit <code>cache_control</code> annotations that Swival injects on the system message for Anthropic, Gemini, and Bedrock providers. Providers that cache automatically (OpenAI, Deepseek) are unaffected by this flag. Prompt caching is on by default.</p>
+<p><code>--no-prompt-cache</code> turns off the cache marks Swival adds for Anthropic, Gemini, Bedrock, and Claude on Vertex AI (see <a href="providers.html#prompt-caching">Prompt Caching</a>).
+Providers that cache automatically (OpenAI, Deepseek) aren't affected.
+Prompt caching is on by default.</p>
 <h3 id="configuration-flags">Configuration Flags</h3>
 <p><code>--init-config</code> generates a global config file at <code>~/.config/swival/config.toml</code> and exits. The file is a commented starter template covering the main settings and integrations.</p>
 <p><code>--init-config --project</code> generates a project-local config file at <code>swival.toml</code> in the current base directory instead.</p>

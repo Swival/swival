@@ -172,7 +172,7 @@ If you want to use Gemini through Google's API, use the `google` provider. Authe
 
 ```sh
 export GEMINI_API_KEY=...
-swival "Hello world" --provider google --model gemini-2.5-flash
+swival "Hello world" --provider google --model gemini-3.8-flash
 ```
 
 Swival routes this through Google's OpenAI-compatible endpoint and will try to auto-detect the context window when `--max-context-tokens` is not set.
@@ -224,7 +224,7 @@ For a deeper look at provider options and server-specific examples, see [Provide
 If you have a ChatGPT Plus or ChatGPT Pro subscription and want to use OpenAI's models without a separate API key, the `chatgpt` provider authenticates through an OAuth device-code flow using your existing subscription.
 
 ```sh
-swival "Hello world" --provider chatgpt --model gpt-5.5
+swival "Hello world" --provider chatgpt --model gpt-6.1-sol
 ```
 
 On the first run, Swival will print a URL and a code. Open the URL in your browser, enter the code, and authorize. After that, tokens are cached locally and you won't be prompted again.
@@ -239,7 +239,7 @@ If you use AWS, the `bedrock` provider connects to models hosted on Bedrock usin
 
 ```sh
 export AWS_REGION_NAME=us-east-2
-swival "Hello world" --provider bedrock --model global.anthropic.claude-opus-4-6-v1
+swival "Hello world" --provider bedrock --model global.anthropic.claude-opus-5-5
 ```
 
 To use a named profile, pass `--aws-profile` or set `AWS_PROFILE`. Note: the region env var is `AWS_REGION_NAME`, not `AWS_DEFAULT_REGION`.

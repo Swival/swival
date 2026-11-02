@@ -186,7 +186,7 @@ Catalogs are available for LM Studio (all downloaded models, loaded ones first),
 `--profile NAME` selects a named LLM profile from config. Profiles bundle provider, model, and related settings under a short name so you can switch setups without retyping flags. See [Profiles](customization.md#profiles) for how to define them.
 
 ```sh
-swival --profile gpt5 "review this patch"
+swival --profile gpt "review this patch"
 ```
 
 `--list-profiles` prints available profiles and exits. The active profile is marked with an arrow and shows which layer selected it (CLI flag, project config, or global config).
@@ -237,10 +237,10 @@ Network errors are retried, and so are prompts the provider flags as "potentiall
 Some OpenAI models return that for perfectly harmless requests, and sending the same request again often works.
 If it keeps failing, try another model.
 
-`--reasoning-effort LEVEL` sets the reasoning effort for models that support tunable reasoning (e.g. gpt-5.5). Valid levels are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `default`.
+`--reasoning-effort LEVEL` sets the reasoning effort for models that support tunable reasoning (e.g. gpt-6.1-sol). Valid levels are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `default`.
 
 ```sh
-swival --provider chatgpt --model gpt-5.5 --reasoning-effort high "task"
+swival --provider chatgpt --model gpt-6.1-sol --reasoning-effort high "task"
 ```
 
 `--show-thinking` keeps the model's streamed thinking in your terminal scrollback after the answer is printed, instead of wiping it when the live stream ends. It only affects the display (the thinking goes to stderr, never into stdout, history, traces, or reports) and it needs a verbose, interactive terminal with a provider that streams reasoning. Without it, a collapsed one-line note (`thinking: N lines / ~M tokens, hidden`) is shown instead. The config-file equivalent is `show_thinking = true`.
@@ -255,7 +255,7 @@ Service tier is not exposed as a dedicated CLI flag. Pass it via `--extra-body`:
 
 ```sh
 # Priority ("fast" mode — like Codex's fast setting)
-swival --provider chatgpt --model gpt-5.5 \
+swival --provider chatgpt --model gpt-6.1-sol \
     --extra-body '{"service_tier": "priority"}' "task"
 ```
 
@@ -263,7 +263,7 @@ In config:
 
 ```toml
 [chatgpt]
-model = "gpt-5.5"
+model = "gpt-6.1-sol"
 extra_body = { service_tier = "priority" }
 ```
 
@@ -271,7 +271,7 @@ extra_body = { service_tier = "priority" }
 
 ```sh
 # Fast response + moderate reasoning
-swival --provider chatgpt --model gpt-5.5 \
+swival --provider chatgpt --model gpt-6.1-sol \
     --reasoning-effort medium \
     --extra-body '{"service_tier": "priority"}' "task"
 ```
@@ -441,7 +441,9 @@ Work that finishes after the last turn line, such as the continue-file summary w
 
 `--cache-dir PATH` overrides the default cache database directory. Useful for sharing a cache across projects.
 
-`--no-prompt-cache` disables the explicit `cache_control` annotations that Swival injects on the system message for Anthropic, Gemini, and Bedrock providers. Providers that cache automatically (OpenAI, Deepseek) are unaffected by this flag. Prompt caching is on by default.
+`--no-prompt-cache` turns off the cache marks Swival adds for Anthropic, Gemini, Bedrock, and Claude on Vertex AI (see [Prompt Caching](providers.html#prompt-caching)).
+Providers that cache automatically (OpenAI, Deepseek) aren't affected.
+Prompt caching is on by default.
 
 ### Configuration Flags
 

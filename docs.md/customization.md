@@ -87,7 +87,7 @@ For the `chatgpt` provider (ChatGPT Plus/Pro subscriptions), no API key is neede
 
 ```toml
 provider = "chatgpt"
-model = "gpt-5.5"
+model = "gpt-6.1-sol"
 ```
 
 Relative paths in `allowed_dirs`, `allowed_dirs_ro`, `skills_dir`, `cache_dir`, `objective`, and `verify` resolve against the config file's parent directory, not the working directory. Tilde paths like `~/projects` expand to the home directory.
@@ -114,9 +114,9 @@ provider = "lmstudio"
 model = "qwen3-coder-next"
 max_context_tokens = 65536
 
-[profiles.gpt5]
+[profiles.gpt]
 provider = "chatgpt"
-model = "gpt-5.5"
+model = "gpt-6.1-sol"
 reasoning_effort = "high"
 
 [profiles.router-main]
@@ -133,7 +133,7 @@ model = "qwen3:32b"
 Switch with `--profile`:
 
 ```sh
-swival --profile gpt5 "review this patch"
+swival --profile gpt "review this patch"
 swival --profile fast-local "write tests"
 ```
 
@@ -165,7 +165,7 @@ Explicit selections with `--profile`, `--model`, `--provider`, `/profile`, or `/
 If `--profile` is combined with explicit flags like `--provider` or `--model`, the explicit flags win on a per-key basis, just like CLI flags override config everywhere else in Swival.
 
 ```sh
-swival --profile gpt5 --reasoning-effort medium "task"
+swival --profile gpt --reasoning-effort medium "task"
 ```
 
 This is particularly useful with `--model`. A profile can lock down the provider, base URL, API key, and other settings for a given service, while `--model` lets you swap models on the fly without duplicating the rest of the configuration. For example, with a HuggingFace profile:
@@ -343,7 +343,7 @@ Some models support a tunable reasoning level that controls how much effort the 
 On the command line:
 
 ```sh
-swival --provider chatgpt --model gpt-5.5 --reasoning-effort high "task"
+swival --provider chatgpt --model gpt-6.1-sol --reasoning-effort high "task"
 ```
 
 In a config file:

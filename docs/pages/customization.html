@@ -176,7 +176,7 @@ auth_token = &quot;sk-...&quot;
 </code></pre>
 <p>For the <code>chatgpt</code> provider (ChatGPT Plus/Pro subscriptions), no API key is needed since authentication is handled through OAuth:</p>
 <pre><code class="language-toml">provider = &quot;chatgpt&quot;
-model = &quot;gpt-5.5&quot;
+model = &quot;gpt-6.1-sol&quot;
 </code></pre>
 <p>Relative paths in <code>allowed_dirs</code>, <code>allowed_dirs_ro</code>, <code>skills_dir</code>, <code>cache_dir</code>, <code>objective</code>, and <code>verify</code> resolve against the config file's parent directory, not the working directory. Tilde paths like <code>~/projects</code> expand to the home directory.</p>
 <p>The <code>reviewer</code>, <code>llm_filter</code>, <code>lifecycle_command</code>, and <code>command_middleware</code> values are shell-split; only path-like first tokens (anything starting with <code>/</code>, <code>~</code>, or containing a <code>/</code>, e.g. <code>./</code>, <code>../</code>, <code>.rtk/</code>, <code>scripts/</code>) are resolved against the config directory, while bare command names like <code>swival</code> are left for PATH lookup at runtime. The same resolution applies to <code>model</code> when <code>provider = "command"</code>.</p>
@@ -194,9 +194,9 @@ provider = &quot;lmstudio&quot;
 model = &quot;qwen3-coder-next&quot;
 max_context_tokens = 65536
 
-[profiles.gpt5]
+[profiles.gpt]
 provider = &quot;chatgpt&quot;
-model = &quot;gpt-5.5&quot;
+model = &quot;gpt-6.1-sol&quot;
 reasoning_effort = &quot;high&quot;
 
 [profiles.router-main]
@@ -210,7 +210,7 @@ base_url = &quot;http://127.0.0.1:11434&quot;
 model = &quot;qwen3:32b&quot;
 </code></pre>
 <p>Switch with <code>--profile</code>:</p>
-<pre><code class="language-sh">swival --profile gpt5 &quot;review this patch&quot;
+<pre><code class="language-sh">swival --profile gpt &quot;review this patch&quot;
 swival --profile fast-local &quot;write tests&quot;
 </code></pre>
 <p>Set <code>active_profile</code> in config to pick a default without typing <code>--profile</code> every time. Project config overrides global config, and <code>--profile</code> on the CLI overrides both.</p>
@@ -229,7 +229,7 @@ description = &quot;Slow and expensive; use for difficult debugging, security au
 To restrict automatic routing to approved profiles, list them in <code>routing_profiles</code>.
 Explicit selections with <code>--profile</code>, <code>--model</code>, <code>--provider</code>, <code>/profile</code>, or <code>/model</code> bypass that list.</p>
 <p>If <code>--profile</code> is combined with explicit flags like <code>--provider</code> or <code>--model</code>, the explicit flags win on a per-key basis, just like CLI flags override config everywhere else in Swival.</p>
-<pre><code class="language-sh">swival --profile gpt5 --reasoning-effort medium &quot;task&quot;
+<pre><code class="language-sh">swival --profile gpt --reasoning-effort medium &quot;task&quot;
 </code></pre>
 <p>This is particularly useful with <code>--model</code>. A profile can lock down the provider, base URL, API key, and other settings for a given service, while <code>--model</code> lets you swap models on the fly without duplicating the rest of the configuration. For example, with a HuggingFace profile:</p>
 <pre><code class="language-toml">active_profile = &quot;hf&quot;
@@ -331,7 +331,7 @@ Don't add dependencies without asking.
 <h2 id="reasoning-effort">Reasoning Effort</h2>
 <p>Some models support a tunable reasoning level that controls how much effort the model puts into thinking before responding. This is a first-class parameter in Swival, separate from <code>extra_body</code>.</p>
 <p>On the command line:</p>
-<pre><code class="language-sh">swival --provider chatgpt --model gpt-5.5 --reasoning-effort high &quot;task&quot;
+<pre><code class="language-sh">swival --provider chatgpt --model gpt-6.1-sol --reasoning-effort high &quot;task&quot;
 </code></pre>
 <p>In a config file:</p>
 <pre><code class="language-toml">reasoning_effort = &quot;high&quot;

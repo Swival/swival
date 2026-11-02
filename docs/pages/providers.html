@@ -123,9 +123,9 @@
 provider = &quot;lmstudio&quot;
 model = &quot;qwen3-coder-next&quot;
 
-[profiles.gpt5]
+[profiles.gpt]
 provider = &quot;chatgpt&quot;
-model = &quot;gpt-5.5&quot;
+model = &quot;gpt-6.1-sol&quot;
 reasoning_effort = &quot;high&quot;
 
 [profiles.claude]
@@ -134,10 +134,10 @@ model = &quot;claude-opus-5-5&quot;
 </code></pre>
 <p>Then switch with <code>--profile</code> at startup, or <code>/profile</code> mid-session:</p>
 <pre><code class="language-sh">swival --profile local &quot;quick task&quot;
-swival --profile gpt5 &quot;hard task&quot;
+swival --profile gpt &quot;hard task&quot;
 swival --profile claude &quot;review this patch&quot;
 </code></pre>
-<pre><code>swival&gt; /profile gpt5
+<pre><code>swival&gt; /profile gpt
 </code></pre>
 <p>Profiles switch the whole stack at once. To change only the model within the current provider, use the <code>/model</code> command in the REPL: with no argument it opens an interactive picker over the models the provider can serve right now, <code>/model NAME</code> switches directly, and favorites you star in the picker are remembered across sessions. Bedrock, GEAP, and the command provider have no model listing, but <code>/model ID</code> still works. See <a href="usage.html">Usage</a> for the details.</p>
 <p>The sections below document each provider's flags, authentication, and behavior in detail.</p>
@@ -317,7 +317,7 @@ swival --provider generic \
 <p><code>--model</code> is required. Authentication comes from <code>--api-key</code>, <code>GEMINI_API_KEY</code>, or <code>OPENAI_API_KEY</code>.</p>
 <pre><code class="language-sh">export GEMINI_API_KEY=...
 swival --provider google \
-    --model gemini-3-flash \
+    --model gemini-3.8-flash \
     &quot;task&quot;
 </code></pre>
 <p>When <code>--max-context-tokens</code> is not set, Swival auto-detects the context window from the model's known limits. If detection fails, context length is unknown and compaction may not trigger at the right time — set <code>--max-context-tokens</code> explicitly if you hit issues.</p>
@@ -358,19 +358,19 @@ location = &quot;us-central1&quot;
 <p>Authentication uses an OAuth device-code flow — on first use, Swival prints a device code and a verification URL to your terminal. Open the URL, enter the code, and authorize with your ChatGPT account. The resulting tokens are cached locally and refreshed automatically on subsequent runs.</p>
 <p>If you need to pass an API key explicitly (for example, when using <code>--self-review</code> which passes credentials via environment variables), set <code>CHATGPT_API_KEY</code> or use <code>--api-key</code>.</p>
 <p><code>--model</code> is required. There is no default model.</p>
-<pre><code class="language-sh">swival --provider chatgpt --model gpt-5.5 &quot;task&quot;
+<pre><code class="language-sh">swival --provider chatgpt --model gpt-6.1-sol &quot;task&quot;
 </code></pre>
 <p>On the first run, you will see a device-code prompt with a URL and a code to enter in your browser. Once you complete the flow, the OAuth tokens are stored locally and refreshed automatically. To remove the cached tokens and force the device-code flow on the next run, use <code>swival --logout</code>.</p>
 <p>Supported model names may change over time. Check OpenAI's documentation for the current model list and naming conventions.</p>
 <p>When <code>--max-context-tokens</code> is not set, Swival looks the window up in LiteLLM's model registry. Set the flag explicitly if your model is not listed there.</p>
 <p>Two environment variables are available for advanced use. <code>CHATGPT_TOKEN_DIR</code> overrides the default token storage directory, and <code>CHATGPT_AUTH_FILE</code> overrides the token filename or path. Use <code>--base-url</code> to override the API base URL.</p>
 <pre><code class="language-sh">export CHATGPT_TOKEN_DIR=/path/to/tokens
-swival --provider chatgpt --model gpt-5.5 &quot;task&quot;
+swival --provider chatgpt --model gpt-6.1-sol &quot;task&quot;
 swival --logout
 </code></pre>
 <p>The <code>--top-p</code>, <code>--seed</code>, and <code>tool_choice</code> parameters are not supported by the ChatGPT Plus/Pro backend. Swival drops them automatically when using this provider.</p>
-<p>Models like <code>gpt-5.5</code> support tunable reasoning effort. Use <code>--reasoning-effort</code> to control how much the model thinks before responding:</p>
-<pre><code class="language-sh">swival --provider chatgpt --model gpt-5.5 --reasoning-effort high &quot;task&quot;
+<p>Models like <code>gpt-6.1-sol</code> support tunable reasoning effort. Use <code>--reasoning-effort</code> to control how much the model thinks before responding:</p>
+<pre><code class="language-sh">swival --provider chatgpt --model gpt-6.1-sol --reasoning-effort high &quot;task&quot;
 </code></pre>
 <p>You can also combine reasoning effort with <strong>priority processing</strong> (<code>service_tier: "priority"</code>) for faster responses without sacrificing quality. See the <a href="usage.html#service-tiers">Service Tiers</a> section.</p>
 <p>No other configuration is needed.</p>
@@ -380,20 +380,20 @@ swival --logout
 <pre><code class="language-sh">export AWS_ACCESS_KEY_ID=AKIA...
 export AWS_SECRET_ACCESS_KEY=...
 export AWS_REGION_NAME=us-east-2
-swival --provider bedrock --model global.anthropic.claude-opus-4-6-v1 &quot;task&quot;
+swival --provider bedrock --model global.anthropic.claude-opus-5-5 &quot;task&quot;
 </code></pre>
 <p>Swival picks up credentials from environment variables, <code>~/.aws/credentials</code>, <code>~/.aws/config</code>, IAM roles, and SSO. To use a named profile, pass <code>--aws-profile</code> or set <code>AWS_PROFILE</code>.</p>
-<pre><code class="language-sh">swival --provider bedrock --model global.anthropic.claude-opus-4-6-v1 \
+<pre><code class="language-sh">swival --provider bedrock --model global.anthropic.claude-opus-5-5 \
     --aws-profile bedrock &quot;task&quot;
 </code></pre>
 <p>Use <code>--base-url</code> to set the region, or pass a custom endpoint URL.</p>
-<pre><code class="language-sh">swival --provider bedrock --model global.anthropic.claude-opus-4-6-v1 \
+<pre><code class="language-sh">swival --provider bedrock --model global.anthropic.claude-opus-5-5 \
     --base-url us-east-2 &quot;task&quot;
 </code></pre>
 <p>Note: the region env var is <code>AWS_REGION_NAME</code>, not <code>AWS_DEFAULT_REGION</code>.</p>
 <p>When <code>--max-context-tokens</code> is not set, Swival reads the window from LiteLLM's model registry for the Bedrock model ID. Set the flag explicitly if your model is not listed there.</p>
 <p>For cross-region inference, use the regional prefix in the model ID (e.g. <code>us.</code>, <code>eu.</code>, <code>apac.</code>).</p>
-<pre><code class="language-sh">swival --provider bedrock --model us.anthropic.claude-opus-4-6-v1 &quot;task&quot;
+<pre><code class="language-sh">swival --provider bedrock --model us.anthropic.claude-opus-5-5 &quot;task&quot;
 </code></pre>
 <h2 id="extra-provider-parameters">Extra Provider Parameters</h2>
 <p>Some models and servers accept parameters that go beyond the standard OpenAI API. Use <code>--extra-body</code> to pass them through. The value is a JSON object that gets forwarded directly to the API call.</p>
@@ -426,7 +426,13 @@ model = &quot;codex exec --skip-git-repo-check --full-auto --ephemeral&quot;
 </code></pre>
 <p>Because the external program handles all model routing, there is no auto-discovery. If you set <code>--max-context-tokens</code>, Swival will apply output clamping and graduated compaction as usual; otherwise context management is left to the command itself.</p>
 <h2 id="prompt-caching">Prompt Caching</h2>
-<p>For providers that support explicit cache annotations, Swival automatically marks the system message as cacheable each turn. This avoids re-processing the system prompt and tool schemas on every call, which typically saves 30–60% of input token costs in long sessions.</p>
+<p>When the model supports it, Swival marks the system prompt as cacheable.
+The system prompt and tool schemas then don't have to be processed again on every call.</p>
+<p>For Claude, once the model has replied, Swival also marks the latest message.
+The next call can then read the conversation so far from the cache.
+That costs much less than sending it fresh, and it adds up quickly in long tool loops.</p>
+<p>This only happens when requests go straight to Anthropic, OpenRouter, Bedrock (by region), or Vertex AI.
+Through a custom gateway, Swival only caches the system prompt, since it can't tell whether the gateway serves cached reads.</p>
 <table>
 <thead>
 <tr>
@@ -439,7 +445,7 @@ model = &quot;codex exec --skip-git-repo-check --full-auto --ephemeral&quot;
 <tr>
 <td>Anthropic (native or via OpenRouter)</td>
 <td>Explicit <code>cache_control</code> injected by Swival</td>
-<td>System message cached; tool schemas not cached in Phase 1</td>
+<td>System prompt, plus the latest message once the model has replied</td>
 </tr>
 <tr>
 <td>Google Gemini</td>
@@ -449,7 +455,12 @@ model = &quot;codex exec --skip-git-repo-check --full-auto --ephemeral&quot;
 <tr>
 <td>AWS Bedrock</td>
 <td>Explicit <code>cache_control</code> injected by Swival</td>
-<td>Supported for Anthropic models on Bedrock</td>
+<td>Claude models also get the latest message cached</td>
+</tr>
+<tr>
+<td>Vertex AI (<code>geap</code>/<code>vertexai</code>)</td>
+<td>Explicit <code>cache_control</code> injected by Swival</td>
+<td>Claude only. Gemini is skipped: Vertex AI rejects cached content with tools or a system prompt</td>
 </tr>
 <tr>
 <td>OpenAI / Deepseek</td>
@@ -462,23 +473,22 @@ model = &quot;codex exec --skip-git-repo-check --full-auto --ephemeral&quot;
 <td>Local inference, no server-side cache</td>
 </tr>
 <tr>
-<td>Vertex AI (<code>geap</code>/<code>vertexai</code>)</td>
-<td>None</td>
-<td>Excluded: Vertex AI rejects cached content when tools or system instructions are in the same request</td>
-</tr>
-<tr>
 <td>Generic with custom base_url</td>
 <td>Best effort</td>
 <td>Annotation injected only when LiteLLM recognizes the model as cache-capable</td>
 </tr>
 </tbody>
 </table>
-<p>Cache annotation is applied automatically when the model is known to support it (Swival defers to LiteLLM's <code>supports_prompt_caching</code> check). It is injected for every provider except LM Studio and Vertex AI; if the call succeeds with a provider that ignores the annotation, the extra field is silently dropped.</p>
+<p>Swival only adds cache marks when LiteLLM knows the model supports caching (its <code>supports_prompt_caching</code> check).
+They're added for every provider except LM Studio and Gemini on Vertex AI.
+A provider that doesn't use them simply ignores them.</p>
 <p>When diagnostics are enabled (the default unless <code>--quiet</code> is set), Swival prints cache hit and write stats to stderr after each turn:</p>
 <pre><code class="language-text">Prompt cache: 4821 tokens cached
 Prompt cache: 6103 tokens written to cache
 </code></pre>
-<p>To opt out of explicit cache annotations, pass <code>--no-prompt-cache</code>. This only suppresses the injection; providers that cache automatically are unaffected.</p>
+<p>To turn off Swival's cache marks, pass <code>--no-prompt-cache</code>.
+Providers that cache automatically keep doing so.</p>
+<p>If you set your own top-level <code>cache_control</code> through <code>extra_body</code>, Swival leaves caching to you and adds no marks of its own.</p>
             <nav class="page-nav" aria-label="Page navigation"><a class="nav-prev" href="customization.html"><span class="nav-label">&larr; Previous</span><span class="nav-title">Customization</span></a><a class="nav-next" href="reports.html"><span class="nav-label">Next &rarr;</span><span class="nav-title">Reports</span></a></nav>
         </article>
         <aside class="page-toc" aria-label="On this page">
