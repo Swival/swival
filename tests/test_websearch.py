@@ -1412,14 +1412,16 @@ class TestTransport:
             {"results": [{"title": "t", "url": "https://e.com/x", "snippet": "httpx"}]}
         ).encode()
         answers = [
-            b"HTTP/1.1 200 OK\r\nSet-Cookie: track=abc123; Path=/\r\n"
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\n"
+            b"Set-Cookie: track=abc123; Path=/\r\n"
             b"Content-Length: %d\r\n\r\n%s" % (len(body), body),
-            b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s" % (len(body), body),
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\n"
+            b"Content-Length: %d\r\n\r\n%s" % (len(body), body),
         ]
         server = Server(lambda conn: conn.sendall(answers.pop(0)))
         answers.append(
-            b"HTTP/1.1 302 Found\r\nLocation: %s\r\nContent-Length: 0\r\n\r\n"
-            % server.url.encode()
+            b"HTTP/1.1 302 Found\r\nConnection: close\r\n"
+            b"Location: %s\r\nContent-Length: 0\r\n\r\n" % server.url.encode()
         )
         engine = real_engine(monkeypatch, server)
         policy = ws.make_policy(**KEENABLE_POLICY)
