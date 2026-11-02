@@ -132,6 +132,7 @@ from .tools import (
     RUN_SHELL_COMMAND_TOOL,  # noqa: F401 — used in build_tools()
     USE_SKILL_TOOL,
     _bg_slots_in_use,
+    _TOOL_ALIASES,
     _memory_path,
     _untrusted_error_details,
     dispatch,
@@ -149,6 +150,7 @@ from .tool_call_repair import (
     is_mutating as _tcr_is_mutating,
     repair_truncated_json,
     scavenge_tool_calls,
+    _FILESYSTEM_MUTATING,
 )
 from .worktree import git as _internal_git
 
@@ -4349,6 +4351,52 @@ def _command_label(command) -> str:
     return text
 
 
+# When a write, edit or delete fails, we skip the rest of the batch, since it
+# assumed the change worked.
+#
+# Reads still run: they're harmless and help the model see what went wrong.
+_RUNS_AFTER_FAILED_MUTATION = frozenset(
+    {"read_file", "read_multiple_files", "list_files", "grep", "outline", "view_image"}
+)
+
+
+def _file_mutation_failure(name, succeeded):
+    canonical = _TOOL_ALIASES.get(name, name)
+    if not succeeded and canonical in _FILESYSTEM_MUTATING:
+        return canonical
+    return None
+
+
+def _skipped_after_failure(name, failed_tool):
+    return (
+        failed_tool is not None
+        and _TOOL_ALIASES.get(name, name) not in _RUNS_AFTER_FAILED_MUTATION
+    )
+
+
+def _skip_tool_call(call_id, name, failed_tool, turn, turn_offset, report, _emit):
+    # Skipped calls never ran, so they stay out of the tool stats and the
+    # error guardrail.
+    content = (
+        f"error: skipped because {failed_tool} failed earlier in this batch; "
+        "this call was not executed. "
+        "Retry it after fixing that failure, if still needed."
+    )
+    _emit(
+        EVENT_TOOL_ERROR,
+        {
+            "id": call_id,
+            "name": name,
+            "turn": turn,
+            "error": content,
+            "arguments": None,
+        },
+    )
+    if report:
+        report.record_skipped_call(turn + turn_offset, name, failed_tool)
+    return content
+
+
 def handle_tool_call(
     tool_call,
     base_dir,
@@ -5384,7 +5432,27 @@ def _call_command_with_tools(
         transcript_messages.append({"role": "assistant", "content": response_text})
 
         round_interventions: list[str] = []
+        batch_failure = None
         for call_id, name, args in calls:
+            if _skipped_after_failure(name, batch_failure):
+                content = _skip_tool_call(
+                    call_id,
+                    name,
+                    batch_failure,
+                    outer_turn,
+                    outer_turn_offset,
+                    report,
+                    _emit,
+                )
+                transcript_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "name": name,
+                        "content": content,
+                    }
+                )
+                continue
             if "_parse_error" in args:
                 tool_msg = {
                     "role": "tool",
@@ -5410,6 +5478,9 @@ def _call_command_with_tools(
                 )
                 tool_msg, tool_meta = handle_tool_call(tc, **handle_tool_call_kwargs)
 
+            batch_failure = batch_failure or _file_mutation_failure(
+                tool_meta["name"], tool_meta["succeeded"]
+            )
             intv = _post_tool_bookkeeping(
                 tool_msg,
                 tool_meta,
@@ -6135,6 +6206,7 @@ def _prompt_cache_kwargs(
     base_url: str | None,
     messages: list,
     extra_body: dict | None,
+    tools: list | None = None,
 ) -> dict:
     """Extra LiteLLM arguments that turn on prompt caching.
 
@@ -6151,8 +6223,11 @@ def _prompt_cache_kwargs(
     ):
         return {}
     # The user set up caching themselves, so we stay out of the way.
-    # Adding our own marks on top can get the request rejected.
-    if "cache_control" in (extra_body or {}):
+    # Our own marks would clash with theirs or replace them.
+    if any(
+        key in (extra_body or {})
+        for key in ("cache_control", "cache_control_injection_points")
+    ):
         return {}
     try:
         from litellm.utils import supports_prompt_caching
@@ -6163,13 +6238,61 @@ def _prompt_cache_kwargs(
         # Older LiteLLM, or a model it doesn't know.
         return {}
 
+    replied = any(_msg_role(m) == "assistant" for m in messages)
+    direct = _is_provider_endpoint(provider, base_url)
+
+    # The system prompt has the current time in it, so it changes between
+    # sessions and subagents, but the tools usually don't.
+    #
+    # Marking the last tool lets new sessions reuse the cached tools.
+    if (
+        provider == "anthropic"
+        and model.startswith("anthropic/claude-")
+        and direct
+        and tools
+        and any(_msg_role(m) == "system" and _msg_content(m) for m in messages)
+    ):
+        try:
+            from litellm.integrations.anthropic_cache_control_hook import (
+                AnthropicCacheControlHook,
+            )
+
+            defaults = AnthropicCacheControlHook.get_default_injection_points(
+                messages=messages,
+                system=None,
+                model=model,
+                custom_llm_provider=None,
+                tools=tools,
+                enable_prompt_caching=True,
+                request_kwargs={"extra_body": extra_body} if extra_body else None,
+            )
+            if not defaults:
+                return {"enable_prompt_caching": True}
+            # Same rule as below: before the first reply, only cache the tools
+            # and the system prompt, and use the cheaper 5-minute TTL.
+            if not replied:
+                defaults = [
+                    {
+                        "location": "message",
+                        "role": "system",
+                        "control": {"type": "ephemeral"},
+                    }
+                ]
+            return {
+                "cache_control_injection_points": [
+                    {"location": "tool_config", "control": defaults[0]["control"]},
+                    *defaults,
+                ]
+            }
+        except Exception:
+            # LiteLLM changed this API, so fall back to the generic marks.
+            pass
+
     points = [{"location": "message", "role": "system"}]
     # Caching the latest message costs a bit extra on every call.
     # It only pays off if the next call reuses it, which won't happen after a
     # one-shot answer, and we can't count on it behind a custom gateway.
-    if _is_provider_endpoint(provider, base_url) and any(
-        _msg_role(m) == "assistant" for m in messages
-    ):
+    if direct and replied:
         try:
             from litellm.llms.anthropic.common_utils import (
                 supports_anthropic_cache_control,
@@ -6501,7 +6624,9 @@ def call_llm(
 
         if prompt_cache:
             completion_kwargs.update(
-                _prompt_cache_kwargs(provider, model, base_url, messages, extra_body)
+                _prompt_cache_kwargs(
+                    provider, model, base_url, messages, extra_body, tools
+                )
             )
 
         if provider == "anthropic":
@@ -12445,6 +12570,7 @@ def _run_agent_loop(
         _malformed_tool_call_repair_pending = False
         _duplicate_tool_call_repair_pending = False
         _goal_completed_by_tool = False
+        batch_failure = None
         for tool_call in msg.tool_calls:
             # Check cancellation before each tool call
             if cancel_flag is not None and cancel_flag.is_set():
@@ -12464,6 +12590,20 @@ def _run_agent_loop(
                     "arguments_raw": getattr(tool_call.function, "arguments", None),
                 },
             )
+            if _skipped_after_failure(_tc_name, batch_failure):
+                content = _skip_tool_call(
+                    tool_call.id,
+                    _tc_name,
+                    batch_failure,
+                    turns,
+                    turn_offset,
+                    report,
+                    _emit,
+                )
+                messages.append(
+                    {"role": "tool", "tool_call_id": tool_call.id, "content": content}
+                )
+                continue
 
             if storm_breaker is not None:
                 _raw_args = getattr(tool_call.function, "arguments", "") or ""
@@ -12524,6 +12664,9 @@ def _run_agent_loop(
                         verbose=verbose,
                     )
                     interventions.extend(bk_interventions)
+                    batch_failure = batch_failure or _file_mutation_failure(
+                        _tc_name, False
+                    )
                     continue
 
             tool_msg, tool_meta = handle_tool_call(
@@ -12563,6 +12706,9 @@ def _run_agent_loop(
                 web_search_policy=web_search_policy,
             )
             messages.append(tool_msg)
+            batch_failure = batch_failure or _file_mutation_failure(
+                tool_meta["name"], tool_meta["succeeded"]
+            )
 
             bk_interventions = _post_tool_bookkeeping(
                 tool_msg,

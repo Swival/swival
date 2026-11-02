@@ -55,6 +55,7 @@ class ReportCollector:
         self.truncation_repairs = 0
         self.scavenged_calls = 0
         self.stormed_calls = 0
+        self.skipped_calls = 0
         self.python_bridge: dict[str, int | float] = {}
         self.web_search: dict = {}
         self.exposure = ExposureMeter()
@@ -224,6 +225,13 @@ class ReportCollector:
                 "args_hash": canonical_args_hash,
                 "count": count,
             }
+        )
+
+    def record_skipped_call(self, turn: int, name: str, failed_tool: str) -> None:
+        """Log a call skipped because a write, edit or delete failed earlier in its batch."""
+        self.skipped_calls += 1
+        self.events.append(
+            {"turn": turn, "type": "skipped_call", "name": name, "after": failed_tool}
         )
 
     def record_recovered_response(self, turn: int, reason: str | None = None):
@@ -457,6 +465,7 @@ class ReportCollector:
                 "truncation_repairs": self.truncation_repairs,
                 "scavenged_calls": self.scavenged_calls,
                 "stormed_calls": self.stormed_calls,
+                "skipped_calls": self.skipped_calls,
                 "llm_calls": self.llm_calls,
                 "total_llm_time_s": round(self.total_llm_time, 3),
                 **(

@@ -5143,6 +5143,51 @@ class TestAnthropicProvider:
 
 
 class TestPromptCacheKwargs:
+    @pytest.mark.parametrize(
+        "provider, model, base_url",
+        [
+            ("bedrock", "bedrock/global.anthropic.claude-opus-5-5", "us-east-1"),
+            ("geap", "vertex_ai/claude-opus-5-5", None),
+            ("openrouter", "openrouter/anthropic/claude-opus-5.5", None),
+            ("generic", "openai/claude-opus-5-5", "http://localhost:11234"),
+            ("anthropic", "anthropic/claude-opus-5-5", "https://gateway.example"),
+        ],
+    )
+    def test_tools_do_not_change_other_provider_policies(
+        self, provider, model, base_url
+    ):
+        messages = _cache_test_messages()
+        expected = agent._prompt_cache_kwargs(provider, model, base_url, messages, None)
+        assert (
+            agent._prompt_cache_kwargs(
+                provider, model, base_url, messages, None, _ANTHROPIC_TOOLS
+            )
+            == expected
+        )
+
+    def test_hook_api_change_falls_back_to_generic_marks(self, monkeypatch):
+        from litellm.integrations.anthropic_cache_control_hook import (
+            AnthropicCacheControlHook,
+        )
+
+        def changed_signature(**kwargs):
+            raise TypeError("unexpected keyword argument")
+
+        monkeypatch.setattr(
+            AnthropicCacheControlHook,
+            "get_default_injection_points",
+            staticmethod(changed_signature),
+        )
+        model = "anthropic/claude-opus-5-5"
+        messages = _cache_test_messages()
+        expected = agent._prompt_cache_kwargs("anthropic", model, None, messages, None)
+        assert (
+            agent._prompt_cache_kwargs(
+                "anthropic", model, None, messages, None, _ANTHROPIC_TOOLS
+            )
+            == expected
+        )
+
     @pytest.mark.parametrize("follow_up", [True, False])
     @pytest.mark.parametrize(
         "provider, model, base_url, expected",
@@ -5215,6 +5260,26 @@ class TestPromptCacheKwargs:
 class TestAnthropicWire:
     """Check the JSON LiteLLM actually sends to the Messages API."""
 
+    @pytest.mark.parametrize("follow_up", [True, False])
+    def test_tools_checkpoint_matches_default_ttl(
+        self, anthropic_wire, monkeypatch, follow_up
+    ):
+        import litellm
+
+        monkeypatch.setattr(litellm, "anthropic_prompt_caching_ttl", "1h")
+        _, sent = anthropic_wire
+        _call_anthropic(
+            _cache_test_messages(follow_up=follow_up), tools=_ANTHROPIC_TOOLS
+        )
+        body = sent[0]["body"]
+        control = {"type": "ephemeral", **({"ttl": "1h"} if follow_up else {})}
+        assert body["tools"][-1]["cache_control"] == control
+        assert body["system"][-1]["cache_control"] == control
+        if follow_up:
+            assert body["messages"][-1]["content"][-1]["cache_control"] == control
+        else:
+            assert _cache_marks(body) == ["tools[0]", "system[0]"]
+
     def test_round_trip_replays_signed_thinking(self, anthropic_wire):
         replies, sent = anthropic_wire
         replies.append(
@@ -5249,8 +5314,8 @@ class TestAnthropicWire:
         assert first["thinking"]["type"] in ("enabled", "adaptive")
         assert "temperature" not in first
         assert first["system"][0]["cache_control"] == {"type": "ephemeral"}
-        assert _cache_marks(first) == ["system[0]"]
-        assert _cache_marks(second) == ["system[0]", "messages[2][0]"]
+        assert _cache_marks(first) == ["tools[0]", "system[0]"]
+        assert _cache_marks(second) == ["tools[0]", "system[0]", "messages[2][0]"]
         assert second["messages"][1]["content"][0] == {
             "type": "thinking",
             "thinking": "plan",
@@ -5266,23 +5331,36 @@ class TestAnthropicWire:
                 {"extra_body": {"cache_control": {"type": "ephemeral", "ttl": "1h"}}},
                 ["top"],
             ),
+            (
+                {
+                    "extra_body": {
+                        "cache_control_injection_points": [
+                            {"location": "message", "role": "system"}
+                        ]
+                    }
+                },
+                ["system[0]"],
+            ),
         ],
     )
     def test_cache_marks_respect_user_settings(
         self, anthropic_wire, kw, expected, follow_up
     ):
         _, sent = anthropic_wire
-        _call_anthropic(_cache_test_messages(follow_up=follow_up), **kw)
+        _call_anthropic(
+            _cache_test_messages(follow_up=follow_up), tools=_ANTHROPIC_TOOLS, **kw
+        )
         assert _cache_marks(sent[0]["body"]) == expected
 
     @pytest.mark.parametrize(
         "location, expected", [("message", ["messages[0][0]"]), ("tool", ["tools[0]"])]
     )
+    @pytest.mark.parametrize("follow_up", [True, False])
     def test_cache_marks_preserve_explicit_breakpoints(
-        self, anthropic_wire, location, expected
+        self, anthropic_wire, location, expected, follow_up
     ):
         _, sent = anthropic_wire
-        messages, tools = _cache_test_messages(), _ANTHROPIC_TOOLS
+        messages, tools = _cache_test_messages(follow_up=follow_up), _ANTHROPIC_TOOLS
         mark = {"type": "ephemeral"}
         if location == "message":
             messages[1]["content"] = [
@@ -5292,6 +5370,11 @@ class TestAnthropicWire:
             tools = [{**tools[0], "cache_control": mark}]
         _call_anthropic(messages, tools=tools)
         assert _cache_marks(sent[0]["body"]) == expected
+
+    def test_no_initial_tools_write_without_system_prompt(self, anthropic_wire):
+        _, sent = anthropic_wire
+        _call_anthropic(tools=_ANTHROPIC_TOOLS)
+        assert _cache_marks(sent[0]["body"]) == []
 
     @pytest.mark.parametrize(
         "kw, expected",
