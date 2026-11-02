@@ -128,9 +128,8 @@ def retrieve_bm25(
     def _tokenize(text: str) -> list[str]:
         return re.findall(r"[a-z0-9]+", text.lower())
 
-    corpus = [_tokenize(e.content) for e in entries]
     # BM25Okapi requires non-empty corpus items; replace empties with placeholder
-    corpus = [doc if doc else [""] for doc in corpus]
+    corpus = [_tokenize(e.content) or [""] for e in entries]
     bm25 = BM25Okapi(corpus)
     query_tokens = _tokenize(query)
     if not query_tokens:

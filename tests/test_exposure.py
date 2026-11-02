@@ -10,7 +10,12 @@ import pytest
 from swival import tokens
 from swival._msg import COMPACTION_MARKER, RECAP_MARKER
 from swival.cost import CostObservation
-from swival.exposure import PROVIDER_RETRY_NOTE, ExposureMeter, _TokenCache
+from swival.exposure import (
+    PROVIDER_RETRY_NOTE,
+    ExposureMeter,
+    _TokenCache,
+    _tool_call_fields,
+)
 from swival.report import ReportCollector
 from swival.tokens import count_tokens
 
@@ -38,6 +43,32 @@ def _transcript(result="alpha beta gamma " * 50):
 
 def _input(meter, source="agent"):
     return meter.to_dict()["by_source"][source]["input"]
+
+
+class TestToolCallFields:
+    @pytest.mark.parametrize("make_call", [dict, types.SimpleNamespace])
+    @pytest.mark.parametrize("fields", [{}, {"function": None}])
+    def test_missing_or_none_function(self, make_call, fields):
+        assert _tool_call_fields(make_call(**fields)) == ("", "")
+
+    @pytest.mark.parametrize("make_call", [dict, types.SimpleNamespace])
+    @pytest.mark.parametrize("make_function", [dict, types.SimpleNamespace])
+    @pytest.mark.parametrize("value", [None, "", False, 0, {}, []])
+    def test_missing_and_falsey_fields(self, make_call, make_function, value):
+        assert _tool_call_fields(make_call(function=make_function())) == ("", "")
+        function = make_function(name=value, arguments=value)
+        assert _tool_call_fields(make_call(function=function)) == ("", "")
+
+    @pytest.mark.parametrize("make_call", [dict, types.SimpleNamespace])
+    @pytest.mark.parametrize("make_function", [dict, types.SimpleNamespace])
+    @pytest.mark.parametrize("arguments", [{"path": "a.py"}, ["a.py"]])
+    def test_structured_arguments_are_untouched(
+        self, make_call, make_function, arguments
+    ):
+        function = make_function(name="read_file", arguments=arguments)
+        name, actual = _tool_call_fields(make_call(function=function))
+        assert name == "read_file"
+        assert actual is arguments
 
 
 class TestAttribution:

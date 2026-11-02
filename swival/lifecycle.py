@@ -90,13 +90,10 @@ def _git_metadata(base_dir: str) -> dict[str, str]:
     normalized = _normalize_remote(raw_remote) if raw_remote else ""
 
     # repo_hash and project_hash
-    if normalized:
-        result["repo_hash"] = _hash48(normalized)
-        project_key = normalized + ":" + result.get("project_rel", "")
-        result["project_hash"] = _hash48(project_key)
-    elif repo_root:
-        result["repo_hash"] = _hash48(repo_root)
-        project_key = repo_root + ":" + result.get("project_rel", "")
+    identity = normalized or repo_root
+    if identity:
+        result["repo_hash"] = _hash48(identity)
+        project_key = identity + ":" + result.get("project_rel", "")
         result["project_hash"] = _hash48(project_key)
 
     return result

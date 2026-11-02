@@ -167,7 +167,7 @@ class TodoState:
     def _batch_done(self, tasks: list[str], errors: list[dict]) -> str:
         done_count = 0
         for task in tasks:
-            match = self._match_item(task, include_done=True)
+            match = self._match_item(task)
             if isinstance(match, str):
                 errors.append({"task": task, "reason": match.removeprefix("error: ")})
                 continue
@@ -184,7 +184,7 @@ class TodoState:
     def _batch_remove(self, tasks: list[str], errors: list[dict]) -> str:
         removed = 0
         for task in tasks:
-            match = self._match_item(task, include_done=True)
+            match = self._match_item(task)
             if isinstance(match, str):
                 errors.append({"task": task, "reason": match.removeprefix("error: ")})
                 continue
@@ -230,22 +230,19 @@ class TodoState:
             note += f" ({extras})"
         return note
 
-    def _match_item(self, task: str, include_done: bool = False) -> TodoItem | str:
+    def _match_item(self, task: str) -> TodoItem | str:
         """Find a matching item. Returns the item or an error string."""
-        candidates = (
-            self.items if include_done else [i for i in self.items if not i.done]
-        )
         lower = _task_key(task)
 
-        exact = [i for i in candidates if _task_key(i.text) == lower]
+        exact = [i for i in self.items if _task_key(i.text) == lower]
         if len(exact) == 1:
             return exact[0]
 
-        prefix = [i for i in candidates if _task_key(i.text).startswith(lower)]
+        prefix = [i for i in self.items if _task_key(i.text).startswith(lower)]
         if len(prefix) == 1:
             return prefix[0]
 
-        sub = [i for i in candidates if lower in _task_key(i.text)]
+        sub = [i for i in self.items if lower in _task_key(i.text)]
         if len(sub) == 1:
             return sub[0]
 

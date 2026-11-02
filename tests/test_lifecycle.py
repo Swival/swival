@@ -1,5 +1,6 @@
 """Tests for the lifecycle hook system."""
 
+import hashlib
 import os
 import shlex
 import stat
@@ -96,6 +97,13 @@ class TestGitMetadata:
         assert len(meta["git_head"]) == 40
         assert meta["git_dirty"] == "0"
         assert meta["project_rel"] == ""
+        assert (
+            meta["repo_hash"] == hashlib.sha256(str(tmp_path).encode()).hexdigest()[:48]
+        )
+        assert (
+            meta["project_hash"]
+            == hashlib.sha256((str(tmp_path) + ":").encode()).hexdigest()[:48]
+        )
 
     def test_outside_git_repo(self, tmp_path):
         # Create a dir outside any git repo
@@ -185,11 +193,19 @@ class TestGitMetadata:
             capture_output=True,
         )
 
-        meta = _git_metadata(str(tmp_path))
+        nested = tmp_path / "services" / "api"
+        nested.mkdir(parents=True)
+
+        meta = _git_metadata(str(nested))
         assert meta["git_remote"] == "git@github.com:org/repo.git"
-        assert "repo_hash" in meta
-        assert "project_hash" in meta
-        assert len(meta["repo_hash"]) == 48
+        assert meta["project_rel"] == "services/api"
+        assert (
+            meta["repo_hash"] == hashlib.sha256(b"github.com/org/repo").hexdigest()[:48]
+        )
+        assert (
+            meta["project_hash"]
+            == hashlib.sha256(b"github.com/org/repo:services/api").hexdigest()[:48]
+        )
 
 
 class TestBuildHookEnv:

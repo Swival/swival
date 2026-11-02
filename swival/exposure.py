@@ -124,12 +124,10 @@ class _TokenCache:
 
 
 def _tool_call_fields(tc) -> tuple[str, str]:
-    fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
+    fn = _msg_get(tc, "function")
     if fn is None:
         return "", ""
-    if isinstance(fn, dict):
-        return fn.get("name") or "", fn.get("arguments") or ""
-    return getattr(fn, "name", "") or "", getattr(fn, "arguments", "") or ""
+    return _msg_get(fn, "name") or "", _msg_get(fn, "arguments") or ""
 
 
 def _content_parts(msg) -> tuple[str, int]:

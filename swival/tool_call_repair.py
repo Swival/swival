@@ -96,26 +96,20 @@ def repair_truncated_json(text: str) -> TruncationResult:
     escaped = False
     in_string = False
     last_significant = -1
-    i = 0
-    n = len(text)
-    while i < n:
-        c = text[i]
+    for i, c in enumerate(text):
         if not c.isspace():
             last_significant = i
         if escaped:
             escaped = False
-            i += 1
             continue
         if in_string:
             if c == "\\":
                 escaped = True
-                i += 1
                 continue
             if c == '"':
                 in_string = False
                 if stack and stack[-1] == '"':
                     stack.pop()
-            i += 1
             continue
         if c == '"':
             in_string = True
@@ -125,7 +119,6 @@ def repair_truncated_json(text: str) -> TruncationResult:
         elif c in "}]":
             if stack and stack[-1] in "{[":
                 stack.pop()
-        i += 1
 
     notes: list[str] = []
     s = text[: last_significant + 1] if last_significant >= 0 else ""

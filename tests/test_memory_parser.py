@@ -190,6 +190,11 @@ class TestRetrieveBm25:
         results = retrieve_bm25("xyzzyplugh", entries, top_k=3, token_budget=2000)
         assert len(results) == 0
 
+    def test_punctuation_only_entry_is_not_retrieved(self):
+        entries = self._make_entries("... !!! ---", "python pytest testing")
+        results = retrieve_bm25("pytest", entries)
+        assert [entry for entry, _score in results] == [entries[1]]
+
     def test_token_budget_respected(self):
         entries = self._make_entries(
             "short entry",

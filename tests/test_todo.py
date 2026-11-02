@@ -195,6 +195,26 @@ class TestMatching:
         result = json.loads(state.process({"action": "remove", "task": "Task A"}))
         assert result["total"] == 0
 
+    def test_done_completed_exact_match_beats_pending_prefix(self):
+        state = TodoState()
+        state.process({"action": "add", "tasks": ["Fix Straße", "Fix Straße tests"]})
+        expected_items = [
+            {"task": "Fix Straße", "done": True},
+            {"task": "Fix Straße tests", "done": False},
+        ]
+        state.process({"action": "done", "task": "Fix Straße"})
+
+        for _ in range(2):
+            result = json.loads(
+                state.process({"action": "done", "task": "FIX STRASSE"})
+            )
+            assert result["items"] == expected_items
+            assert result["total"] == 2
+            assert result["remaining"] == state.remaining_count == 1
+            assert state.add_count == 2
+            assert state.done_count == 1
+            assert state.remove_count == 0
+
     def test_done_matches_already_done_items(self):
         """Done matches even already-completed items (no-op)."""
         state = TodoState()
