@@ -356,7 +356,7 @@ location = &quot;us-central1&quot;
 <h2 id="chatgpt-pluspro">ChatGPT Plus/Pro</h2>
 <p>The <code>chatgpt</code> provider lets you use OpenAI models through your existing ChatGPT Plus or ChatGPT Pro subscription, without needing a separate API key.</p>
 <p>Authentication uses an OAuth device-code flow — on first use, Swival prints a device code and a verification URL to your terminal. Open the URL, enter the code, and authorize with your ChatGPT account. The resulting tokens are cached locally and refreshed automatically on subsequent runs.</p>
-<p>If you need to pass an API key explicitly (for example, when using <code>--self-review</code> which passes credentials via environment variables), set <code>CHATGPT_API_KEY</code> or use <code>--api-key</code>.</p>
+<p>If you need to pass an API key explicitly, set <code>CHATGPT_API_KEY</code> or use <code>--api-key</code>.</p>
 <p><code>--model</code> is required. There is no default model.</p>
 <pre><code class="language-sh">swival --provider chatgpt --model gpt-6.1-sol &quot;task&quot;
 </code></pre>

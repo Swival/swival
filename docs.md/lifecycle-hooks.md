@@ -301,7 +301,7 @@ The example script above does not do this. It always syncs to `heads/<sha>`, whi
 
 ## Interaction with Other Features
 
-**Reviewer and self-review:** Hooks do not run in `--reviewer-mode`. Self-review spawns a reviewer subprocess, but that subprocess gets `--reviewer-mode`, so it also skips hooks. No nested sync.
+**Reviewer and self-review:** Hooks do not run in `--reviewer-mode`. Self-review doesn't run hooks either. No nested sync.
 
 **A2A serve:** The `--serve` process itself does not run hooks, but the per-context sessions it creates inherit the lifecycle settings and run startup and exit hooks per session (exit fires when a session is evicted or closed). Use `--no-lifecycle` to disable hooks in a long-lived server.
 

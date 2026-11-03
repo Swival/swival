@@ -70,7 +70,7 @@ cache = true
 
 # Reviewer settings
 reviewer = "swival --reviewer-mode"
-# self_review = true               # shorthand: mirrors provider/model into reviewer
+# self_review = true               # review answers with the session's own model
 review_prompt = "Focus on correctness and test coverage"
 max_review_rounds = 15
 objective = "objective.md"

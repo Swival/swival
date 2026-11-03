@@ -7,6 +7,7 @@ import types
 import pytest
 
 from swival import agent
+from swival.agent import TurnOutcome
 from swival.goal import GoalState, GoalStatus
 from swival.input_commands import INPUT_COMMANDS
 from swival.input_dispatch import InputContext, StepResult, parse_input_line
@@ -92,7 +93,7 @@ class TestRegistration:
     def test_programmatic_context_rejects_even_in_repl_mode(self, monkeypatch):
         ctx = _make_ctx(interactive=False)
         monkeypatch.setattr(
-            agent, "_invoke_agent_turn", lambda *a, **k: ("x", False, False)
+            agent, "_invoke_agent_turn", lambda *a, **k: TurnOutcome("x", False, False)
         )
         result = agent.execute_input(parse_input_line("/btw hello"), ctx, mode="repl")
         assert result.is_error
@@ -162,10 +163,10 @@ class TestTranscriptIsolation:
             # get AgentError/KeyboardInterrupt folded into return values.
             if outcome == "error":
                 agent.fmt.error("provider exploded")
-                return None, False, False
+                return TurnOutcome(None, False, False)
             if outcome == "interrupt":
-                return None, False, True
-            return f"answer-{outcome}", outcome == "exhausted", False
+                return TurnOutcome(None, False, True)
+            return TurnOutcome(f"answer-{outcome}", outcome == "exhausted", False)
 
         monkeypatch.setattr(agent, "_invoke_agent_turn", fake_invoke)
         monkeypatch.setattr(agent.fmt, "error", lambda t: None)
@@ -196,7 +197,7 @@ class TestTranscriptIsolation:
 
         def fake_invoke(content, ctx_arg, *, goal_launch=False, route=False):
             ctx_arg.messages[:] = [{"role": "system", "content": "compacted"}]
-            return "done", False, False
+            return TurnOutcome("done", False, False)
 
         monkeypatch.setattr(agent, "_invoke_agent_turn", fake_invoke)
         _run_btw(ctx, "/btw hello")
@@ -225,7 +226,7 @@ class TestStateIsolation:
         def fake_invoke(content, iso_ctx, *, goal_launch=False, route=False):
             assert iso_ctx.file_tracker is None
             assert iso_ctx.loop_kwargs["file_tracker"] is None
-            return "ok", False, False
+            return TurnOutcome("ok", False, False)
 
         monkeypatch.setattr(agent, "_invoke_agent_turn", fake_invoke)
         _run_btw(ctx, "/btw can I write?")
@@ -252,7 +253,7 @@ class TestStateIsolation:
             assert iso_ctx.goal_state is not None
             assert not iso_ctx.goal_state.has_active()
             assert iso_ctx.turn_state == {"max_turns": 100, "turns_used": 0}
-            return "ok", False, False
+            return TurnOutcome("ok", False, False)
 
         monkeypatch.setattr(agent, "_invoke_agent_turn", fake_invoke)
         _run_btw(ctx, "/btw what remains?")
@@ -316,7 +317,7 @@ class TestStateIsolation:
 
         def fake_invoke(content, iso_ctx, *, goal_launch=False, route=False):
             assert iso_ctx.turn_state == {"max_turns": 500, "turns_used": 0}
-            return "ok", False, False
+            return TurnOutcome("ok", False, False)
 
         monkeypatch.setattr(agent, "_invoke_agent_turn", fake_invoke)
         _run_btw(ctx, "/btw what remains?")
@@ -335,7 +336,7 @@ class TestStateIsolation:
             seen["thinks"] = iso_ctx.thinking_state.think_calls
             iso_ctx.file_tracker.record_read("/tmp/btw-only.py")
             iso_ctx.thinking_state.think_calls += 10
-            return "ok", False, False
+            return TurnOutcome("ok", False, False)
 
         monkeypatch.setattr(agent, "_invoke_agent_turn", fake_invoke)
         _run_btw(ctx, "/btw what did I read?")
@@ -358,7 +359,7 @@ class TestStateIsolation:
         def fake_invoke(content, iso_ctx, *, goal_launch=False, route=False):
             iso_ctx.todo_state.process({"action": "add", "tasks": ["injected task"]})
             iso_ctx.snapshot_state.mark_dirty("write_file")
-            return "ok", False, False
+            return TurnOutcome("ok", False, False)
 
         monkeypatch.setattr(agent, "_invoke_agent_turn", fake_invoke)
         _run_btw(ctx, "/btw todos?")
@@ -394,7 +395,7 @@ class TestStateIsolation:
             # Any goal activity happens on the throwaway state only.
             iso_ctx.goal_state.create("btw private objective")
             iso_ctx.goal_state.set_status(GoalStatus.COMPLETE)
-            return "ok", False, False
+            return TurnOutcome("ok", False, False)
 
         monkeypatch.setattr(agent, "_invoke_agent_turn", fake_invoke)
         _run_btw(ctx, "/btw are we done yet?")
@@ -413,7 +414,7 @@ class TestStateIsolation:
         def fake_invoke(content, iso_ctx, *, goal_launch=False, route=False):
             iso_ctx.turn_state["turns_used"] = 9
             iso_ctx.tools.append({"type": "function", "function": {"name": "extra"}})
-            return "ok", False, False
+            return TurnOutcome("ok", False, False)
 
         monkeypatch.setattr(agent, "_invoke_agent_turn", fake_invoke)
         _run_btw(ctx, "/btw how many turns?")
@@ -427,7 +428,7 @@ class TestStateIsolation:
         def fake_invoke(content, iso_ctx, *, goal_launch=False, route=False):
             assert iso_ctx.skill_read_roots == ["/skills/root"]
             iso_ctx.skill_read_roots.append("/tmp/btw-only-skill")
-            return "ok", False, False
+            return TurnOutcome("ok", False, False)
 
         monkeypatch.setattr(agent, "_invoke_agent_turn", fake_invoke)
         _run_btw(ctx, "/btw load that skill")
@@ -446,7 +447,7 @@ class TestStateIsolation:
             assert iso_ctx.no_history is True
             assert iso_ctx.continue_here is False
             assert iso_ctx.loop_kwargs["continue_here"] is False
-            return "answer", False, False
+            return TurnOutcome("answer", False, False)
 
         monkeypatch.setattr(agent, "_invoke_agent_turn", fake_invoke)
         result = _run_btw(ctx, "/btw remember this?")
@@ -462,7 +463,7 @@ class TestStateIsolation:
 
         def fake_invoke(content, iso_ctx, *, goal_launch=False, route=False):
             assert iso_ctx.loop_kwargs["compaction_state"] is None
-            return "answer", False, False
+            return TurnOutcome("answer", False, False)
 
         monkeypatch.setattr(agent, "_invoke_agent_turn", fake_invoke)
         _run_btw(ctx, "/btw checkpoint?")
@@ -504,7 +505,7 @@ class TestCleanupAndAccounting:
         manager.fresh_copy = lambda: manager
         ctx = _make_ctx(subagent_manager=manager)
         monkeypatch.setattr(
-            agent, "_invoke_agent_turn", lambda *a, **k: ("ok", False, False)
+            agent, "_invoke_agent_turn", lambda *a, **k: TurnOutcome("ok", False, False)
         )
         result = agent.execute_input(parse_input_line("/btw answer"), ctx, mode="repl")
         assert manager.shutdown_calls == 0
@@ -523,7 +524,7 @@ class TestCleanupAndAccounting:
         ctx = _make_ctx(subagent_manager=InterruptingManager())
         warnings: list[str] = []
         monkeypatch.setattr(
-            agent, "_invoke_agent_turn", lambda *a, **k: ("ok", False, False)
+            agent, "_invoke_agent_turn", lambda *a, **k: TurnOutcome("ok", False, False)
         )
         monkeypatch.setattr(agent.fmt, "warning", warnings.append)
 
@@ -545,7 +546,9 @@ class TestCleanupAndAccounting:
 
         monkeypatch.setattr(agent, "_shutdown_and_reconcile", spy_reconcile)
         monkeypatch.setattr(
-            agent, "_invoke_agent_turn", lambda *a, **k: ("fine", False, False)
+            agent,
+            "_invoke_agent_turn",
+            lambda *a, **k: TurnOutcome("fine", False, False),
         )
         _run_btw(ctx, "/btw spawn anything?")
         assert shutdown_seen and shutdown_seen[-1] >= 0
@@ -563,12 +566,17 @@ class TestCleanupAndAccounting:
             )
 
             def fake_invoke(
-                content, iso_ctx, *, goal_launch=False, route=False, _o=outcome
+                content,
+                iso_ctx,
+                *,
+                goal_launch=False,
+                route=False,
+                _o=outcome,
             ):
                 seen.append(iso_ctx.subagent_manager)
                 if _o == "interrupt":
                     # Real contract: KI is folded into the return value.
-                    return None, False, True
+                    return TurnOutcome(None, False, True)
                 raise RuntimeError("boom")
 
             seen: list[object] = []
@@ -611,7 +619,7 @@ class TestCleanupAndAccounting:
 
         def interrupted_turn(content, isolated, *, goal_launch=False, route=False):
             isolated.messages.append({"role": "assistant", "content": "new answer"})
-            return None, False, True
+            return TurnOutcome(None, False, True)
 
         monkeypatch.setattr(agent, "_invoke_agent_turn", interrupted_turn)
         result = agent.execute_input(parse_input_line("question"), ctx, mode="repl")
@@ -624,7 +632,9 @@ class TestCleanupAndAccounting:
         copied: list[str | None] = []
 
         monkeypatch.setattr(
-            agent, "_invoke_agent_turn", lambda *a, **k: ("the answer", False, False)
+            agent,
+            "_invoke_agent_turn",
+            lambda *a, **k: TurnOutcome("the answer", False, False),
         )
         monkeypatch.setattr(agent, "_repl_copy", copied.append)
         result = _run_btw(ctx, "/btw tell me")
@@ -646,7 +656,7 @@ class TestCleanupAndAccounting:
 
         def fake_invoke(content, iso_ctx, *, goal_launch=False, route=False):
             iso_ctx.messages[:] = [{"role": "system", "content": "compacted"}]
-            return "answer retained after compaction", True, False
+            return TurnOutcome("answer retained after compaction", True, False)
 
         monkeypatch.setattr(agent, "_invoke_agent_turn", fake_invoke)
         monkeypatch.setattr(agent.fmt, "warning", warnings.append)
@@ -680,7 +690,7 @@ class TestCleanupAndAccounting:
             assert iso_ctx.loop_kwargs["session_cost"] is session_cost
             assert iso_ctx.loop_kwargs["report"] is report
             report.events.append("llm_call")
-            return "ok", False, False
+            return TurnOutcome("ok", False, False)
 
         monkeypatch.setattr(agent, "_invoke_agent_turn", fake_invoke)
         _run_btw(ctx, "/btw cost check")

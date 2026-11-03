@@ -10,7 +10,7 @@ from datetime import datetime
 import functools
 import itertools
 import json
-from typing import Literal
+from typing import Literal, NamedTuple
 import os
 import platform
 import random
@@ -36,6 +36,7 @@ from ._msg import (
     IMAGE_TOKEN_ESTIMATE as _IMAGE_TOKEN_ESTIMATE,
     COMPACTION_MARKER,
     RECAP_MARKER,
+    REVIEWER_FEEDBACK_PREFIX,
     _canonicalize_tool_calls,
     _complete_orphaned_tool_calls,
     _estimate_tokens,
@@ -110,8 +111,16 @@ from .input_commands import EXIT_COMMANDS
 from .input_dispatch import (
     InputContext,
     ParsedInput,
+    ReviewState,
     StepResult,
     parse_input_line,
+)
+from .reviewer import (
+    REVIEW_TIMEOUT,
+    ExternalReviewer,
+    ReviewRequest,
+    SelfReviewer,
+    render_conversation,
 )
 from . import loops as _loops_mod
 from .loops import (
@@ -210,7 +219,7 @@ SYNTHETIC_USER_PREFIXES: tuple[str, ...] = (
     "STOP:",
     "Tip:",
     "Reminder:",
-    "[REVIEWER FEEDBACK",
+    REVIEWER_FEEDBACK_PREFIX,
     _IMAGE_SYNTHETIC_PREFIX,
     _COMMAND_TOOL_CONTEXT_PREFIX,
     GOAL_RECAP_PREFIX,
@@ -7050,84 +7059,24 @@ def call_llm(
     return msg, finish_reason, [], retries, cache_stats
 
 
-# Provider → env var that resolve_provider() checks for that provider
-_PROVIDER_KEY_ENV: dict[str, str] = {
-    "huggingface": "HF_TOKEN",
-    "openrouter": "OPENROUTER_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-    "generic": "OPENAI_API_KEY",
-    "google": "GEMINI_API_KEY",
-    "chatgpt": "CHATGPT_API_KEY",
-}
-
-
-def _build_self_review_cmd(
-    args: argparse.Namespace, *, files_mode: str = "some", profile: str | None = None
-) -> str:
-    """Build a reviewer command that mirrors the current invocation's settings.
-
-    With *profile*, the one routing moved the task to, the reviewer runs on that
-    profile instead of the startup provider flags.
-    """
-    import shlex
-
-    if profile is not None:
-        args = copy.copy(args)
-        for name in (
-            "provider",
-            "model",
-            "base_url",
-            "max_context_tokens",
-            "max_output_tokens",
-            "aws_profile",
-            "gcp_project",
-            "location",
-        ):
-            setattr(args, name, None)
-    parts = [sys.executable, "-m", "swival.agent", "--reviewer-mode", "--quiet"]
-
-    if files_mode != "some":
-        parts.extend(["--files", files_mode])
-    cmds = args.commands
-    if isinstance(cmds, list):
-        parts.extend(["--commands", ",".join(cmds)])
-    elif cmds == "none":
-        parts.extend(["--commands", "none"])
-    if args.provider and args.provider != "lmstudio":
-        parts.extend(["--provider", args.provider])
-    if args.model:
-        parts.extend(["--model", str(args.model)])
-    if args.base_url:
-        parts.extend(["--base-url", str(args.base_url)])
-    if args.skills_dir:
-        for d in args.skills_dir:
-            parts.extend(["--skills-dir", d])
-    if args.max_context_tokens:
-        parts.extend(["--max-context-tokens", str(args.max_context_tokens)])
-    if args.max_output_tokens and args.max_output_tokens != 32768:
-        parts.extend(["--max-output-tokens", str(args.max_output_tokens)])
-    if getattr(args, "max_output_lines", 2000) != 2000:
-        parts.extend(["--max-output-lines", str(args.max_output_lines)])
-    if getattr(args, "max_output_kb", 50) != 50:
-        parts.extend(["--max-output-kb", str(args.max_output_kb)])
+def _build_reviewer(args, base_dir: str) -> "ExternalReviewer | SelfReviewer | None":
+    """The reviewer that --self-review or --reviewer asks for, if any."""
+    if args.self_review:
+        return SelfReviewer(
+            base_dir=base_dir,
+            max_rounds=args.max_review_rounds,
+            review_prompt=args.review_prompt,
+            verify=args.verify,
+        )
+    if not args.reviewer:
+        return None
+    _validate_external_command(args.reviewer, "reviewer")
+    encrypt_key = None
     if getattr(args, "encrypt_secrets", False):
-        parts.append("--encrypt-secrets")
-    if getattr(args, "retries", 5) != 5:
-        parts.extend(["--retries", str(args.retries)])
-    if getattr(args, "provider_timeout", 900) != 900:
-        parts.extend(["--provider-timeout", str(args.provider_timeout)])
-    if getattr(args, "initial_tool_choice", "auto") != "auto":
-        parts.extend(["--initial-tool-choice", args.initial_tool_choice])
-    if getattr(args, "aws_profile", None):
-        parts.extend(["--aws-profile", args.aws_profile])
-    if getattr(args, "gcp_project", None):
-        parts.extend(["--gcp-project", args.gcp_project])
-    if getattr(args, "location", None):
-        parts.extend(["--location", args.location])
-    if profile is not None:
-        parts.extend(["--profile", profile])
-
-    return shlex.join(parts)
+        encrypt_key = getattr(args, "encrypt_secrets_key", None)
+    return ExternalReviewer(
+        args.reviewer, base_dir, args.max_review_rounds, encrypt_key=encrypt_key
+    )
 
 
 def run_reviewer(
@@ -7135,7 +7084,7 @@ def run_reviewer(
     base_dir: str,
     answer: str,
     verbose: bool,
-    timeout: int = 3600,
+    timeout: int = REVIEW_TIMEOUT,
     env_extra: dict[str, str] | None = None,
 ) -> tuple[int, str, str]:
     """Run the reviewer executable.
@@ -7159,7 +7108,8 @@ def run_reviewer(
         if verbose:
             fmt.warning(f"reviewer timed out after {timeout}s, accepting answer as-is")
         return 2, "", ""
-    except OSError as e:
+    # ValueError: a NUL byte in the environment, or text that can't be encoded.
+    except (OSError, ValueError) as e:
         if verbose:
             fmt.warning(f"reviewer failed to run: {e}")
         return 2, "", ""
@@ -7825,15 +7775,15 @@ def build_parser():
         "--review-prompt",
         type=str,
         default=_UNSET,
-        help="Custom instructions appended to the built-in review prompt (reviewer mode).",
+        help="Custom instructions appended to the built-in review prompt "
+        "(reviewer mode and --self-review).",
     )
     review_group.add_argument(
         "--reviewer",
         metavar="COMMAND",
         default=_UNSET,
         help="Reviewer command (shell-split). Called after each answer with base_dir as argument "
-        "and answer on stdin. Exit 0=accept, 1=retry with stdout as feedback, 2=reviewer error. "
-        "Requires a task; incompatible with --repl.",
+        "and answer on stdin. Exit 0=accept, 1=retry with stdout as feedback, 2=reviewer error.",
     )
     review_group.add_argument(
         "--reviewer-mode",
@@ -7848,9 +7798,8 @@ def build_parser():
         "--self-review",
         action="store_true",
         default=_UNSET,
-        help="Use a second swival instance as reviewer, inheriting provider, model, "
-        "skills-dir, and files settings from the current invocation. "
-        "Requires a task; incompatible with --repl.",
+        help="Review each answer with the session's own model and read-only tools "
+        "before accepting it, in one-shot and REPL modes.",
     )
     provider_group.add_argument(
         "--seed",
@@ -7945,7 +7894,8 @@ def build_parser():
         type=str,
         default=_UNSET,
         metavar="FILE",
-        help="Read verification/acceptance criteria from FILE (reviewer mode).",
+        help="Read verification/acceptance criteria from FILE "
+        "(reviewer mode and --self-review).",
     )
     output_group.add_argument(
         "--version",
@@ -8168,6 +8118,13 @@ def _handle_list_profiles(config: dict, args) -> None:
         )
 
 
+def _exit_outcome(exc: SystemExit) -> tuple[str, int]:
+    """The report outcome and exit code for a SystemExit."""
+    code = exc.code if isinstance(exc.code, int) else 1
+    outcome = {0: "success", 2: "exhausted", 130: "interrupted", 143: "interrupted"}
+    return outcome.get(code, "error"), code
+
+
 def main():
     import signal
 
@@ -8352,11 +8309,8 @@ def main():
     # Derived values (after all sentinels are resolved)
     args.verbose = not args.quiet
 
-    # Synthesize reviewer command from current args when --self-review is set
-    if args.self_review:
-        if args.reviewer:
-            parser.error("--self-review and --reviewer cannot be used together")
-        args.reviewer = _build_self_review_cmd(args, files_mode=files_mode)
+    if args.self_review and args.reviewer:
+        parser.error("--self-review and --reviewer cannot be used together")
 
     # --- A2A serve mode ---
     _is_serve = getattr(args, "serve", False)
@@ -8384,22 +8338,12 @@ def main():
             parser.error("question is required (stdin was empty)")
 
     if not args.repl and not _is_serve and not _is_acp and args.question is None:
-        if args.self_review:
-            parser.error("--self-review requires a task")
         if args.report:
             parser.error("--report requires a task")
-        if args.reviewer:
-            parser.error("--reviewer requires a task")
         if sys.stdin.isatty() and sys.stdout.isatty():
             args.repl = True
         else:
             parser.error("question is required (or use --repl)")
-
-    if args.self_review and args.repl:
-        parser.error("--self-review is incompatible with --repl")
-
-    if args.reviewer and args.repl:
-        parser.error("--reviewer is incompatible with --repl")
 
     if args.max_turns is None:
         args.max_turns = REPL_MAX_TURNS if args.repl else ONESHOT_MAX_TURNS
@@ -8687,7 +8631,6 @@ def main():
         model_id="unknown",
         skills_catalog=None,
         instructions_loaded=None,
-        review_rounds=0,
         todo_state=None,
         snapshot_state=None,
         goal_state=None,
@@ -8732,7 +8675,6 @@ def main():
             exit_code=exit_code,
             turns=effective_turns,
             error_message=error_message,
-            review_rounds=review_rounds,
             todo_stats=todo_stats,
             snapshot_stats=snapshot_stats,
             goal_stats=goal_stats,
@@ -8779,17 +8721,10 @@ def main():
                 model_id=getattr(args, "_resolved_model_id", args.model or "unknown"),
                 skills_catalog=getattr(args, "_resolved_skills", None),
                 instructions_loaded=getattr(args, "_resolved_instructions", None),
-                review_rounds=getattr(args, "_review_rounds", 0),
             )
         sys.exit(1)
     except SystemExit as e:
-        _run_exit_code = e.code if isinstance(e.code, int) else 1
-        _run_outcome = {
-            0: "success",
-            2: "exhausted",
-            130: "interrupted",
-            143: "interrupted",
-        }.get(_run_exit_code, "error")
+        _run_outcome, _run_exit_code = _exit_outcome(e)
         raise
     except KeyboardInterrupt:
         # Ctrl-C outside the agent loop must not report success to the exit hook.
@@ -8866,7 +8801,6 @@ def main():
                     ),
                     skills_catalog=getattr(args, "_resolved_skills", None),
                     instructions_loaded=getattr(args, "_resolved_instructions", None),
-                    review_rounds=getattr(args, "_review_rounds", 0),
                 )
 
         _cache = getattr(args, "_llm_cache", None)
@@ -10678,11 +10612,7 @@ def _run_main(args, report, _write_report, parser):
     _continue_here = not no_continue
     loop_kwargs["continue_here"] = _continue_here
 
-    # Validate reviewer executable at startup
-    reviewer_cmd = None
-    if args.reviewer:
-        _validate_external_command(args.reviewer, "reviewer")
-        reviewer_cmd = args.reviewer
+    reviewer = _build_reviewer(args, base_dir)
 
     def _write_trace(msgs):
         if not getattr(args, "trace_dir", None) or not msgs:
@@ -10701,10 +10631,51 @@ def _run_main(args, report, _write_report, parser):
 
     if not args.repl:
         # Single-shot path
+        _active_profile = getattr(args, "_active_profile", None)
+        oneshot_turn_state = {
+            "max_turns": loop_kwargs.pop("max_turns", 10),
+            "turns_used": 0,
+        }
+        loop_kwargs["turn_state"] = oneshot_turn_state
+        if report:
+            loop_kwargs["report"] = report
+        ctx = InputContext(
+            messages=messages,
+            tools=tools,
+            base_dir=base_dir,
+            start_dir=start_dir,
+            turn_state=oneshot_turn_state,
+            thinking_state=thinking_state,
+            todo_state=todo_state,
+            snapshot_state=snapshot_state,
+            goal_state=goal_state,
+            file_tracker=file_tracker,
+            no_history=no_history,
+            continue_here=_continue_here,
+            verbose=args.verbose,
+            loop_kwargs=loop_kwargs,
+            # One-shot input is not a human at a keyboard, so agent-turn
+            # failures propagate instead of being printed and swallowed.
+            interactive=False,
+            current_profile=_active_profile,
+            profiles=getattr(args, "_all_profiles", None) or {},
+            startup_profile=_active_profile,
+            raw_llm_baseline=getattr(args, "_raw_llm_baseline", {}),
+            pre_profile_baseline=getattr(args, "_pre_profile_baseline", {}),
+            routing=_routing,
+            mcp_manager=loop_kwargs.get("mcp_manager"),
+            a2a_manager=loop_kwargs.get("a2a_manager"),
+            subagent_manager=subagent_manager,
+            extra_write_roots=loop_kwargs.get("extra_write_roots", []),
+            skill_read_roots=loop_kwargs.get("skill_read_roots", []),
+            skills_catalog=skills_catalog,
+            trace_dir=getattr(args, "trace_dir", None),
+            instructions_enabled=_instructions_enabled,
+            instructions_full=_instructions_full,
+            reviewer=reviewer,
+        )
+
         try:
-            # Command-script detection: if the input starts with a known
-            # command or bang, run it through the shared executor instead
-            # of the plain agent loop.
             from .input_dispatch import is_command_script
 
             _is_script = is_command_script(args.question)
@@ -10714,7 +10685,7 @@ def _run_main(args, report, _write_report, parser):
                     "was not set; treating as plain text."
                 )
                 _is_script = False
-            if _is_script and reviewer_cmd:
+            if _is_script and reviewer is not None:
                 fmt.warning(
                     "command scripts (input starting with / or !) are not "
                     "compatible with --reviewer or --self-review. "
@@ -10722,247 +10693,70 @@ def _run_main(args, report, _write_report, parser):
                 )
                 sys.exit(1)
 
-            if _is_script:
-                _active_profile = getattr(args, "_active_profile", None)
-                _script_turn_state = {
-                    "max_turns": loop_kwargs.pop("max_turns", 10),
-                    "turns_used": 0,
-                }
-                loop_kwargs["turn_state"] = _script_turn_state
-                if report:
-                    loop_kwargs["report"] = report
-                ctx = InputContext(
-                    messages=messages,
-                    tools=tools,
-                    base_dir=base_dir,
-                    start_dir=start_dir,
-                    turn_state=_script_turn_state,
-                    thinking_state=thinking_state,
-                    todo_state=todo_state,
-                    snapshot_state=snapshot_state,
-                    goal_state=goal_state,
-                    file_tracker=file_tracker,
-                    no_history=no_history,
-                    continue_here=_continue_here,
-                    verbose=args.verbose,
-                    loop_kwargs=loop_kwargs,
-                    # A one-shot command script is not a human at a keyboard,
-                    # so agent-turn failures propagate instead of being printed
-                    # and swallowed by the interactive REPL.
-                    interactive=False,
-                    current_profile=_active_profile,
-                    profiles=getattr(args, "_all_profiles", None) or {},
-                    startup_profile=_active_profile,
-                    raw_llm_baseline=getattr(args, "_raw_llm_baseline", {}),
-                    pre_profile_baseline=getattr(args, "_pre_profile_baseline", {}),
-                    routing=_routing,
-                    mcp_manager=loop_kwargs.get("mcp_manager"),
-                    a2a_manager=loop_kwargs.get("a2a_manager"),
-                    subagent_manager=subagent_manager,
-                    extra_write_roots=loop_kwargs.get("extra_write_roots", []),
-                    skill_read_roots=loop_kwargs.get("skill_read_roots", []),
-                    skills_catalog=skills_catalog,
-                    trace_dir=getattr(args, "trace_dir", None),
-                    instructions_enabled=_instructions_enabled,
-                    instructions_full=_instructions_full,
-                )
-                try:
+            try:
+                if _is_script:
                     result = run_input_script(args.question, ctx, mode="oneshot")
-                finally:
-                    # Report the runtime the script ended on, not the one it
-                    # started with.
-                    model_id = ctx.loop_kwargs.get("model_id") or model_id
-                    args._resolved_model_id = model_id
-                    if not ctx.on_startup_runtime:
-                        profile = ctx.profiles[ctx.current_profile]
-                        args._routed_provider = profile["provider"]
-                answer = result.text
-                exhausted = result.exhausted
-                # Per-step history is already written by _finalize_agent_step
-                # inside execute_input, so no additional append_history here.
-                if answer is not None:
-                    fmt.print_answer(answer)
-                if report:
-                    _write_report(
-                        "error"
-                        if result.is_error
-                        else ("exhausted" if exhausted else "success"),
-                        answer=answer,
-                        exit_code=1 if result.is_error else (2 if exhausted else 0),
-                        turns=ctx.turn_state.get("turns_used", 0),
-                        model_id=model_id,
-                        skills_catalog=skills_catalog,
-                        instructions_loaded=instructions_loaded,
-                        review_rounds=0,
-                        todo_state=todo_state,
-                        snapshot_state=snapshot_state,
-                        goal_state=goal_state,
-                    )
-                _show_sandbox_review_hint(args)
-                if result.is_error:
-                    sys.exit(1)
-                if exhausted:
-                    if args.verbose:
-                        fmt.warning("max turns reached, agent stopped.")
-                    sys.exit(2)
-                return
-
-            messages.append({"role": "user", "content": args.question})
-            switched = False
-            if _routing is not None:
-                # Route once: the review rounds below belong to the same task.
-                routed, switched = _route_task(
-                    _routing,
-                    args.question,
-                    current=getattr(args, "_active_profile", None),
-                    history=messages[:-1],
-                    tools=tools,
-                    loop_kwargs=loop_kwargs,
-                    subagent_manager=subagent_manager,
-                    report=report,
-                )
-                model_id = loop_kwargs["model_id"]
-                args._resolved_model_id = model_id
-                if switched:
-                    args._routed_provider = _routing.profiles[routed]["provider"]
-                    if reviewer_cmd and args.self_review:
-                        reviewer_cmd = _build_self_review_cmd(
-                            args, files_mode=args._resolved_files_mode, profile=routed
-                        )
-            review_round = 0
-            turn_offset = 0
-
-            # Build env vars for reviewer subprocess
-            reviewer_env: dict[str, str] | None = None
-            if reviewer_cmd:
-                reviewer_env = {"SWIVAL_TASK": args.question}
-                model_id = getattr(args, "_resolved_model_id", None)
-                if model_id:
-                    reviewer_env["SWIVAL_MODEL"] = model_id
-                # Pass API key via provider-specific env var (avoid CLI exposure)
-                if args.self_review and args.api_key and not switched:
-                    env_var = _PROVIDER_KEY_ENV.get(args.provider)
-                    if env_var:
-                        reviewer_env[env_var] = args.api_key
-                # Pass encryption key via env var (avoid ps exposure)
-                if getattr(args, "encrypt_secrets", False):
-                    key_hex = getattr(args, "encrypt_secrets_key", None)
-                    if key_hex:
-                        from .secrets import ENCRYPT_KEY_ENV
-
-                        reviewer_env[ENCRYPT_KEY_ENV] = key_hex
-
-            while True:
-                try:
-                    answer, exhausted = run_agent_loop(
-                        messages,
-                        tools,
-                        **loop_kwargs,
-                        report=report,
-                        turn_offset=turn_offset,
-                    )
-                except (KeyboardInterrupt, SystemExit) as exc:
-                    is_term = isinstance(exc, SystemExit)
-                    exit_code = exc.code if is_term else 130
-                    fmt.warning("terminated." if is_term else "interrupted.")
-                    if _continue_here:
-                        from .continue_here import write_continue_file
-
-                        write_continue_file(
-                            base_dir,
-                            messages,
-                            todo_state=todo_state,
-                            snapshot_state=snapshot_state,
-                            thinking_state=thinking_state,
-                            goal_state=goal_state,
-                        )
-                    sys.exit(exit_code)
-
-                if not reviewer_cmd or answer is None or exhausted:
-                    break
-
-                review_round += 1
-                args._review_rounds = review_round
-                if args.verbose:
-                    fmt.review_sending(review_round)
-
-                reviewer_env["SWIVAL_REVIEW_ROUND"] = str(review_round)
-                exit_code, review_text, review_stderr = run_reviewer(
-                    reviewer_cmd,
-                    base_dir,
-                    answer,
-                    args.verbose,
-                    env_extra=reviewer_env,
-                )
-
-                if report:
-                    report.record_review(
-                        review_round, exit_code, review_text, stderr=review_stderr
-                    )
-
-                if exit_code == 0:
-                    if args.verbose:
-                        fmt.review_accepted(review_round)
-                    break
-                elif exit_code == 1:
-                    if review_round >= args.max_review_rounds:
-                        if args.verbose:
-                            fmt.warning(
-                                f"Max review rounds ({args.max_review_rounds}) reached, accepting answer"
-                            )
-                        break
-                    if args.verbose:
-                        fmt.review_feedback(review_round, review_text)
-                    retry_msg = (
-                        f"[REVIEWER FEEDBACK — Round {review_round}]\n"
-                        "A reviewer has evaluated your answer and requested changes. "
-                        "You MUST address the feedback below by taking concrete "
-                        "tool-call actions — do not simply rewrite your previous "
-                        "answer. If the task cannot be completed as requested, use "
-                        "tools to gather evidence, then report the failure clearly.\n\n"
-                        f"{review_text}"
-                    )
-                    messages.append({"role": "user", "content": retry_msg})
-                    if report:
-                        turn_offset = report.max_turn_seen
-                    loop_kwargs["max_turns"] = args.max_turns
-                    continue
                 else:
-                    if args.verbose:
-                        fmt.warning(
-                            f"Reviewer exited with code {exit_code}, accepting answer as-is"
-                        )
-                    break
-
-            if not no_history and answer:
-                append_history(
-                    base_dir, args.question, answer, diagnostics=args.verbose
-                )
+                    result = _run_agent_step(
+                        args.question,
+                        args.question,
+                        ctx,
+                        interruption_message="interrupted.",
+                        exhaustion_message=(
+                            "max turns reached, agent stopped."
+                            if args.verbose
+                            else None
+                        ),
+                        route=True,
+                        review_task=args.question,
+                    )
+            except SystemExit:
+                fmt.warning("terminated.")
+                raise
+            finally:
+                # Report the runtime the run ended on, not the one it started with.
+                model_id = ctx.loop_kwargs.get("model_id") or model_id
+                args._resolved_model_id = model_id
+                if not ctx.on_startup_runtime:
+                    args._routed_provider = ctx.profiles[ctx.current_profile][
+                        "provider"
+                    ]
+            if result.interrupted:
+                sys.exit(130)
+            answer, exhausted = result.text, result.exhausted
             if answer is not None:
                 fmt.print_answer(answer)
             if report:
                 _write_report(
-                    "exhausted" if exhausted else "success",
+                    "error"
+                    if result.is_error
+                    else ("exhausted" if exhausted else "success"),
                     answer=answer,
-                    exit_code=2 if exhausted else 0,
-                    turns=report.max_turn_seen,
+                    exit_code=1 if result.is_error else (2 if exhausted else 0),
+                    # A script adds up the turns of all its steps.
+                    turns=ctx.turn_state.get("turns_used", 0)
+                    if _is_script
+                    else report.max_turn_seen,
                     model_id=model_id,
                     skills_catalog=skills_catalog,
                     instructions_loaded=instructions_loaded,
-                    review_rounds=review_round,
                     todo_state=todo_state,
                     snapshot_state=snapshot_state,
                     goal_state=goal_state,
                 )
             _show_sandbox_review_hint(args)
+            if result.is_error:
+                sys.exit(1)
             if exhausted:
-                if args.verbose:
+                # For a plain task, the step already printed this.
+                if _is_script and args.verbose:
                     fmt.warning("max turns reached, agent stopped.")
                 sys.exit(2)
             return
         finally:
+            # Ctrl-C swaps in a fresh subagent manager, so use the context's.
             _shutdown_and_reconcile(
-                subagent_manager, loop_kwargs.get("session_cost"), args.verbose
+                ctx.subagent_manager, loop_kwargs.get("session_cost"), args.verbose
             )
             _write_trace(messages)
 
@@ -10970,74 +10764,7 @@ def _run_main(args, report, _write_report, parser):
     if report:
         loop_kwargs["report"] = report
     _sa_holder = [subagent_manager]
-    _current_profile = getattr(args, "_active_profile", None)
-    _initial_switched = False
     try:
-        if args.question:
-            messages.append({"role": "user", "content": args.question})
-            try:
-                with _settling(_routing, loop_kwargs):
-                    if _routing is not None:
-                        _current_profile, _initial_switched = _route_task(
-                            _routing,
-                            args.question,
-                            current=_current_profile,
-                            history=messages[:-1],
-                            tools=tools,
-                            loop_kwargs=loop_kwargs,
-                            subagent_manager=subagent_manager,
-                            report=report,
-                        )
-                    answer, exhausted = run_agent_loop(messages, tools, **loop_kwargs)
-            except KeyboardInterrupt:
-                if subagent_manager is not None:
-                    try:
-                        _shutdown_and_reconcile(
-                            subagent_manager,
-                            loop_kwargs.get("session_cost"),
-                            args.verbose,
-                        )
-                    finally:
-                        subagent_manager = subagent_manager.fresh_copy()
-                        loop_kwargs["subagent_manager"] = subagent_manager
-                        _sa_holder[0] = subagent_manager
-                fmt.warning("interrupted during initial question.")
-                if _continue_here:
-                    from .continue_here import write_continue_file
-
-                    write_continue_file(
-                        base_dir,
-                        messages,
-                        todo_state=todo_state,
-                        snapshot_state=snapshot_state,
-                        thinking_state=thinking_state,
-                    )
-                answer, exhausted = None, False
-            except SystemExit as exc:
-                fmt.warning("terminated during initial question.")
-                if _continue_here:
-                    from .continue_here import write_continue_file
-
-                    write_continue_file(
-                        base_dir,
-                        messages,
-                        todo_state=todo_state,
-                        snapshot_state=snapshot_state,
-                        thinking_state=thinking_state,
-                    )
-                raise SystemExit(exc.code)
-            if report is not None:
-                loop_kwargs["turn_offset"] = report.max_turn_seen
-            if not no_history and answer:
-                append_history(
-                    base_dir, args.question, answer, diagnostics=args.verbose
-                )
-            if answer is not None:
-                fmt.repl_answer(answer)
-            if exhausted and args.verbose:
-                fmt.warning(
-                    "max turns reached for initial question. Use /continue to resume."
-                )
 
         def _on_repl_exit(outcome, exit_code):
             task = f"repl session ({report.max_turn_seen} turns)"
@@ -11066,9 +10793,9 @@ def _run_main(args, report, _write_report, parser):
             raw_llm_baseline=getattr(args, "_raw_llm_baseline", None),
             pre_profile_baseline=getattr(args, "_pre_profile_baseline", None),
             routing=_routing,
-            current_profile=_current_profile,
-            on_startup_runtime=not _initial_switched,
             on_exit=_on_repl_exit if report else None,
+            reviewer=reviewer,
+            initial_question=args.question,
             start_dir=start_dir,
             trace_dir=getattr(args, "trace_dir", None),
             instructions_enabled=_instructions_enabled,
@@ -14819,6 +14546,7 @@ def _repl_clear(
     loop_registry: LoopRegistry | None = None,
     continue_base_dir: str | None = None,
     deferred_tools: DeferredTools | None = None,
+    review_state: ReviewState | None = None,
 ) -> str:
     """Clear conversation history, keeping only the leading system messages."""
     leading = _leading_system(messages)
@@ -14844,6 +14572,9 @@ def _repl_clear(
 
     if deferred_tools is not None:
         deferred_tools.reset()
+
+    if review_state is not None:
+        review_state.reset()
 
     if loop_registry is not None:
         cancelled = loop_registry.reset()
@@ -15280,20 +15011,56 @@ def _repl_remember(text: str, ctx: "InputContext") -> tuple[str, bool]:
     return msg + "\n" + detail, True
 
 
+class TurnOutcome(NamedTuple):
+    answer: str | None
+    exhausted: bool = False
+    interrupted: bool = False
+    # An AgentError took the request back out of the transcript.
+    rolled_back: bool = False
+
+
+# Marks the request a turn appends, to find it again after an error.
+# Its text won't do: escaping changes it, and compaction swaps in copies.
+_REQUEST_MARKER = "_swival_request"
+
+
+def _drop_request_marker(messages: list, request_id: str) -> None:
+    for msg in reversed(messages):
+        if isinstance(msg, dict) and msg.get(_REQUEST_MARKER) == request_id:
+            del msg[_REQUEST_MARKER]
+            return
+
+
+def _save_continue_state(ctx: InputContext) -> None:
+    if not ctx.continue_here:
+        return
+    from .continue_here import write_continue_file
+
+    write_continue_file(
+        ctx.base_dir,
+        ctx.messages,
+        todo_state=ctx.todo_state,
+        snapshot_state=ctx.snapshot_state,
+        thinking_state=ctx.thinking_state,
+        goal_state=ctx.goal_state,
+    )
+
+
 def _invoke_agent_turn(
     content: str | None,
     ctx: InputContext,
     *,
     goal_launch: bool = False,
     route: bool = False,
-) -> tuple[str | None, bool, bool]:
+) -> TurnOutcome:
     """Append content and run the agent loop.
 
     With *route*, the decision model may move the task to another profile
     first.
     The routing_profiles check runs either way.
 
-    Returns ``(answer, exhausted, interrupted)``.
+    On an interactive context, an ``AgentError`` before any progress takes the
+    request back out of the transcript (``rolled_back``).
 
     Raises:
         _InstructionsPending: a saved instruction update is not active, so this
@@ -15302,8 +15069,12 @@ def _invoke_agent_turn(
     blocked = _revalidate_pending_instructions(ctx)
     if blocked is not None:
         raise _InstructionsPending(blocked)
+    request_id = None
     if content is not None:
-        ctx.messages.append({"role": "user", "content": content})
+        request_id = _uuid.uuid4().hex
+        ctx.messages.append(
+            {"role": "user", "content": content, _REQUEST_MARKER: request_id}
+        )
     try:
         with _settling(ctx.routing, ctx.loop_kwargs):
             if ctx.routing is not None:
@@ -15317,23 +15088,17 @@ def _invoke_agent_turn(
                 **ctx.loop_kwargs,
             )
     except KeyboardInterrupt:
-        _reset_subagent(ctx)
         # Pause any active goal so subsequent `/continue` can resume from a
         # consistent baseline. Accounting was rolled in by the loop.
         if ctx.goal_state is not None and ctx.goal_state.has_active():
             ctx.goal_state.pause()
-        if ctx.continue_here:
-            from .continue_here import write_continue_file
-
-            write_continue_file(
-                ctx.base_dir,
-                ctx.messages,
-                todo_state=ctx.todo_state,
-                snapshot_state=ctx.snapshot_state,
-                thinking_state=ctx.thinking_state,
-                goal_state=ctx.goal_state,
-            )
-        return None, False, True
+        # Save first: a second Ctrl-C during the subagent shutdown would skip it.
+        _save_continue_state(ctx)
+        _reset_subagent(ctx)
+        return TurnOutcome(None, interrupted=True)
+    except SystemExit:
+        _save_continue_state(ctx)
+        raise
     except AgentError as e:
         if not ctx.interactive:
             raise
@@ -15343,9 +15108,14 @@ def _invoke_agent_turn(
             and ctx.messages
             and _msg_role(ctx.messages[-1]) == "user"
         ):
-            ctx.messages.pop()
-        return None, False, False
-    return answer, exhausted, False
+            # After some progress, the last message can be a nudge instead.
+            if _msg_get(ctx.messages.pop(), _REQUEST_MARKER) == request_id:
+                return TurnOutcome(None, rolled_back=True)
+        return TurnOutcome(None)
+    finally:
+        if request_id is not None:
+            _drop_request_marker(ctx.messages, request_id)
+    return TurnOutcome(answer, exhausted)
 
 
 def _reset_subagent(ctx: InputContext) -> None:
@@ -15375,6 +15145,84 @@ def _finalize_agent_step(
     return StepResult(kind="agent_turn", text=answer, exhausted=exhausted)
 
 
+def _review_feedback_message(review_round: int, feedback: str) -> str:
+    return (
+        f"{REVIEWER_FEEDBACK_PREFIX}, Round {review_round}]\n"
+        "A reviewer has evaluated your answer and requested changes. "
+        "You MUST address the feedback below by taking concrete "
+        "tool-call actions; do not simply rewrite your previous "
+        "answer. If the task cannot be completed as requested, use "
+        "tools to gather evidence, then report the failure clearly.\n\n"
+        f"{feedback}"
+    )
+
+
+def _review_and_retry(
+    turn: TurnOutcome, review_task: str, ctx: InputContext, conversation: str | None
+) -> TurnOutcome:
+    """Review the answer, running retry passes until the reviewer accepts it.
+
+    Ctrl-C during a review keeps the answer in the REPL, and interrupts the
+    step anywhere else.
+    """
+    report = ctx.loop_kwargs.get("report")
+    review_round = 0
+    while turn.answer and not (turn.exhausted or turn.interrupted):
+        review_round += 1
+        if ctx.verbose:
+            fmt.review_sending(review_round)
+        request = ReviewRequest(review_task, turn.answer, review_round, conversation)
+        try:
+            verdict = ctx.reviewer.review(request, ctx.loop_kwargs)
+        except KeyboardInterrupt:
+            if ctx.interactive:
+                fmt.warning("review interrupted; the answer was not reviewed.")
+                return turn
+            _save_continue_state(ctx)
+            return turn._replace(interrupted=True)
+        except SystemExit:
+            _save_continue_state(ctx)
+            raise
+        if report is not None:
+            report.record_review(
+                review_round,
+                verdict.exit_code,
+                verdict.text,
+                stderr=verdict.stderr,
+                error=verdict.error,
+            )
+        if verdict.status == "accept":
+            if ctx.verbose:
+                fmt.review_accepted(review_round)
+            break
+        if verdict.status == "error":
+            if ctx.verbose:
+                fmt.warning(f"reviewer error: {verdict.error}, accepting answer as-is")
+            break
+        if review_round >= ctx.reviewer.max_rounds:
+            if ctx.verbose:
+                fmt.warning(
+                    f"Max review rounds ({ctx.reviewer.max_rounds}) reached, accepting answer"
+                )
+            break
+        if ctx.verbose:
+            fmt.review_feedback(review_round, verdict.text)
+        if report is not None:
+            ctx.loop_kwargs["turn_offset"] = report.max_turn_seen
+        try:
+            retry = _invoke_agent_turn(
+                _review_feedback_message(review_round, verdict.text), ctx
+            )
+        except _InstructionsPending as pending:
+            fmt.warning(pending.step.text)
+            break
+        if retry.rolled_back:
+            fmt.warning("the retry failed; showing the answer the reviewer rejected.")
+            break
+        turn = retry
+    return turn
+
+
 def _run_agent_step(
     content: str | None,
     history_label: str,
@@ -15385,18 +15233,40 @@ def _run_agent_step(
     exhaustion_message: str | None = None,
     goal_launch: bool = False,
     route: bool = False,
+    review_task: str | None = None,
 ) -> StepResult:
-    """Invoke the agent loop and return its normalized result."""
+    """Invoke the agent loop and return its normalized result.
+
+    With *review_task* and a reviewer, the answer is reviewed against that
+    task, and the agent retries until the reviewer accepts it.
+    A step with no new *content* continues the previous one.
+    """
+    # Before the task changes, so a refused or interrupted refresh leaves it alone.
+    blocked = _revalidate_pending_instructions(ctx)
+    if blocked is not None:
+        return blocked
+    continued = content is None
+    previous_task = ctx.review.task
+    if ctx.reviewer is not None:
+        ctx.review.task = review_task
+        earlier = ctx.review.earlier(review_task, continued=continued)
     try:
-        answer, exhausted, interrupted = _invoke_agent_turn(
-            content, ctx, goal_launch=goal_launch, route=route
-        )
+        turn = _invoke_agent_turn(content, ctx, goal_launch=goal_launch, route=route)
+        if turn.rolled_back:
+            ctx.review.task = previous_task
+        elif ctx.reviewer is not None and review_task:
+            turn = _review_and_retry(
+                turn, review_task, ctx, render_conversation(earlier)
+            )
+            ctx.review.record(review_task, turn.answer, continued=continued)
     except _InstructionsPending as pending:
+        ctx.review.task = previous_task
         return pending.step
-    if interrupted:
+    if turn.interrupted:
         ctx.last_answer = _last_assistant_text(ctx.messages)
         fmt.warning(interruption_message or f"interrupted, {interrupt_label} aborted.")
         return StepResult(kind="agent_turn", interrupted=True)
+    answer, exhausted = turn.answer, turn.exhausted
     step = _finalize_agent_step(answer, exhausted, history_label, ctx)
     if answer is not None:
         ctx.last_answer = answer
@@ -15552,6 +15422,7 @@ def execute_input(
             f"[!{cmd_name}] {parsed.raw}",
             ctx,
             interrupt_label="question",
+            review_task=prompt_content,
         )
 
     # Slash command.
@@ -15621,6 +15492,7 @@ def execute_input(
                 loop_registry=ctx.loop_registry,
                 continue_base_dir=ctx.base_dir if ctx.continue_here else None,
                 deferred_tools=ctx.loop_kwargs.get("deferred_tools"),
+                review_state=ctx.review,
             )
             _teardown_goal(ctx)
             ctx.last_answer = None
@@ -15654,7 +15526,11 @@ def execute_input(
                     ctx.goal_state.resume()
                 ctx.goal_state.rearm_continuation()
             return _run_agent_step(
-                None, "(continued)", ctx, interrupt_label="continuation"
+                None,
+                "(continued)",
+                ctx,
+                interrupt_label="continuation",
+                review_task=ctx.review.task,
             )
 
         if cmd == "/extend":
@@ -15893,7 +15769,12 @@ def execute_input(
 
     # Plain text. _run_agent_step holds it back if an update is still pending.
     return _run_agent_step(
-        parsed.raw, parsed.raw, ctx, interrupt_label="question", route=True
+        parsed.raw,
+        parsed.raw,
+        ctx,
+        interrupt_label="question",
+        route=True,
+        review_task=parsed.raw,
     )
 
 
@@ -15975,8 +15856,9 @@ def _run_init_passes(cmd_arg: str, ctx: InputContext) -> StepResult:
         history_label: str,
         interrupt_message: str,
     ) -> tuple[str | None, bool] | None:
-        answer, exhausted, interrupted = _invoke_agent_turn(None, ctx)
-        if interrupted:
+        turn = _invoke_agent_turn(None, ctx)
+        answer, exhausted = turn.answer, turn.exhausted
+        if turn.interrupted:
             fmt.warning(interrupt_message)
             return None
         if not ctx.no_history and answer:
@@ -16001,6 +15883,7 @@ def _run_init_passes(cmd_arg: str, ctx: InputContext) -> StepResult:
             goal_state=ctx.goal_state,
             loop_registry=ctx.loop_registry,
             deferred_tools=ctx.loop_kwargs.get("deferred_tools"),
+            review_state=ctx.review,
         )
     )
     _teardown_goal(ctx)
@@ -16638,6 +16521,9 @@ def _build_isolated_ctx(ctx: InputContext, kind: _IsolatedTurnKind) -> InputCont
         last_answer=None,
         loop_kwargs=loop_kwargs,
         routing=None,
+        # Its own review state, so these turns can't change the parent's.
+        reviewer=None,
+        review=ReviewState(),
         **loop_overrides,
     )
 
@@ -16999,6 +16885,8 @@ def repl_loop(
     initial_tool_choice: str = "auto",
     decisions=None,
     web_search_policy=None,
+    reviewer=None,
+    initial_question: str | None = None,
 ):
     """Interactive read-eval-print loop.
 
@@ -17230,6 +17118,7 @@ def repl_loop(
         loop_registry=loop_registry,
         instructions_enabled=instructions_enabled,
         instructions_full=instructions_full,
+        reviewer=reviewer,
     )
 
     completer.model_candidates = lambda: _model_completion_candidates(ctx)
@@ -17244,17 +17133,8 @@ def repl_loop(
         )
 
     def _write_continue_state():
-        if continue_here and _has_conversation():
-            from .continue_here import write_continue_file
-
-            write_continue_file(
-                base_dir,
-                messages,
-                todo_state=todo_state,
-                snapshot_state=snapshot_state,
-                thinking_state=thinking_state,
-                goal_state=goal_state,
-            )
+        if _has_conversation():
+            _save_continue_state(ctx)
 
     def _fire_loops_while_idle():
         with ui.turn():
@@ -17266,7 +17146,9 @@ def repl_loop(
         parsed = parse_input_line(line)
         if not parsed.raw:
             return False
+        return _handle_parsed(parsed)
 
+    def _handle_parsed(parsed: ParsedInput) -> bool:
         if report is not None:
             report.record_repl_turn(parsed.raw)
 
@@ -17295,12 +17177,21 @@ def repl_loop(
                 ui.recall_queued()
         return bool(result is not None and result.stop)
 
-    _exit_outcome = "error"
-    _exit_code = 1
+    _repl_outcome = "error"
+    _repl_exit_code = 1
     ui.start()
     # After start, so the git status does not delay the first prompt.
-    _refresh_toolbar_state()
+    if not initial_question:
+        _refresh_toolbar_state()
     try:
+        if initial_question:
+            # Run as plain text even if it starts with "/" or "!".
+            try:
+                _handle_parsed(ParsedInput(raw=initial_question))
+                print(file=sys.stderr)
+                _refresh_toolbar_state()
+            except KeyboardInterrupt:
+                pass
         if not is_subagent:
             herdr_activity.report("idle")
         while True:
@@ -17322,12 +17213,15 @@ def repl_loop(
             if stop:
                 break
 
-        _exit_outcome = "success"
-        _exit_code = 0
+        _repl_outcome = "success"
+        _repl_exit_code = 0
+    except SystemExit as exc:
+        _repl_outcome, _repl_exit_code = _exit_outcome(exc)
+        raise
     finally:
         ui.stop()
         if on_exit:
-            on_exit(_exit_outcome, _exit_code)
+            on_exit(_repl_outcome, _repl_exit_code)
 
 
 if __name__ == "__main__":

@@ -35,6 +35,7 @@ class ReportCollector:
         self.compactions = 0
         self.turn_drops = 0
         self.guardrail_interventions = 0
+        self.review_rounds = 0
         self.recovered_responses = 0
         self.llm_calls = 0
         self.total_llm_time = 0.0
@@ -281,7 +282,9 @@ class ReportCollector:
         feedback: str,
         *,
         stderr: str = "",
+        error: str | None = None,
     ):
+        self.review_rounds += 1
         event: dict = {
             "type": "review",
             "round": review_round,
@@ -290,6 +293,8 @@ class ReportCollector:
         }
         if stderr:
             event["stderr"] = stderr
+        if error:
+            event["error"] = error
         self.events.append(event)
 
     def record_command_policy(self, bucket: str, decision: str):
@@ -395,7 +400,6 @@ class ReportCollector:
         exit_code: int,
         turns: int,
         error_message: str | None = None,
-        review_rounds: int = 0,
         todo_stats: dict | None = None,
         snapshot_stats: dict | None = None,
         goal_stats: dict | None = None,
@@ -481,7 +485,7 @@ class ReportCollector:
                 "total_tool_time_s": round(self.total_tool_time, 3),
                 **({"exposure": exposure} if exposure else {}),
                 "skills_used": list(self.skills_used),
-                "review_rounds": review_rounds,
+                "review_rounds": self.review_rounds,
                 **({"todo": todo_stats} if todo_stats else {}),
                 **({"snapshot": snapshot_stats} if snapshot_stats else {}),
                 **({"goal": goal_stats} if goal_stats else {}),
@@ -527,7 +531,6 @@ class ReportCollector:
         exit_code: int,
         turns: int,
         error_message: str | None = None,
-        review_rounds: int = 0,
         todo_stats: dict | None = None,
         snapshot_stats: dict | None = None,
         goal_stats: dict | None = None,
@@ -554,7 +557,6 @@ class ReportCollector:
             exit_code=exit_code,
             turns=turns,
             error_message=error_message,
-            review_rounds=review_rounds,
             todo_stats=todo_stats,
             snapshot_stats=snapshot_stats,
             goal_stats=goal_stats,

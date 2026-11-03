@@ -1315,7 +1315,8 @@ class TestCatalogContextFallback:
     ):
         from swival import agent
 
-        monkeypatch.setenv(agent._PROVIDER_KEY_ENV[provider], "sk_test")
+        key_env = {"openrouter": "OPENROUTER_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
+        monkeypatch.setenv(key_env[provider], "sk_test")
         monkeypatch.setattr(agent, "_litellm_context_length", lambda s: litellm_ctx)
         seen = {}
 

@@ -361,23 +361,3 @@ class TestConfigIntegration:
 
         assert kwargs["encrypt_secrets"] is True
         assert kwargs["encrypt_secrets_key"] == "aa" * 32
-
-    def test_build_self_review_cmd_includes_encrypt_flag(self):
-        """_build_self_review_cmd should include --encrypt-secrets when enabled."""
-        from swival.agent import _build_self_review_cmd
-
-        args = types.SimpleNamespace(
-            files="some",
-            yolo=False,
-            provider="generic",
-            model="test-model",
-            base_url=None,
-            skills_dir=None,
-            max_context_tokens=None,
-            max_output_tokens=32768,
-            encrypt_secrets=True,
-            commands=None,
-        )
-
-        cmd = _build_self_review_cmd(args)
-        assert "--encrypt-secrets" in cmd

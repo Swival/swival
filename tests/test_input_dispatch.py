@@ -627,7 +627,11 @@ class TestGoalCommand:
 
     def test_completed_goal_removes_goal_tools(self, monkeypatch):
         from swival import agent
-        from swival.agent import _ensure_goal_tools_enabled, _run_agent_step
+        from swival.agent import (
+            TurnOutcome,
+            _ensure_goal_tools_enabled,
+            _run_agent_step,
+        )
         from swival.goal import GoalStatus
 
         ctx = _make_goal_ctx()
@@ -636,7 +640,7 @@ class TestGoalCommand:
 
         def _fake_invoke(content, ctx_arg, *, goal_launch=False, route=False):
             ctx_arg.goal_state.set_status(GoalStatus.COMPLETE)
-            return "done", False, False
+            return TurnOutcome("done", False, False)
 
         monkeypatch.setattr(agent, "_invoke_agent_turn", _fake_invoke)
         ctx.turn_state["max_turns"] = 500

@@ -1,13 +1,16 @@
 """Tests for the --self-review feature."""
 
 import argparse
-import shlex
+import json
 import sys
 
 import pytest
 from unittest.mock import patch, MagicMock
 
+from conftest import make_message
 from swival import agent
+from swival._msg import _msg_content, _msg_role
+from swival.report import AgentError
 from swival.config import (
     _UNSET,
     apply_config_to_args,
@@ -18,31 +21,6 @@ from swival.config import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_args(**overrides):
-    """Build a namespace with resolved (post-config-merge) defaults."""
-    defaults = dict(
-        provider="lmstudio",
-        model=None,
-        api_key=None,
-        base_url=None,
-        max_output_tokens=32768,
-        max_context_tokens=None,
-        commands="all",
-        yolo=False,
-        skills_dir=[],
-        report=None,
-        cache=False,
-        self_review=False,
-        reviewer=None,
-        encrypt_secrets=False,
-        retries=5,
-        provider_timeout=900,
-        initial_tool_choice="auto",
-    )
-    defaults.update(overrides)
-    return argparse.Namespace(**defaults)
 
 
 def _make_unset_args(**overrides):
@@ -100,117 +78,6 @@ def _make_unset_args(**overrides):
 
 
 # ===========================================================================
-# _build_self_review_cmd unit tests
-# ===========================================================================
-
-
-class TestBuildSelfReviewCmd:
-    def test_basic(self):
-        args = _make_args(provider="chatgpt", model="gpt-5.4")
-        cmd = agent._build_self_review_cmd(args, files_mode="all")
-        parts = shlex.split(cmd)
-        assert "--reviewer-mode" in parts
-        assert "--quiet" in parts
-        assert ["--files", "all"] == [
-            parts[parts.index("--files")],
-            parts[parts.index("--files") + 1],
-        ]
-        assert "--provider" in parts
-        idx = parts.index("--provider")
-        assert parts[idx + 1] == "chatgpt"
-        idx = parts.index("--model")
-        assert parts[idx + 1] == "gpt-5.4"
-
-    def test_skills_dir_multiple(self):
-        args = _make_args(skills_dir=["/path/a", "/path/b"])
-        cmd = agent._build_self_review_cmd(args)
-        parts = shlex.split(cmd)
-        indices = [i for i, p in enumerate(parts) if p == "--skills-dir"]
-        assert len(indices) == 2
-        assert parts[indices[0] + 1] == "/path/a"
-        assert parts[indices[1] + 1] == "/path/b"
-
-    def test_base_url(self):
-        args = _make_args(
-            provider="generic", model="m", base_url="https://my.server/v1"
-        )
-        cmd = agent._build_self_review_cmd(args)
-        parts = shlex.split(cmd)
-        idx = parts.index("--base-url")
-        assert parts[idx + 1] == "https://my.server/v1"
-
-    def test_no_api_key_on_cmdline(self):
-        args = _make_args(provider="openrouter", model="m", api_key="sk-secret-key")
-        cmd = agent._build_self_review_cmd(args)
-        assert "--api-key" not in cmd
-        assert "sk-secret-key" not in cmd
-
-    def test_no_report_no_cache(self):
-        args = _make_args(report="/tmp/full.json", cache=True)
-        cmd = agent._build_self_review_cmd(args)
-        assert "--report" not in cmd
-        assert "--cache" not in cmd
-
-    def test_correct_token_flags(self):
-        args = _make_args(max_context_tokens=65536, max_output_tokens=16384)
-        cmd = agent._build_self_review_cmd(args)
-        parts = shlex.split(cmd)
-        idx = parts.index("--max-context-tokens")
-        assert parts[idx + 1] == "65536"
-        idx = parts.index("--max-output-tokens")
-        assert parts[idx + 1] == "16384"
-
-    def test_default_max_output_tokens_not_mirrored(self):
-        args = _make_args(max_output_tokens=32768)
-        cmd = agent._build_self_review_cmd(args)
-        assert "--max-output-tokens" not in cmd
-
-    def test_provider_timeout_mirrored_when_non_default(self):
-        cmd = agent._build_self_review_cmd(_make_args(provider_timeout=45))
-        parts = shlex.split(cmd)
-        idx = parts.index("--provider-timeout")
-        assert parts[idx + 1] == "45"
-
-    def test_default_provider_timeout_not_mirrored(self):
-        cmd = agent._build_self_review_cmd(_make_args())
-        assert "--provider-timeout" not in cmd
-
-    def test_initial_tool_choice_mirrored_when_required(self):
-        cmd = agent._build_self_review_cmd(_make_args(initial_tool_choice="required"))
-        parts = shlex.split(cmd)
-        idx = parts.index("--initial-tool-choice")
-        assert parts[idx + 1] == "required"
-
-    def test_default_initial_tool_choice_not_mirrored(self):
-        cmd = agent._build_self_review_cmd(_make_args())
-        assert "--initial-tool-choice" not in cmd
-
-    def test_lmstudio_provider_not_mirrored(self):
-        args = _make_args(provider="lmstudio")
-        cmd = agent._build_self_review_cmd(args)
-        assert "--provider" not in cmd
-
-    def test_commands_none_mirrored(self):
-        args = _make_args(commands="none")
-        cmd = agent._build_self_review_cmd(args)
-        parts = shlex.split(cmd)
-        idx = parts.index("--commands")
-        assert parts[idx + 1] == "none"
-
-    def test_commands_whitelist_mirrored(self):
-        args = _make_args(commands=["ls", "git"])
-        cmd = agent._build_self_review_cmd(args)
-        parts = shlex.split(cmd)
-        idx = parts.index("--commands")
-        assert parts[idx + 1] == "ls,git"
-
-    def test_commands_all_not_mirrored(self):
-        args = _make_args(commands="all")
-        cmd = agent._build_self_review_cmd(args)
-        assert "--commands" not in cmd
-
-
-# ===========================================================================
 # Validation / conflict tests
 # ===========================================================================
 
@@ -231,17 +98,6 @@ class TestSelfReviewValidation:
                 str(tmp_path),
                 "question",
             ],
-        )
-        with pytest.raises(SystemExit):
-            agent.main()
-
-    def test_self_review_and_repl_conflict(self, tmp_path, monkeypatch):
-        """--self-review and --repl together should error in main()."""
-        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            ["swival", "--self-review", "--repl", "--base-dir", str(tmp_path)],
         )
         with pytest.raises(SystemExit):
             agent.main()
@@ -311,30 +167,11 @@ class TestSelfReviewConfig:
 
 
 # ===========================================================================
-# Env-based API key
+# ChatGPT API key resolution
 # ===========================================================================
 
 
-class TestSelfReviewApiKeyEnv:
-    @pytest.mark.parametrize(
-        "provider,expected_env_var",
-        [
-            ("huggingface", "HF_TOKEN"),
-            ("openrouter", "OPENROUTER_API_KEY"),
-            ("generic", "OPENAI_API_KEY"),
-            ("google", "GEMINI_API_KEY"),
-            ("chatgpt", "CHATGPT_API_KEY"),
-        ],
-    )
-    def test_api_key_passed_via_provider_env(self, provider, expected_env_var):
-        """API key should be injected as provider-specific env var."""
-        env_var = agent._PROVIDER_KEY_ENV.get(provider)
-        assert env_var == expected_env_var
-
-    def test_api_key_env_not_set_for_lmstudio(self):
-        """lmstudio should not have a key env var mapping."""
-        assert "lmstudio" not in agent._PROVIDER_KEY_ENV
-
+class TestChatgptApiKey:
     def test_chatgpt_resolve_provider_reads_env(self, monkeypatch):
         """resolve_provider() for chatgpt should read CHATGPT_API_KEY from env."""
         monkeypatch.setenv("CHATGPT_API_KEY", "test-chatgpt-key")
@@ -371,59 +208,214 @@ class TestSelfReviewApiKeyEnv:
         assert api_key == "cli-key"
 
 
-# ===========================================================================
-# Integration: command + env handoff
-# ===========================================================================
+@pytest.fixture
+def chat(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setattr(agent, "discover_model", lambda *a: ("test-model", None))
+    monkeypatch.setattr(agent, "_show_sandbox_review_hint", lambda args: None)
+    monkeypatch.setattr(
+        agent,
+        "run_reviewer",
+        lambda *a, **k: pytest.fail("self-review spawned a reviewer process"),
+    )
+    return _Chat(monkeypatch)
 
 
-class TestSelfReviewHandoff:
-    def test_synthesized_cmd_plus_env_key(self):
-        """Full handoff: command has no --api-key, env has provider-specific key."""
-        args = _make_args(
-            provider="openrouter",
-            model="meta-llama/llama-4",
-            api_key="sk-or-secret",
-            self_review=True,
-            question="do something",
+def _run_main(tmp_path, monkeypatch, *argv):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["swival", "--base-dir", str(tmp_path), "-q", "--no-history", *argv],
+    )
+    with pytest.raises(SystemExit) as exc:
+        agent.main()
+        raise SystemExit(0)
+    return exc.value.code
+
+
+class TestSelfReviewInProcess:
+    """One-shot --self-review runs the review in-process on the agent's runtime."""
+
+    def test_review_and_retry_print_only_the_final_answer(
+        self, tmp_path, monkeypatch, capsys, chat
+    ):
+        chat.answers = ["v1", "v2"]
+        chat.verdicts = ["Add a test.\nVERDICT: RETRY", "VERDICT: ACCEPT"]
+        assert _run_main(tmp_path, monkeypatch, "--self-review", "fix add") == 0
+        assert capsys.readouterr().out.strip() == "v2"
+        first = chat.reviews[0]
+        assert "<task>\nfix add\n</task>" in first["prompt"]
+        assert "<answer>\nv1\n</answer>" in first["prompt"]
+        assert first["model"] == chat.agent_calls[0]["model"]
+        feedback = chat.agent_calls[1]["last_user"]
+        assert feedback.startswith("[REVIEWER FEEDBACK, Round 1]\n")
+        assert "Add a test." in feedback
+
+    def test_cli_review_settings_reach_the_reviewer(self, tmp_path, monkeypatch, chat):
+        (tmp_path / "criteria.md").write_text("Must keep the public API.")
+        chat.answers = ["done"]
+        chat.verdicts = ["VERDICT: ACCEPT"]
+        code = _run_main(
+            tmp_path,
+            monkeypatch,
+            "--self-review",
+            "--review-prompt",
+            "Focus on error paths.",
+            "--verify",
+            "criteria.md",
+            "--reasoning-effort",
+            "high",
+            "fix add",
         )
+        assert code == 0
+        [review] = chat.reviews
+        assert "Focus on error paths." in review["prompt"]
+        assert "Must keep the public API." in review["prompt"]
+        assert review["reasoning_effort"] == "high"
 
-        # Build command — should not contain the key
-        cmd = agent._build_self_review_cmd(args, files_mode="all")
-        assert "--api-key" not in cmd
-        assert "sk-or-secret" not in cmd
-        assert "--reviewer-mode" in cmd
-        assert "--provider" in cmd
+    def test_configured_objective_does_not_replace_the_task(
+        self, tmp_path, monkeypatch, chat
+    ):
+        (tmp_path / "other.md").write_text("Something else entirely.")
+        (tmp_path / "swival.toml").write_text('objective = "other.md"\n')
+        chat.answers = ["done"]
+        chat.verdicts = ["VERDICT: ACCEPT"]
+        assert _run_main(tmp_path, monkeypatch, "--self-review", "fix add") == 0
+        [review] = chat.reviews
+        assert "<task>\nfix add\n</task>" in review["prompt"]
+        assert "Something else entirely." not in review["prompt"]
 
-        # Simulate the env setup that main() does
-        reviewer_env = {"SWIVAL_TASK": args.question}
-        if args.self_review and args.api_key:
-            env_var = agent._PROVIDER_KEY_ENV.get(args.provider)
-            if env_var:
-                reviewer_env[env_var] = args.api_key
+    def test_report_counts_review_rounds(self, tmp_path, monkeypatch, chat):
+        chat.answers = ["v1", "v2"]
+        chat.verdicts = ["VERDICT: RETRY", "VERDICT: ACCEPT"]
+        report_path = tmp_path / "report.json"
+        code = _run_main(
+            tmp_path,
+            monkeypatch,
+            "--self-review",
+            "--report",
+            str(report_path),
+            "fix add",
+        )
+        assert code == 0
+        report = json.loads(report_path.read_text())
+        assert report["stats"]["review_rounds"] == 2
+        events = [e for e in report["timeline"] if e["type"] == "review"]
+        assert [e["exit_code"] for e in events] == [1, 0]
 
-        assert reviewer_env["OPENROUTER_API_KEY"] == "sk-or-secret"
 
-        # Verify the command would be invoked with those env vars by run_reviewer
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0,
-                stdout=b"VERDICT: ACCEPT",
-                stderr=b"",
+class TestSelfReviewInTheRepl:
+    """--self-review and --reviewer work in the REPL, initial question included."""
+
+    def _repl(self, tmp_path, monkeypatch, lines, *argv):
+        session = MagicMock()
+        session.prompt.side_effect = [*lines, "/exit"]
+        monkeypatch.setattr("prompt_toolkit.PromptSession", lambda *a, **k: session)
+        return _run_main(tmp_path, monkeypatch, "--repl", *argv), session
+
+    def test_initial_question_and_follow_ups_are_reviewed(
+        self, tmp_path, monkeypatch, chat
+    ):
+        chat.answers = ["Options: 1) retry 2) give up", "Gave up."]
+        chat.verdicts = ["VERDICT: ACCEPT", "VERDICT: ACCEPT"]
+        code, _ = self._repl(
+            tmp_path, monkeypatch, ["use option 2"], "--self-review", "list options"
+        )
+        assert code == 0
+        first, second = chat.reviews
+        assert "<task>\nlist options\n</task>" in first["prompt"]
+        assert "<conversation>" not in first["prompt"]
+        assert "<task>\nuse option 2\n</task>" in second["prompt"]
+        assert "Options: 1) retry 2) give up" in second["prompt"]
+
+    def test_external_reviewer_gets_the_conversation(self, tmp_path, monkeypatch, chat):
+        script = tmp_path / "review.sh"
+        script.write_text("#!/bin/sh\nexit 0\n")
+        script.chmod(0o755)
+        envs = []
+
+        def run_reviewer(command, base_dir, answer, verbose, env_extra=None):
+            envs.append(env_extra)
+            return 0, "", ""
+
+        monkeypatch.setattr(agent, "run_reviewer", run_reviewer)
+        chat.answers = ["Options: 1) retry 2) give up", "Gave up."]
+        code, _ = self._repl(
+            tmp_path,
+            monkeypatch,
+            ["use option 2"],
+            "--reviewer",
+            str(script),
+            "list options",
+        )
+        assert code == 0
+        assert [e["SWIVAL_TASK"] for e in envs] == ["list options", "use option 2"]
+        assert "SWIVAL_CONVERSATION" not in envs[0]
+        assert "Options: 1) retry 2) give up" in envs[1]["SWIVAL_CONVERSATION"]
+
+    def test_agent_error_on_the_initial_question_keeps_the_repl_running(
+        self, tmp_path, monkeypatch, chat
+    ):
+        chat.answers = [AgentError("provider down"), "Fixed it."]
+        chat.verdicts = ["VERDICT: ACCEPT"]
+        code, _ = self._repl(
+            tmp_path, monkeypatch, ["try again"], "--self-review", "list options"
+        )
+        assert code == 0
+        # The next line still ran and was reviewed after the error.
+        assert [c["last_user"] for c in chat.agent_calls] == [
+            "list options",
+            "try again",
+        ]
+        [review] = chat.reviews
+        assert "<task>\ntry again\n</task>" in review["prompt"]
+
+    def test_sigterm_on_the_initial_question_reports_the_real_exit(
+        self, tmp_path, monkeypatch, chat
+    ):
+        chat.answers = [SystemExit(143)]
+        report_path = tmp_path / "report.json"
+        code, _ = self._repl(
+            tmp_path,
+            monkeypatch,
+            [],
+            "--self-review",
+            "--report",
+            str(report_path),
+            "list options",
+        )
+        assert code == 143
+        result = json.loads(report_path.read_text())["result"]
+        assert (result["outcome"], result["exit_code"]) == ("interrupted", 143)
+
+
+class _Chat:
+    """Stand-in for call_llm that answers agent and review requests apart."""
+
+    def __init__(self, monkeypatch):
+        self.answers = []
+        self.verdicts = []
+        self.agent_calls = []
+        self.reviews = []
+        monkeypatch.setattr(agent, "call_llm", self)
+
+    def __call__(self, base_url, model_id, messages, *args, **kwargs):
+        first = _msg_content(messages[0]) or ""
+        if first.startswith("You are reviewing a coding agent's work."):
+            self.reviews.append(
+                {
+                    "model": model_id,
+                    "prompt": first,
+                    "reasoning_effort": kwargs.get("reasoning_effort"),
+                }
             )
-            agent.run_reviewer(
-                cmd,
-                "/tmp/base",
-                "answer text",
-                verbose=False,
-                env_extra=reviewer_env,
+            content = self.verdicts.pop(0)
+        else:
+            last_user = next(
+                _msg_content(m) for m in reversed(messages) if _msg_role(m) == "user"
             )
-            mock_run.assert_called_once()
-            call_kwargs = mock_run.call_args
-            passed_env = call_kwargs.kwargs.get("env") or call_kwargs[1].get("env")
-            assert passed_env["OPENROUTER_API_KEY"] == "sk-or-secret"
-            passed_argv = (
-                call_kwargs.args[0] if call_kwargs.args else call_kwargs[1]["args"]
-            )
-            argv_str = " ".join(passed_argv)
-            assert "--api-key" not in argv_str
-            assert "sk-or-secret" not in argv_str
+            self.agent_calls.append({"model": model_id, "last_user": last_user})
+            content = self.answers.pop(0)
+            if isinstance(content, BaseException):
+                raise content
+        return make_message(content=content), "stop"

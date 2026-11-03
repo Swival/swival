@@ -62,8 +62,11 @@ def _estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
+# Every reviewer feedback message starts with this, so it isn't taken for a request.
+REVIEWER_FEEDBACK_PREFIX = "[REVIEWER FEEDBACK"
+
 _ALWAYS_SYNTHETIC_PREFIXES: tuple[str, ...] = (
-    "[REVIEWER FEEDBACK",
+    REVIEWER_FEEDBACK_PREFIX,
     "[image]",
     "[Context for follow-up:",
 )

@@ -11,10 +11,54 @@ if TYPE_CHECKING:
 
     from .goal import GoalState
     from .loops import LoopRegistry
+    from .reviewer import ExternalReviewer, SelfReviewer
     from .snapshot import SnapshotState
     from .thinking import ThinkingState
     from .todo import TodoState
     from .tracker import FileAccessTracker
+
+
+_MAX_EXCHANGES = 32
+
+
+@dataclass
+class ReviewState:
+    """What answer review remembers between turns.
+
+    ``task`` is the request the last reviewed turn worked on, for ``/continue``.
+    ``exchanges`` keeps what the user asked and the final answers, so the
+    reviewer can make sense of follow-ups like "use option 2".
+    """
+
+    task: str | None = None
+    exchanges: list[tuple[str, str | None]] = field(default_factory=list)
+
+    def _continues(self, request: str | None, continued: bool) -> bool:
+        return continued and bool(self.exchanges) and self.exchanges[-1][0] == request
+
+    def record(self, request: str, answer: str | None, *, continued: bool) -> None:
+        """Record a step; continuing the last request replaces it.
+
+        A continuation with no answer keeps the one already recorded.
+        """
+        if self._continues(request, continued):
+            if answer is not None:
+                self.exchanges[-1] = (request, answer)
+            return
+        self.exchanges.append((request, answer))
+        del self.exchanges[:-_MAX_EXCHANGES]
+
+    def earlier(
+        self, request: str | None, *, continued: bool
+    ) -> list[tuple[str, str | None]]:
+        """The exchanges before the one *request* is working on."""
+        if self._continues(request, continued):
+            return self.exchanges[:-1]
+        return list(self.exchanges)
+
+    def reset(self) -> None:
+        self.task = None
+        self.exchanges.clear()
 
 
 @dataclass
@@ -82,6 +126,8 @@ class InputContext:
     # The last answer displayed by this context. Side questions need this
     # because their transcript is discarded before `/copy` runs.
     last_answer: str | None = None
+    reviewer: ExternalReviewer | SelfReviewer | None = None
+    review: ReviewState = field(default_factory=ReviewState)
 
 
 @dataclass

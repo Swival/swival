@@ -4,10 +4,8 @@ import subprocess
 import types
 
 import pytest
-from unittest.mock import patch, MagicMock
 
 from swival import agent, fmt
-from swival.config import _UNSET
 from swival.report import AgentError
 
 
@@ -166,6 +164,15 @@ class TestRunReviewer:
         assert code == 2
         assert text == ""
 
+    def test_unusable_environment_returns_2(self, tmp_path):
+        script = tmp_path / "reviewer.sh"
+        script.write_text("#!/bin/sh\nexit 0\n")
+        script.chmod(0o755)
+        code, stdout, stderr = agent.run_reviewer(
+            str(script), str(tmp_path), "answer", False, env_extra={"X": "a\0b"}
+        )
+        assert (code, stdout, stderr) == (2, "", "")
+
     def test_unknown_exit_code_passed_through(self, tmp_path):
         script = tmp_path / "reviewer.sh"
         script.write_text("#!/bin/sh\nexit 42\n")
@@ -254,40 +261,6 @@ class TestRunReviewer:
 
 
 class TestCLIValidation:
-    def test_reviewer_incompatible_with_repl(self):
-        """--reviewer + --repl should produce an argparse error."""
-        with patch("swival.agent.build_parser") as mock_bp:
-            mock_parser = MagicMock()
-            mock_args = types.SimpleNamespace(
-                question=None,
-                repl=True,
-                quiet=False,
-                verbose=True,
-                color=False,
-                no_color=False,
-                version=False,
-                report=None,
-                reviewer="/some/reviewer",
-                base_dir=".",
-                init_config=False,
-                project=False,
-                reviewer_mode=False,
-                review_prompt=None,
-                objective=None,
-                verify=None,
-                files=_UNSET,
-                yolo=_UNSET,
-                commands=_UNSET,
-            )
-            mock_parser.parse_args.return_value = mock_args
-            mock_parser.error.side_effect = SystemExit(2)
-            mock_bp.return_value = mock_parser
-
-            with pytest.raises(SystemExit):
-                agent.main()
-            mock_parser.error.assert_called_once()
-            assert "incompatible" in mock_parser.error.call_args[0][0]
-
     def test_reviewer_not_found_at_startup(self, tmp_path, monkeypatch):
         """Invalid --reviewer path should raise AgentError."""
         args = _base_args(tmp_path, reviewer="/nonexistent/reviewer")

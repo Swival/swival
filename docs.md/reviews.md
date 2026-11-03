@@ -6,7 +6,8 @@ The `--reviewer` flag lets you attach an external executable to the agent loop. 
 swival "Refactor the error handling in src/api.py" --reviewer ./review.sh
 ```
 
-This pattern works well for automated gates such as tests, linting, format checks, schema checks, or LLM-as-a-judge scoring. `--reviewer` is incompatible with `--repl`.
+This pattern works well for automated gates such as tests, linting, format checks, schema checks, or LLM-as-a-judge scoring.
+It works in the REPL too, see Reviews In The REPL below.
 
 ## Reviewer Protocol
 
@@ -26,6 +27,10 @@ Reviewer execution has a 60-minute timeout. Timeout or spawn failures are treate
 
 Swival sets context variables on the reviewer subprocess for each round. `SWIVAL_TASK` contains the original user task and is always set. `SWIVAL_REVIEW_ROUND` contains the current review round number and is always set.
 
+`SWIVAL_CONVERSATION` holds the session's recent requests and answers as `<user>` and `<agent>` blocks, oldest first.
+It's only set in the REPL, once there's an earlier exchange.
+Treat the answers in it as the agent's claims, not as proof.
+
 `SWIVAL_MODEL` contains the resolved model identifier when available. When `--encrypt-secrets` is active and an explicit key is configured (via `--encrypt-secrets-key`, config, or the `SWIVAL_ENCRYPT_KEY` environment variable), that key is forwarded to the reviewer as `SWIVAL_ENCRYPT_KEY` so it can decrypt secrets in the answer. The default per-session random key is not shared, so a reviewer running without a configured key sees secrets in their encrypted form.
 
 The reviewer inherits the parent environment too, but Swival's injected values override any same-named parent values.
@@ -39,7 +44,7 @@ swival "Refactor error handling in src/api.py" \
     --reviewer "swival --reviewer-mode"
 ```
 
-When `--reviewer-mode` is active, Swival reads the base directory from the first positional argument (as passed by the outer instance), reads the agent's answer from standard input, and reads the task from `SWIVAL_TASK` (or a `--objective` file). The reviewer can read, list, search, and outline files under the base directory before returning its verdict. It cannot edit files, run commands or tests, or call external tools. These restrictions apply even with `--yolo` or broader file and command permissions in config.
+When `--reviewer-mode` is active, Swival reads the base directory from the first positional argument (as passed by the outer instance), reads the agent's answer from standard input, and reads the task from `SWIVAL_TASK` (or a `--objective` file). If `SWIVAL_CONVERSATION` is set, it's added to the review prompt as background. The reviewer can read, list, search, and outline files under the base directory before returning its verdict. It cannot edit files, run commands or tests, or call external tools. These restrictions apply even with `--yolo` or broader file and command permissions in config.
 
 Reviewer mode ignores the history file. The reviewer tools act as if `.swival/HISTORY.md` does not exist. Past answers are claims from the agent, not evidence. The review also adds no entry to the history file, even if the config enables history.
 
@@ -54,35 +59,32 @@ Feedback goes to stdout; diagnostics go to stderr. Exit status `0` accepts, `1` 
 
 ### Self-Review
 
-The `--self-review` flag is a shorthand that automatically builds the reviewer command by mirroring the current invocation's provider, model, and other settings. Instead of writing the reviewer command by hand:
+`--self-review` has the session's own model check each answer, with no reviewer command to write:
 
 ```sh
-swival --provider huggingface --model zai-org/GLM-5.2 --yolo \
-    --skills-dir ~/skills \
-    --reviewer 'swival --reviewer-mode \
-        --provider huggingface --model zai-org/GLM-5.2 \
-        --quiet --yolo --skills-dir ~/skills' \
-    "task"
+swival --provider huggingface --model zai-org/GLM-5.2 --yolo --self-review "task"
 ```
 
-Use `--self-review`:
+The review uses the provider, model, keys, and settings the session is using at that moment.
+In the REPL, that includes switches made with `/profile`, `/model`, `/reasoning`, or model routing.
+If you set up an `llm_filter`, review requests go through it too.
 
-```sh
-swival --provider huggingface --model zai-org/GLM-5.2 --yolo \
-    --skills-dir ~/skills \
-    --self-review \
-    "task"
-```
+The reviewer can only read files in the base directory.
+It can't edit files, run commands, use MCP or A2A tools, or read `.swival/HISTORY.md`, even with `--yolo`.
+It also can't see directories added with `--add-dir` or `/add-dir`.
 
-The synthesized reviewer command inherits `--provider`, `--model`, `--base-url`, `--files`, `--commands`, `--skills-dir`, `--max-context-tokens`, `--max-output-tokens`, `--max-output-lines`, `--max-output-kb`, `--encrypt-secrets`, `--retries`, `--aws-profile`, `--gcp-project`, and `--location` from the outer invocation (each only when it differs from the default). It always adds `--reviewer-mode` and `--quiet`.
+`--review-prompt` and `--verify` work with self-review.
+`--objective` doesn't: the answer is always checked against what you actually asked.
 
-API keys are not placed on the reviewer command line to avoid exposing secrets in process listings. If `--api-key` was set on the outer invocation, Swival passes it to the reviewer subprocess via the provider-specific environment variable (`HF_TOKEN`, `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` for generic, `GEMINI_API_KEY` for google, `CHATGPT_API_KEY` for chatgpt).
+Each review round gets about 60 minutes.
+A request already sent to the provider is allowed to finish, retries included, so a slow provider can push a round past the hour.
+If a review times out or fails, the answer is accepted as it is.
 
-Bedrock uses the AWS credential chain and needs no API key. Keys already set via environment variables are inherited automatically.
+Review cost shows up in the session cost.
+`--report` records each round, but its usage, cost, and exposure totals don't include the reviewer's own requests.
 
-`--report` and `--cache` are not mirrored because reviewer mode does not initialize report or cache infrastructure.
-
-`--self-review` is incompatible with `--reviewer`, `--repl`, and `--reviewer-mode`. It can be set in `swival.toml`:
+You can't combine `--self-review` with `--reviewer` or `--reviewer-mode`.
+To turn it on for a project, add this to `swival.toml`:
 
 ```toml
 self_review = true
@@ -142,7 +144,7 @@ verify = "verification/working.md"
 review_prompt = "Focus on correctness and test coverage"
 ```
 
-Or, if you want the reviewer to mirror your provider and model settings automatically:
+Or, to have the session's own model do the review:
 
 ```toml
 self_review = true
@@ -152,7 +154,30 @@ review_prompt = "Focus on correctness and test coverage"
 
 The `reviewer` value is shell-split; the first token is resolved via PATH when it's a bare command name, or against the config directory when it's a relative path containing a `/` (such as `./review.sh` or `scripts/review.sh`); `~` expands to your home directory. Remaining tokens are preserved as-is. The `verify` and `objective` paths resolve relative to the config directory, consistent with `allowed_dirs` and `skills_dir`.
 
-Note that `reviewer_mode` is deliberately not supported in config files. A config file with `reviewer_mode = true` would silently force every `swival` invocation into reviewer mode, breaking normal usage. `self_review` does not have this problem: the inner reviewer process inherits the config but clears the flag automatically.
+Note that `reviewer_mode` is deliberately not supported in config files. A config file with `reviewer_mode = true` would silently force every `swival` invocation into reviewer mode, breaking normal usage. `self_review = true` is fine in config: a `swival --reviewer-mode` process reading the same config just ignores it.
+
+## Reviews In The REPL
+
+`--reviewer` and `--self-review` work in the REPL too.
+These get reviewed before you see the answer:
+
+- plain requests, including the first question in `swival --repl "task"`
+- custom `!commands`, checked against the prompt they expand to
+- `/continue`, when it picks up one of those requests
+
+Other commands, like `/goal`, `/loop`, `/btw`, `/init`, `/learn`, `/simplify`, and `/audit`, aren't reviewed.
+
+If the agent hits its turn limit, whatever it has so far is shown without a review.
+Finish it with `/continue`, and that answer gets reviewed.
+
+Follow-ups like "use option 2" only make sense with what came before.
+So the reviewer also sees your recent requests and the agent's answers, leaving out the oldest ones when there are too many.
+It still checks the files instead of taking those answers at face value.
+External reviewers get the same text in `SWIVAL_CONVERSATION`.
+`/clear` and `/init` start it over.
+
+Pressing Ctrl-C during a review stops it, and the answer is shown with a warning that it wasn't reviewed.
+In one-shot mode, Ctrl-C during a review stops the whole run, just like during the agent's own work.
 
 ## Writing A Custom Reviewer Script
 
@@ -257,12 +282,19 @@ If the limit is reached and the reviewer still returns code `1`, Swival accepts 
 Startup validation fails fast if the reviewer executable is missing or non-executable.
 
 After startup, reviewer failures are non-fatal. Timeout failures, process spawn failures, and crash-style exits all degrade to reviewer error handling, which means the current answer is accepted and returned.
+With `--self-review`, the same goes for provider errors, an unreadable `--verify` file, and a reply without a verdict.
 
 ## Interaction With `--quiet` And `--report`
 
 With `--quiet`, reviewer diagnostics are suppressed along with other diagnostic logging. Rejected intermediate answers are not printed to standard output; only the final accepted answer is printed.
 
-With `--report`, each reviewer invocation is recorded as a `review` event in the timeline with the round number, exit code, full reviewer output, and reviewer standard error (when non-empty). `stats.review_rounds` records the total number of reviewer invocations. Turn numbers remain cumulative across rounds, so the timeline reads as one continuous run.
+With `--report`, each finished review round is recorded as a `review` event in the timeline.
+It has the round number, exit code, full reviewer output, reviewer standard error (when there is any), and a short reason when a review failed.
+For an external reviewer, that reason is just its exit code.
+A review interrupted with Ctrl-C isn't recorded.
+
+`stats.review_rounds` counts those rounds, over the whole session in the REPL.
+Turn numbers keep counting across rounds, so the timeline reads as one continuous run.
 
 ```sh
 jq '.stats.review_rounds' report.json

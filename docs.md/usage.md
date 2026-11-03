@@ -47,7 +47,7 @@ REPL mode keeps a shared conversation state, so each new question can build on e
 swival
 ```
 
-It starts automatically when no task is given on a terminal. Pass `--repl` to force REPL mode even when a task argument is present or when stdin is not a terminal (useful for `expect`-style scripting). `--repl` is incompatible with `--reviewer`, `--self-review`, `--reviewer-mode`, and `--acp`. (`--serve` and `--acp` are separate run modes; `--serve` simply takes precedence and starts the server instead of a REPL.)
+It starts automatically when no task is given on a terminal. Pass `--repl` to force REPL mode even when a task argument is present or when stdin is not a terminal (useful for `expect`-style scripting). `--repl` can't be combined with `--reviewer-mode` or `--acp`. With `--reviewer` or `--self-review`, REPL answers get reviewed too. (`--serve` and `--acp` are separate run modes; `--serve` simply takes precedence and starts the server instead of a REPL.)
 
 The prompt is a framed input box that stays on screen the whole session. It is built on `prompt-toolkit`, so it supports input history (`^R` to search), Tab completion, normal terminal line editing, and Shift+Enter (or `^J`) for multi-line input.
 
@@ -390,11 +390,11 @@ See [A2A](a2a.md) for full server documentation.
 
 `--trace-dir DIR` writes a HuggingFace-compatible JSONL session trace to `DIR`. Each session produces a `<session_id>.jsonl` file that HuggingFace auto-detects as `format:agent-traces` with harness `swival`. Works in both one-shot and REPL modes. See [Reports](reports.md) for details.
 
-`--reviewer COMMAND` runs an external reviewer after each answer. The command string is shell-split, so you can pass arguments inline (e.g. `--reviewer "swival --reviewer-mode"`). Requires a task; incompatible with `--repl`.
+`--reviewer COMMAND` runs an external reviewer after each answer. The command string is shell-split, so you can pass arguments inline (e.g. `--reviewer "swival --reviewer-mode"`). It works in one-shot and REPL mode.
 
 `--max-review-rounds N` limits how many times the reviewer can request retries and defaults to `15`. Set to `0` to accept the first answer without retries.
 
-`--self-review` uses a second Swival instance as reviewer, inheriting provider, model, skills-dir, and files settings from the current invocation. Requires a task; incompatible with `--repl` and `--reviewer`. See [Reviews](reviews.md) for details.
+`--self-review` has the session's own model check each answer, with read-only access to the base directory, in one-shot and REPL mode. It can't be combined with `--reviewer`. See [Reviews](reviews.md) for details.
 
 `--reviewer-mode` runs Swival as a reviewer process that speaks the reviewer protocol. It reads `base_dir` from the positional argument, the answer from standard input, evaluates with the LLM, and exits 0 (accept), 1 (retry), or 2 (error). Incompatible with `--repl` and `--reviewer`.
 

@@ -357,9 +357,9 @@ class TestIntegration:
 
     def _mock_call_llm(self, answer_text):
         def mock(*args, **kwargs):
-            msg = MagicMock()
-            msg.content = answer_text
-            msg.tool_calls = None
+            msg = types.SimpleNamespace(
+                content=answer_text, tool_calls=None, role="assistant"
+            )
             return msg, "stop"
 
         return mock
@@ -401,8 +401,10 @@ class TestIntegration:
         assert not (tmp_path / ".swival" / "HISTORY.md").exists()
 
     def test_initial_repl_question_logged(self, tmp_path):
-        """--repl 'question' logs the initial answer before entering the loop."""
+        """--repl 'question' logs the initial answer before the first prompt."""
         fake_args = self._base_args(tmp_path, repl=True, question="repl init q")
+        session = MagicMock()
+        session.prompt.side_effect = ["/exit"]
 
         with (
             patch.object(agent, "build_parser") as mock_parser,
@@ -410,7 +412,7 @@ class TestIntegration:
                 agent, "call_llm", side_effect=self._mock_call_llm("repl init answer")
             ),
             patch.object(agent, "discover_model", return_value=("test-model", None)),
-            patch.object(agent, "repl_loop"),  # Don't actually enter interactive loop
+            patch("prompt_toolkit.PromptSession", return_value=session),
         ):
             mock_parser.return_value.parse_args.return_value = fake_args
             agent.main()

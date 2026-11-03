@@ -2,13 +2,14 @@
 
 import json
 import shlex
+import threading
 import types
 
 import pytest
 from unittest.mock import patch, MagicMock
 
 from conftest import make_tool_call
-from swival import agent
+from swival import agent, reviewer
 from swival._msg import _msg_content, _msg_role
 from swival.config import _UNSET, ConfigError, load_config, apply_config_to_args
 from swival.report import AgentError
@@ -16,8 +17,10 @@ from swival.reviewer import (
     _parse_verdict,
     _build_prompt,
     _resolve_path,
+    review_answer,
     run_as_reviewer,
 )
+from swival.secrets import SecretShield
 from swival.tools import _history_path, dispatch
 from swival.worktree import READ_ONLY_AGENT_TOOLS, ToolPolicy
 
@@ -152,6 +155,403 @@ class TestResolvePath:
     def test_nested_relative(self):
         result = _resolve_path("verification/working.md", "/project")
         assert result == "/project/verification/working.md"
+
+
+def _engine_runtime(**overrides):
+    runtime = dict(
+        api_base="http://fake",
+        model_id="test-model",
+        max_turns=2,
+        max_output_tokens=1024,
+        temperature=0.5,
+        top_p=None,
+        seed=None,
+        context_length=None,
+        verbose=False,
+        llm_kwargs={"provider": "lmstudio", "api_key": None},
+    )
+    runtime.update(overrides)
+    return runtime
+
+
+class TestReviewAnswer:
+    def _reply(self, monkeypatch, content):
+        monkeypatch.setattr(
+            agent, "call_llm", lambda *a, **kw: (_make_message(content=content), "stop")
+        )
+
+    def _review(self, tmp_path, **runtime):
+        return review_answer(
+            "Fix the bug",
+            "Fixed.",
+            base_dir=str(tmp_path),
+            runtime=_engine_runtime(**runtime),
+        )
+
+    @pytest.mark.parametrize("status", ["accept", "retry"])
+    def test_verdict(self, tmp_path, monkeypatch, status):
+        reply = f"Checked.\nVERDICT: {status.upper()}"
+        self._reply(monkeypatch, reply)
+        verdict = self._review(tmp_path)
+        assert (verdict.status, verdict.text, verdict.error) == (status, reply, None)
+
+    def test_missing_verdict_keeps_the_text(self, tmp_path, monkeypatch):
+        self._reply(monkeypatch, "Not sure.")
+        verdict = self._review(tmp_path)
+        assert verdict.status == "error"
+        assert verdict.text == "Not sure."
+        assert "no VERDICT" in verdict.error
+
+    def test_llm_failure_is_returned_not_raised(self, tmp_path, monkeypatch):
+        def fail(*a, **kw):
+            raise AgentError("connection refused")
+
+        monkeypatch.setattr(agent, "call_llm", fail)
+        verdict = self._review(tmp_path)
+        assert verdict.status == "error"
+        assert "LLM call failed: connection refused" in verdict.error
+
+    @pytest.mark.parametrize(
+        "key, value", [("files_mode", "all"), ("cancel_flag", threading.Event())]
+    )
+    def test_runtime_cannot_override_fixed_policy(self, tmp_path, key, value):
+        with pytest.raises(TypeError, match=key):
+            self._review(tmp_path, **{key: value})
+
+    def test_shield_is_left_to_the_caller(self, tmp_path, monkeypatch):
+        self._reply(monkeypatch, "VERDICT: ACCEPT")
+        shield = SecretShield.from_config()
+        try:
+            self._review(tmp_path, secret_shield=shield)
+            assert not shield.destroyed
+        finally:
+            shield.destroy()
+
+
+class _FakeTimer:
+    interrupt_on_start = False
+
+    def __init__(self, seconds, flag):
+        self.seconds = seconds
+        self.flag = flag
+        self.started = False
+        self.cancelled = False
+
+    def start(self):
+        self.started = True
+        if self.interrupt_on_start:
+            raise KeyboardInterrupt
+
+    def cancel(self):
+        self.cancelled = True
+
+
+class TestReviewDeadline:
+    @pytest.fixture
+    def timers(self, monkeypatch):
+        created = []
+
+        def make(seconds, flag):
+            created.append(_FakeTimer(seconds, flag))
+            return created[-1]
+
+        monkeypatch.setattr(reviewer, "_deadline_timer", make)
+        return created
+
+    def _review(self, tmp_path, deadline=60):
+        return review_answer(
+            "Fix the bug",
+            "Fixed.",
+            base_dir=str(tmp_path),
+            runtime=_engine_runtime(),
+            deadline=deadline,
+        )
+
+    def test_verdict_after_the_deadline_is_a_timeout(
+        self, tmp_path, monkeypatch, timers
+    ):
+        calls = 0
+
+        def call_llm(*a, **kw):
+            nonlocal calls
+            calls += 1
+            timers[0].flag.set()
+            return _make_message(content="Wrong.\nVERDICT: RETRY"), "stop"
+
+        parse = MagicMock(wraps=reviewer._parse_verdict)
+        monkeypatch.setattr(agent, "call_llm", call_llm)
+        monkeypatch.setattr(reviewer, "_parse_verdict", parse)
+        verdict = self._review(tmp_path)
+        assert calls == 1
+        parse.assert_not_called()
+        assert verdict.status == "error"
+        assert verdict.error == "review timed out after 60s"
+        assert verdict.text == ""
+
+    def test_expired_deadline_stops_before_the_next_tool_call(
+        self, tmp_path, monkeypatch, timers
+    ):
+        (tmp_path / "add.py").write_text("x")
+        calls = 0
+
+        def call_llm(*a, **kw):
+            nonlocal calls
+            calls += 1
+            timers[0].flag.set()
+            return _make_message(
+                tool_calls=[make_tool_call("read_file", '{"file_path": "add.py"}')]
+            ), "tool_calls"
+
+        dispatch = MagicMock(return_value="x")
+        monkeypatch.setattr(agent, "call_llm", call_llm)
+        monkeypatch.setattr(agent, "dispatch", dispatch)
+        verdict = self._review(tmp_path)
+        assert calls == 1
+        dispatch.assert_not_called()
+        assert verdict.error == "review timed out after 60s"
+
+    @pytest.mark.parametrize("elapsed, status", [(60, "error"), (59.9, "accept")])
+    def test_clock_decides_when_the_timer_never_fired(
+        self, tmp_path, monkeypatch, timers, elapsed, status
+    ):
+        now = [100.0]
+        monkeypatch.setattr(reviewer, "monotonic", lambda: now[0])
+
+        def call_llm(*a, **kw):
+            now[0] += elapsed
+            return _make_message(content="VERDICT: ACCEPT"), "stop"
+
+        monkeypatch.setattr(agent, "call_llm", call_llm)
+        verdict = self._review(tmp_path)
+        assert not timers[0].flag.is_set()
+        assert verdict.status == status
+
+    @pytest.mark.parametrize(
+        "outcome",
+        [
+            lambda: (_make_message(content="VERDICT: ACCEPT"), "stop"),
+            lambda: (_ for _ in ()).throw(AgentError("boom")),
+            lambda: (_ for _ in ()).throw(KeyboardInterrupt()),
+        ],
+        ids=["verdict", "llm-error", "interrupt"],
+    )
+    def test_timer_is_cancelled_on_every_exit(
+        self, tmp_path, monkeypatch, timers, outcome
+    ):
+        monkeypatch.setattr(agent, "call_llm", lambda *a, **kw: outcome())
+        try:
+            self._review(tmp_path, deadline=3600)
+        except KeyboardInterrupt:
+            pass
+        assert [(t.seconds, t.started, t.cancelled) for t in timers] == [
+            (3600, True, True)
+        ]
+
+    def test_interrupt_while_starting_the_timer_still_cancels_it(
+        self, tmp_path, monkeypatch, timers
+    ):
+        monkeypatch.setattr(_FakeTimer, "interrupt_on_start", True)
+        monkeypatch.setattr(
+            agent, "call_llm", MagicMock(side_effect=AssertionError("loop ran"))
+        )
+        with pytest.raises(KeyboardInterrupt):
+            self._review(tmp_path)
+        assert [(t.started, t.cancelled) for t in timers] == [(True, True)]
+
+    def test_no_deadline_starts_no_timer(self, tmp_path, monkeypatch, timers):
+        monkeypatch.setattr(
+            agent,
+            "call_llm",
+            lambda *a, **kw: (_make_message(content="VERDICT: ACCEPT"), "stop"),
+        )
+        assert self._review(tmp_path, deadline=None).status == "accept"
+        assert timers == []
+
+    def test_real_timer_is_unstarted_daemon_that_sets_the_flag(self):
+        flag = threading.Event()
+        timer = reviewer._deadline_timer(0, flag)
+        assert timer.daemon
+        assert not timer.is_alive()
+        timer.start()
+        assert flag.wait(timeout=5)
+
+
+def _agent_loop_kwargs(**overrides):
+    loop_kwargs = dict(
+        _engine_runtime(),
+        llm_kwargs={
+            "provider": "lmstudio",
+            "api_key": "k",
+            "session_id": "agent-session",
+            "reasoning_effort": "high",
+        },
+        report=object(),
+        cache=object(),
+        mcp_manager=object(),
+        files_mode="all",
+        verbose=True,
+        max_turns=500,
+    )
+    loop_kwargs.update(overrides)
+    return loop_kwargs
+
+
+class TestReviewerRuntime:
+    def test_only_shared_keys_reach_the_reviewer(self):
+        shield = object()
+        loop_kwargs = _agent_loop_kwargs(secret_shield=shield)
+        runtime = reviewer._reviewer_runtime(loop_kwargs)
+        assert set(runtime) == {
+            "api_base",
+            "model_id",
+            "max_output_tokens",
+            "temperature",
+            "top_p",
+            "seed",
+            "context_length",
+            "secret_shield",
+            "llm_kwargs",
+            "max_turns",
+            "verbose",
+        }
+        assert runtime["secret_shield"] is shield
+        assert runtime["max_turns"] == reviewer.ONESHOT_MAX_TURNS
+        assert runtime["verbose"] is False
+
+    def test_session_id_is_dropped_without_touching_the_agents(self):
+        loop_kwargs = _agent_loop_kwargs()
+        runtime = reviewer._reviewer_runtime(loop_kwargs)
+        assert runtime["llm_kwargs"] == {
+            "provider": "lmstudio",
+            "api_key": "k",
+            "reasoning_effort": "high",
+        }
+        assert loop_kwargs["llm_kwargs"]["session_id"] == "agent-session"
+
+
+def _capture_reviews(monkeypatch, content="VERDICT: ACCEPT"):
+    calls = []
+
+    def call_llm(base_url, model_id, messages, *a, **kw):
+        calls.append({"model": model_id, "prompt": _msg_content(messages[-1]), **kw})
+        return _make_message(content=content), "stop"
+
+    monkeypatch.setattr(agent, "call_llm", call_llm)
+    return calls
+
+
+class TestSelfReviewer:
+    def _request(self):
+        return reviewer.ReviewRequest("Fix the bug", "Fixed.", 1)
+
+    def test_each_review_reads_the_loop_kwargs_it_is_given(self, tmp_path, monkeypatch):
+        calls = _capture_reviews(monkeypatch)
+        self_reviewer = reviewer.SelfReviewer(base_dir=str(tmp_path), max_rounds=3)
+        startup = _agent_loop_kwargs()
+        # A REPL builds its own dict, so the second review gets a different one.
+        repl = _agent_loop_kwargs(model_id="switched-model")
+        repl["llm_kwargs"]["reasoning_effort"] = "low"
+        self_reviewer.review(self._request(), startup)
+        verdict = self_reviewer.review(self._request(), repl)
+
+        assert verdict.status == "accept"
+        assert [c["model"] for c in calls] == ["test-model", "switched-model"]
+        assert [c["reasoning_effort"] for c in calls] == ["high", "low"]
+
+    def test_filter_and_cost_reach_the_provider_call(self, tmp_path, monkeypatch):
+        calls = _capture_reviews(monkeypatch)
+        llm_filter, cost = object(), agent.SessionCost()
+        reviewer.SelfReviewer(base_dir=str(tmp_path), max_rounds=3).review(
+            self._request(),
+            _agent_loop_kwargs(llm_filter=llm_filter, session_cost=cost),
+        )
+        assert calls[0]["llm_filter"] is llm_filter
+        assert calls[0]["session_cost"] is cost
+
+    def test_review_runs_under_the_round_deadline(self, tmp_path, monkeypatch):
+        _capture_reviews(monkeypatch)
+        seconds = []
+
+        def make(deadline, flag):
+            seconds.append(deadline)
+            return threading.Timer(deadline, flag.set)
+
+        monkeypatch.setattr(reviewer, "_deadline_timer", make)
+        reviewer.SelfReviewer(base_dir=str(tmp_path), max_rounds=3).review(
+            self._request(), _agent_loop_kwargs()
+        )
+        assert seconds == [reviewer.REVIEW_TIMEOUT]
+
+    @pytest.mark.parametrize("contents", [None, b"\xff"], ids=["missing", "not-utf8"])
+    def test_unreadable_verify_file_is_a_review_error(
+        self, tmp_path, monkeypatch, contents
+    ):
+        if contents is not None:
+            (tmp_path / "criteria.md").write_bytes(contents)
+        calls = _capture_reviews(monkeypatch)
+        verdict = reviewer.SelfReviewer(
+            base_dir=str(tmp_path), max_rounds=3, verify="criteria.md"
+        ).review(self._request(), _agent_loop_kwargs())
+        assert verdict.status == "error"
+        assert "cannot read --verify file" in verdict.error
+        assert calls == []
+
+
+class TestExternalReviewer:
+    @pytest.mark.parametrize(
+        "code, status", [(0, "accept"), (1, "retry"), (2, "error"), (7, "error")]
+    )
+    def test_exit_codes_map_to_verdicts(self, tmp_path, monkeypatch, code, status):
+        monkeypatch.setattr(
+            agent, "run_reviewer", lambda *a, **kw: (code, "out", "err")
+        )
+        verdict = reviewer.ExternalReviewer("./review.sh", str(tmp_path), 3).review(
+            reviewer.ReviewRequest("task", "answer", 1), {"model_id": "m"}
+        )
+        assert (verdict.status, verdict.exit_code) == (status, code)
+        assert (verdict.text, verdict.stderr) == ("out", "err")
+        assert (verdict.error is None) == (status != "error")
+
+    @pytest.mark.parametrize("conversation", [None, "<user>\nearlier\n</user>"])
+    def test_environment_comes_from_the_request_and_live_model(
+        self, tmp_path, monkeypatch, conversation
+    ):
+        seen = {}
+
+        def run_reviewer(command, base_dir, answer, verbose, env_extra=None):
+            seen.update(command=command, answer=answer, env=env_extra)
+            return 0, "", ""
+
+        monkeypatch.setattr(agent, "run_reviewer", run_reviewer)
+        request = reviewer.ReviewRequest("the task", "the answer", 2, conversation)
+        reviewer.ExternalReviewer(
+            "./review.sh", str(tmp_path), 3, encrypt_key="ab" * 32
+        ).review(request, {"model_id": "m2"})
+        expected = {
+            "SWIVAL_TASK": "the task",
+            "SWIVAL_REVIEW_ROUND": "2",
+            "SWIVAL_MODEL": "m2",
+            "SWIVAL_ENCRYPT_KEY": "ab" * 32,
+        }
+        if conversation:
+            expected["SWIVAL_CONVERSATION"] = conversation
+        assert (seen["command"], seen["answer"]) == ("./review.sh", "the answer")
+        assert seen["env"] == expected
+
+    def test_nul_bytes_do_not_break_the_reviewer_environment(self, tmp_path):
+        script = tmp_path / "review.sh"
+        script.write_text(
+            '#!/bin/sh\nprintf "%s|%s" "$SWIVAL_TASK" "$SWIVAL_CONVERSATION"\n'
+        )
+        script.chmod(0o755)
+        request = reviewer.ReviewRequest(
+            "fix\0 it", "answer", 2, "<agent>\nbad\0 byte\n</agent>"
+        )
+        verdict = reviewer.ExternalReviewer(str(script), str(tmp_path), 3).review(
+            request, {}
+        )
+        assert verdict.status == "accept"
+        assert verdict.text == "fix it|<agent>\nbad byte\n</agent>"
 
 
 # ---------------------------------------------------------------------------
@@ -524,6 +924,14 @@ class TestRunAsReviewer:
         assert code == 2
         captured = capsys.readouterr()
         assert "cannot read --objective file" in captured.err
+
+    def test_undecodable_objective_returns_2(self, tmp_path, capsys, monkeypatch):
+        obj_file = tmp_path / "task.md"
+        obj_file.write_bytes(b"\xff")
+        args = _reviewer_args(str(tmp_path), objective=str(obj_file))
+        monkeypatch.setattr("sys.stdin", types.SimpleNamespace(read=lambda: "Answer."))
+        assert run_as_reviewer(args, str(tmp_path)) == 2
+        assert "cannot read --objective file" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
@@ -1093,3 +1501,84 @@ class TestInitConfigTemplate:
         assert "review_prompt" in template
         assert "objective" in template
         assert "verify" in template
+
+
+class TestRenderConversation:
+    def test_nothing_to_render(self):
+        assert reviewer.render_conversation([]) is None
+
+    def test_exchanges_read_oldest_first(self):
+        text = reviewer.render_conversation([("first", "one"), ("second", None)])
+        assert text == (
+            "<user>\nfirst\n</user>\n<agent>\none\n</agent>\n"
+            "<user>\nsecond\n</user>\n<agent>\n(no answer)\n</agent>"
+        )
+
+    def test_complete_exchange_within_budget_is_kept_whole(self):
+        lines = [f"- requirement {i}: " + "r" * 70 for i in range(100)]
+        lines[50] = "- requirement 50: MUST keep the public API unchanged"
+        request = "\n".join(lines)
+        answer = "a" * 1_200
+        # Over half the budget on its own, but the whole exchange still fits.
+        assert agent._estimate_tokens(request) > reviewer.CONVERSATION_BUDGET // 2
+        assert agent._estimate_tokens(request + answer) < reviewer.CONVERSATION_BUDGET
+        text = reviewer.render_conversation([("old", "x"), (request, answer)])
+        assert request in text and answer in text
+        assert "[...]" not in text
+
+    def test_newest_request_stays_whole_next_to_a_huge_answer(self):
+        request = "spec " + "s" * 9_000 + " MIDDLE " + "s" * 1_000
+        answer = "HEAD " + "x" * 40_000 + " TAIL"
+        text = reviewer.render_conversation([(request, answer)])
+        assert request in text
+        assert "HEAD" in text and "TAIL" in text and "\n[...]\n" in text
+        assert len(text) <= reviewer.CONVERSATION_BUDGET * 4
+
+    def test_older_answers_keep_their_opening_lines(self):
+        older = "\n".join(f"line {i} " + "y" * 60 for i in range(200))
+        text = reviewer.render_conversation([("old", older), ("new", "short")])
+        assert "line 0 " in text and "line 150 " not in text
+        assert text.endswith("<user>\nnew\n</user>\n<agent>\nshort\n</agent>")
+
+    def test_oldest_exchanges_drop_first_when_over_budget(self):
+        exchanges = [(f"request {i} " + "z" * 400, "ok") for i in range(30)]
+        text = reviewer.render_conversation(exchanges, budget=600)
+        assert "request 29 " in text and "request 0 " not in text
+        assert len(text) <= 600 * 4
+
+    def test_oversized_newest_request_is_clipped_but_keeps_its_answer(self):
+        text = reviewer.render_conversation([("Q" * 50_000, "the answer")], budget=800)
+        assert len(text) <= 800 * 4
+        assert "\n[...]\n" in text and "the answer" in text
+
+
+class TestConversationReachesReviewers:
+    def test_self_review_prompt_frames_it_as_context(self, tmp_path, monkeypatch):
+        calls = _capture_reviews(monkeypatch)
+        request = reviewer.ReviewRequest(
+            "use option 2", "Done.", 1, "<user>\nlist options\n</user>"
+        )
+        reviewer.SelfReviewer(base_dir=str(tmp_path), max_rounds=3).review(
+            request, _agent_loop_kwargs()
+        )
+        prompt = calls[0]["prompt"]
+        assert (
+            "<conversation>\n<user>\nlist options\n</user>\n</conversation>" in prompt
+        )
+        assert "not evidence" in prompt
+        assert prompt.index("<conversation>") < prompt.index("<task>")
+
+    def test_reviewer_mode_reads_it_from_the_environment(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        calls = _capture_reviews(monkeypatch)
+        monkeypatch.setenv("SWIVAL_TASK", "use option 2")
+        monkeypatch.setenv("SWIVAL_CONVERSATION", "<user>\nlist options\n</user>")
+        monkeypatch.setattr("sys.stdin", types.SimpleNamespace(read=lambda: "Done."))
+        monkeypatch.setattr(
+            agent,
+            "resolve_provider",
+            lambda **kw: ("m", "http://fake", None, None, {"provider": "lmstudio"}),
+        )
+        assert run_as_reviewer(_reviewer_args(str(tmp_path)), str(tmp_path)) == 0
+        assert "<conversation>\n<user>\nlist options\n</user>" in calls[0]["prompt"]

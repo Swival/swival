@@ -1648,7 +1648,7 @@ def generate_config(
         "# max_review_rounds = 15",
         '# llm_filter = "./filter.py"    # outbound message filter script (stdin/stdout JSON)',
         '# reviewer = "./review.sh"',
-        "# self_review = false              # use self as reviewer (mirrors provider/model flags)",
+        "# self_review = false              # review answers with the session's own model",
         '# review_prompt = "Focus on correctness"',
         '# objective = "objective.md"',
         '# verify = "verification/working.md"',

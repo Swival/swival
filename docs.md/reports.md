@@ -111,7 +111,7 @@ A `success` outcome means the model produced a final non-tool response. An `exha
 `skipped_calls` counts tool calls that were not run because a write, edit, or delete sent before them in the same response failed.
 These four counters are always present in `stats`.
 
-`skills_used` records skill names successfully activated through `use_skill`. `review_rounds` records how many reviewer passes occurred when `--reviewer` is active.
+`skills_used` records skill names successfully activated through `use_skill`. `review_rounds` counts the review rounds that finished when `--reviewer` or `--self-review` is on, over the whole session in REPL mode.
 
 `todo` appears only when the `todo` tool was used and includes `added`, `completed`, and `remaining` counts. `snapshot` appears only when the `snapshot` tool was used and includes `saves`, `restores`, `cancels`, `blocked`, `force_restores`, and `tokens_saved` counts.
 
@@ -200,7 +200,9 @@ For `compaction`, fields include `strategy`, `tokens_before`, and `tokens_after`
 
 For `guardrail`, fields include `tool` and `level`, where `level` is `nudge` for repeated failures and `stop` for stronger intervention.
 
-For `review`, fields include `round`, `exit_code`, and `feedback` (reviewer standard output). When the reviewer produces standard error output, `stderr` is also included.
+For `review`, fields include `round`, `exit_code`, and `feedback` (reviewer standard output). When the reviewer produces standard error output, `stderr` is also included. When a review fails, `error` has a short reason; for an external reviewer, that's just its exit code.
+
+The report's usage, cost, and exposure totals don't include the requests `--self-review` makes.
 
 For `recovered_response`, the event marks an LLM response that was not directly usable and prompted a recovery step. The optional `reason` field is `length` (output cut off by the token limit), `malformed_args` (tool call with unparseable JSON arguments), `textual_tool_call_leak` (tool-call markup emitted as plain text), `announced_action` (the reply said what it was about to do but made no tool call), or `context_exhausted` (even the smallest recovery prompt was rejected and the turn ended with an operational notice). It is omitted for a plain text response truncated by the output limit.
 

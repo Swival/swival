@@ -10,7 +10,7 @@ import contextlib
 import sys
 import time
 import types
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import litellm
 import pytest
@@ -106,6 +106,7 @@ class World:
             types.SimpleNamespace(
                 model=model_id,
                 provider=kwargs.get("provider"),
+                api_key=kwargs.get("api_key"),
                 autofix=kwargs.get("model_autofix", True),
                 llm_filter=kwargs.get("llm_filter"),
                 reasoning=kwargs.get("reasoning_effort"),
@@ -1261,18 +1262,16 @@ class TestMain:
     def test_initial_repl_question_is_routed_once(self, tmp_path, world, monkeypatch):
         _write_config(tmp_path, "model_routing = true")
         world.probs = {"local": 0.05, "gpt": 0.05, "max": 0.9}
-        seen = {}
-
-        def fake_repl_loop(messages, tools, **kwargs):
-            seen.update(kwargs)
-
-        monkeypatch.setattr(agent, "repl_loop", fake_repl_loop)
+        session = MagicMock()
+        session.prompt.side_effect = ["and the flaky test", "/exit"]
+        monkeypatch.setattr("prompt_toolkit.PromptSession", lambda *a, **k: session)
         self._main(tmp_path, monkeypatch, ["--repl", "fix the race"])
-        assert len(world.sent) == 1 and world.models == ["gpt-6-astra"]
-        assert seen["current_profile"] == "max"
-        assert seen["model_id"] == "gpt-6-astra"
-        assert seen["routing"].watch is None
-        assert seen["on_startup_runtime"] is False
+        # One decision per task, and the follow-up stays on the routed profile.
+        assert [s["state"]["request"] for s in world.sent] == [
+            "fix the race",
+            "and the flaky test",
+        ]
+        assert world.models == ["gpt-6-astra", "gpt-6-astra"]
 
     def test_list_profiles_shows_descriptions_and_candidates(
         self, tmp_path, monkeypatch, capsys
@@ -1287,44 +1286,24 @@ class TestMain:
         assert any(line.startswith("  local") and "[routing]" in line for line in out)
         assert "    Small local model, for trivial edits." in out
 
-    def test_self_review_follows_the_routed_profile(self, tmp_path, world, monkeypatch):
+    def test_self_review_runs_on_the_routed_profile(self, tmp_path, world, monkeypatch):
         _write_config(tmp_path, "model_routing = true")
         world.probs = {"local": 0.05, "gpt": 0.05, "max": 0.9}
-        seen = []
-
-        def fake_reviewer(cmd, base_dir, answer, verbose, env_extra=None):
-            seen.append((cmd, env_extra))
-            return 0, "", ""
-
-        monkeypatch.setattr(agent, "run_reviewer", fake_reviewer)
+        monkeypatch.setattr(
+            agent,
+            "run_reviewer",
+            lambda *a, **k: pytest.fail("self-review spawned a reviewer process"),
+        )
         code = self._main(
             tmp_path,
             monkeypatch,
-            ["--self-review", "--api-key", "k", "fix the race"],
+            ["--self-review", "--api-key", "startup-key", "fix the race"],
         )
         assert code == 0 and len(world.sent) == 1
-        cmd, env = seen[0]
-        assert cmd.endswith("--profile max")
-        assert "gpt-6.1-sol" not in cmd and "--provider" not in cmd
+        # The task and its review both ran on the profile routing picked.
+        assert world.models == ["gpt-6-astra", "gpt-6-astra"]
         # The startup provider's key is not handed to another profile.
-        assert "k" not in env.values()
-
-    def test_routed_self_review_cmd_drops_provider_flags(self):
-        args = types.SimpleNamespace(
-            commands="none",
-            provider="generic",
-            model="m",
-            base_url="http://x",
-            skills_dir=[],
-            max_context_tokens=4096,
-            max_output_tokens=1024,
-            location="eu",
-        )
-        cmd = agent._build_self_review_cmd(args, files_mode="all", profile="max")
-        assert cmd.endswith(
-            "--reviewer-mode --quiet --files all --commands none --profile max"
-        )
-        assert args.model == "m"
+        assert [c.api_key for c in world.chat] == [None, None]
 
 
 class TestConfig:

@@ -208,6 +208,15 @@ class TestArgumentParsing:
         _, mock_args = _run_main_validation(question="a task")
         assert mock_args.max_turns == 250
 
+    @pytest.mark.parametrize(
+        "review", [{"reviewer": "my-review-cmd"}, {"self_review": True}]
+    )
+    def test_review_is_accepted_with_repl(self, review):
+        mock_parser, mock_args = _run_main_validation(repl=True, **review)
+        mock_parser.error.assert_not_called()
+        # Set right after validation, so validation was passed, not skipped.
+        assert mock_args.max_turns == 200
+
     def test_explicit_max_turns_wins_in_repl(self):
         _, mock_args = _run_main_validation(repl=True, max_turns=7)
         assert mock_args.max_turns == 7
@@ -269,23 +278,24 @@ class TestArgumentParsing:
         mock_parser, _ = _run_main_validation(report="out.json")
         mock_parser.error.assert_called_once_with("--report requires a task")
 
-    def test_no_auto_repl_with_reviewer(self):
-        """--reviewer with no task on TTY errors with '--reviewer requires a task'."""
-        mock_parser, _ = _run_main_validation(reviewer="my-review-cmd")
-        mock_parser.error.assert_called_once_with("--reviewer requires a task")
+    @pytest.mark.parametrize(
+        "review", [{"reviewer": "my-review-cmd"}, {"self_review": True}]
+    )
+    def test_review_without_a_task_on_a_tty_starts_the_repl(self, review):
+        mock_parser, mock_args = _run_main_validation(**review)
+        mock_parser.error.assert_not_called()
+        assert mock_args.repl is True
 
-    def test_no_auto_repl_with_self_review(self):
-        """--self-review with no task on TTY errors with '--self-review requires a task'."""
+    @pytest.mark.parametrize(
+        "review", [{"reviewer": "my-review-cmd"}, {"self_review": True}]
+    )
+    def test_review_without_a_task_or_a_tty_still_needs_a_question(self, review):
         mock_parser, _ = _run_main_validation(
-            self_review=True,
-            extra_patches=[
-                patch(
-                    "swival.agent._build_self_review_cmd",
-                    return_value="swival --reviewer-mode",
-                ),
-            ],
+            stdin_tty=False, stdin_content="", **review
         )
-        mock_parser.error.assert_called_once_with("--self-review requires a task")
+        mock_parser.error.assert_called_once_with(
+            "question is required (stdin was empty)"
+        )
 
     def test_report_piped_empty_stdin(self):
         """swival --report out.json with piped empty stdin gets 'stdin was empty' error."""
