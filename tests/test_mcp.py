@@ -5,6 +5,7 @@ import json
 import sys
 import textwrap
 import threading
+import time
 import types
 from contextlib import contextmanager
 from unittest.mock import MagicMock
@@ -789,6 +790,24 @@ class TestMcpConfig:
         with pytest.raises(ConfigError, match="type: expected str, got int"):
             load_mcp_json(mcp_file)
 
+    @pytest.mark.parametrize(
+        "value,match",
+        [
+            (True, "expected int or float, got bool"),
+            (0, "must be a positive number"),
+            (float("nan"), "must be a positive number"),
+            (float("inf"), "must be a positive number"),
+        ],
+    )
+    def test_mcp_server_startup_timeout_rejected(self, tmp_path, value, match):
+        from swival.config import load_mcp_json
+
+        mcp_file = tmp_path / "mcp.json"
+        server = {"command": "cmd", "startup_timeout": value}
+        mcp_file.write_text(json.dumps({"mcpServers": {"s": server}}))
+        with pytest.raises(ConfigError, match=f"startup_timeout: {match}"):
+            load_mcp_json(mcp_file)
+
     def test_mcp_server_unknown_transport_rejected(self, tmp_path):
         from swival.config import load_mcp_json
 
@@ -1248,6 +1267,25 @@ class TestMcpManagerLifecycle:
             assert mgr._loop.is_running()
             assert mgr._thread is not None
             assert mgr._thread.is_alive()
+        finally:
+            mgr.close()
+
+    def test_stuck_server_is_skipped_after_its_startup_timeout(self, monkeypatch):
+        async def _never_ready(self, *_):
+            await asyncio.Event().wait()
+
+        errors = []
+        monkeypatch.setattr(McpManager, "_server_lifecycle", _never_ready)
+        monkeypatch.setattr(
+            McpManager, "_server_error_notice", lambda self, n, e: errors.append(e)
+        )
+        config = {"probe": {"command": "true", "startup_timeout": 0.05}}
+        mgr = McpManager(config, verbose=False)
+        t0 = time.monotonic()
+        mgr.start()
+        try:
+            assert time.monotonic() - t0 < 5
+            assert errors == ["TimeoutError: MCP server 'probe' startup timed out"]
         finally:
             mgr.close()
 
@@ -1790,8 +1828,9 @@ class TestOpenHttpSession:
 
     def test_stalled_transport_does_not_eat_the_fallback(self, monkeypatch):
         events = self._patch(monkeypatch, streamable="hang")
-        monkeypatch.setattr(mcp_client, "_HANDSHAKE_TIMEOUT", 0.05)
-        session = self._connect({"url": "http://x/mcp"})
+        t0 = time.monotonic()
+        session = self._connect({"url": "http://x/mcp", "startup_timeout": 0.9})
+        assert time.monotonic() - t0 < 0.6
         assert session.streams == ("sse-stream", "sse-stream")
         assert "exit:streamable" in events
 

@@ -10,6 +10,7 @@ import os
 import re
 import shlex
 import sys
+import threading
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -313,6 +314,16 @@ def _type_name(expected: type | tuple[type, ...]) -> str:
     return expected.__name__
 
 
+def _check_type(value, expected: type | tuple[type, ...], label: str) -> None:
+    """Like isinstance, but True and False don't count as numbers."""
+    if (isinstance(value, bool) and expected is not bool) or not isinstance(
+        value, expected
+    ):
+        raise ConfigError(
+            f"{label} expected {_type_name(expected)}, got {type(value).__name__}"
+        )
+
+
 def _validate_config(config: dict, source: str) -> None:
     """Validate types and mutual exclusions in a parsed config dict.
 
@@ -324,17 +335,7 @@ def _validate_config(config: dict, source: str) -> None:
             print(f"warning: {source}: unknown config key {key!r}", file=sys.stderr)
             continue
 
-        expected = CONFIG_KEYS[key]
-        # bool is a subclass of int in Python, so isinstance(True, int) is True.
-        # Reject bools for non-bool fields explicitly.
-        if isinstance(value, bool) and expected is not bool:
-            raise ConfigError(
-                f"{source}: {key!r} expected {_type_name(expected)}, got bool"
-            )
-        if not isinstance(value, expected):
-            raise ConfigError(
-                f"{source}: {key!r} expected {_type_name(expected)}, got {type(value).__name__}"
-            )
+        _check_type(value, CONFIG_KEYS[key], f"{source}: {key!r}")
         if key == "files":
             if value not in ("none", "some", "all"):
                 raise ConfigError(
@@ -525,17 +526,7 @@ def _validate_profiles(profiles: dict, source: str) -> None:
                         f"got {type(value).__name__}"
                     )
                 continue
-            expected = CONFIG_KEYS[key]
-            if isinstance(value, bool) and expected is not bool:
-                raise ConfigError(
-                    f"{source}: profiles.{name}.{key} expected "
-                    f"{_type_name(expected)}, got bool"
-                )
-            if not isinstance(value, expected):
-                raise ConfigError(
-                    f"{source}: profiles.{name}.{key} expected "
-                    f"{_type_name(expected)}, got {type(value).__name__}"
-                )
+            _check_type(value, CONFIG_KEYS[key], f"{source}: profiles.{name}.{key}")
         if (
             "reasoning_effort" in body
             and body["reasoning_effort"] not in REASONING_LEVELS
@@ -708,6 +699,7 @@ _MCP_SERVER_FIELD_TYPES: dict[str, type | tuple[type, ...]] = {
     "env": dict,
     "headers": dict,
     "python_tools": list,
+    "startup_timeout": (int, float),
 }
 
 
@@ -734,11 +726,14 @@ def _validate_mcp_server_configs(servers: dict, source: str) -> None:
         prefix = f"{source}: mcp_servers.{name}"
         for field, expected in _MCP_SERVER_FIELD_TYPES.items():
             if field in cfg:
-                if not isinstance(cfg[field], expected):
-                    raise ConfigError(
-                        f"{prefix}.{field}: expected {_type_name(expected)}, "
-                        f"got {type(cfg[field]).__name__}"
-                    )
+                _check_type(cfg[field], expected, f"{prefix}.{field}:")
+        # This also rules out nan and inf, which would break the startup wait.
+        if "startup_timeout" in cfg and not (
+            0 < cfg["startup_timeout"] <= threading.TIMEOUT_MAX
+        ):
+            raise ConfigError(
+                f"{prefix}.startup_timeout: must be a positive number of seconds"
+            )
 
         for field in ("type", "transport"):
             if field in cfg and not is_known_transport(cfg[field]):
@@ -882,15 +877,7 @@ def _validate_a2a_server_configs(servers: dict, source: str) -> None:
         prefix = f"{source}: a2a_servers.{name}"
         for field, expected in _A2A_SERVER_FIELD_TYPES.items():
             if field in cfg:
-                if isinstance(cfg[field], bool) and expected is not bool:
-                    raise ConfigError(
-                        f"{prefix}.{field}: expected {_type_name(expected)}, got bool"
-                    )
-                if not isinstance(cfg[field], expected):
-                    raise ConfigError(
-                        f"{prefix}.{field}: expected {_type_name(expected)}, "
-                        f"got {type(cfg[field]).__name__}"
-                    )
+                _check_type(cfg[field], expected, f"{prefix}.{field}:")
 
 
 def load_a2a_config(path: Path) -> dict[str, dict]:

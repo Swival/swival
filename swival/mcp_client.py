@@ -35,9 +35,9 @@ _KNOWN_TRANSPORTS = _HTTP_TRANSPORT_ALIASES.keys() | {"stdio"}
 _HTTP_CONNECT_TIMEOUT = 10
 _HTTP_READ_TIMEOUT = 300
 
-# Two handshakes have to fit in the startup budget of _start_server_task, and a
-# transport that stalls must not spend it all before the other one is tried.
-_HANDSHAKE_TIMEOUT = 10
+# How long a server gets to start and list its tools before we skip it.
+# A stuck server holds up startup that long, so keep it short.
+_STARTUP_TIMEOUT = 10
 
 # How long one tool call may run before we give up on it. Shorter than
 # _HTTP_READ_TIMEOUT, so this is what bounds a call over any transport.
@@ -146,6 +146,10 @@ def _http_transport_order(config: dict) -> list[str]:
         if pinned:
             return [pinned]
     return ["streamable-http", "sse"]
+
+
+def _startup_timeout(config: dict) -> float:
+    return config.get("startup_timeout", _STARTUP_TIMEOUT)
 
 
 @asynccontextmanager
@@ -393,7 +397,7 @@ class McpManager:
         # Connect to each server via a long-lived lifecycle task
         for name, config in self._server_configs.items():
             try:
-                self._start_server_task(name, config, timeout=30)
+                self._start_server_task(name, config)
             except Exception as e:
                 self._server_error_notice(name, _describe_exception(e))
 
@@ -711,7 +715,7 @@ class McpManager:
             # concurrent.futures raises its own CancelledError, distinct from asyncio's.
             raise McpShutdownError("operation cancelled during shutdown")
 
-    def _start_server_task(self, name: str, config: dict, timeout: float = 30) -> None:
+    def _start_server_task(self, name: str, config: dict) -> None:
         """Launch a long-lived task for one server; block until connected.
 
         The lifecycle task owns the AsyncExitStack so that connect and
@@ -736,7 +740,7 @@ class McpManager:
 
         self._run_sync(_launch(), timeout=5)
 
-        if not ready.wait(timeout=timeout):
+        if not ready.wait(timeout=_startup_timeout(config)):
             task = self._server_tasks.pop(name, None)
             if task:
                 self._loop.call_soon_threadsafe(task.cancel)
@@ -851,13 +855,16 @@ class McpManager:
         url = config["url"]
         headers = config.get("headers")
         order = _http_transport_order(config)
+        # A stuck transport can't use up all the time before we try the other
+        # one, and the extra share is left for listing tools and cleanup.
+        handshake_timeout = _startup_timeout(config) / (len(order) + 1)
         errors: list[BaseException] = []
 
         for transport in order:
             attempt = AsyncExitStack()
             await attempt.__aenter__()
             try:
-                async with asyncio.timeout(_HANDSHAKE_TIMEOUT):
+                async with asyncio.timeout(handshake_timeout):
                     streams = await attempt.enter_async_context(
                         _http_streams(transport, url, headers)
                     )

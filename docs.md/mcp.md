@@ -81,6 +81,24 @@ url = "http://127.0.0.1:49374/mcp"
 
 The accepted values are `http` (`streamable-http` and `streamable_http` mean the same thing), `sse`, and `stdio`, which is there so configs copied from other MCP clients load unchanged. Case and surrounding spaces are ignored. Anything else is a config error rather than a silent guess.
 
+Each server has 10 seconds to start and list its tools.
+If it takes longer, Swival skips it, just like a server that fails to start.
+
+This way a stuck server, such as an `npx` download with no network, doesn't hold up startup.
+
+To give a server more or less time, set `startup_timeout` in seconds:
+
+```toml
+[mcp_servers.chrome]
+command = "npx"
+args = ["-y", "chrome-devtools-mcp@latest"]
+startup_timeout = 3
+```
+
+For HTTP servers, the handshake only gets part of that time, so Swival can still fall back to SSE.
+
+A slow HTTP server may need a higher value.
+
 ## JSON Configuration
 
 Swival also reads `.swival/mcp.json`. This uses the same format as other MCP-compatible tools:
@@ -97,7 +115,7 @@ Swival also reads `.swival/mcp.json`. This uses the same format as other MCP-com
 }
 ```
 
-The JSON format supports the same fields as TOML: `command`, `args`, `env` for stdio, and `url`, `type`, `headers` for HTTP.
+The JSON format supports the same fields as TOML: `command`, `args`, `env` for stdio, `url`, `type`, `headers` for HTTP, and `startup_timeout` for both.
 
 ```json
 {
