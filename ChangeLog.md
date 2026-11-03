@@ -2,6 +2,12 @@
 
 All notable user-facing changes to Swival.
 
+## Unreleased
+
+- `--self-review` and `--reviewer` now work in the REPL.
+  It follows `/profile`, `/model`, `/reasoning`, and model routing, and picks up `--reasoning-effort`, `--temperature`, `--review-prompt`, and `--verify` from the command line.
+- `--report` now records a short reason when a review fails, and counts review rounds in REPL sessions too.
+
 ## 1.9.2
 
 - Long Claude sessions are now cheaper. Once the model has replied, Swival now caches the conversation so far, not just the system prompt, on Anthropic, OpenRouter, Bedrock, and Vertex AI.
