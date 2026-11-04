@@ -2,10 +2,9 @@
 
 All notable user-facing changes to Swival.
 
-## Unreleased
+## 1.9.3
 
-- `--self-review` and `--reviewer` now work in the REPL.
-  It follows `/profile`, `/model`, `/reasoning`, and model routing, and picks up `--reasoning-effort`, `--temperature`, `--review-prompt`, and `--verify` from the command line.
+- `--self-review` and `--reviewer` can now be used in the REPL, so that the model always verifies that its own changes are correct. Enable this, and the output quality immediately improves, even during interactive sessions.
 - `--report` now records a short reason when a review fails, and counts review rounds in REPL sessions too.
 
 ## 1.9.2
