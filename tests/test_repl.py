@@ -545,6 +545,46 @@ class TestReplLoop:
         assert "4k tok" in toolbar_text
         assert "ctx 42%" in toolbar_text
 
+    def test_bottom_toolbar_tips_are_short_unique_and_use_known_commands(
+        self, tmp_path
+    ):
+        import re
+
+        from swival.input_commands import INPUT_COMMANDS
+
+        mock_session = self._mock_session(["/exit"])
+        with (
+            patch(
+                "prompt_toolkit.PromptSession", return_value=mock_session
+            ) as mock_cls,
+            patch("swival.agent.run_agent_loop"),
+            patch("swival.agent._internal_git", return_value=""),
+            patch("swival.agent.random.shuffle") as shuffle,
+        ):
+            repl_loop([], [], **_loop_kwargs(tmp_path))
+            tips = shuffle.call_args.args[0]
+            _, kwargs = mock_cls.call_args
+            toolbar_parts = kwargs["bottom_toolbar"]()
+
+        assert len(tips) == len(set(tips))
+        assert all(0 < len(tip) <= 78 for tip in tips)
+        commands = {
+            command for tip in tips for command in re.findall(r"/[a-z][a-z-]*", tip)
+        }
+        assert commands <= INPUT_COMMANDS.keys()
+        assert {
+            "/reasoning",
+            "/route",
+            "/loops",
+            "/unloop",
+            "/unsave",
+        } <= commands
+        rendered_tips = [
+            text for style, text in toolbar_parts if style == "class:bottom-toolbar.tip"
+        ]
+        assert len(rendered_tips) == 1
+        assert rendered_tips[0] in tips
+
     def test_bottom_toolbar_shows_only_contextual_state(self, tmp_path):
         """Toolbar shows git dirty, todo, goal, elapsed; omits static info."""
         from swival.goal import GoalState
@@ -593,6 +633,9 @@ class TestReplLoop:
         assert "test-model" not in toolbar_text
         assert "lmstudio" not in toolbar_text
         assert "some" not in toolbar_text
+        assert not any(
+            style == "class:bottom-toolbar.tip" for style, _ in toolbar_parts
+        )
 
     def test_exit_command(self, tmp_path):
         """Feeding /exit exits the loop without error."""
