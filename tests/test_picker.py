@@ -29,9 +29,9 @@ def _isolated_config(tmp_path, monkeypatch):
 
 
 def test_match_score_ordering():
-    e = E("zai-org/GLM-5.2")
+    e = E("zai-org/GLM-5.3-Flash")
     assert match_score("", e) == 0
-    assert match_score("zai-org/glm-5.2", e) == 0  # exact, case-insensitive
+    assert match_score("zai-org/glm-5.3-flash", e) == 0  # exact, case-insensitive
     assert match_score("zai", e) == 1  # prefix
     assert match_score("glm", e) == 2  # substring
     assert match_score("zgl", e) == 3  # subsequence

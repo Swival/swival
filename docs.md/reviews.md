@@ -62,7 +62,7 @@ Feedback goes to stdout; diagnostics go to stderr. Exit status `0` accepts, `1` 
 `--self-review` has the session's own model check each answer, with no reviewer command to write:
 
 ```sh
-swival --provider huggingface --model zai-org/GLM-5.2 --yolo --self-review "task"
+swival --provider huggingface --model zai-org/GLM-5.3-Flash --yolo --self-review "task"
 ```
 
 The review uses the provider, model, keys, and settings the session is using at that moment.

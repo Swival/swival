@@ -887,7 +887,7 @@ class TestModelExplorerIntegration:
     def test_ask_huggingface_browse(self, monkeypatch):
         _capture_stderr(monkeypatch)
         monkeypatch.setattr(
-            "swival.onboarding._browse_models", lambda *a, **k: "zai-org/GLM-5.2"
+            "swival.onboarding._browse_models", lambda *a, **k: "zai-org/GLM-5.3-Flash"
         )
         _patch_prompt_sequence(
             monkeypatch,
@@ -899,7 +899,7 @@ class TestModelExplorerIntegration:
         )
         s = {}
         _ask_huggingface(s)
-        assert s["model"] == "zai-org/GLM-5.2"
+        assert s["model"] == "zai-org/GLM-5.3-Flash"
 
     def test_ask_huggingface_browse_cancel_falls_back(self, monkeypatch):
         _capture_stderr(monkeypatch)

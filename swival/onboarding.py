@@ -726,7 +726,7 @@ def _ask_huggingface(s: dict) -> None:
             _console.print(Text("  Must be in org/model format.", style="red"))
             model = ""
     while not model:
-        model = _prompt_text_required("Model (org/model, e.g. zai-org/GLM-5.2)")
+        model = _prompt_text_required("Model (org/model, e.g. zai-org/GLM-5.3-Flash)")
         if "/" not in model:
             _console.print(Text("  Must be in org/model format.", style="red"))
             model = ""

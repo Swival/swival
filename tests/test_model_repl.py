@@ -25,7 +25,7 @@ BASELINE = {
 CATALOG = Catalog(
     entries=[
         ModelEntry(
-            id="zai-org/GLM-5.2",
+            id="zai-org/GLM-5.3-Flash",
             context_length=1_048_576,
             supports_tools=True,
             price_in=0.9,
@@ -43,7 +43,7 @@ def _isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
 
 
-def _resolve_return(model="zai-org/GLM-5.2", context=128000):
+def _resolve_return(model="zai-org/GLM-5.3-Flash", context=128000):
     return (
         model,
         None,
@@ -124,23 +124,23 @@ def _call_model(
 class TestModelSwitch:
     def test_exact_id_switch_updates_kwargs(self, monkeypatch):
         new_last, msg, err, kw, mock_rp = _call_model(
-            "zai-org/GLM-5.2", monkeypatch=monkeypatch
+            "zai-org/GLM-5.3-Flash", monkeypatch=monkeypatch
         )
         assert not err
         assert new_last == ("huggingface", "org/old-model")  # revert slot
-        assert kw["model_id"] == "zai-org/GLM-5.2"
+        assert kw["model_id"] == "zai-org/GLM-5.3-Flash"
         assert kw["context_length"] == 128000
         call_kw = mock_rp.call_args.kwargs
         assert call_kw["provider"] == "huggingface"
-        assert call_kw["model"] == "zai-org/GLM-5.2"
-        assert "model: zai-org/GLM-5.2" in msg
+        assert call_kw["model"] == "zai-org/GLM-5.3-Flash"
+        assert "model: zai-org/GLM-5.3-Flash" in msg
         assert "128,000 tokens" in msg
         assert "$0.9 in / $3 out" in msg
 
     def test_exact_match_is_case_insensitive(self, monkeypatch):
         _, _, err, kw, _ = _call_model("zai-org/glm-5.2", monkeypatch=monkeypatch)
         assert not err
-        assert kw["model_id"] == "zai-org/GLM-5.2"
+        assert kw["model_id"] == "zai-org/GLM-5.3-Flash"
 
     def test_fuzzy_single_match(self, monkeypatch):
         _, _, err, kw, mock_rp = _call_model("qwen", monkeypatch=monkeypatch)
@@ -164,7 +164,7 @@ class TestModelSwitch:
         new_last, msg, err, kw, _ = _call_model("mistral", monkeypatch=monkeypatch)
         assert err
         assert "was not found" in msg
-        assert "zai-org/GLM-5.2" in msg
+        assert "zai-org/GLM-5.3-Flash" in msg
         assert kw["model_id"] == "org/old-model"
 
     def test_catalog_unavailable_trusts_the_id(self, monkeypatch):
@@ -176,9 +176,9 @@ class TestModelSwitch:
 
     def test_same_model_is_a_noop(self, monkeypatch):
         kw = _make_repl_kwargs()
-        kw["model_id"] = "zai-org/GLM-5.2"
+        kw["model_id"] = "zai-org/GLM-5.3-Flash"
         new_last, msg, err, kw, _ = _call_model(
-            "zai-org/GLM-5.2",
+            "zai-org/GLM-5.3-Flash",
             repl_kwargs=kw,
             last_model=("huggingface", "keep-me"),
             monkeypatch=monkeypatch,
@@ -191,7 +191,7 @@ class TestModelSwitch:
         kw = _make_repl_kwargs()
         original = dict(kw)
         new_last, msg, err, kw, _ = _call_model(
-            "zai-org/GLM-5.2",
+            "zai-org/GLM-5.3-Flash",
             repl_kwargs=kw,
             last_model=("huggingface", "prior"),
             resolve_side_effect=ConfigError("bad key"),
@@ -205,20 +205,20 @@ class TestModelSwitch:
 
     def test_context_falls_back_to_entry_metadata(self, monkeypatch):
         _, msg, err, kw, _ = _call_model(
-            "zai-org/GLM-5.2",
-            resolve_return=("zai-org/GLM-5.2", None, "hf-key", None, {}),
+            "zai-org/GLM-5.3-Flash",
+            resolve_return=("zai-org/GLM-5.3-Flash", None, "hf-key", None, {}),
             monkeypatch=monkeypatch,
         )
         assert kw["context_length"] == 1_048_576
 
     def test_session_llm_kwargs_survive(self, monkeypatch):
-        _, _, _, kw, _ = _call_model("zai-org/GLM-5.2", monkeypatch=monkeypatch)
+        _, _, _, kw, _ = _call_model("zai-org/GLM-5.3-Flash", monkeypatch=monkeypatch)
         assert kw["llm_kwargs"]["reasoning_effort"] == "high"
         assert kw["llm_kwargs"]["prompt_cache"] is False
         assert kw["llm_kwargs"]["provider"] == "huggingface"
 
     def test_sampling_knobs_untouched(self, monkeypatch):
-        _, _, _, kw, _ = _call_model("zai-org/GLM-5.2", monkeypatch=monkeypatch)
+        _, _, _, kw, _ = _call_model("zai-org/GLM-5.3-Flash", monkeypatch=monkeypatch)
         assert kw["temperature"] == 0.7
         assert kw["max_output_tokens"] == 4096
 
@@ -233,13 +233,15 @@ class TestModelSwitch:
         assert "no tool-calling support" in msg
 
     def test_recents_recorded(self, monkeypatch):
-        _call_model("zai-org/GLM-5.2", monkeypatch=monkeypatch)
-        assert mp.load_prefs().recents_for("huggingface") == ["zai-org/GLM-5.2"]
+        _call_model("zai-org/GLM-5.3-Flash", monkeypatch=monkeypatch)
+        assert mp.load_prefs().recents_for("huggingface") == ["zai-org/GLM-5.3-Flash"]
 
     def test_subagent_template_updated(self, monkeypatch):
         mgr = types.SimpleNamespace(_template={"model_id": "old"})
-        _call_model("zai-org/GLM-5.2", subagent_manager=mgr, monkeypatch=monkeypatch)
-        assert mgr._template["model_id"] == "zai-org/GLM-5.2"
+        _call_model(
+            "zai-org/GLM-5.3-Flash", subagent_manager=mgr, monkeypatch=monkeypatch
+        )
+        assert mgr._template["model_id"] == "zai-org/GLM-5.3-Flash"
         assert mgr._template["context_length"] == 128000
 
 
@@ -332,14 +334,14 @@ class TestModelListing:
         new_last, msg, err, kw, _ = _call_model("", monkeypatch=monkeypatch)
         assert not err
         assert "test catalog" in msg
-        assert "zai-org/GLM-5.2" in msg
+        assert "zai-org/GLM-5.3-Flash" in msg
         assert "switch with /model <id>" in msg
         assert kw["model_id"] == "org/old-model"
 
     def test_listing_marks_current_and_favorites(self, monkeypatch):
         mp.toggle_favorite("huggingface", "Qwen/Qwen3.6-35B")
         kw = _make_repl_kwargs()
-        kw["model_id"] = "zai-org/GLM-5.2"
+        kw["model_id"] = "zai-org/GLM-5.3-Flash"
         _, msg, _, _, _ = _call_model("", repl_kwargs=kw, monkeypatch=monkeypatch)
         assert "★ Qwen/Qwen3.6-35B" in msg
         assert "(current)" in msg
@@ -424,10 +426,12 @@ class TestModelDispatch:
         ctx = _make_ctx()
         monkeypatch.setattr(mc, "list_models", lambda *a, **k: CATALOG)
         with patch("swival.agent.resolve_provider", return_value=_resolve_return()):
-            result = execute_input(parse_input_line("/model zai-org/GLM-5.2"), ctx)
+            result = execute_input(
+                parse_input_line("/model zai-org/GLM-5.3-Flash"), ctx
+            )
         assert result.kind == "state_change"
         assert not result.is_error
-        assert ctx.loop_kwargs["model_id"] == "zai-org/GLM-5.2"
+        assert ctx.loop_kwargs["model_id"] == "zai-org/GLM-5.3-Flash"
         assert ctx.last_model == ("huggingface", "org/old-model")
 
     def test_revert_survives_profile_round_trip(self, monkeypatch):
