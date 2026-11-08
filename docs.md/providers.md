@@ -84,7 +84,7 @@ For HuggingFace, `--model` is required and must be in `org/model` format. Authen
 
 ```sh
 export HF_TOKEN=hf_your_token_here
-swival --provider huggingface --model zai-org/GLM-5.3-Flash "task"
+swival --provider huggingface --model zai-org/GLM-5.3 "task"
 ```
 
 Serverless HuggingFace endpoints often expose smaller context windows than local deployments, so long multi-turn coding sessions can hit context pressure sooner. When `--max-context-tokens` is not set, Swival looks the window up in LiteLLM's model registry; set the flag explicitly if your model is not listed there.
@@ -93,7 +93,7 @@ For dedicated endpoints, keep the same model identifier and pass your endpoint U
 
 ```sh
 swival --provider huggingface \
-    --model zai-org/GLM-5.3-Flash \
+    --model zai-org/GLM-5.3 \
     --base-url https://xyz.endpoints.huggingface.cloud \
     --api-key hf_your_key \
     "task"

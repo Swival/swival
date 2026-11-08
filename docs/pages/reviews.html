@@ -135,7 +135,7 @@ swival --reviewer-mode --objective task.md . &lt; answer.txt
 <p>Feedback goes to stdout; diagnostics go to stderr. Exit status <code>0</code> accepts, <code>1</code> requests changes, and <code>2</code> reports a reviewer error. Relative <code>--objective</code> and <code>--verify</code> paths on the command line resolve against the base directory. <code>--max-turns</code> limits the review loop; an unfinished review returns <code>2</code> and does not write a continuation file.</p>
 <h3 id="self-review">Self-Review</h3>
 <p><code>--self-review</code> has the session's own model check each answer, with no reviewer command to write:</p>
-<pre><code class="language-sh">swival --provider huggingface --model zai-org/GLM-5.3-Flash --yolo --self-review &quot;task&quot;
+<pre><code class="language-sh">swival --provider huggingface --model zai-org/GLM-5.3 --yolo --self-review &quot;task&quot;
 </code></pre>
 <p>The review uses the provider, model, keys, and settings the session is using at that moment.
 In the REPL, that includes switches made with <code>/profile</code>, <code>/model</code>, <code>/reasoning</code>, or model routing.
