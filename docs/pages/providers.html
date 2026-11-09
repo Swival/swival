@@ -139,7 +139,12 @@ swival --profile claude &quot;review this patch&quot;
 </code></pre>
 <pre><code>swival&gt; /profile gpt
 </code></pre>
-<p>Profiles switch the whole stack at once. To change only the model within the current provider, use the <code>/model</code> command in the REPL: with no argument it opens an interactive picker over the models the provider can serve right now, <code>/model NAME</code> switches directly, and favorites you star in the picker are remembered across sessions. Bedrock, GEAP, and the command provider have no model listing, but <code>/model ID</code> still works. See <a href="usage.html">Usage</a> for the details.</p>
+<p>Profiles switch the whole stack at once.
+To change only the model within the current provider, use the <code>/model</code> command in the REPL.</p>
+<p>With no argument it opens a picker over the models the provider can serve right now.
+<code>/model NAME</code> switches directly, and favorites you star in the picker are remembered across sessions.</p>
+<p>GEAP and the command provider have no model listing, so the picker shows the models you already use instead, and <code>/model ID</code> still works.
+See <a href="usage.html">Usage</a> for the details.</p>
 <p>The sections below document each provider's flags, authentication, and behavior in detail.</p>
 <h2 id="lm-studio">LM Studio</h2>
 <p>LM Studio is the default provider and usually requires no flags when the local server is already running with a loaded model.</p>
@@ -392,6 +397,12 @@ swival --provider bedrock --model global.anthropic.claude-opus-5-5 &quot;task&qu
 </code></pre>
 <p>Note: the region env var is <code>AWS_REGION_NAME</code>, not <code>AWS_DEFAULT_REGION</code>.</p>
 <p>When <code>--max-context-tokens</code> is not set, Swival reads the window from LiteLLM's model registry for the Bedrock model ID. Set the flag explicitly if your model is not listed there.</p>
+<p>In the REPL, <code>/model</code> lists the inference profiles and models Bedrock offers in that region.
+Your account may not have access to all of them.</p>
+<p>Listing uses the <code>bedrock:ListFoundationModels</code> and <code>bedrock:ListInferenceProfiles</code> permissions.
+With only one of them you get a shorter list.
+It doesn't work when <code>--base-url</code> is a custom endpoint.</p>
+<p><code>/model ID</code> also takes ids that aren't on the list, like provisioned model ARNs.</p>
 <p>For cross-region inference, use the regional prefix in the model ID (e.g. <code>us.</code>, <code>eu.</code>, <code>apac.</code>).</p>
 <pre><code class="language-sh">swival --provider bedrock --model us.anthropic.claude-opus-5-5 &quot;task&quot;
 </code></pre>

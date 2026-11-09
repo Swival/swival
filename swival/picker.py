@@ -498,6 +498,8 @@ def choose_model(
     *,
     current: str | None = None,
     initial_query: str = "",
+    known_models: tuple | list = (),
+    aws_profile: str | None = None,
     input=None,
     output=None,
 ) -> tuple[str, ModelEntry | None] | None:
@@ -506,19 +508,32 @@ def choose_model(
     Handles picker rounds, catalog refresh, manual entry, and (for the public
     HuggingFace endpoint) hub-wide search. Returns ``(model_id, entry)`` where
     ``entry`` is None for manually typed ids, or None when the user cancels.
-    Raises :class:`~swival.model_catalog.CatalogUnavailable` when the initial
-    catalog cannot be fetched at all.
+
+    *known_models* are also offered when the catalog is missing or incomplete.
+
+    Raises :class:`~swival.model_catalog.CatalogUnavailable` if the catalog
+    can't be fetched and no model is known either.
     """
     from .fmt import suspend_live
 
     # One suspension for the whole flow, so the REPL prompt does not flash
     # between picker rounds.
     with suspend_live():
-        from .model_catalog import CatalogUnavailable, is_hf_router, list_models
+        from .model_catalog import (
+            CatalogUnavailable,
+            is_hf_router,
+            list_models,
+            list_models_or_known,
+            with_known_models,
+        )
         from .model_prefs import load_prefs, toggle_favorite
 
         hf_explorer = is_hf_router(provider, base_url)
-        catalog = list_models(provider, base_url, api_key)
+        catalog, warning = list_models_or_known(
+            provider, base_url, api_key, known_models, aws_profile=aws_profile
+        )
+        if warning:
+            fmt.warning(warning)
 
         prefs = load_prefs()
         if prefs.warning:
@@ -569,7 +584,16 @@ def choose_model(
             if res.kind == "refresh":
                 try:
                     if search_query is None:
-                        catalog = list_models(provider, base_url, api_key, refresh=True)
+                        catalog = with_known_models(
+                            list_models(
+                                provider,
+                                base_url,
+                                api_key,
+                                refresh=True,
+                                aws_profile=aws_profile,
+                            ),
+                            known_models,
+                        )
                         state.set_entries(catalog.entries)
                     else:
                         from .model_catalog import search_hf_models

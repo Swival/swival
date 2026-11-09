@@ -162,7 +162,13 @@ For HuggingFace on the public endpoint the picker becomes a small model explorer
 
 Switches are transactional: the new model is fully resolved (including context-window discovery) before anything changes, so a failed switch leaves the session exactly as it was. A model that reports no tool-calling support switches with a warning, since the agent loop already falls back to plain chat when a model rejects tools.
 
-Catalogs are available for LM Studio (all downloaded models, loaded ones first), llama.cpp, OpenAI-compatible servers, Apple Foundation Models, HuggingFace, OpenRouter, Google Gemini, and ChatGPT. For bedrock, GEAP, and the command provider there is no listing, but `/model ID` still works. Favorites and recents live in `$XDG_CONFIG_HOME/swival/models.toml` (usually `~/.config/swival/models.toml`), a plain TOML file that is safe to edit by hand.
+Catalogs are available for LM Studio (all downloaded models, loaded ones first), llama.cpp, OpenAI-compatible servers, Apple Foundation Models, HuggingFace, OpenRouter, Google Gemini, ChatGPT, and AWS Bedrock.
+GEAP and the command provider have no listing.
+
+If a provider has no listing, or the listing fails, the picker shows your current model, favorites, recents, and the profiles on the same endpoint.
+`/model ID` works either way.
+
+Favorites and recents live in `$XDG_CONFIG_HOME/swival/models.toml` (usually `~/.config/swival/models.toml`), a plain TOML file that is safe to edit by hand.
 
 `/route` shows the state of [model routing](decision-models.md#model-routing): whether it is on, the candidate profiles, and the last decision with its probabilities.
 `/route on` resumes routing after `/profile` or `/model` paused it, and `/route off` pauses it.

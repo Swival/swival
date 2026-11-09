@@ -1666,7 +1666,9 @@ class TestStartupRuntime:
         monkeypatch.setattr(
             model_catalog,
             "cached_entries",
-            lambda provider, base_url: looked_up.append(provider) or [],
+            lambda provider, base_url, aws_profile=None: (
+                looked_up.append(provider) or []
+            ),
         )
         monkeypatch.setattr(
             model_prefs,

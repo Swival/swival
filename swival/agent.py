@@ -14010,9 +14010,15 @@ def _repl_model(
             return last_model, "no previous model to revert to", True
         new_model, entry = last_pair[1], None
     elif not arg:
+        known = _known_models(settings, profiles, pre_profile_baseline, current_model)
         if not interactive:
             text, err = _format_model_listing(
-                provider, settings.get("base_url"), api_key, current_model
+                provider,
+                settings.get("base_url"),
+                api_key,
+                current_model,
+                known,
+                aws_profile=settings.get("aws_profile"),
             )
             return last_model, text, err
         from .picker import choose_model
@@ -14023,12 +14029,11 @@ def _repl_model(
                 settings.get("base_url"),
                 api_key,
                 current=current_model,
+                known_models=known,
+                aws_profile=settings.get("aws_profile"),
             )
         except CatalogUnavailable as e:
-            msg = f"cannot list models: {e.reason}"
-            if e.hint:
-                msg += f"\n{e.hint}"
-            return last_model, msg, True
+            return last_model, e.describe(), True
         if choice is None:
             return last_model, "model switch cancelled", False
         new_model, entry = choice
@@ -14041,6 +14046,7 @@ def _repl_model(
                 api_key=api_key,
                 interactive=interactive,
                 current_model=current_model,
+                aws_profile=settings.get("aws_profile"),
             )
         except _ModelResolveError as exc:
             return last_model, str(exc), True
@@ -14152,12 +14158,16 @@ def _resolve_model_arg(
     api_key: str | None,
     interactive: bool,
     current_model: str | None,
+    aws_profile: str | None,
 ) -> tuple[str, object | None] | None:
     """Resolve a direct /model argument against the provider catalog.
 
     Returns ``(model_id, entry)``, or None when the user cancelled out of
     the disambiguation picker. Raises :class:`_ModelResolveError` when the
     argument matches nothing usable.
+
+    Some catalogs are incomplete, so an id they don't list is used as typed,
+    and never swapped for a similar one.
     """
     from . import model_prefs
     from .model_catalog import (
@@ -14171,7 +14181,7 @@ def _resolve_model_arg(
     if provider == "anthropic":
         arg = arg.removeprefix("anthropic/")
     try:
-        catalog = list_models(provider, base_url, api_key)
+        catalog = list_models(provider, base_url, api_key, aws_profile=aws_profile)
     except CatalogUnavailable:
         # No listing for this provider (or the fetch failed): trust the id
         # and let resolve_provider / the first call validate it.
@@ -14190,9 +14200,15 @@ def _resolve_model_arg(
     ]
     ranked = rank_entries(pool, query=arg, favorites=set(preferred))
 
-    if ranked and (len(ranked) == 1 or match_score(arg, ranked[0]) == 0):
-        sel = ranked[0]
-        return sel.id, by_id.get(sel.id.lower())
+    if not catalog.exhaustive:
+        # Favorites sort first, so the exact match may not be on top.
+        sel = next((e for e in ranked if match_score(arg, e) == 0), None)
+        if sel is not None:
+            return sel.id, by_id.get(sel.id.lower())
+        if not ranked or not interactive:
+            return arg, None
+    elif ranked and (len(ranked) == 1 or match_score(arg, ranked[0]) == 0):
+        return ranked[0].id, by_id.get(ranked[0].id.lower())
 
     if ranked:
         if interactive:
@@ -14205,9 +14221,11 @@ def _resolve_model_arg(
                     api_key,
                     current=current_model,
                     initial_query=arg,
+                    known_models=preferred,
+                    aws_profile=aws_profile,
                 )
             except CatalogUnavailable as e:
-                raise _ModelResolveError(f"cannot list models: {e.reason}")
+                raise _ModelResolveError(e.describe())
         listing = "\n".join(f"  • {e.id}" for e in ranked[:10])
         raise _ModelResolveError(
             f"{arg!r} matches several models:\n{listing}\nBe more specific."
@@ -14260,24 +14278,57 @@ def _hf_exact_status_check(arg, api_key, catalog):
 _MODEL_LISTING_LIMIT = 30
 
 
+def _known_models(
+    settings: dict,
+    profiles: dict,
+    pre_profile_baseline: dict | None,
+    current_model: str | None,
+) -> list[str]:
+    """Models to offer when the provider's list is missing or incomplete.
+
+    /model stays on the current endpoint, so other endpoints' profiles don't count.
+    """
+    from . import model_prefs
+
+    names = [current_model] if current_model else []
+    names += model_prefs.load_prefs().preferred_for(settings["provider"])
+
+    def endpoint(config: dict) -> tuple:
+        return (
+            *_catalog_key(config),
+            config.get("aws_profile"),
+            config.get("project"),
+            config.get("location"),
+        )
+
+    current = endpoint(settings)
+    for body in profiles.values():
+        merged = _overlay_profile(pre_profile_baseline, body)
+        if merged.get("model") and endpoint(merged) == current:
+            names.append(merged["model"])
+    return names
+
+
 def _format_model_listing(
     provider: str,
     base_url: str | None,
     api_key: str | None,
     current_model: str | None,
+    known_models: list[str],
+    *,
+    aws_profile: str | None,
 ) -> tuple[str, bool]:
     """Plain-text catalog listing for non-interactive /model calls."""
     from . import model_prefs
-    from .model_catalog import CatalogUnavailable, list_models
+    from .model_catalog import CatalogUnavailable, list_models_or_known
     from .picker import _id_width, format_entry, rank_entries
 
     try:
-        catalog = list_models(provider, base_url, api_key)
+        catalog, warning = list_models_or_known(
+            provider, base_url, api_key, known_models, aws_profile=aws_profile
+        )
     except CatalogUnavailable as e:
-        msg = f"cannot list models: {e.reason}"
-        if e.hint:
-            msg += f"\n{e.hint}"
-        return msg, True
+        return e.describe(), True
 
     limit = _MODEL_LISTING_LIMIT
     prefs = model_prefs.load_prefs()
@@ -14289,7 +14340,8 @@ def _format_model_listing(
         current=current_model,
     )
     width = _id_width(list(ranked[:limit]))
-    lines = [f"models from {catalog.source}:"]
+    lines = [warning] if warning else []
+    lines.append(f"models from {catalog.source}:")
     for e in ranked[:limit]:
         lines.append(
             "  "
@@ -14302,8 +14354,11 @@ def _format_model_listing(
         )
     if len(ranked) > limit:
         lines.append(f"  … {len(ranked) - limit} more")
-    lines.append("switch with /model <id>")
-    return "\n".join(lines), False
+    if catalog.exhaustive:
+        lines.append("switch with /model <id>")
+    else:
+        lines.append("switch with /model <id>, listed here or not")
+    return "\n".join(lines), warning is not None
 
 
 def _model_completion_candidates(ctx) -> list[str]:
@@ -14326,7 +14381,10 @@ def _model_completion_candidates(ctx) -> list[str]:
     provider = normalize_provider(settings.get("provider") or "lmstudio")
     names = load_prefs().preferred_for(provider)
     seen = {n.lower() for n in names}
-    for e in cached_entries(provider, settings.get("base_url")) or ():
+    for e in (
+        cached_entries(provider, settings.get("base_url"), settings.get("aws_profile"))
+        or ()
+    ):
         if e.id.lower() not in seen:
             seen.add(e.id.lower())
             names.append(e.id)

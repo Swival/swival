@@ -1,5 +1,7 @@
 """Tests for swival/picker.py: pure logic headless, app logic via pipe input."""
 
+from unittest.mock import Mock
+
 import pytest
 from prompt_toolkit.input.defaults import create_pipe_input
 from prompt_toolkit.output import DummyOutput
@@ -276,15 +278,20 @@ def _fake_catalog(entries):
     return Catalog(list(entries), source="test source")
 
 
-def _choose(keys, monkeypatch, provider="lmstudio", entries=None, **kw):
-    catalog = _fake_catalog(entries if entries is not None else [E("m1"), E("m2")])
+def _choose(keys, monkeypatch, provider="lmstudio", entries=None, catalog=None, **kw):
+    """*catalog* can also be an exception for the listing to raise."""
+    catalog = catalog or _fake_catalog(
+        entries if entries is not None else [E("m1"), E("m2")]
+    )
     calls = []
 
     def fake_list_models(prov, base_url=None, api_key=None, *, refresh=False, **_):
         calls.append(refresh)
+        if isinstance(catalog, Exception):
+            raise catalog
         return catalog
 
-    monkeypatch.setattr(mc, "list_models", fake_list_models)
+    monkeypatch.setattr(mc, "list_models", Mock(side_effect=fake_list_models))
     with create_pipe_input() as pipe:
         pipe.send_text(keys)
         result = picker.choose_model(provider, input=pipe, output=DummyOutput(), **kw)
@@ -312,6 +319,72 @@ def test_choose_model_refresh_refetches(monkeypatch):
     result, calls = _choose("\x12\r", monkeypatch)
     assert result[0] == "m1"
     assert calls == [False, True]
+
+
+NO_LISTING = mc.CatalogUnavailable("not supported")
+
+
+@pytest.mark.parametrize(
+    "provider, expected_warnings",
+    [("geap", []), ("lmstudio", ["cannot list models: not supported"])],
+)
+def test_choose_model_falls_back_to_known_models(
+    provider, expected_warnings, monkeypatch
+):
+    warnings = []
+    monkeypatch.setattr(picker.fmt, "warning", warnings.append)
+    (model_id, _), _ = _choose(
+        "\x1b[B\r",
+        monkeypatch,
+        provider=provider,
+        catalog=NO_LISTING,
+        known_models=["a", "b"],
+    )
+    assert model_id == "b"
+    assert warnings == expected_warnings
+
+    with pytest.raises(mc.CatalogUnavailable):
+        _choose("\r", monkeypatch, provider=provider, catalog=NO_LISTING)
+
+
+def test_choose_model_manual_entry_without_a_listing(monkeypatch):
+    result, _ = _choose(
+        "\x1b[B\r" + "gemini-typed\r",
+        monkeypatch,
+        provider="geap",
+        catalog=NO_LISTING,
+        known_models=["gemini-a"],
+    )
+    assert result == ("gemini-typed", None)
+
+
+def test_choose_model_failed_refresh_keeps_known_models(monkeypatch):
+    result, _ = _choose(
+        "\x12\r",
+        monkeypatch,
+        provider="geap",
+        catalog=NO_LISTING,
+        known_models=["gemini-a"],
+    )
+    assert result[0] == "gemini-a"
+
+
+def test_choose_model_refresh_keeps_known_models_on_partial_catalog(monkeypatch):
+    result, calls = _choose(
+        "\x12\r",
+        monkeypatch,
+        provider="bedrock",
+        catalog=Catalog([E("listed")], source="partial", exhaustive=False),
+        current="unlisted",
+        known_models=["unlisted"],
+        aws_profile="prod",
+    )
+    assert result[0] == "unlisted"
+    assert calls == [False, True]
+    assert [c.kwargs["aws_profile"] for c in mc.list_models.call_args_list] == [
+        "prod",
+        "prod",
+    ]
 
 
 def test_choose_model_hf_search_flow(monkeypatch):

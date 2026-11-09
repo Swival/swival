@@ -16,7 +16,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 HF_ROUTER_MODELS_URL = "https://router.huggingface.co/v1/models"
 HF_HUB_MODELS_URL = "https://huggingface.co/api/models"
@@ -31,6 +31,7 @@ LMSTUDIO_DEFAULT_BASE = "http://127.0.0.1:1234"
 LLAMACPP_DEFAULT_BASE = "http://127.0.0.1:8080"
 
 _CACHE_TTL_SECONDS = 300.0
+_MANUAL_ID_HINT = "pass a model id directly: /model <id>"
 
 
 class CatalogUnavailable(Exception):
@@ -43,6 +44,11 @@ class CatalogUnavailable(Exception):
         super().__init__(reason)
         self.reason = reason
         self.hint = hint
+
+    def describe(self) -> str:
+        if self.hint:
+            return f"cannot list models: {self.reason}\n{self.hint}"
+        return f"cannot list models: {self.reason}"
 
 
 @dataclass(frozen=True)
@@ -64,9 +70,11 @@ class ModelEntry:
 class Catalog:
     entries: list[ModelEntry]
     source: str
+    # False when the provider can serve models that aren't listed here.
+    exhaustive: bool = True
 
 
-_cache: dict[tuple[str, str | None], tuple[float, Catalog]] = {}
+_cache: dict[tuple, tuple[float, Catalog]] = {}
 
 
 def normalize_provider(provider: str) -> str:
@@ -81,8 +89,7 @@ def normalize_provider(provider: str) -> str:
 def supports_listing(provider: str) -> bool:
     """True when the provider's current model list can be enumerated.
 
-    bedrock/geap/command have no fetcher: /model still accepts explicit ids
-    for them.
+    geap/command have no fetcher: /model still accepts explicit ids for them.
     """
     return normalize_provider(provider) in _FETCHERS
 
@@ -94,12 +101,22 @@ def is_hf_router(provider: str, base_url: str | None) -> bool:
     return normalize_provider(provider) == "huggingface" and not base_url
 
 
-def cached_entries(provider: str, base_url: str | None) -> list[ModelEntry] | None:
-    """Return the cached entries for (provider, base_url) without any network.
+def _cache_key(provider: str, base_url: str | None, aws_profile: str | None) -> tuple:
+    """Each AWS account sees different Bedrock models, so keep them apart."""
+    provider = normalize_provider(provider)
+    if provider == "bedrock":
+        return provider, base_url, aws_profile
+    return provider, base_url
+
+
+def cached_entries(
+    provider: str, base_url: str | None, aws_profile: str | None = None
+) -> list[ModelEntry] | None:
+    """Return the cached entries for this endpoint without any network.
 
     Used by TAB completion, which must never block on a fetch.
     """
-    hit = _cache.get((normalize_provider(provider), base_url))
+    hit = _cache.get(_cache_key(provider, base_url, aws_profile))
     if hit is None:
         return None
     return hit[1].entries
@@ -116,16 +133,17 @@ def list_models(
     *,
     timeout: float = 6.0,
     refresh: bool = False,
+    aws_profile: str | None = None,
 ) -> Catalog:
     """Fetch the current model catalog for *provider*.
 
-    Results are cached per (provider, base_url) for a few minutes so
-    reopening the picker is instant; ``refresh=True`` bypasses the cache.
+    Results are cached per endpoint for a few minutes so reopening the
+    picker is instant; ``refresh=True`` bypasses the cache.
     Raises :class:`CatalogUnavailable` when the provider has no listing
     support or the fetch fails.
     """
     provider = normalize_provider(provider)
-    key = (provider, base_url)
+    key = _cache_key(provider, base_url, aws_profile)
     if not refresh:
         hit = _cache.get(key)
         if hit is not None and (time.monotonic() - hit[0]) < _CACHE_TTL_SECONDS:
@@ -135,11 +153,52 @@ def list_models(
     if fetcher is None:
         raise CatalogUnavailable(
             f"model listing is not supported for provider {provider!r}",
-            hint="pass a model id directly: /model <id>",
+            hint=_MANUAL_ID_HINT,
         )
-    catalog = fetcher(base_url, api_key, timeout)
+    extra = {"aws_profile": aws_profile} if provider == "bedrock" else {}
+    catalog = fetcher(base_url, api_key, timeout, **extra)
     _cache[key] = (time.monotonic(), catalog)
     return catalog
+
+
+def with_known_models(catalog: Catalog, known: tuple | list) -> Catalog:
+    """Add the *known* ids that an incomplete catalog is missing."""
+    if catalog.exhaustive:
+        return catalog
+    seen = {e.id.lower() for e in catalog.entries}
+    extra = []
+    for model_id in known:
+        if model_id.lower() not in seen:
+            seen.add(model_id.lower())
+            extra.append(ModelEntry(id=model_id))
+    return replace(catalog, entries=catalog.entries + extra)
+
+
+def list_models_or_known(
+    provider: str,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    known: tuple | list = (),
+    *,
+    aws_profile: str | None = None,
+) -> tuple[Catalog, str | None]:
+    """Fetch the catalog, or fall back to the *known* ids if that fails.
+
+    Returns the catalog and a warning to show, if any.
+    Providers that never had a listing don't get a warning.
+
+    Raises :class:`CatalogUnavailable` if there's nothing to show at all.
+    """
+    try:
+        catalog = list_models(provider, base_url, api_key, aws_profile=aws_profile)
+        return with_known_models(catalog, known), None
+    except CatalogUnavailable as e:
+        fallback = with_known_models(
+            Catalog([], "your profiles and history", exhaustive=False), known
+        )
+        if not fallback.entries:
+            raise
+        return fallback, e.describe() if supports_listing(provider) else None
 
 
 def find_entry(entries, model_id: str) -> ModelEntry | None:
@@ -747,12 +806,192 @@ def _fetch_chatgpt(base_url: str | None, api_key: str | None, timeout: float):
     if not entries:
         raise CatalogUnavailable(
             "no ChatGPT models found in the litellm registry",
-            hint="pass a model id directly: /model <id>",
+            hint=_MANUAL_ID_HINT,
         )
     return Catalog(entries, source="known ChatGPT models")
 
 
+_BEDROCK_MAX_PROFILES = 1000
+
+
+def _bedrock_client(base_url: str | None, aws_profile: str | None, timeout: float):
+    """Make a Bedrock client for the configured region, with chat's credentials.
+
+    We ask LiteLLM for those because boto3 alone ignores settings like
+    AWS_PROFILE_NAME.
+
+    Returns the client and its region.
+    """
+    import boto3
+    from botocore.config import Config
+    from botocore.exceptions import NoCredentialsError
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    aws = BaseAWSLLM()
+    region = aws.get_aws_region_name({"aws_region_name": base_url} if base_url else {})
+
+    # botocore finds this token by itself, and there may be no other credentials.
+    if os.environ.get("AWS_BEARER_TOKEN_BEDROCK"):
+        session = boto3.Session(region_name=region)
+    else:
+        credentials = aws.get_credentials(
+            aws_region_name=region, aws_profile_name=aws_profile
+        )
+        if credentials is None:
+            raise NoCredentialsError()
+        frozen = credentials.get_frozen_credentials()
+        session = boto3.Session(
+            aws_access_key_id=frozen.access_key,
+            aws_secret_access_key=frozen.secret_key,
+            aws_session_token=frozen.token,
+            region_name=region,
+        )
+
+    client = session.client(
+        "bedrock",
+        config=Config(
+            connect_timeout=timeout,
+            read_timeout=timeout,
+            retries={"total_max_attempts": 1},
+        ),
+    )
+    return client, region
+
+
+def _unless_denied(call):
+    """Run one listing call, or return None if AWS says we're not allowed."""
+    from botocore.exceptions import ClientError
+
+    try:
+        return call()
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "AccessDeniedException":
+            raise
+        return None
+
+
+def _bedrock_inference_profiles(client) -> list:
+    pages = client.get_paginator("list_inference_profiles").paginate(
+        PaginationConfig={"MaxItems": _BEDROCK_MAX_PROFILES}
+    )
+    return [p for page in pages for p in page.get("inferenceProfileSummaries") or []]
+
+
+def _is_bedrock_chat_model(summary: dict, info: dict) -> bool:
+    if summary and "TEXT" not in (summary.get("outputModalities") or []):
+        return False
+    return info.get("mode") in (None, "chat")
+
+
+def _bedrock_entry(
+    model_id: str, name: str | None, summary: dict, info: dict
+) -> ModelEntry:
+    tags = []
+    if "IMAGE" in (summary.get("inputModalities") or []):
+        tags.append("vision")
+    if (summary.get("modelLifecycle") or {}).get("status") == "LEGACY":
+        tags.append("legacy")
+    return ModelEntry(
+        id=model_id,
+        display_name=name,
+        context_length=info.get("max_input_tokens"),
+        supports_tools=info.get("supports_function_calling"),
+        price_in=_per_million(info.get("input_cost_per_token")),
+        price_out=_per_million(info.get("output_cost_per_token")),
+        tags=tuple(tags),
+    )
+
+
+def _bedrock_entries(foundation: list, profiles: list, registry: dict) -> list:
+    """Inference profiles first, then models you can call directly.
+
+    A model that's only available through a profile has no ON_DEMAND type,
+    and calling its bare id would fail.
+    """
+    summaries = {m.get("modelId"): m for m in foundation}
+    from_profiles = []
+    for profile in profiles:
+        # LiteLLM needs the ARN for application profiles.
+        id_field = (
+            "inferenceProfileArn"
+            if profile.get("type") == "APPLICATION"
+            else "inferenceProfileId"
+        )
+        model_id = profile.get(id_field)
+        if not model_id or profile.get("status") != "ACTIVE":
+            continue
+        arns = [m.get("modelArn") or "" for m in profile.get("models") or []]
+        base_id = arns[0].rsplit("/", 1)[-1] if arns else None
+        summary = summaries.get(base_id, {})
+        info = registry.get(model_id) or registry.get(base_id) or {}
+        if _is_bedrock_chat_model(summary, info):
+            name = profile.get("inferenceProfileName")
+            from_profiles.append(_bedrock_entry(model_id, name, summary, info))
+
+    direct = []
+    for model_id, summary in summaries.items():
+        if not model_id:
+            continue
+        if "ON_DEMAND" not in (summary.get("inferenceTypesSupported") or []):
+            continue
+        info = registry.get(model_id) or {}
+        if _is_bedrock_chat_model(summary, info):
+            name = summary.get("modelName")
+            direct.append(_bedrock_entry(model_id, name, summary, info))
+
+    return sorted(from_profiles, key=lambda e: e.id) + sorted(
+        direct, key=lambda e: e.id
+    )
+
+
+def _fetch_bedrock(
+    base_url: str | None,
+    api_key: str | None,
+    timeout: float,
+    *,
+    aws_profile: str | None,
+) -> Catalog:
+    """List the inference profiles and models Bedrock offers in this region.
+
+    The catalog is marked incomplete because AWS doesn't list provisioned or
+    custom model ARNs, and those are valid ids.
+    """
+    if base_url and base_url.startswith("http"):
+        raise CatalogUnavailable(
+            "Bedrock models can be listed for a region, not a custom endpoint",
+            hint=_MANUAL_ID_HINT,
+        )
+
+    # /model falls back on CatalogUnavailable, so nothing else may escape from here.
+    region = base_url or "the configured region"
+    try:
+        registry = _litellm_registry()
+        client, region = _bedrock_client(base_url, aws_profile, timeout)
+        foundation = _unless_denied(
+            lambda: client.list_foundation_models().get("modelSummaries") or []
+        )
+        profiles = _unless_denied(lambda: _bedrock_inference_profiles(client))
+    except Exception as e:
+        raise CatalogUnavailable(
+            f"could not list Bedrock models in {region}: {e}", hint=_MANUAL_ID_HINT
+        )
+
+    if foundation is None and profiles is None:
+        raise CatalogUnavailable(
+            f"this AWS identity may not list Bedrock models in {region}",
+            hint="grant bedrock:ListFoundationModels and "
+            "bedrock:ListInferenceProfiles, or " + _MANUAL_ID_HINT,
+        )
+    entries = _bedrock_entries(foundation or [], profiles or [], registry)
+    if not entries:
+        raise CatalogUnavailable(
+            f"AWS Bedrock reports no text models in {region}", hint=_MANUAL_ID_HINT
+        )
+    return Catalog(entries, source=f"AWS Bedrock ({region})", exhaustive=False)
+
+
 _FETCHERS = {
+    "bedrock": _fetch_bedrock,
     "lmstudio": _fetch_lmstudio,
     "llamacpp": _fetch_llamacpp,
     "generic": _fetch_generic,

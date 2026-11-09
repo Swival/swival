@@ -46,7 +46,14 @@ swival --profile claude "review this patch"
 swival> /profile gpt
 ```
 
-Profiles switch the whole stack at once. To change only the model within the current provider, use the `/model` command in the REPL: with no argument it opens an interactive picker over the models the provider can serve right now, `/model NAME` switches directly, and favorites you star in the picker are remembered across sessions. Bedrock, GEAP, and the command provider have no model listing, but `/model ID` still works. See [Usage](usage.md) for the details.
+Profiles switch the whole stack at once.
+To change only the model within the current provider, use the `/model` command in the REPL.
+
+With no argument it opens a picker over the models the provider can serve right now.
+`/model NAME` switches directly, and favorites you star in the picker are remembered across sessions.
+
+GEAP and the command provider have no model listing, so the picker shows the models you already use instead, and `/model ID` still works.
+See [Usage](usage.md) for the details.
 
 The sections below document each provider's flags, authentication, and behavior in detail.
 
@@ -455,6 +462,15 @@ swival --provider bedrock --model global.anthropic.claude-opus-5-5 \
 Note: the region env var is `AWS_REGION_NAME`, not `AWS_DEFAULT_REGION`.
 
 When `--max-context-tokens` is not set, Swival reads the window from LiteLLM's model registry for the Bedrock model ID. Set the flag explicitly if your model is not listed there.
+
+In the REPL, `/model` lists the inference profiles and models Bedrock offers in that region.
+Your account may not have access to all of them.
+
+Listing uses the `bedrock:ListFoundationModels` and `bedrock:ListInferenceProfiles` permissions.
+With only one of them you get a shorter list.
+It doesn't work when `--base-url` is a custom endpoint.
+
+`/model ID` also takes ids that aren't on the list, like provisioned model ARNs.
 
 For cross-region inference, use the regional prefix in the model ID (e.g. `us.`, `eu.`, `apac.`).
 

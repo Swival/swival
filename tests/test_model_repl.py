@@ -1,13 +1,13 @@
 """Tests for the /model REPL command."""
 
 import types
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
 from swival import model_catalog as mc
 from swival import model_prefs as mp
-from swival.agent import _repl_model, execute_input
+from swival.agent import _model_completion_candidates, _repl_model, execute_input
 from swival.input_dispatch import InputContext, parse_input_line
 from swival.model_catalog import Catalog, ModelEntry
 from swival.report import ConfigError
@@ -21,6 +21,29 @@ BASELINE = {
     "base_url": None,
     "max_context_tokens": None,
 }
+
+GEAP_BASELINE = {
+    "provider": "vertexai",
+    "model": "gemini-3.8-flash",
+    "base_url": None,
+    "location": "global",
+}
+
+BEDROCK_BASELINE = {
+    "provider": "bedrock",
+    "model": "global.anthropic.claude-opus-5-5",
+    "base_url": "us-east-2",
+    "aws_profile": "prod",
+}
+
+PARTIAL_CATALOG = Catalog(
+    entries=[
+        ModelEntry(id="global.anthropic.claude-opus-5-5", context_length=1_000_000),
+        ModelEntry(id="us.anthropic.claude-opus-5-5", display_name="US Opus"),
+    ],
+    source="partial catalog",
+    exhaustive=False,
+)
 
 CATALOG = Catalog(
     entries=[
@@ -81,6 +104,9 @@ def _call_model(
     resolve_side_effect=None,
     subagent_manager=None,
     baseline=None,
+    profiles=None,
+    pre_profile_baseline=None,
+    interactive=False,
     monkeypatch=None,
 ):
     if repl_kwargs is None:
@@ -91,7 +117,7 @@ def _call_model(
             raise mc.CatalogUnavailable("listing off", hint="pass an id")
         return catalog
 
-    monkeypatch.setattr(mc, "list_models", fake_list_models)
+    monkeypatch.setattr(mc, "list_models", Mock(side_effect=fake_list_models))
 
     patch_kwargs = {}
     if resolve_side_effect is not None:
@@ -102,15 +128,15 @@ def _call_model(
     with patch("swival.agent.resolve_provider", **patch_kwargs) as mock_rp:
         new_last, msg, is_error = _repl_model(
             cmd_arg,
-            profiles={},
+            profiles=profiles or {},
             current_profile=None,
             startup_profile=None,
             raw_baseline=dict(baseline or BASELINE),
-            pre_profile_baseline={},
+            pre_profile_baseline=pre_profile_baseline or {},
             repl_kwargs=repl_kwargs,
             subagent_manager=subagent_manager,
             last_model=last_model,
-            interactive=False,
+            interactive=interactive,
             verbose=False,
         )
     return new_last, msg, is_error, repl_kwargs, mock_rp
@@ -350,8 +376,178 @@ class TestModelListing:
     def test_listing_unavailable(self, monkeypatch):
         _, msg, err, _, _ = _call_model("", catalog=None, monkeypatch=monkeypatch)
         assert err
-        assert "cannot list models" in msg
-        assert "pass an id" in msg
+        assert msg.splitlines()[:3] == [
+            "cannot list models: listing off",
+            "pass an id",
+            "models from your profiles and history:",
+        ]
+        assert "org/old-model (current)" in msg
+
+    def test_failure_with_nothing_known_is_only_an_error(self, monkeypatch):
+        kw = _make_repl_kwargs()
+        kw["model_id"] = None
+        _, msg, err, _, _ = _call_model(
+            "", catalog=None, repl_kwargs=kw, monkeypatch=monkeypatch
+        )
+        assert err
+        assert msg == "cannot list models: listing off\npass an id"
+
+    def test_provider_without_listing_shows_known_models(self, monkeypatch):
+        mp.record_recent("geap", "gemini-3.6-flash")
+        mp.toggle_favorite("geap", "gemini-4-argon")
+        kw = _make_repl_kwargs()
+        kw["model_id"] = "gemini-3.8-flash"
+        _, msg, err, _, _ = _call_model(
+            "",
+            catalog=None,
+            repl_kwargs=kw,
+            baseline=GEAP_BASELINE,
+            monkeypatch=monkeypatch,
+        )
+        assert not err
+        assert "cannot list" not in msg
+        lines = msg.splitlines()
+        assert "gemini-4-argon" in lines[1]
+        assert "gemini-3.8-flash (current)" in lines[2]
+        assert "gemini-3.6-flash" in lines[3]
+        assert lines[-1] == "switch with /model <id>, listed here or not"
+
+    def test_only_profiles_on_this_endpoint_are_known(self, monkeypatch):
+        profiles = {
+            "alias": {"provider": "vertexai", "model": "gemini-alias"},
+            "canonical": {"provider": "geap", "model": "gemini-canonical"},
+            "inherits": {"model": "gemini-inherits"},
+            "no-model": {"provider": "geap"},
+            "other-provider": {"provider": "openrouter", "model": "not-this"},
+            "other-endpoint": {
+                "provider": "geap",
+                "model": "not-that",
+                "base_url": "https://proxy.example",
+            },
+            "other-location": {
+                "provider": "geap",
+                "model": "not-there",
+                "location": "us-central1",
+            },
+            "other-project": {
+                "provider": "geap",
+                "model": "not-theirs",
+                "project": "someone-else",
+            },
+        }
+        kw = _make_repl_kwargs()
+        kw["model_id"] = "gemini-3.8-flash"
+        _, msg, _, _, _ = _call_model(
+            "",
+            catalog=None,
+            repl_kwargs=kw,
+            baseline=GEAP_BASELINE,
+            profiles=profiles,
+            pre_profile_baseline={"provider": "geap", "location": "global"},
+            monkeypatch=monkeypatch,
+        )
+        for expected in ("gemini-alias", "gemini-canonical", "gemini-inherits"):
+            assert expected in msg
+        for excluded in ("not-this", "not-that", "not-there", "not-theirs"):
+            assert excluded not in msg
+
+
+class TestPartialCatalog:
+    def _switch(self, arg, monkeypatch, **kw):
+        kw.setdefault("resolve_return", _resolve_return(model=arg))
+        return _call_model(
+            arg,
+            catalog=PARTIAL_CATALOG,
+            baseline=BEDROCK_BASELINE,
+            monkeypatch=monkeypatch,
+            **kw,
+        )
+
+    @pytest.mark.parametrize(
+        "arg",
+        [
+            "arn:aws:bedrock:us-east-2:1:provisioned-model/abc",
+            "global.anthropic.claude-opus-5",
+        ],
+    )
+    def test_an_unlisted_id_is_used_as_typed(self, arg, monkeypatch):
+        _, msg, err, _, mock_rp = self._switch(arg, monkeypatch)
+        assert not err
+        assert "not found" not in msg
+        assert mock_rp.call_args.kwargs["model"] == arg
+
+    def test_a_listed_id_carries_its_entry(self, monkeypatch):
+        arg = "global.anthropic.claude-opus-5-5"
+        _, msg, err, _, _ = self._switch(
+            arg,
+            monkeypatch,
+            resolve_return=(arg, None, None, None, {"provider": "bedrock"}),
+        )
+        assert not err
+        assert "1,000,000" in msg
+
+    def test_a_similar_id_opens_the_picker_when_interactive(self, monkeypatch):
+        arg = "global.anthropic.claude-opus-5"
+        mp.record_recent("bedrock", "us.recent")
+        with patch("swival.picker.choose_model", return_value=None) as choose:
+            _, msg, err, _, mock_rp = self._switch(arg, monkeypatch, interactive=True)
+        assert msg == "model switch cancelled"
+        assert not err
+        mock_rp.assert_not_called()
+        assert choose.call_args.kwargs["initial_query"] == arg
+        assert choose.call_args.kwargs["aws_profile"] == "prod"
+        assert choose.call_args.kwargs["known_models"] == ["us.recent"]
+
+    def test_an_exact_display_name_beats_a_fuzzy_favorite(self, monkeypatch):
+        mp.toggle_favorite("bedrock", "favorite")
+        catalog = Catalog(
+            entries=[
+                ModelEntry(id="exact", display_name="US Opus"),
+                ModelEntry(id="favorite", display_name="Fast US Opus"),
+            ],
+            source="partial catalog",
+            exhaustive=False,
+        )
+        _, _, err, _, mock_rp = _call_model(
+            "US Opus",
+            catalog=catalog,
+            baseline=BEDROCK_BASELINE,
+            resolve_return=_resolve_return(model="exact"),
+            monkeypatch=monkeypatch,
+        )
+        assert not err
+        assert mock_rp.call_args.kwargs["model"] == "exact"
+
+    def test_listing_shows_known_models_and_says_others_work(self, monkeypatch):
+        mp.record_recent("bedrock", "arn:aws:bedrock:us-east-2:1:custom/x")
+        _, msg, err, _, _ = self._switch("", monkeypatch)
+        assert not err
+        assert "arn:aws:bedrock:us-east-2:1:custom/x" in msg
+        assert msg.splitlines()[-1] == "switch with /model <id>, listed here or not"
+
+    def test_aws_profile_and_known_models_reach_the_listing(self, monkeypatch):
+        mp.record_recent("bedrock", "us.recent")
+        with patch("swival.picker.choose_model", return_value=None) as choose:
+            self._switch("", monkeypatch, interactive=True)
+        assert choose.call_args.kwargs["aws_profile"] == "prod"
+        assert choose.call_args.kwargs["known_models"] == [
+            "org/old-model",
+            "us.recent",
+        ]
+
+        for arg in ("", "us.other"):
+            self._switch(arg, monkeypatch)
+            assert mc.list_models.call_args.kwargs["aws_profile"] == "prod"
+
+    def test_tab_completion_reads_the_cache_of_this_aws_profile(self, monkeypatch):
+        def fetch(base_url, api_key, timeout, *, aws_profile=None):
+            return Catalog([ModelEntry(id=f"us.{aws_profile}")], "src")
+
+        monkeypatch.setitem(mc._FETCHERS, "bedrock", fetch)
+        mc.list_models("bedrock", "us-east-2", aws_profile="prod")
+        ctx = _make_ctx()
+        ctx.raw_llm_baseline = dict(BEDROCK_BASELINE)
+        assert "us.prod" in _model_completion_candidates(ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -471,6 +667,7 @@ def test_anthropic_prefix_is_stripped_before_catalog_match(monkeypatch):
         api_key="k",
         interactive=False,
         current_model=None,
+        aws_profile=None,
     )
     assert model_id == "claude-opus-5-5"
     assert entry is catalog.entries[0]
