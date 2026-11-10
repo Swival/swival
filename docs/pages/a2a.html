@@ -216,7 +216,7 @@ result = session.run(&quot;Ask the research agent to summarize recent papers on 
 <p>Terminal tasks return their result immediately. Interrupted tasks return with continuation metadata so the model can resume.</p>
 <h2 id="using-swival-as-an-a2a-server">Using Swival As An A2A Server</h2>
 <p>Swival can run as an A2A server, exposing a Session as an endpoint that other agents can call. This lets you wrap any swival configuration (provider, model, tools, skills, MCP servers) as a remote A2A agent.</p>
-<pre><code class="language-sh">swival --serve --provider openrouter --model z-ai/glm-5.2
+<pre><code class="language-sh">swival --serve --provider openrouter --model z-ai/glm-5.3
 </code></pre>
 <p>This starts an HTTP server at <code>0.0.0.0:8080</code> that accepts A2A JSON-RPC requests and serves an Agent Card at <code>/.well-known/agent-card.json</code>.</p>
 <h3 id="server-cli-flags">Server CLI Flags</h3>
@@ -282,7 +282,7 @@ examples = [&quot;What does this function do?&quot;]
 <pre><code class="language-python">from swival.a2a_server import A2aServer
 
 server = A2aServer(
-    session_kwargs={&quot;provider&quot;: &quot;openrouter&quot;, &quot;model&quot;: &quot;z-ai/glm-5.2&quot;},
+    session_kwargs={&quot;provider&quot;: &quot;openrouter&quot;, &quot;model&quot;: &quot;z-ai/glm-5.3&quot;},
     host=&quot;0.0.0.0&quot;,
     port=8080,
     auth_token=&quot;sk-...&quot;,

@@ -137,7 +137,7 @@ export OPENROUTER_API_KEY=sk_or_your_token_here
 Then pass the model you want to use. OpenRouter has both free and paid tiers.
 
 ```sh
-swival "Hello world" --provider openrouter --model z-ai/glm-5.2
+swival "Hello world" --provider openrouter --model z-ai/glm-5.3
 ```
 
 OpenRouter models vary widely in context limits. When `--max-context-tokens` is not set, Swival looks the window up in LiteLLM's model registry; set it explicitly if your model is not listed there or you want a lower cap.
@@ -145,7 +145,7 @@ OpenRouter models vary widely in context limits. When `--max-context-tokens` is 
 ```sh
 swival "Hello world" \
     --provider openrouter \
-    --model z-ai/glm-5.2 \
+    --model z-ai/glm-5.3 \
     --max-context-tokens 131072
 ```
 

@@ -164,7 +164,7 @@ class TestModelSwitch:
         assert "$0.9 in / $3 out" in msg
 
     def test_exact_match_is_case_insensitive(self, monkeypatch):
-        _, _, err, kw, _ = _call_model("zai-org/glm-5.2", monkeypatch=monkeypatch)
+        _, _, err, kw, _ = _call_model("zai-org/glm-5.3", monkeypatch=monkeypatch)
         assert not err
         assert kw["model_id"] == "zai-org/GLM-5.3"
 

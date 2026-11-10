@@ -121,7 +121,7 @@ reasoning_effort = "high"
 
 [profiles.router-main]
 provider = "openrouter"
-model = "z-ai/glm-5.2"
+model = "z-ai/glm-5.3"
 max_context_tokens = 131072
 
 [profiles.ollama]
@@ -204,7 +204,7 @@ Profiles defined in global config and project config merge per-key for the same 
 # In global config: defines the base profile
 [profiles.shared]
 provider = "openrouter"
-model = "z-ai/glm-5.2"
+model = "z-ai/glm-5.3"
 max_context_tokens = 131072
 
 # In project swival.toml: overrides just the model
@@ -218,7 +218,7 @@ When you only want a different model from the same provider, `/model` in the REP
 
 ```text
 swival> /model                # open an interactive model picker
-swival> /model glm-5.2        # switch directly, fuzzy-matched against the provider catalog
+swival> /model glm-5.3        # switch directly, fuzzy-matched against the provider catalog
 swival> /model -              # revert to the model used before the last switch
 swival> /model --fav          # toggle the current model as a favorite
 swival> /model --fav ID       # toggle a favorite for a specific model

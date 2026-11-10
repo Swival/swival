@@ -135,7 +135,7 @@ Terminal tasks return their result immediately. Interrupted tasks return with co
 Swival can run as an A2A server, exposing a Session as an endpoint that other agents can call. This lets you wrap any swival configuration (provider, model, tools, skills, MCP servers) as a remote A2A agent.
 
 ```sh
-swival --serve --provider openrouter --model z-ai/glm-5.2
+swival --serve --provider openrouter --model z-ai/glm-5.3
 ```
 
 This starts an HTTP server at `0.0.0.0:8080` that accepts A2A JSON-RPC requests and serves an Agent Card at `/.well-known/agent-card.json`.
@@ -239,7 +239,7 @@ You can also create and run the server programmatically:
 from swival.a2a_server import A2aServer
 
 server = A2aServer(
-    session_kwargs={"provider": "openrouter", "model": "z-ai/glm-5.2"},
+    session_kwargs={"provider": "openrouter", "model": "z-ai/glm-5.3"},
     host="0.0.0.0",
     port=8080,
     auth_token="sk-...",

@@ -136,14 +136,14 @@ For OpenRouter, `--model` is required and authentication comes from `OPENROUTER_
 
 ```sh
 export OPENROUTER_API_KEY=sk_or_your_token_here
-swival --provider openrouter --model z-ai/glm-5.2 "task"
+swival --provider openrouter --model z-ai/glm-5.3 "task"
 ```
 
 If you use an OpenRouter-compatible custom endpoint, set `--base-url`.
 
 ```sh
 swival --provider openrouter \
-    --model z-ai/glm-5.2 \
+    --model z-ai/glm-5.3 \
     --base-url https://custom.openrouter.endpoint \
     --api-key sk_or_key \
     "task"
@@ -152,11 +152,11 @@ swival --provider openrouter \
 OpenRouter models vary widely in context limits. When `--max-context-tokens` is not set, Swival looks the window up in LiteLLM's model registry. If the model is missing from the registry, or you want a different limit, set the value explicitly:
 
 ```sh
-swival --provider openrouter --model z-ai/glm-5.2 \
+swival --provider openrouter --model z-ai/glm-5.3 \
     --max-context-tokens 131072 "task"
 ```
 
-Pass bare model identifiers like `z-ai/glm-5.2`. If you accidentally include a provider prefix (e.g. `openrouter/z-ai/glm-5.2`), Swival detects and corrects the double prefix.
+Pass bare model identifiers like `z-ai/glm-5.3`. If you accidentally include a provider prefix (e.g. `openrouter/z-ai/glm-5.3`), Swival detects and corrects the double prefix.
 
 ## Anthropic
 
@@ -286,7 +286,7 @@ swival --provider generic \
 export ZAI_API_KEY=...
 swival --provider generic \
     --base-url https://api.z.ai/api/paas/v4 \
-    --model glm-5.2 \
+    --model glm-5.3 \
     --api-key "$ZAI_API_KEY" \
     "task"
 ```

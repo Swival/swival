@@ -201,7 +201,7 @@ reasoning_effort = &quot;high&quot;
 
 [profiles.router-main]
 provider = &quot;openrouter&quot;
-model = &quot;z-ai/glm-5.2&quot;
+model = &quot;z-ai/glm-5.3&quot;
 max_context_tokens = 131072
 
 [profiles.ollama]
@@ -253,7 +253,7 @@ swival&gt; /profile -            # revert to the profile active at session start
 <pre><code class="language-toml"># In global config: defines the base profile
 [profiles.shared]
 provider = &quot;openrouter&quot;
-model = &quot;z-ai/glm-5.2&quot;
+model = &quot;z-ai/glm-5.3&quot;
 max_context_tokens = 131072
 
 # In project swival.toml: overrides just the model
@@ -263,7 +263,7 @@ model = &quot;z-ai/glm-5-mini&quot;
 <h2 id="switching-models-mid-session">Switching Models Mid-Session</h2>
 <p>When you only want a different model from the same provider, <code>/model</code> in the REPL is lighter than a profile switch:</p>
 <pre><code class="language-text">swival&gt; /model                # open an interactive model picker
-swival&gt; /model glm-5.2        # switch directly, fuzzy-matched against the provider catalog
+swival&gt; /model glm-5.3        # switch directly, fuzzy-matched against the provider catalog
 swival&gt; /model -              # revert to the model used before the last switch
 swival&gt; /model --fav          # toggle the current model as a favorite
 swival&gt; /model --fav ID       # toggle a favorite for a specific model
