@@ -738,8 +738,8 @@ class TestModelInfo:
 
 class TestInfo:
     def test_basic(self):
-        out = _capture(fmt.info, "Loaded CLAUDE.md (500 bytes)")
-        assert "Loaded CLAUDE.md (500 bytes)" in out
+        out = _capture(fmt.info, "Loaded AGENTS.md (500 bytes)")
+        assert "Loaded AGENTS.md (500 bytes)" in out
 
 
 class TestContextStats:

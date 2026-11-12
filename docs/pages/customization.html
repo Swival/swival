@@ -144,7 +144,7 @@ cache = true
 # no_read_guard = false    # disable read-before-write guard
 # no_mcp = false           # disable MCP server connections
 # no_a2a = false           # disable A2A agent connections
-# no_instructions = false  # skip CLAUDE.md and AGENTS.md loading
+# no_instructions = false  # skip AGENTS.md loading
 # no_skills = false        # disable skill discovery
 # metaskills = &quot;local&quot;     # &quot;local&quot;, &quot;all&quot;, or &quot;off&quot;
 # no_memory = false        # skip auto-memory loading
@@ -270,24 +270,21 @@ swival&gt; /model --fav ID       # toggle a favorite for a specific model
 </code></pre>
 <p><code>/model</code> stays within the current provider, so reasoning effort, <code>extra_body</code>, caching, and authentication carry over unchanged. The picker lists favorites first (toggle them with <code>*</code> inside the picker), then the current model, then recent picks; favorites and recents also feed TAB completion for <code>/model</code> arguments. They are stored per provider in <code>~/.config/swival/models.toml</code>, a file managed by <code>/model</code> that is safe to hand-edit. As with <code>/profile</code>, a switch applies to subagents spawned afterwards but not to ones already running.</p>
 <h2 id="instruction-files">Instruction Files</h2>
-<p>Swival loads instruction files during startup and appends them to the system prompt. <code>CLAUDE.md</code> provides project rules (<code>&lt;project-instructions&gt;</code>), while <code>AGENTS.md</code> provides agent workflow commands and conventions (<code>&lt;agent-instructions&gt;</code>). Use <code>/init</code> in the REPL to auto-generate a project-level <code>AGENTS.md</code>, or <code>/remember &lt;text&gt;</code> to add individual facts to its <code>## Conventions</code> section.</p>
-<h3 id="claudemd">CLAUDE.md</h3>
-<p>Loaded from the project base directory only. Capped at 10,000 characters.</p>
-<h3 id="agentsmd">AGENTS.md</h3>
-<p>Loaded from up to three levels, in this order:</p>
+<p>Swival loads <code>AGENTS.md</code> instruction files during startup and appends them to the system prompt. They provide project rules, agent workflow commands and conventions. Use <code>/init</code> in the REPL to auto-generate a project-level <code>AGENTS.md</code>, or <code>/remember &lt;text&gt;</code> to add individual facts to its <code>## Conventions</code> section.</p>
+<p><code>AGENTS.md</code> is loaded from up to three levels, in this order:</p>
 <ol>
 <li><strong>User-level</strong>: <code>~/.config/swival/AGENTS.md</code> (or <code>$XDG_CONFIG_HOME/swival/AGENTS.md</code>)</li>
 <li><strong>Global cross-agent</strong>: <code>~/.agents/AGENTS.md</code></li>
 <li><strong>Project-level</strong>: <code>&lt;base-dir&gt;/AGENTS.md</code></li>
 </ol>
-<p>All are optional. Content is concatenated inside a single <code>&lt;agent-instructions&gt;</code> block sharing a combined 10,000 character budget. Files are read in the order shown; earlier files get budget priority. When you start Swival from a subdirectory of the project root, the project level also picks up an <code>AGENTS.md</code> from each directory on the path from the root down to where you started, general to specific.</p>
+<p>All are optional. Content is concatenated inside a single <code>&lt;agent-instructions&gt;</code> block, in the order shown. The files are loaded in full and are never trimmed. If they are too large, Swival stops and names the files. When Swival does not know the model's context window, it loads them and does not stop. <code>--instructions-full</code> loads them anyway, but a file over 1 MB is always refused. When you start Swival from a subdirectory of the project root, the project level also picks up an <code>AGENTS.md</code> from each directory on the path from the root down to where you started, general to specific.</p>
 <p>The user-level file is for swival-specific personal conventions. The global file (<code>~/.agents/AGENTS.md</code>) follows the cross-agent standard shared with OpenCode, OpenHands, and similar tools; put conventions here that should apply regardless of which agent you're using. The project-level file is for project-specific rules.</p>
 <pre><code class="language-markdown">This is a Go project using Chi for routing. Tests use testify.
 Always run `go test ./...` after making changes.
 Don't add dependencies without asking.
 </code></pre>
 <h3 id="disabling-instructions">Disabling instructions</h3>
-<p>Use <code>--no-instructions</code> to skip all instruction files (CLAUDE.md and AGENTS.md at all levels, including <code>~/.agents/AGENTS.md</code>).</p>
+<p>Use <code>--no-instructions</code> to skip all instruction files (<code>AGENTS.md</code> at all levels, including <code>~/.agents/AGENTS.md</code>).</p>
 <pre><code class="language-sh">swival --no-instructions &quot;task&quot;
 </code></pre>
 <p>Use <code>--no-memory</code> to skip loading auto-memory from <code>.swival/memory/</code>.</p>

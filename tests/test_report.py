@@ -292,18 +292,20 @@ class TestInstructionPathsForReports:
         assert loaded.text == ""
         assert loaded.paths == []
 
-    def test_claude_md_only(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text("rules")
+    def test_agents_md_only(self, tmp_path):
+        (tmp_path / "AGENTS.md").write_text("rules")
         loaded = instructions.load(str(tmp_path), verbose=False)
         assert "rules" in loaded.text
-        assert loaded.paths == [str(tmp_path / "CLAUDE.md")]
+        assert loaded.paths == [str(tmp_path / "AGENTS.md")]
 
-    def test_both_files(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text("a")
+    def test_two_scopes(self, tmp_path):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (config_dir / "AGENTS.md").write_text("a")
         (tmp_path / "AGENTS.md").write_text("b")
-        loaded = instructions.load(str(tmp_path), verbose=False)
+        loaded = instructions.load(str(tmp_path), config_dir, verbose=False)
         assert loaded.paths == [
-            str(tmp_path / "CLAUDE.md"),
+            str(config_dir / "AGENTS.md"),
             str(tmp_path / "AGENTS.md"),
         ]
 

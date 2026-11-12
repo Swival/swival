@@ -228,7 +228,7 @@ class TestAwkwardText:
 class TestAdmissionIsAdvisoryOffline:
     def test_complete_instructions_are_admitted(self, tmp_path, offline):
         body = "\n".join(f"- Règle {i} : lancer `make check`." for i in range(2000))
-        (tmp_path / "CLAUDE.md").write_text(body, encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text(body, encoding="utf-8")
         result = agent.assemble_system_prompt(
             base_dir=str(tmp_path),
             system_prompt=None,

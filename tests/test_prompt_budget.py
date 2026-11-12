@@ -138,7 +138,7 @@ class TestClampingStaysConsistent:
 class TestAdmissionAndRuntimeAgree:
     @pytest.mark.parametrize("window", WINDOWS)
     def test_an_admitted_prompt_is_under_the_runtime_budget(self, tmp_path, window):
-        (tmp_path / "CLAUDE.md").write_text(
+        (tmp_path / "AGENTS.md").write_text(
             "\n".join(f"- Rule {i}" for i in range(50)), encoding="utf-8"
         )
         result = agent.assemble_system_prompt(
@@ -170,7 +170,7 @@ class TestProactiveCompactionFrequency:
         The proactive pass aims below its budget by a hysteresis factor, so a
         single early compaction is normal. Firing on every turn is not.
         """
-        (tmp_path / "CLAUDE.md").write_text(
+        (tmp_path / "AGENTS.md").write_text(
             "\n".join(f"- Rule {i}: run `make check`." for i in range(30)),
             encoding="utf-8",
         )

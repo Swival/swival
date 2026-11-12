@@ -53,16 +53,18 @@ def _make_message(content=None, tool_calls=None):
 
 class TestAggregateAdmission:
     def test_small_set_is_admitted_whole(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text("Use tabs.", encoding="utf-8")
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (config_dir / "AGENTS.md").write_text("Use tabs.", encoding="utf-8")
         (tmp_path / "AGENTS.md").write_text("## Workflow\n\n- test: `pytest`\n")
-        result = _assemble(tmp_path)
+        result = _assemble(tmp_path, config_dir=config_dir)
         assert result.admission.admitted
         assert "Use tabs." in result.content
         assert "- test: `pytest`" in result.content
         assert len(result.instructions_loaded) == 2
 
     def test_oversized_set_is_refused_whole(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text(_rules(2000), encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text(_rules(2000), encoding="utf-8")
         result = _assemble(tmp_path, context_length=32_768)
         assert not result.admission.admitted
         assert result.instructions_loaded == []
@@ -80,7 +82,7 @@ class TestAggregateAdmission:
 
     def test_the_last_line_of_a_file_survives(self, tmp_path):
         body = _rules(40) + "\n- Never force-push to master.\n"
-        (tmp_path / "CLAUDE.md").write_text(body, encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text(body, encoding="utf-8")
         result = _assemble(tmp_path)
         assert "- Never force-push to master." in result.content
 
@@ -116,25 +118,25 @@ class TestAggregateAdmission:
 
 class TestOptOutsAndOverride:
     def test_no_instructions_skips_the_decision(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text(_rules(2000), encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text(_rules(2000), encoding="utf-8")
         result = _assemble(tmp_path, no_instructions=True, context_length=8192)
         assert result.admission is None
         assert result.instruction_set is None
         assert agent._instruction_status(result) == "disabled"
 
     def test_custom_prompt_skips_the_decision(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text(_rules(2000), encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text(_rules(2000), encoding="utf-8")
         result = _assemble(tmp_path, system_prompt="be brief", context_length=8192)
         assert result.admission is None
         assert result.content == "be brief" or result.content.startswith("be brief")
 
     def test_command_provider_skips_the_decision(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text(_rules(2000), encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text(_rules(2000), encoding="utf-8")
         result = _assemble(tmp_path, provider="command", context_length=8192)
         assert result.admission is None
 
     def test_override_admits_an_oversized_set(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text(_rules(2000), encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text(_rules(2000), encoding="utf-8")
         result = _assemble(tmp_path, context_length=32_768, instructions_full=True)
         assert result.admission.admitted
         assert result.admission.forced
@@ -142,13 +144,13 @@ class TestOptOutsAndOverride:
         assert "Rule 1999" in result.content
 
     def test_override_does_not_change_a_set_that_fits(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text("Small.", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("Small.", encoding="utf-8")
         result = _assemble(tmp_path, instructions_full=True)
         assert result.admission.admitted
         assert not result.admission.forced
 
     def test_unknown_window_admits_and_stays_advisory(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text(_rules(2000), encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text(_rules(2000), encoding="utf-8")
         result = _assemble(tmp_path, context_length=None)
         assert result.admission.admitted
         assert result.admission.advisory
@@ -163,7 +165,7 @@ class TestOptOutsAndOverride:
 
 class TestDiagnostics:
     def _rejected(self, tmp_path, **overrides):
-        (tmp_path / "CLAUDE.md").write_text(_rules(2000), encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text(_rules(2000), encoding="utf-8")
         result = _assemble(tmp_path, context_length=32_768, **overrides)
         return result.admission
 
@@ -172,7 +174,7 @@ class TestDiagnostics:
         assert "too large for this setup" in text
         assert "--no-instructions" in text
         assert "--instructions-full" in text
-        assert str(tmp_path / "CLAUDE.md") in text
+        assert str(tmp_path / "AGENTS.md") in text
 
     def test_larger_model_advice_is_dropped_when_it_would_not_help(self):
         admission = instr.InstructionAdmission(
@@ -229,7 +231,7 @@ class TestDiagnostics:
 class TestReads:
     def test_oversized_file_is_an_error_not_a_prefix(self, tmp_path, monkeypatch):
         monkeypatch.setattr(instr, "MAX_INSTRUCTION_FILE_BYTES", 64)
-        (tmp_path / "CLAUDE.md").write_text("y" * 500, encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("y" * 500, encoding="utf-8")
         loaded = instr.load(str(tmp_path))
         assert loaded.sources == []
         assert loaded.errors and "per-file read limit" in loaded.errors[0]
@@ -237,18 +239,20 @@ class TestReads:
 
     def test_combined_cap_is_an_error_not_a_prefix(self, tmp_path, monkeypatch):
         monkeypatch.setattr(instr, "MAX_INSTRUCTION_TOTAL_BYTES", 40)
-        (tmp_path / "CLAUDE.md").write_text("a" * 30, encoding="utf-8")
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (config_dir / "AGENTS.md").write_text("a" * 30, encoding="utf-8")
         (tmp_path / "AGENTS.md").write_text("b" * 30, encoding="utf-8")
-        loaded = instr.load(str(tmp_path))
-        assert [s.kind for s in loaded.sources] == ["claude"]
+        loaded = instr.load(str(tmp_path), config_dir)
+        assert [s.scope for s in loaded.sources] == ["user"]
         assert loaded.errors and "combined read limit" in loaded.errors[0]
 
     def test_unreadable_file_is_reported_and_skipped(self, tmp_path, monkeypatch):
-        (tmp_path / "CLAUDE.md").write_text("readable", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("readable", encoding="utf-8")
         real_open = type(tmp_path).open
 
         def bad_open(self, *args, **kwargs):
-            if self.name == "CLAUDE.md":
+            if self.name == "AGENTS.md":
                 raise OSError("Permission denied")
             return real_open(self, *args, **kwargs)
 
@@ -281,7 +285,7 @@ class TestAwkwardContent:
         assert "uv run pytest tests/test_x.py -k 'a or b'" in result.content
 
     def test_an_exception_inside_an_example_survives(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text(
+        (tmp_path / "AGENTS.md").write_text(
             "Never edit generated files.\nException: `build/version.py` is edited by hand.\n",
             encoding="utf-8",
         )
@@ -353,20 +357,20 @@ def _system_message(result):
 
 class TestRecordedRegions:
     def test_span_covers_the_rendered_block(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text("Rule one.", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("Rule one.", encoding="utf-8")
         result = _assemble(tmp_path)
         block = _instruction_block(_system_message(result))
-        assert block.startswith("\n\n<project-instructions>")
-        assert block.endswith("</project-instructions>")
+        assert block.startswith("\n\n<agent-instructions>")
+        assert block.endswith("</agent-instructions>")
 
     def test_a_unicode_prefix_does_not_shift_the_region(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text("Règle numéro un — café.", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("Règle numéro un — café.", encoding="utf-8")
         result = _assemble(tmp_path, policy="interactive")
         message = _system_message(result)
         assert "Règle numéro un — café." in _instruction_block(message)
 
     def test_policy_is_applied_before_the_offsets_are_taken(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text("Rule.", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("Rule.", encoding="utf-8")
         for policy in ("autonomous", "interactive"):
             result = _assemble(tmp_path, policy=policy)
             assert "{{AUTONOMY_DIRECTIVE}}" not in result.content
@@ -376,7 +380,7 @@ class TestRecordedRegions:
             assert "Rule." in _instruction_block(message)
 
     def test_emergency_truncation_keeps_the_instructions(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text(
+        (tmp_path / "AGENTS.md").write_text(
             "- Always run `make check` before a commit.", encoding="utf-8"
         )
         result = _assemble(tmp_path)
@@ -387,7 +391,7 @@ class TestRecordedRegions:
         assert _instruction_block(messages[0]) == before
 
     def test_emergency_truncation_still_shrinks_the_rest(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text("- Small rule.", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("- Small rule.", encoding="utf-8")
         result = _assemble(tmp_path)
         message = _system_message(result)
         original = len(message["content"])
@@ -397,7 +401,7 @@ class TestRecordedRegions:
         assert "- Small rule." in messages[0]["content"]
 
     def test_special_token_escaping_rebases_the_region(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text(
+        (tmp_path / "AGENTS.md").write_text(
             "Never emit <|eot_id|> literally.", encoding="utf-8"
         )
         result = _assemble(tmp_path)
@@ -410,7 +414,7 @@ class TestRecordedRegions:
     def test_metadata_survives_a_copy(self, tmp_path):
         import copy
 
-        (tmp_path / "CLAUDE.md").write_text("Rule.", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("Rule.", encoding="utf-8")
         message = _system_message(_assemble(tmp_path))
         clone = copy.deepcopy(message)
         assert ps.spans_valid(clone["content"], ps.get_spans(clone))
@@ -419,7 +423,7 @@ class TestRecordedRegions:
     def test_metadata_key_is_stripped_before_the_provider(self, tmp_path, monkeypatch):
         import copy
 
-        (tmp_path / "CLAUDE.md").write_text("Rule.", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("Rule.", encoding="utf-8")
         result = _assemble(tmp_path)
         messages = [
             _system_message(result),
@@ -475,7 +479,7 @@ class TestSnapshotBoundary:
     def test_marker_inside_instructions_is_not_a_boundary(self, tmp_path):
         from swival.snapshot import SNAPSHOT_HISTORY_SENTINEL
 
-        (tmp_path / "CLAUDE.md").write_text(
+        (tmp_path / "AGENTS.md").write_text(
             f"Rules.\n{SNAPSHOT_HISTORY_SENTINEL}\n- keep this rule\n", encoding="utf-8"
         )
         result = _assemble(tmp_path)
@@ -557,7 +561,7 @@ class TestLiveActivation:
         assert "Second rule" in block
 
     def test_remember_leaves_the_rest_of_the_prompt_alone(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text("Project rule.", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("Project rule.", encoding="utf-8")
         result = _assemble(tmp_path)
         ctx = _context(tmp_path, result)
         before = ctx.messages[0]["content"]
@@ -655,7 +659,7 @@ def _answering_llm(*args, **kwargs):
 class TestLibraryFailureContract:
     def test_construction_stays_lazy(self, tmp_path, monkeypatch):
         _fake_provider(monkeypatch)
-        (tmp_path / "CLAUDE.md").write_text(_rules(2000), encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text(_rules(2000), encoding="utf-8")
         Session(base_dir=str(tmp_path), history=False)  # must not raise
 
     def test_run_raises_before_the_first_model_call(self, tmp_path, monkeypatch):
@@ -664,12 +668,12 @@ class TestLibraryFailureContract:
         monkeypatch.setattr(
             agent, "call_llm", lambda *a, **k: called.append(1) or _answering_llm()
         )
-        (tmp_path / "CLAUDE.md").write_text(_rules(2000), encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text(_rules(2000), encoding="utf-8")
         session = Session(base_dir=str(tmp_path), history=False)
         with pytest.raises(swival.InstructionLoadError) as excinfo:
             session.run("hello")
         assert called == []
-        assert str(tmp_path / "CLAUDE.md") in excinfo.value.sources
+        assert str(tmp_path / "AGENTS.md") in excinfo.value.sources
         assert excinfo.value.breakdown["instructions"] > 0
 
     def test_error_is_a_config_error(self, tmp_path):
@@ -678,7 +682,7 @@ class TestLibraryFailureContract:
     def test_report_travels_on_the_exception(self, tmp_path, monkeypatch):
         _fake_provider(monkeypatch)
         monkeypatch.setattr(agent, "call_llm", _answering_llm)
-        (tmp_path / "CLAUDE.md").write_text(_rules(2000), encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text(_rules(2000), encoding="utf-8")
         session = Session(base_dir=str(tmp_path), history=False)
         with pytest.raises(swival.InstructionLoadError) as excinfo:
             session.run("hello", report=True)
@@ -691,7 +695,7 @@ class TestLibraryFailureContract:
     def test_ask_leaves_the_transcript_usable(self, tmp_path, monkeypatch):
         _fake_provider(monkeypatch)
         monkeypatch.setattr(agent, "call_llm", _answering_llm)
-        (tmp_path / "CLAUDE.md").write_text(_rules(2000), encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text(_rules(2000), encoding="utf-8")
         session = Session(base_dir=str(tmp_path), history=False)
         with pytest.raises(swival.InstructionLoadError):
             session.ask("hello")
@@ -702,11 +706,11 @@ class TestLibraryFailureContract:
     ):
         _fake_provider(monkeypatch)
         monkeypatch.setattr(agent, "call_llm", _answering_llm)
-        (tmp_path / "CLAUDE.md").write_text(_rules(2000), encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text(_rules(2000), encoding="utf-8")
         session = Session(base_dir=str(tmp_path), history=False)
         with pytest.raises(swival.InstructionLoadError):
             session.run("hello")
-        (tmp_path / "CLAUDE.md").write_text("- Short rule.", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("- Short rule.", encoding="utf-8")
         result = session.run("hello")
         assert result.answer == "the answer"
         assert "- Short rule." in result.messages[0]["content"]
@@ -714,7 +718,7 @@ class TestLibraryFailureContract:
     def test_override_admits_it_in_the_library_too(self, tmp_path, monkeypatch):
         _fake_provider(monkeypatch)
         monkeypatch.setattr(agent, "call_llm", _answering_llm)
-        (tmp_path / "CLAUDE.md").write_text(_rules(2000), encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text(_rules(2000), encoding="utf-8")
         session = Session(base_dir=str(tmp_path), history=False, instructions_full=True)
         result = session.run("hello")
         assert "Rule 1999" in result.messages[0]["content"]
@@ -722,7 +726,7 @@ class TestLibraryFailureContract:
     def test_no_instructions_wins_over_the_override(self, tmp_path, monkeypatch):
         _fake_provider(monkeypatch)
         monkeypatch.setattr(agent, "call_llm", _answering_llm)
-        (tmp_path / "CLAUDE.md").write_text(_rules(2000), encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text(_rules(2000), encoding="utf-8")
         session = Session(
             base_dir=str(tmp_path),
             history=False,
@@ -745,7 +749,7 @@ class TestSingleAdmissionEvaluation:
             return _answering_llm()
 
         monkeypatch.setattr(agent, "call_llm", capture)
-        (tmp_path / "CLAUDE.md").write_text("- Project rule.", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("- Project rule.", encoding="utf-8")
         memory_dir = tmp_path / ".swival" / "memory"
         memory_dir.mkdir(parents=True)
         (memory_dir / "MEMORY.md").write_text(
@@ -776,12 +780,12 @@ class TestReports:
     def test_cli_report_settings_carry_the_loading_status(self, tmp_path, monkeypatch):
         _fake_provider(monkeypatch, context_length=128_000)
         monkeypatch.setattr(agent, "call_llm", _answering_llm)
-        (tmp_path / "CLAUDE.md").write_text("- Project rule.", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("- Project rule.", encoding="utf-8")
         session = Session(base_dir=str(tmp_path), history=False)
         result = session.run("hello", report=True)
         settings = result.report["settings"]
         assert settings["instructions_status"] == "loaded"
-        assert settings["instructions_loaded"] == [str(tmp_path / "CLAUDE.md")]
+        assert settings["instructions_loaded"] == [str(tmp_path / "AGENTS.md")]
         assert settings["instructions_full"] is False
 
     def test_disabled_loading_is_distinguishable_from_failure(
@@ -789,7 +793,7 @@ class TestReports:
     ):
         _fake_provider(monkeypatch, context_length=128_000)
         monkeypatch.setattr(agent, "call_llm", _answering_llm)
-        (tmp_path / "CLAUDE.md").write_text("- Project rule.", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("- Project rule.", encoding="utf-8")
         session = Session(base_dir=str(tmp_path), history=False, no_instructions=True)
         result = session.run("hello", report=True)
         assert result.report["settings"]["instructions_status"] == "disabled"
@@ -818,7 +822,7 @@ class TestSpanPreservingRecovery:
         from swival.thinking import ThinkingState
         from swival.todo import TodoState
 
-        (tmp_path / "CLAUDE.md").write_text(
+        (tmp_path / "AGENTS.md").write_text(
             "- Always run `make check` before a commit.\n- Never force-push.\n",
             encoding="utf-8",
         )
@@ -1064,9 +1068,18 @@ class TestOverrideOwnsItsContextFailures:
 # ---------------------------------------------------------------------------
 
 
+def _global_agents(tmp_path, monkeypatch, text):
+    """Give the session a cross-agent AGENTS.md, next to the project one."""
+    path = tmp_path / "shared" / "AGENTS.md"
+    path.parent.mkdir()
+    path.write_text(text, encoding="utf-8")
+    monkeypatch.setattr(instr, "global_agents_md_path", lambda: path)
+    return path
+
+
 def _oversize_agents(tmp_path, monkeypatch, cap=64):
     monkeypatch.setattr(instr, "MAX_INSTRUCTION_FILE_BYTES", cap)
-    (tmp_path / "CLAUDE.md").write_text("- Small project rule.", encoding="utf-8")
+    _global_agents(tmp_path, monkeypatch, "- Small shared rule.")
     (tmp_path / "AGENTS.md").write_text("- Big rule. " * 200, encoding="utf-8")
 
 
@@ -1280,7 +1293,7 @@ class TestContinuationSurvivesRejection:
             agent, "call_llm", lambda *a, **k: calls.append(1) or _answering_llm()
         )
         path = self._continue_file(tmp_path)
-        (tmp_path / "CLAUDE.md").write_text(_rules(2000), encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text(_rules(2000), encoding="utf-8")
 
         session = Session(base_dir=str(tmp_path), history=False)
         with pytest.raises(swival.InstructionLoadError):
@@ -1300,13 +1313,13 @@ class TestContinuationSurvivesRejection:
 
         monkeypatch.setattr(agent, "call_llm", capture)
         path = self._continue_file(tmp_path)
-        (tmp_path / "CLAUDE.md").write_text(_rules(2000), encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text(_rules(2000), encoding="utf-8")
 
         session = Session(base_dir=str(tmp_path), history=False)
         with pytest.raises(swival.InstructionLoadError):
             session.run("hello")
 
-        (tmp_path / "CLAUDE.md").write_text("- Short rule.", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("- Short rule.", encoding="utf-8")
         session.run("hello")
         assert "Finish the parser rewrite" in sent[0]
         assert not path.exists()
@@ -1458,15 +1471,11 @@ class TestInvokeAgentTurnIsTheBackstop:
 # ---------------------------------------------------------------------------
 
 
-def _deny_open(monkeypatch, name):
-    real_open = Path.open
-
-    def bad_open(self, *args, **kwargs):
-        if self.name == name:
-            raise OSError("Permission denied")
-        return real_open(self, *args, **kwargs)
-
-    monkeypatch.setattr("pathlib.Path.open", bad_open)
+def _unreachable_agents(tmp_path, monkeypatch):
+    """A cross-agent AGENTS.md that exists and cannot be opened."""
+    path = _global_agents(tmp_path, monkeypatch, "- unreachable")
+    _deny_paths(monkeypatch, [path])
+    return path
 
 
 class TestUnreadableFileDoesNotBlockTheRun:
@@ -1479,11 +1488,10 @@ class TestUnreadableFileDoesNotBlockTheRun:
     """
 
     def test_it_is_reported_but_not_fatal(self, tmp_path, monkeypatch):
-        (tmp_path / "CLAUDE.md").write_text("- unreachable", encoding="utf-8")
         (tmp_path / "AGENTS.md").write_text(
             "## Workflow\n\n- test: `pytest`\n", encoding="utf-8"
         )
-        _deny_open(monkeypatch, "CLAUDE.md")
+        _unreachable_agents(tmp_path, monkeypatch)
 
         result = _assemble(tmp_path)
         assert result.admission.admitted
@@ -1495,9 +1503,8 @@ class TestUnreadableFileDoesNotBlockTheRun:
     def test_the_run_reaches_the_model(self, tmp_path, monkeypatch):
         _fake_provider(monkeypatch, context_length=128_000)
         monkeypatch.setattr(agent, "call_llm", _answering_llm)
-        (tmp_path / "CLAUDE.md").write_text("- unreachable", encoding="utf-8")
         (tmp_path / "AGENTS.md").write_text("- project rule\n", encoding="utf-8")
-        _deny_open(monkeypatch, "CLAUDE.md")
+        _unreachable_agents(tmp_path, monkeypatch)
 
         session = Session(base_dir=str(tmp_path), history=False)
         result = session.run("hello")
@@ -1517,8 +1524,7 @@ class TestUnreadableFileDoesNotBlockTheRun:
         )
         result = _assemble(tmp_path)
         ctx = _context(tmp_path, result)
-        (tmp_path / "CLAUDE.md").write_text("- unreachable", encoding="utf-8")
-        _deny_open(monkeypatch, "CLAUDE.md")
+        _unreachable_agents(tmp_path, monkeypatch)
 
         msg, is_error = agent._repl_remember("a new rule", ctx)
         assert is_error is False
@@ -1552,7 +1558,7 @@ class TestTheOverrideAlwaysSaysSo:
     """Full loading warns once, whatever else was going to let the set in."""
 
     def _big(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text(_rules(2000), encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text(_rules(2000), encoding="utf-8")
 
     def test_a_known_window_reports_it_as_forced(self, tmp_path):
         self._big(tmp_path)
@@ -1577,7 +1583,7 @@ class TestTheOverrideAlwaysSaysSo:
         assert "--instructions-full" in capsys.readouterr().err
 
     def test_a_set_that_fits_says_nothing(self, tmp_path, capsys):
-        (tmp_path / "CLAUDE.md").write_text("- Small rule.", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("- Small rule.", encoding="utf-8")
         result = _assemble(tmp_path, instructions_full=True)
         agent._warn_instruction_admission(
             result, verbose=False, flag="--instructions-full"
@@ -1622,22 +1628,20 @@ class TestTheReportRecordsWhatWasDropped:
     def test_a_skipped_file_appears_in_the_report(self, tmp_path, monkeypatch):
         _fake_provider(monkeypatch, context_length=128_000)
         monkeypatch.setattr(agent, "call_llm", _answering_llm)
-        (tmp_path / "CLAUDE.md").write_text("- unreachable", encoding="utf-8")
         (tmp_path / "AGENTS.md").write_text("- project rule\n", encoding="utf-8")
-        _deny_open(monkeypatch, "CLAUDE.md")
+        unreachable = _unreachable_agents(tmp_path, monkeypatch)
 
         session = Session(base_dir=str(tmp_path), history=False)
         settings = session.run("hello", report=True).report["settings"]
 
         assert settings["instructions_loaded"] == [str(tmp_path / "AGENTS.md")]
         assert len(settings["instructions_skipped"]) == 1
-        assert str(tmp_path / "CLAUDE.md") in settings["instructions_skipped"][0]
+        assert str(unreachable) in settings["instructions_skipped"][0]
 
     def test_it_says_why_the_file_was_dropped(self, tmp_path, monkeypatch):
         _fake_provider(monkeypatch, context_length=128_000)
         monkeypatch.setattr(agent, "call_llm", _answering_llm)
-        (tmp_path / "CLAUDE.md").write_text("- unreachable", encoding="utf-8")
-        _deny_open(monkeypatch, "CLAUDE.md")
+        _unreachable_agents(tmp_path, monkeypatch)
 
         session = Session(base_dir=str(tmp_path), history=False)
         settings = session.run("hello", report=True).report["settings"]
@@ -1647,9 +1651,8 @@ class TestTheReportRecordsWhatWasDropped:
         """A file we could not open did not change the loading decision."""
         _fake_provider(monkeypatch, context_length=128_000)
         monkeypatch.setattr(agent, "call_llm", _answering_llm)
-        (tmp_path / "CLAUDE.md").write_text("- unreachable", encoding="utf-8")
         (tmp_path / "AGENTS.md").write_text("- project rule\n", encoding="utf-8")
-        _deny_open(monkeypatch, "CLAUDE.md")
+        _unreachable_agents(tmp_path, monkeypatch)
 
         session = Session(base_dir=str(tmp_path), history=False)
         settings = session.run("hello", report=True).report["settings"]
@@ -1719,7 +1722,6 @@ class TestEveryDiscoveredFileIsAccountedFor:
         config_dir.mkdir()
         sub = tmp_path / "sub"
         sub.mkdir()
-        (tmp_path / "CLAUDE.md").write_text("- small", encoding="utf-8")
         (config_dir / "AGENTS.md").write_text("- personal", encoding="utf-8")
         (tmp_path / "AGENTS.md").write_text("P" * 500, encoding="utf-8")
         (sub / "AGENTS.md").write_text("- nested", encoding="utf-8")
@@ -1729,7 +1731,7 @@ class TestEveryDiscoveredFileIsAccountedFor:
         found = instr.discover(str(tmp_path), config_dir, start_dir=sub)
         loaded = instr.load(str(tmp_path), config_dir, start_dir=sub)
         placed = set()
-        for path, _scope, _kind in found:
+        for path, _scope in found:
             homes = [
                 name
                 for name, hit in (
@@ -1742,7 +1744,7 @@ class TestEveryDiscoveredFileIsAccountedFor:
             assert homes, f"{path} was found and then went nowhere"
             assert len(homes) == 1, f"{path} landed in {homes}"
             placed.add(str(path))
-        assert placed == {str(p) for p, _s, _k in found}
+        assert placed == {str(p) for p, _s in found}
         assert len(found) == len(loaded.sources) + len(loaded.errors) + len(
             loaded.skipped
         )
@@ -1751,7 +1753,7 @@ class TestEveryDiscoveredFileIsAccountedFor:
     def test_when_every_file_reads(self, tmp_path):
         config_dir, sub = self._layout(tmp_path)
         loaded = self._check(tmp_path, config_dir, sub)
-        assert len(loaded.sources) == 4
+        assert len(loaded.sources) == 3
 
     def test_when_one_cannot_be_opened(self, tmp_path, monkeypatch):
         config_dir, sub = self._layout(tmp_path)
@@ -1793,13 +1795,12 @@ class TestTheReportAccountsForEveryFileToo:
     """The same partition, one layer up, where the report is written."""
 
     def test_loaded_and_skipped_cover_discovery(self, tmp_path, monkeypatch):
-        (tmp_path / "CLAUDE.md").write_text("- unreachable", encoding="utf-8")
         (tmp_path / "AGENTS.md").write_text("- project rule\n", encoding="utf-8")
-        _deny_paths(monkeypatch, [tmp_path / "CLAUDE.md"])
+        _unreachable_agents(tmp_path, monkeypatch)
 
         result = _assemble(tmp_path)
         assert agent._instruction_status(result) != "failed"
-        found = {str(p) for p, _s, _k in instr.discover(str(tmp_path))}
+        found = {str(p) for p, _s in instr.discover(str(tmp_path))}
         accounted = set(result.instructions_loaded)
         for path in found - accounted:
             assert _mentions(result.instructions_skipped, path)

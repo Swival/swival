@@ -231,7 +231,7 @@ Reviewers and continuations stay on the current profile.
 Routing favors the profile you are on, so the provider can reuse its prompt cache: another profile has to be clearly better to take over.
 After `/clear` or `/new` there is nothing left to reuse, so the next task goes straight to the best profile.
 
-Instruction files (`CLAUDE.md` and `AGENTS.md`) are checked against the starting profile's context window at startup, before routing runs.
+Instruction files (`AGENTS.md`) are checked against the starting profile's context window at startup, before routing runs.
 If they only fit a larger profile, Swival stops there, even though routing could have picked that profile.
 To avoid this, start on a profile whose window fits them by setting `active_profile`.
 `--profile` works too, but it pauses routing for the run; `/route on` resumes it in the REPL.

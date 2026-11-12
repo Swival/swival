@@ -108,11 +108,10 @@ class TestInstructionPriorityContract:
             "user-messages-override rule missing"
         )
 
-    def test_claude_md_and_agents_md_named(self):
-        # Both files must be named so the model knows project-level instruction
-        # files exist. Their relative ordering is not part of the contract.
+    def test_agents_md_named(self):
+        # The file must be named so the model knows project-level instruction
+        # files exist.
         text = _normalize(_read_prompt())
-        assert "claude.md" in text, "CLAUDE.md must be named in the prompt"
         assert "agents.md" in text, "AGENTS.md must be named in the prompt"
 
     def test_safety_always_binding(self):

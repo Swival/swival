@@ -293,7 +293,7 @@ It does not switch profiles between a task's tool calls.
 Reviewers and continuations stay on the current profile.</p>
 <p>Routing favors the profile you are on, so the provider can reuse its prompt cache: another profile has to be clearly better to take over.
 After <code>/clear</code> or <code>/new</code> there is nothing left to reuse, so the next task goes straight to the best profile.</p>
-<p>Instruction files (<code>CLAUDE.md</code> and <code>AGENTS.md</code>) are checked against the starting profile's context window at startup, before routing runs.
+<p>Instruction files (<code>AGENTS.md</code>) are checked against the starting profile's context window at startup, before routing runs.
 If they only fit a larger profile, Swival stops there, even though routing could have picked that profile.
 To avoid this, start on a profile whose window fits them by setting <code>active_profile</code>.
 <code>--profile</code> works too, but it pauses routing for the run; <code>/route on</code> resumes it in the REPL.</p>
