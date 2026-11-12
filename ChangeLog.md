@@ -2,6 +2,21 @@
 
 All notable user-facing changes to Swival.
 
+## 1.9.4
+
+- The `/model` picker now always shows a picker UI and can list Bedrock models.
+  Favorites and recents are remembered per provider, and a `tools-only` filter
+  hides models known not to support function calling.
+  Hugging Face models can be searched hub-wide with ``Ctrl+S``.
+- Built-in support for herdr-core (herdr-app) has been added. Swival reports
+  working, idle, and blocked states to compatible terminals, so your window
+  title and status line update as it works.
+- Lifecycle hooks now support a `task_done` event, emitted after interactive
+  tasks and background loop turns. Scripts receive metadata about task outcomes,
+  commands, and goal status through `SWIVAL_*` environment variables.
+- MCP server startup is now capped at 10 seconds (configurable), and MCP schema
+  flattening and repeat-loop protection are always enabled.
+
 ## 1.9.3
 
 - `--self-review` and `--reviewer` can now be used in the REPL, so that the model always verifies that its own changes are correct. Enable this, and the output quality immediately improves, even during interactive sessions.
