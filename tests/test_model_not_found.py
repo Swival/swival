@@ -10,6 +10,7 @@ from swival.agent import (
     AgentError,
     _MODEL_AUTOFIX,
     _format_model_not_found,
+    _list_server_models,
 )
 
 
@@ -191,3 +192,9 @@ class TestCallLlmModelNotFound:
         ):
             with pytest.raises(AgentError, match="LLM call failed"):
                 _call()
+
+
+def test_bedrock_is_not_listed():
+    with patch("litellm.get_valid_models") as listing:
+        assert _list_server_models("bedrock", None, None) == []
+    listing.assert_not_called()

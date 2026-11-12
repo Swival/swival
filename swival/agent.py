@@ -586,7 +586,14 @@ def _list_server_models(litellm_provider, api_base, api_key):
 
     Returns [] when the endpoint is unreachable or the provider has no
     model-listing support (get_valid_models is non-blocking by design).
+
+    Bedrock is skipped: where its requests go depends on the model name and
+    on settings LiteLLM's list ignores, so it could show the wrong region or
+    account.
     """
+    if litellm_provider == "bedrock":
+        return []
+
     from litellm import get_valid_models
 
     try:
