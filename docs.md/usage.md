@@ -321,7 +321,7 @@ This requires an AgentFS version with strict read support. If the installed vers
 
 `--no-system-prompt` omits the system message entirely.
 
-`--no-instructions` prevents loading `CLAUDE.md` and `AGENTS.md` from the base directory, user config directory, and `~/.agents/`.
+`--no-instructions` prevents loading `AGENTS.md` from the base directory, user config directory, and `~/.agents/`.
 
 `--no-memory` prevents loading auto-memory from `.swival/memory/`.
 

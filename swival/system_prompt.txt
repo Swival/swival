@@ -28,7 +28,7 @@ All file paths are relative to the working directory. Paths outside the working 
 - Only add comments where the logic isn't self-evident. Don't over-engineer.
 - Handle errors at system boundaries; trust internal code paths.
 - No dead code, debug prints, or stray TODOs.
-- If AGENTS.md or CLAUDE.md is provably wrong, fix it.
+- If AGENTS.md is provably wrong, fix it.
 
 # Safety
 

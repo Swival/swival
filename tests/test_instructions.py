@@ -1,4 +1,4 @@
-"""Tests for CLAUDE.md / AGENTS.md instruction loading."""
+"""Tests for AGENTS.md instruction loading."""
 
 import sys
 import types
@@ -31,14 +31,11 @@ class TestFileDiscovery:
         assert result == ""
         assert loaded == []
 
-    def test_claude_md_only(self, tmp_path):
+    def test_claude_md_ignored(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("Use tabs not spaces.", encoding="utf-8")
         result, loaded = load_instructions(str(tmp_path), verbose=False)
-        assert "<project-instructions>" in result
-        assert "Use tabs not spaces." in result
-        assert "</project-instructions>" in result
-        assert "agent-instructions" not in result
-        assert loaded == [str(tmp_path / "CLAUDE.md")]
+        assert result == ""
+        assert loaded == []
 
     def test_agent_md_only(self, tmp_path):
         (tmp_path / "AGENTS.md").write_text("Be concise.", encoding="utf-8")
@@ -46,20 +43,15 @@ class TestFileDiscovery:
         assert "<agent-instructions>" in result
         assert "Be concise." in result
         assert "</agent-instructions>" in result
-        assert "project-instructions" not in result
         assert loaded == [str(tmp_path / "AGENTS.md")]
 
-    def test_both_files(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text("Project rules.", encoding="utf-8")
+    def test_claude_md_ignored_next_to_agents_md(self, tmp_path):
+        (tmp_path / "CLAUDE.md").write_text("Claude rules.", encoding="utf-8")
         (tmp_path / "AGENTS.md").write_text("Agent rules.", encoding="utf-8")
         result, loaded = load_instructions(str(tmp_path), verbose=False)
-        assert "<project-instructions>" in result
-        assert "<agent-instructions>" in result
-        # project-instructions comes first
-        pi = result.index("<project-instructions>")
-        ai = result.index("<agent-instructions>")
-        assert pi < ai
-        assert loaded == [str(tmp_path / "CLAUDE.md"), str(tmp_path / "AGENTS.md")]
+        assert "Agent rules." in result
+        assert "Claude rules." not in result
+        assert loaded == [str(tmp_path / "AGENTS.md")]
 
 
 # ---------------------------------------------------------------------------
@@ -71,22 +63,20 @@ class TestContentHandling:
     def test_large_file_loaded_whole(self, tmp_path):
         """A long file is never sliced. It loads whole or it fails admission."""
         content = "x" * 15_000
-        (tmp_path / "CLAUDE.md").write_text(content, encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text(content, encoding="utf-8")
         result, loaded = load_instructions(str(tmp_path), verbose=False)
         assert "truncated" not in result
-        inner = result.split("<project-instructions>\n", 1)[1].rsplit(
-            "\n</project-instructions>", 1
-        )[0]
+        inner = result.split(" -->\n", 1)[1].rsplit("\n</agent-instructions>", 1)[0]
         assert inner == content
-        assert loaded == [str(tmp_path / "CLAUDE.md")]
+        assert loaded == [str(tmp_path / "AGENTS.md")]
 
     def test_unreadable_file_skipped(self, tmp_path, monkeypatch):
-        (tmp_path / "CLAUDE.md").write_text("readable", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("readable", encoding="utf-8")
 
         original_open = open
 
         def bad_open(self, *args, **kwargs):
-            if self.name.endswith("CLAUDE.md"):
+            if self.name.endswith("AGENTS.md"):
                 raise OSError("Permission denied")
             return original_open(self, *args, **kwargs)
 
@@ -96,16 +86,16 @@ class TestContentHandling:
         assert loaded == []
 
     def test_empty_file_included(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text("", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("", encoding="utf-8")
         result, loaded = load_instructions(str(tmp_path), verbose=False)
-        assert "<project-instructions>" in result
-        assert "</project-instructions>" in result
+        assert "<agent-instructions>" in result
+        assert "</agent-instructions>" in result
 
     def test_non_utf8_replaced(self, tmp_path):
         # Write raw bytes with invalid UTF-8
-        (tmp_path / "CLAUDE.md").write_bytes(b"hello \xff\xfe world")
+        (tmp_path / "AGENTS.md").write_bytes(b"hello \xff\xfe world")
         result, loaded = load_instructions(str(tmp_path), verbose=False)
-        assert "<project-instructions>" in result
+        assert "<agent-instructions>" in result
         assert "hello" in result
         assert "world" in result
         assert "\ufffd" in result  # replacement character
@@ -130,7 +120,7 @@ class TestIntegration:
         from swival import agent, config
 
         monkeypatch.setattr(config, "load_config", lambda _: {})
-        (tmp_path / "CLAUDE.md").write_text("Always use snake_case.", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("Always use snake_case.", encoding="utf-8")
 
         captured_messages = {}
 
@@ -156,14 +146,14 @@ class TestIntegration:
         msgs = captured_messages["messages"]
         system_msg = msgs[0]
         assert system_msg["role"] == "system"
-        assert "<project-instructions>" in system_msg["content"]
+        assert "<agent-instructions>" in system_msg["content"]
         assert "Always use snake_case." in system_msg["content"]
 
     def test_no_system_prompt_flag_skips_instructions(self, tmp_path, monkeypatch):
         from swival import agent, config
 
         monkeypatch.setattr(config, "load_config", lambda _: {})
-        (tmp_path / "CLAUDE.md").write_text("Should not appear.", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("Should not appear.", encoding="utf-8")
 
         captured_messages = {}
 
@@ -197,7 +187,7 @@ class TestIntegration:
         from swival import agent, config
 
         monkeypatch.setattr(config, "load_config", lambda _: {})
-        (tmp_path / "CLAUDE.md").write_text("Should not appear.", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("Should not appear.", encoding="utf-8")
 
         captured_messages = {}
 
@@ -226,14 +216,14 @@ class TestIntegration:
         system_msg = msgs[0]
         assert system_msg["role"] == "system"
         assert system_msg["content"].startswith("Custom prompt only.")
-        assert "project-instructions" not in system_msg["content"]
+        assert "agent-instructions" not in system_msg["content"]
         assert "Should not appear" not in system_msg["content"]
 
     def test_no_instructions_flag(self, tmp_path, monkeypatch):
         from swival import agent, config
 
         monkeypatch.setattr(config, "load_config", lambda _: {})
-        (tmp_path / "CLAUDE.md").write_text("Should not appear.", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("Should not appear.", encoding="utf-8")
 
         captured_messages = {}
 
@@ -260,7 +250,7 @@ class TestIntegration:
         msgs = captured_messages["messages"]
         system_msg = msgs[0]
         assert system_msg["role"] == "system"
-        assert "project-instructions" not in system_msg["content"]
+        assert "agent-instructions" not in system_msg["content"]
         assert "Should not appear" not in system_msg["content"]
 
     def test_custom_system_prompt_with_commands_appends_run_command(
@@ -270,7 +260,7 @@ class TestIntegration:
         import shutil
 
         monkeypatch.setattr(config, "load_config", lambda _: {})
-        (tmp_path / "CLAUDE.md").write_text("Should not appear.", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("Should not appear.", encoding="utf-8")
 
         captured = {}
 
@@ -307,11 +297,11 @@ class TestIntegration:
         # run_command tool is present in the tool list
         tool_names = [t["function"]["name"] for t in captured["tools"]]
         assert "run_command" in tool_names
-        # But CLAUDE.md instructions are NOT appended to the system prompt
+        # But AGENTS.md instructions are NOT appended to the system prompt
         msgs = captured["messages"]
         system_msg = msgs[0]
         assert system_msg["role"] == "system"
-        assert "project-instructions" not in system_msg["content"]
+        assert "agent-instructions" not in system_msg["content"]
         assert "Should not appear" not in system_msg["content"]
 
 
@@ -468,7 +458,7 @@ class TestUserLevelAgentsMd:
 
         result, loaded = load_instructions(str(project_dir), config_dir, verbose=False)
         assert "Project only." in result
-        # Both files loaded (empty is still loaded, consistent with CLAUDE.md behavior)
+        # Both files loaded (an empty file is still loaded)
         assert len(loaded) == 2
 
     def test_boundary_formatting(self, tmp_path):
@@ -671,14 +661,6 @@ class TestGlobalAgentsMd:
 
 
 class TestCommentStripping:
-    def test_comments_stripped_from_claude_md(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text(
-            "<!-- hidden -->visible content", encoding="utf-8"
-        )
-        result, loaded = load_instructions(str(tmp_path), verbose=False)
-        assert "visible content" in result
-        assert "hidden" not in result
-
     def test_comments_stripped_from_agents_md(self, tmp_path):
         (tmp_path / "AGENTS.md").write_text(
             "<!-- hidden -->visible rules", encoding="utf-8"
@@ -688,7 +670,7 @@ class TestCommentStripping:
         assert "hidden" not in result
 
     def test_multiline_comments_stripped(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text(
+        (tmp_path / "AGENTS.md").write_text(
             "before\n<!-- line1\nline2\nline3 -->\nafter", encoding="utf-8"
         )
         result, loaded = load_instructions(str(tmp_path), verbose=False)
@@ -700,7 +682,7 @@ class TestCommentStripping:
     def test_large_leading_comment_stripped(self, tmp_path):
         """Regression: a >10k comment followed by visible text must not lose the text."""
         big_comment = "<!-- " + "x" * 15_000 + " -->"
-        (tmp_path / "CLAUDE.md").write_text(
+        (tmp_path / "AGENTS.md").write_text(
             big_comment + "\nvisible after big comment", encoding="utf-8"
         )
         result, loaded = load_instructions(str(tmp_path), verbose=False)

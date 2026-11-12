@@ -109,9 +109,9 @@ class InputContext:
     subagent_manager: object = None
     subagent_holder: list | None = None
     # Instruction loading state, carried rather than guessed from the prompt.
-    # instructions_enabled says whether this session loads CLAUDE.md and
-    # AGENTS.md at all; pending_instruction_failure holds the reason a saved
-    # update is on disk but not active, so the next input can revalidate it.
+    # instructions_enabled says whether this session loads AGENTS.md at all;
+    # pending_instruction_failure holds the reason a saved update is on disk
+    # but not active, so the next input can revalidate it.
     instructions_enabled: bool = True
     instructions_full: bool = False
     pending_instruction_failure: str | None = None

@@ -1,8 +1,8 @@
 """Instruction file discovery, rendering and admission.
 
-``CLAUDE.md`` and ``AGENTS.md`` hold mandatory rules: exact commands, hard
-requirements, the exceptions to them. A rule cut in half still reads like a
-complete rule, so this module never cuts one. It reads every applicable file
+``AGENTS.md`` files hold mandatory rules: exact commands, hard requirements,
+the exceptions to them. A rule cut in half still reads like a complete rule,
+so this module never cuts one. It reads every applicable file
 whole, renders the complete set, measures that set once, and then either admits
 all of it or explains what did not fit.
 
@@ -71,7 +71,6 @@ class InstructionSource:
 
     path: str
     scope: str  # "project", "user" or "global"
-    kind: str  # "claude" or "agents"
     text: str
 
 
@@ -140,29 +139,24 @@ def discover(
     config_dir: "Path | None" = None,
     *,
     start_dir: "Path | None" = None,
-) -> list[tuple[Path, str, str]]:
-    """List the applicable instruction files as ``(path, scope, kind)``.
+) -> list[tuple[Path, str]]:
+    """List the applicable ``AGENTS.md`` files as ``(path, scope)``.
 
-    The order is the loading order and it does not change: the project
-    ``CLAUDE.md`` first, then ``AGENTS.md`` from the user config directory, the
-    cross-agent directory, and finally each project directory from *base_dir*
-    down to *start_dir*.
+    The order is the loading order and it does not change: the user config
+    directory first, then the cross-agent directory, and finally each project
+    directory from *base_dir* down to *start_dir*.
     """
     root = Path(base_dir).resolve()
-    found: list[tuple[Path, str, str]] = []
-
-    claude_path = root / "CLAUDE.md"
-    if _is_file_or_unreadable(claude_path):
-        found.append((claude_path, "project", "claude"))
+    found: list[tuple[Path, str]] = []
 
     if config_dir is not None:
         user_path = Path(config_dir) / "AGENTS.md"
         if _is_file_or_unreadable(user_path):
-            found.append((user_path, "user", "agents"))
+            found.append((user_path, "user"))
 
     global_path = global_agents_md_path()
     if _is_file_or_unreadable(global_path):
-        found.append((global_path, "global", "agents"))
+        found.append((global_path, "global"))
 
     proj_dirs = (
         _collect_project_dirs(root, start_dir) if start_dir is not None else [root]
@@ -170,7 +164,7 @@ def discover(
     for proj_dir in proj_dirs:
         proj_path = proj_dir / "AGENTS.md"
         if _is_file_or_unreadable(proj_path):
-            found.append((proj_path, "project", "agents"))
+            found.append((proj_path, "project"))
 
     return found
 
@@ -247,7 +241,7 @@ def load(
     result = InstructionSet()
     remaining = MAX_INSTRUCTION_TOTAL_BYTES
 
-    for path, scope, kind in discover(base_dir, config_dir, start_dir=start_dir):
+    for path, scope in discover(base_dir, config_dir, start_dir=start_dir):
         read = _read_whole(path, remaining)
         if read.message is not None:
             (result.errors if read.oversized else result.skipped).append(read.message)
@@ -258,13 +252,11 @@ def load(
             InstructionSource(
                 path=str(path),
                 scope=scope,
-                kind=kind,
                 text=strip_markdown_comments(read.text),
             )
         )
         if verbose:
-            name = "CLAUDE.md" if kind == "claude" else "AGENTS.md"
-            fmt.info(f"Loaded {name} ({read.size} bytes) from {path.parent}")
+            fmt.info(f"Loaded AGENTS.md ({read.size} bytes) from {path.parent}")
 
     result.text = render(result.sources)
     return result
@@ -273,32 +265,21 @@ def load(
 def render(sources: "list[InstructionSource]") -> str:
     """Render *sources* as the XML block that goes into the system prompt.
 
-    The project ``CLAUDE.md`` keeps its own wrapper. The ``AGENTS.md`` files
-    share one wrapper and each carries a comment naming its scope and path, so
-    the model can tell a personal preference from a project rule.
+    The files share one wrapper and each carries a comment naming its scope
+    and path, so the model can tell a personal preference from a project rule.
     """
-    sections: list[str] = []
-
-    claude = [s for s in sources if s.kind == "claude"]
-    for source in claude:
-        sections.append(
-            f"<project-instructions>\n{source.text}\n</project-instructions>"
-        )
-
-    agents = [s for s in sources if s.kind == "agents"]
     by_scope = {scope: [] for scope in _SCOPE_ORDER}
-    for source in agents:
+    for source in sources:
         by_scope[source.scope].append(source)
     parts = [
         f"<!-- {source.scope}: {source.path} -->\n{source.text}"
         for scope in _SCOPE_ORDER
         for source in by_scope[scope]
     ]
-    if parts:
-        inner = "\n\n".join(parts)
-        sections.append(f"<agent-instructions>\n{inner}\n</agent-instructions>")
-
-    return "\n\n".join(sections)
+    if not parts:
+        return ""
+    inner = "\n\n".join(parts)
+    return f"<agent-instructions>\n{inner}\n</agent-instructions>"
 
 
 def instruction_budget(

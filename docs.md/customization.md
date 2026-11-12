@@ -52,7 +52,7 @@ cache = true
 # no_read_guard = false    # disable read-before-write guard
 # no_mcp = false           # disable MCP server connections
 # no_a2a = false           # disable A2A agent connections
-# no_instructions = false  # skip CLAUDE.md and AGENTS.md loading
+# no_instructions = false  # skip AGENTS.md loading
 # no_skills = false        # disable skill discovery
 # metaskills = "local"     # "local", "all", or "off"
 # no_memory = false        # skip auto-memory loading
@@ -228,21 +228,15 @@ swival> /model --fav ID       # toggle a favorite for a specific model
 
 ## Instruction Files
 
-Swival loads instruction files during startup and appends them to the system prompt. `CLAUDE.md` provides project rules (`<project-instructions>`), while `AGENTS.md` provides agent workflow commands and conventions (`<agent-instructions>`). Use `/init` in the REPL to auto-generate a project-level `AGENTS.md`, or `/remember <text>` to add individual facts to its `## Conventions` section.
+Swival loads `AGENTS.md` instruction files during startup and appends them to the system prompt. They provide project rules, agent workflow commands and conventions. Use `/init` in the REPL to auto-generate a project-level `AGENTS.md`, or `/remember <text>` to add individual facts to its `## Conventions` section.
 
-### CLAUDE.md
-
-Loaded from the project base directory only. Capped at 10,000 characters.
-
-### AGENTS.md
-
-Loaded from up to three levels, in this order:
+`AGENTS.md` is loaded from up to three levels, in this order:
 
 1. **User-level**: `~/.config/swival/AGENTS.md` (or `$XDG_CONFIG_HOME/swival/AGENTS.md`)
 2. **Global cross-agent**: `~/.agents/AGENTS.md`
 3. **Project-level**: `<base-dir>/AGENTS.md`
 
-All are optional. Content is concatenated inside a single `<agent-instructions>` block sharing a combined 10,000 character budget. Files are read in the order shown; earlier files get budget priority. When you start Swival from a subdirectory of the project root, the project level also picks up an `AGENTS.md` from each directory on the path from the root down to where you started, general to specific.
+All are optional. Content is concatenated inside a single `<agent-instructions>` block, in the order shown. The files are loaded in full and are never trimmed. If they are too large, Swival stops and names the files. When Swival does not know the model's context window, it loads them and does not stop. `--instructions-full` loads them anyway, but a file over 1 MB is always refused. When you start Swival from a subdirectory of the project root, the project level also picks up an `AGENTS.md` from each directory on the path from the root down to where you started, general to specific.
 
 The user-level file is for swival-specific personal conventions. The global file (`~/.agents/AGENTS.md`) follows the cross-agent standard shared with OpenCode, OpenHands, and similar tools; put conventions here that should apply regardless of which agent you're using. The project-level file is for project-specific rules.
 
@@ -254,7 +248,7 @@ Don't add dependencies without asking.
 
 ### Disabling instructions
 
-Use `--no-instructions` to skip all instruction files (CLAUDE.md and AGENTS.md at all levels, including `~/.agents/AGENTS.md`).
+Use `--no-instructions` to skip all instruction files (`AGENTS.md` at all levels, including `~/.agents/AGENTS.md`).
 
 ```sh
 swival --no-instructions "task"
