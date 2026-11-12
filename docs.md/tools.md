@@ -4,7 +4,7 @@ Swival gives the model a fixed set of tools at runtime. Most tools are always av
 
 Command execution tools are included by default (commands default to `"all"`): `run_command` takes an argv array and is available in every command mode except `--commands none`, while `run_shell_command` takes a shell string and is only available with `--commands all` or `--yolo`. Pass `--commands none` to remove both, or `--commands ask` for interactive approval (argv-only, no shell).
 
-`use_skill` appears only when skills are discovered, MCP tools appear when external MCP servers are configured, and A2A tools appear when remote A2A agents are configured. The experimental `run_python` tool appears only with `--commands all` or `--yolo` when a Python interpreter is available and the context window is large enough.
+`use_skill` appears only when skills are discovered, MCP tools appear when external MCP servers are configured, and A2A tools appear when remote A2A agents are configured. The `run_python` tool appears only with `--commands all` or `--yolo` when a Python interpreter is available and the context window is large enough.
 
 ## `read_file`
 
@@ -189,7 +189,7 @@ Setting `background=true` launches the command detached and returns immediately 
 
 `run_python` runs a Python snippet and returns its captured output. The code is handed straight to a fresh `python -c` subprocess in the workspace directory, with no shell in between, so there is nothing to quote or escape. It is meant for quickly evaluating a piece of Python without the argv-array or shell-string ceremony of `run_command` and `run_shell_command`. Parameters are `code` (required) and `timeout` (1-7200 seconds, default 30). The subprocess runs with the same sanitized environment as the other command tools, so a snippet that shells out by name sees Swival's bundled dependency scripts stripped from `PATH`.
 
-Because it executes arbitrary code, `run_python` is only exposed with `--commands all` or `--yolo`, the same trust tier as `run_shell_command`. On top of that it appears only when a Python interpreter is available (the one running Swival, or `python3`/`python` on `PATH` for standalone builds) and when the detected context window is at least 100,000 tokens, the same floor that auto-enables subagents. This tool is experimental.
+Because it executes arbitrary code, `run_python` is only exposed with `--commands all` or `--yolo`, the same trust tier as `run_shell_command`. On top of that it appears only when a Python interpreter is available (the one running Swival, or `python3`/`python` on `PATH` for standalone builds) and when the detected context window is at least 100,000 tokens, the same floor that auto-enables subagents.
 
 If the run is cancelled, for example because its subagent was cancelled, the snippet is killed right away.
 The result then starts with `error: cancelled before the program finished`.

@@ -231,32 +231,6 @@ def test_storm_breaker_allows_verification_after_python_write(tmp_path, monkeypa
     assert "after" in results[-1]
 
 
-def test_storm_breaker_off_dispatches_normally(tmp_path, monkeypatch):
-    """With the storm breaker disabled, repeat calls all dispatch."""
-    args = _base_args(tmp_path, storm_breaker=False)
-    tc_args = json.dumps({"file_path": "missing.txt"})
-
-    def rf(i):
-        return _make_tool_call("read_file", tc_args, call_id=f"r{i}")
-
-    responses = [
-        (_make_message(content="", tool_calls=[rf(1)]), "tool_calls", [], 0, (0, 0)),
-        (_make_message(content="", tool_calls=[rf(2)]), "tool_calls", [], 0, (0, 0)),
-        (_make_message(content="", tool_calls=[rf(3)]), "tool_calls", [], 0, (0, 0)),
-        (_make_message(content="done"), "stop", [], 0, (0, 0)),
-    ]
-    captured = _drive_agent(tmp_path, monkeypatch, args, responses)
-    final_history = captured[-1]
-    tool_msgs = [
-        m
-        for m in final_history
-        if (m.get("role") if isinstance(m, dict) else m.role) == "tool"
-    ]
-    for m in tool_msgs:
-        content = m.get("content") if isinstance(m, dict) else m.content
-        assert "repeat-loop guard tripped" not in content
-
-
 def test_explicit_non_idempotent_mcp_repeat_dispatches_once(tmp_path, monkeypatch):
     from swival import mcp_client
 

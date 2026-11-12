@@ -1467,8 +1467,8 @@ class TestMcpSystemPrompt:
         assert "## MCP Tools" in text
 
 
-class TestFlattenToggle:
-    """The flatten_mcp_schemas toggle gates deep-schema flattening."""
+class TestFlattenSchemas:
+    """Deep MCP schemas are flattened to dot paths."""
 
     def _deep_pair(self):
         params = {
@@ -1497,11 +1497,11 @@ class TestFlattenToggle:
         schema, _ = self._deep_pair()
         assert analyze_schema(schema["function"]["parameters"]).should_flatten
 
-    def test_flatten_enabled_produces_dot_paths(self):
-        mgr = McpManager({}, flatten_schemas=True)
+    def test_deep_schema_becomes_dot_paths(self):
+        mgr = McpManager({})
         schema, original = self._deep_pair()
 
-        ((flat_schema, name),) = mgr._apply_flattening([(schema, original)])
+        flat_schema, name = mgr._maybe_flatten_pair(schema, original)
 
         props = flat_schema["function"]["parameters"]["properties"]
         assert "config.nested.value" in props
@@ -1509,18 +1509,6 @@ class TestFlattenToggle:
         assert name == original
         # Side table is recorded so call_tool can re-nest arguments.
         assert "deep_tool" in mgr._flatten_meta
-
-    def test_flatten_disabled_passes_schema_through(self):
-        mgr = McpManager({}, flatten_schemas=False)
-        schema, original = self._deep_pair()
-
-        result = mgr._apply_flattening([(schema, original)])
-
-        assert result == [(schema, original)]
-        props = result[0][0]["function"]["parameters"]["properties"]
-        assert "config" in props
-        assert "config.nested.value" not in props
-        assert mgr._flatten_meta == {}
 
 
 class TestManagerLifecycle:

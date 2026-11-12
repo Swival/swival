@@ -1693,7 +1693,7 @@ class TestAgent:
         llm = ScriptedLLM(
             [search_call({"query": f"{QUERY} {i}"}, f"c{i}") for i in range(4)]
         )
-        run_cli(monkeypatch, tmp_path, llm, storm_breaker=False)
+        run_cli(monkeypatch, tmp_path, llm)
         results = tool_results(llm.snapshots[-1])
         assert results[0].startswith(UNTRUSTED_MARKER)
         assert results[1:] == [ws.CEILING] * 3

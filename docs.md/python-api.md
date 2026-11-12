@@ -104,8 +104,6 @@ Session(
     location: str | None = None,
     approved_buckets: set[str] | None = None,
     metaskills: str = "local",  # "local", "all", or "off"
-    storm_breaker: bool = True,
-    flatten_mcp_schemas: bool = True,
     defer_mcp_schemas: bool = True,
     profiles: dict | None = None,
     active_profile: str | None = None,
@@ -161,8 +159,6 @@ All parameters are keyword-only. The important ones:
 | `approved_buckets`      | Pre-approved command buckets for `commands="ask"` mode (e.g. `{"ls", "git push"}`).                                                                                                                                                                                                    |
 | `web_search`            | Offer the [`web_search`](tools.html#web_search) tool. Default `True`; it is only available when `network` is `"full"`.                                                                                                                       |
 | `web_search_providers`  | Search services `web_search` may use, from `"parallel"`, `"keenable"`, `"exa"` and `"tavily"`. Default: all of them.                                                                                                                         |
-| `storm_breaker`         | Suppress repeated identical tool calls, returning an error that tells the model to try a different approach. Default `True`.                                                                                                                                                           |
-| `flatten_mcp_schemas`   | Flatten deeply nested MCP tool schemas to formats small models tolerate better. Default `True`.                                                                                                                                                                                        |
 | `defer_mcp_schemas`     | When there are many MCP tools, send their names and descriptions first, then let the model load schemas as needed with `tool_search`. See [MCP](mcp.html#deferred-schemas). Default `True`. |
 
 Parameters not listed here correspond to the same-named CLI flags and config keys. See [Customization](customization.html) for the full config reference.

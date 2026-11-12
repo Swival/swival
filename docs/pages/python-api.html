@@ -195,8 +195,6 @@ print(answer)
     location: str | None = None,
     approved_buckets: set[str] | None = None,
     metaskills: str = &quot;local&quot;,  # &quot;local&quot;, &quot;all&quot;, or &quot;off&quot;
-    storm_breaker: bool = True,
-    flatten_mcp_schemas: bool = True,
     defer_mcp_schemas: bool = True,
     profiles: dict | None = None,
     active_profile: str | None = None,
@@ -381,14 +379,6 @@ print(answer)
 <tr>
 <td><code>web_search_providers</code></td>
 <td>Search services <code>web_search</code> may use, from <code>"parallel"</code>, <code>"keenable"</code>, <code>"exa"</code> and <code>"tavily"</code>. Default: all of them.</td>
-</tr>
-<tr>
-<td><code>storm_breaker</code></td>
-<td>Suppress repeated identical tool calls, returning an error that tells the model to try a different approach. Default <code>True</code>.</td>
-</tr>
-<tr>
-<td><code>flatten_mcp_schemas</code></td>
-<td>Flatten deeply nested MCP tool schemas to formats small models tolerate better. Default <code>True</code>.</td>
 </tr>
 <tr>
 <td><code>defer_mcp_schemas</code></td>

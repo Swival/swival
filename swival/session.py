@@ -186,8 +186,6 @@ class Session:
         location: str | None = None,
         approved_buckets: set[str] | None = None,
         metaskills: str = "local",
-        storm_breaker: bool = True,
-        flatten_mcp_schemas: bool = True,
         defer_mcp_schemas: bool = True,
         profiles: dict | None = None,
         active_profile: str | None = None,
@@ -307,10 +305,7 @@ class Session:
         self.location = location
         self.approved_buckets = approved_buckets
         self.metaskills = metaskills
-        self.storm_breaker = storm_breaker
-        self.flatten_mcp_schemas = flatten_mcp_schemas
         self.defer_mcp_schemas = defer_mcp_schemas
-        self._mcp_flattened_schemas: dict[str, object] = {}
 
         # A profile that leaves out a setting gets it from these arguments, the
         # way --profile falls back on the top-level config.
@@ -650,7 +645,6 @@ class Session:
             self._mcp_manager = McpManager(
                 self.mcp_servers,
                 verbose=self.verbose,
-                flatten_schemas=self.flatten_mcp_schemas,
                 net_jail=self._net_jail,
                 roots=workspace_roots(
                     self.files, self.base_dir, self._allowed_dir_paths
@@ -969,7 +963,6 @@ class Session:
             command_policy=self._command_policy,
             metaskills_policy=self._metaskills_policy,
             enabled_metaskills=set(self._metaskill_names or []),
-            storm_breaker_enabled=self.storm_breaker,
             instructions_full=self.instructions_full,
             session=self,
             network_mode=self.network,

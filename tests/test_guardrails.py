@@ -141,9 +141,11 @@ def test_guardrail_escalates_on_repeated_identical_errors(tmp_path, monkeypatch)
         snapshots.append(list(args[2]))
         call_count += 1
         if call_count <= 3:
+            # The offset changes on each call, so the storm breaker lets them
+            # through. The error stays the same, so the guardrail sees a repeat.
             tc = _make_tool_call(
                 "read_file",
-                json.dumps({"file_path": "missing.txt"}),
+                json.dumps({"file_path": "missing.txt", "offset": call_count}),
                 call_id=f"call_{call_count}",
             )
             return _make_message(tool_calls=[tc]), "tool_calls"
@@ -159,7 +161,7 @@ def test_guardrail_escalates_on_repeated_identical_errors(tmp_path, monkeypatch)
         ),
     )
 
-    args = _base_args(tmp_path, storm_breaker=False)
+    args = _base_args(tmp_path)
     monkeypatch.setattr(sys, "argv", ["agent", "test guardrails"])
     monkeypatch.setattr("argparse.ArgumentParser.parse_args", lambda self: args)
 

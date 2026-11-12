@@ -279,7 +279,6 @@ class McpManager:
         self,
         server_configs: dict[str, dict],
         verbose: bool = False,
-        flatten_schemas: bool = True,
         net_jail: list[str] | None = None,
         roots: list | None = None,
     ):
@@ -309,7 +308,6 @@ class McpManager:
         self._server_configs = server_configs
         self._verbose = verbose
         self._net_jail = list(net_jail) if net_jail else None
-        self._flatten_schemas = flatten_schemas
         self._flatten_meta: dict[str, object] = {}
         self._roots = _normalize_roots(roots)
         # Settled by start(), since capabilities are never renegotiated. Once
@@ -812,7 +810,10 @@ class McpManager:
                 if tool.name in wanted
             }
             self._non_idempotent_tools.update(non_idempotent_tools)
-            tool_pairs = self._apply_flattening(tool_pairs)
+            tool_pairs = [
+                self._maybe_flatten_pair(schema, original)
+                for schema, original in tool_pairs
+            ]
             self._tool_schemas[name] = [schema for schema, _original_name in tool_pairs]
             self._tool_original_names[name] = {
                 schema["function"]["name"]: original_name
@@ -929,20 +930,6 @@ class McpManager:
         self._server_tasks.clear()
         self._shutdown_events.clear()
         self._sessions.clear()
-
-    def _apply_flattening(
-        self, tool_pairs: list[tuple[dict, str]]
-    ) -> list[tuple[dict, str]]:
-        """Flatten each (schema, original_name) pair when flattening is enabled.
-
-        Returns the pairs untouched when ``flatten_schemas=False``.
-        """
-        if not self._flatten_schemas:
-            return tool_pairs
-        return [
-            self._maybe_flatten_pair(schema, original)
-            for schema, original in tool_pairs
-        ]
 
     def _maybe_flatten_pair(self, schema: dict, original_name: str) -> tuple[dict, str]:
         """Flatten the tool's parameters if its schema is large or deep.

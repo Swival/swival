@@ -10339,7 +10339,6 @@ def _run_main(args, report, _write_report, parser):
             mcp_manager = McpManager(
                 mcp_servers,
                 verbose=args.verbose,
-                flatten_schemas=getattr(args, "flatten_mcp_schemas", True),
                 net_jail=net_jail,
                 roots=workspace_roots(files_mode, base_dir, allowed_dirs),
             )
@@ -10557,7 +10556,6 @@ def _run_main(args, report, _write_report, parser):
         command_policy=command_policy,
         metaskills_policy=_metaskills_policy_val,
         enabled_metaskills=set(_metaskill_names or []),
-        storm_breaker_enabled=getattr(args, "storm_breaker", True),
         instructions_full=_instructions_full,
         network_mode=_network_mode,
         net_jail=net_jail,
@@ -10885,7 +10883,6 @@ def _run_agent_loop(
     metaskills_policy: str = "local",
     enabled_metaskills: set | None = None,
     repl_input_text: str | None = None,
-    storm_breaker_enabled: bool = True,
     session: object | None = None,
     network_mode: str = "full",
     net_jail: list | None = None,
@@ -10969,9 +10966,7 @@ def _run_agent_loop(
             turn_state["turns_used"] = turns
 
     consecutive_errors: dict[str, tuple[str, int]] = {}
-    storm_breaker: StormBreaker | None = (
-        StormBreaker() if storm_breaker_enabled else None
-    )
+    storm_breaker = StormBreaker()
     turns = 0
     todo_last_used = 0
     todo_reminder = None
@@ -12343,69 +12338,66 @@ def _run_agent_loop(
                 )
                 continue
 
-            if storm_breaker is not None:
-                _raw_args = getattr(tool_call.function, "arguments", "") or ""
-                _verdict = storm_breaker.inspect(
-                    _tc_name,
-                    _raw_args,
-                    mutating=_tcr_is_mutating(_tc_name),
-                    suppress_on_repeat=bool(
-                        mcp_manager is not None
-                        and mcp_manager.is_non_idempotent_tool(_tc_name)
-                    ),
-                )
-                if _verdict.suppress:
-                    if report is not None:
-                        import hashlib as _hashlib
+            _raw_args = getattr(tool_call.function, "arguments", "") or ""
+            _verdict = storm_breaker.inspect(
+                _tc_name,
+                _raw_args,
+                mutating=_tcr_is_mutating(_tc_name),
+                suppress_on_repeat=bool(
+                    mcp_manager is not None
+                    and mcp_manager.is_non_idempotent_tool(_tc_name)
+                ),
+            )
+            if _verdict.suppress:
+                if report is not None:
+                    import hashlib as _hashlib
 
-                        _args_hash = _hashlib.sha1(
-                            _raw_args.encode("utf-8", errors="replace")
-                        ).hexdigest()[:12]
-                        report.record_storm_suppression(
-                            turns + turn_offset,
-                            name=_tc_name,
-                            canonical_args_hash=_args_hash,
-                            count=_verdict.count,
-                        )
-                    if verbose:
-                        fmt.storm_suppression(_tc_name, _verdict.count, _verdict.reason)
-                    if _bg_slots_in_use() > 0:
-                        time.sleep(5)
-                    _suppress_msg = (
-                        f"error: repeat-loop guard tripped — "
-                        f"{_tc_name} was called with identical arguments "
-                        f"{_verdict.count} times. Try a different approach."
+                    _args_hash = _hashlib.sha1(
+                        _raw_args.encode("utf-8", errors="replace")
+                    ).hexdigest()[:12]
+                    report.record_storm_suppression(
+                        turns + turn_offset,
+                        name=_tc_name,
+                        canonical_args_hash=_args_hash,
+                        count=_verdict.count,
                     )
-                    tool_msg = {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": _suppress_msg,
-                    }
-                    messages.append(tool_msg)
-                    _emit(
-                        EVENT_TOOL_ERROR,
-                        {
-                            "id": tool_call.id,
-                            "name": _tc_name,
-                            "turn": turns,
-                            "error": _suppress_msg[:500],
-                            "arguments": None,
-                            "suppressed": True,
-                        },
-                    )
-                    bk_interventions = _accumulate_consecutive_errors(
-                        _tc_name,
-                        _suppress_msg,
-                        turn=turns + turn_offset,
-                        consecutive_errors=consecutive_errors,
-                        report=report,
-                        verbose=verbose,
-                    )
-                    interventions.extend(bk_interventions)
-                    batch_failure = batch_failure or _file_mutation_failure(
-                        _tc_name, False
-                    )
-                    continue
+                if verbose:
+                    fmt.storm_suppression(_tc_name, _verdict.count, _verdict.reason)
+                if _bg_slots_in_use() > 0:
+                    time.sleep(5)
+                _suppress_msg = (
+                    f"error: repeat-loop guard tripped — "
+                    f"{_tc_name} was called with identical arguments "
+                    f"{_verdict.count} times. Try a different approach."
+                )
+                tool_msg = {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": _suppress_msg,
+                }
+                messages.append(tool_msg)
+                _emit(
+                    EVENT_TOOL_ERROR,
+                    {
+                        "id": tool_call.id,
+                        "name": _tc_name,
+                        "turn": turns,
+                        "error": _suppress_msg[:500],
+                        "arguments": None,
+                        "suppressed": True,
+                    },
+                )
+                bk_interventions = _accumulate_consecutive_errors(
+                    _tc_name,
+                    _suppress_msg,
+                    turn=turns + turn_offset,
+                    consecutive_errors=consecutive_errors,
+                    report=report,
+                    verbose=verbose,
+                )
+                interventions.extend(bk_interventions)
+                batch_failure = batch_failure or _file_mutation_failure(_tc_name, False)
+                continue
 
             tool_msg, tool_meta = handle_tool_call(
                 tool_call,
@@ -17014,7 +17006,6 @@ def repl_loop(
     trace_dir: str | None = None,
     metaskills_policy: str = "local",
     enabled_metaskills: set | None = None,
-    storm_breaker_enabled: bool = True,
     session: object | None = None,
     network_mode: str = "full",
     net_jail: list | None = None,
@@ -17249,7 +17240,6 @@ def repl_loop(
         turn_offset=turn_offset,
         metaskills_policy=metaskills_policy,
         enabled_metaskills=enabled_metaskills,
-        storm_breaker_enabled=storm_breaker_enabled,
         session=session,
         network_mode=network_mode,
         net_jail=net_jail,
