@@ -10813,8 +10813,13 @@ def run_agent_loop(messages: list, tools: list, **loop_kwargs):
     """Run the agent loop, then reconcile the session-cost display on every
     exit: checkpoints, continue-file summaries, and concurrent subagents can
     all add cost after the last turn line."""
+    from .continue_here import _find_user_task
+
     try:
-        with herdr_activity.turn(enabled=not loop_kwargs.get("is_subagent", False)):
+        with herdr_activity.turn(
+            enabled=not loop_kwargs.get("is_subagent", False),
+            title=_find_user_task(messages, reverse=True),
+        ):
             return _run_agent_loop(messages, tools, **loop_kwargs)
     finally:
         session_cost = loop_kwargs.get("session_cost")

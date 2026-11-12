@@ -59,15 +59,12 @@ The REPL greets you with an animated splash, and in one-shot mode the rule that 
 SWIVAL_ANIMATIONS=0 swival
 ```
 
-## herdr Activity Indicator
+## herdr Support
 
-Inside [herdr](https://herdr.dev), Swival updates the activity dot automatically.
-It shows `working` during a turn, `blocked` while waiting for command approval,
-and `idle` between turns.
-
-Swival clears its activity status when it exits.
-If Swival starts another Swival in the same pane, for example through a command, only the outer one reports.
-If herdr is unavailable, Swival continues normally.
+Swival supports [herdr](https://herdr.dev) out of the box.
+This includes classic herdr and the herdr app with herdr-core.
+herdr shows Swival as an agent, with its status and your current request.
+There is nothing to install or configure.
 
 ## Input Commands
 

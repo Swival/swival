@@ -281,6 +281,9 @@ def _isolate_herdr(monkeypatch):
     monkeypatch.delenv("HERDR_ENV", raising=False)
     # Reporting writes this into os.environ; going through monkeypatch undoes it.
     monkeypatch.setenv("SWIVAL_HERDR_OWNER", "")
+    monkeypatch.setenv("SWIVAL_TERMINAL_OWNER", "")
+    # Keep escape sequences out of the real terminal when tests run with `pytest -s`.
+    monkeypatch.setattr("swival.herdr._status_terminal", lambda: None)
 
 
 @pytest.fixture(autouse=True)
