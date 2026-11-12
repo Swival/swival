@@ -406,7 +406,7 @@ Swival can transparently encrypt recognized credential tokens before they leave 
 
 ## Lifecycle Hooks
 
-Swival can run a user-defined command at startup and exit, useful for syncing `.swival/` state to and from remote storage. See [Lifecycle Hooks](lifecycle-hooks.md) for the full documentation, including environment variables, execution ordering, failure semantics, and a complete Hugging Face Buckets example.
+Swival can run a user-defined command at startup and exit, useful for syncing `.swival/` state to and from remote storage. In the REPL, the same command also runs each time a task finishes, so a script can notify you. See [Lifecycle Hooks](lifecycle-hooks.md) for the full documentation, including environment variables, execution ordering, failure semantics, and a complete Hugging Face Buckets example.
 
 ## Command Middleware
 

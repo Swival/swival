@@ -10,7 +10,10 @@ import types
 
 import pytest
 
+from swival.agent import _run_task_done_hook
+from swival.input_dispatch import InputContext
 from swival.lifecycle import (
+    _EVENT_ENV_KEYS,
     LifecycleError,
     _git_metadata,
     _normalize_remote,
@@ -241,6 +244,27 @@ class TestBuildHookEnv:
         assert env["SWIVAL_EXIT_CODE"] == "0"
         assert env["SWIVAL_GIT_HEAD"] == "abc123"
 
+    def test_plain_prompt_has_empty_command(self, tmp_path):
+        env = build_hook_env(
+            event="task_done",
+            resolved_base=str(tmp_path),
+            git_meta={"git_present": "0"},
+            outcome="success",
+            task_command="",
+        )
+        assert env["SWIVAL_COMMAND"] == ""
+        assert "SWIVAL_GOAL_STATUS" not in env
+
+    def test_inherited_event_vars_are_dropped(self, tmp_path, monkeypatch):
+        for key in _EVENT_ENV_KEYS:
+            monkeypatch.setenv(key, "stale")
+        env = build_hook_env(
+            event="startup",
+            resolved_base=str(tmp_path),
+            git_meta={"git_present": "0"},
+        )
+        assert not set(_EVENT_ENV_KEYS) & set(env)
+
 
 class TestRunLifecycleHook:
     def _make_hook(self, tmp_path, script_body):
@@ -321,6 +345,19 @@ class TestRunLifecycleHook:
         assert result["error"] is not None
         assert "failed to start" in result["error"]
 
+    def test_not_executable(self, tmp_path):
+        hook = tmp_path / "hook.sh"
+        hook.write_text("#!/bin/sh\n")
+        hook.chmod(0o644)
+        result = run_lifecycle_hook(
+            str(hook),
+            "task_done",
+            str(tmp_path),
+            git_meta={"git_present": "0"},
+        )
+        assert result["exit_code"] is None
+        assert "failed to start" in result["error"]
+
     def test_env_vars_passed(self, tmp_path):
         hook = self._make_hook(
             tmp_path, 'echo "$SWIVAL_HOOK_EVENT $SWIVAL_GIT_PRESENT"'
@@ -359,6 +396,93 @@ class TestRunLifecycleHook:
         )
         assert result["exit_code"] == 0
         assert (swival_dir / "MEMORY.md").read_text() == "test memory\n"
+
+
+class TestTaskDoneHook:
+    _make_hook = TestRunLifecycleHook._make_hook
+
+    def _args(self, tmp_path, hook):
+        return types.SimpleNamespace(
+            _lifecycle_cmd=hook,
+            _lifecycle_timeout=5,
+            _lifecycle_fail_closed=True,
+            _lifecycle_git_meta={"git_present": "0"},
+            base_dir=str(tmp_path),
+            provider="lmstudio",
+            verbose=False,
+        )
+
+    def _ctx(self, tmp_path, **overrides):
+        return InputContext(
+            messages=[],
+            tools=[],
+            base_dir=str(tmp_path),
+            turn_state={},
+            thinking_state=None,
+            todo_state=None,
+            snapshot_state=None,
+            file_tracker=None,
+            no_history=True,
+            continue_here=False,
+            verbose=False,
+            loop_kwargs={"model_id": "test-model"},
+            **overrides,
+        )
+
+    def test_failing_hook_never_ends_the_session(self, tmp_path):
+        from swival.report import ReportCollector
+
+        hook = self._make_hook(tmp_path, "exit 1")
+        report = ReportCollector()
+        _run_task_done_hook(
+            self._args(tmp_path, hook), report, self._ctx(tmp_path), "", "success", None
+        )
+        assert report.lifecycle_events[0]["event"] == "task_done"
+        assert report.lifecycle_events[0]["exit_code"] == 1
+
+    def test_hook_cannot_read_the_terminal(self, tmp_path):
+        hook = self._make_hook(tmp_path, "cat\necho done > seen.txt")
+        # Stand in for a terminal: an input that stays open and sends nothing.
+        read_end, write_end = os.pipe()
+        saved_stdin = os.dup(0)
+        os.dup2(read_end, 0)
+        try:
+            _run_task_done_hook(
+                self._args(tmp_path, hook),
+                None,
+                self._ctx(tmp_path),
+                "",
+                "success",
+                None,
+            )
+        finally:
+            os.dup2(saved_stdin, 0)
+            for fd in (saved_stdin, read_end, write_end):
+                os.close(fd)
+        assert (tmp_path / "seen.txt").read_text() == "done\n"
+
+    def test_reports_the_current_provider_and_model(self, tmp_path):
+        """A profile can leave the provider out and inherit it."""
+        hook = self._make_hook(
+            tmp_path,
+            'echo "$1 $SWIVAL_PROVIDER $SWIVAL_MODEL $SWIVAL_COMMAND '
+            '$SWIVAL_OUTCOME $SWIVAL_GOAL_STATUS" > seen.txt',
+        )
+        ctx = self._ctx(
+            tmp_path,
+            profiles={"small": {"model": "small-model"}},
+            current_profile="small",
+            on_startup_runtime=False,
+            raw_llm_baseline={"provider": "lmstudio"},
+            pre_profile_baseline={"provider": "openrouter"},
+        )
+        ctx.loop_kwargs["model_id"] = "small-model"
+        _run_task_done_hook(
+            self._args(tmp_path, hook), None, ctx, "/goal", "success", "complete"
+        )
+        assert (tmp_path / "seen.txt").read_text() == (
+            "task_done openrouter small-model /goal success complete\n"
+        )
 
 
 class TestConfigIntegration:

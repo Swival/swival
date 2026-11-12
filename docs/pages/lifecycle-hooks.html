@@ -103,6 +103,7 @@
         <article class="docs-content">
             <h1 id="lifecycle-hooks">Lifecycle Hooks</h1>
 <p>Swival can run a user-configured command at two points in every session: once at startup (before memory and continue state are loaded) and once at exit (after history, reports, and continue files are written). This lets you sync <code>.swival/</code> state to and from remote storage without any provider-specific code in Swival itself — and without committing <code>.swival/</code> to git. Memory, continue files, and reports stay out of version control but still follow you across machines.</p>
+<p>In the interactive REPL, Swival also runs the command each time a task finishes. You can use this to get a notification when a long <code>/goal</code> is done. See <a href="#task-notifications">Task Notifications</a>.</p>
 <p>The feature is generic. Swival does not know or care what the hook does. The canonical use case is syncing <code>.swival/</code> to Hugging Face Buckets so that memory, continue files, and reports survive across machines and commits — but any storage backend works.</p>
 <h2 id="enabling-hooks">Enabling Hooks</h2>
 <p>On the command line:</p>
@@ -129,8 +130,9 @@ with Session(
 <p>Swival calls the configured command as:</p>
 <pre><code class="language-text">&lt;command&gt; startup &lt;base_dir&gt;
 &lt;command&gt; exit &lt;base_dir&gt;
+&lt;command&gt; task_done &lt;base_dir&gt;
 </code></pre>
-<p>The first positional argument is the event name (<code>startup</code> or <code>exit</code>). The second is the absolute path to the project base directory. The working directory is set to <code>base_dir</code>.</p>
+<p>The first positional argument is the event name (<code>startup</code>, <code>exit</code> or <code>task_done</code>). The second is the absolute path to the project base directory. The working directory is set to <code>base_dir</code>. Only the REPL sends <code>task_done</code>.</p>
 <p>The command is validated at startup using the same logic as <code>reviewer</code> and <code>llm_filter</code>: <code>shlex.split</code> parses the string, and the first token must be an executable on PATH or a path to an executable file. No <code>shell=True</code> — the command runs as a direct subprocess.</p>
 <h2 id="execution-ordering">Execution Ordering</h2>
 <h3 id="startup">Startup</h3>
@@ -158,7 +160,7 @@ with Session(
 </ul>
 <p>In the CLI, the exit hook runs in the outer <code>finally</code> block, so it fires on success, exhaustion, error, and interruption.</p>
 <h3 id="repl">REPL</h3>
-<p>Hooks run once on process start and once on process exit. They do not run per prompt, on <code>/clear</code>, or on <code>/continue</code>.</p>
+<p>The <code>startup</code> and <code>exit</code> events run once each, on process start and on process exit. The <code>task_done</code> event runs each time a task finishes. See <a href="#task-notifications">Task Notifications</a>.</p>
 <h3 id="reviewer-and-serve-modes">Reviewer and Serve Modes</h3>
 <p>Hooks are not run in <code>--reviewer-mode</code>. Reviewer mode is a subprocess of the main Swival invocation; running hooks there would cause nested syncs.</p>
 <p>In <code>--serve</code>, the server process itself runs no hooks, but each per-context session it creates inherits the lifecycle settings: the startup hook runs when a context's session is first used, and the exit hook runs when that session is evicted or closed. Pass <code>--no-lifecycle</code> if you do not want per-session hooks in a long-lived server.</p>
@@ -175,68 +177,68 @@ with Session(
 <tbody>
 <tr>
 <td><code>SWIVAL_HOOK_EVENT</code></td>
-<td><code>startup</code> or <code>exit</code></td>
-<td>both</td>
+<td><code>startup</code>, <code>exit</code> or <code>task_done</code></td>
+<td>all</td>
 </tr>
 <tr>
 <td><code>SWIVAL_BASE_DIR</code></td>
 <td>Absolute path to the project base directory</td>
-<td>both</td>
+<td>all</td>
 </tr>
 <tr>
 <td><code>SWIVAL_SWIVAL_DIR</code></td>
 <td>Path to the <code>.swival/</code> directory</td>
-<td>both</td>
+<td>all</td>
 </tr>
 <tr>
 <td><code>SWIVAL_PROVIDER</code></td>
 <td>Provider name (e.g. <code>lmstudio</code>, <code>openrouter</code>)</td>
-<td>both</td>
+<td>all</td>
 </tr>
 <tr>
 <td><code>SWIVAL_MODEL</code></td>
 <td>Resolved model ID</td>
-<td>both</td>
+<td>all</td>
 </tr>
 <tr>
 <td><code>SWIVAL_GIT_PRESENT</code></td>
 <td><code>1</code> if inside a Git repo, <code>0</code> otherwise</td>
-<td>both</td>
+<td>all</td>
 </tr>
 <tr>
 <td><code>SWIVAL_REPO_ROOT</code></td>
 <td>Git repo root (absolute path)</td>
-<td>both</td>
+<td>all</td>
 </tr>
 <tr>
 <td><code>SWIVAL_PROJECT_REL</code></td>
 <td>Relative path from repo root to base_dir (empty at repo root)</td>
-<td>both</td>
+<td>all</td>
 </tr>
 <tr>
 <td><code>SWIVAL_GIT_HEAD</code></td>
 <td>HEAD commit SHA</td>
-<td>both</td>
+<td>all</td>
 </tr>
 <tr>
 <td><code>SWIVAL_GIT_DIRTY</code></td>
 <td><code>1</code> if working tree has staged, unstaged, or untracked changes</td>
-<td>both</td>
+<td>all</td>
 </tr>
 <tr>
 <td><code>SWIVAL_GIT_REMOTE</code></td>
 <td><code>remote.origin.url</code> value</td>
-<td>both</td>
+<td>all</td>
 </tr>
 <tr>
 <td><code>SWIVAL_REPO_HASH</code></td>
 <td>48-character hash of normalized repo identity</td>
-<td>both</td>
+<td>all</td>
 </tr>
 <tr>
 <td><code>SWIVAL_PROJECT_HASH</code></td>
 <td>48-character hash of repo identity + project_rel</td>
-<td>both</td>
+<td>all</td>
 </tr>
 <tr>
 <td><code>SWIVAL_REPORT</code></td>
@@ -245,13 +247,23 @@ with Session(
 </tr>
 <tr>
 <td><code>SWIVAL_OUTCOME</code></td>
-<td>Run outcome: <code>success</code>, <code>exhausted</code>, <code>interrupted</code>, <code>error</code></td>
-<td>exit only</td>
+<td>Outcome: <code>success</code>, <code>exhausted</code>, <code>interrupted</code>, <code>error</code></td>
+<td>exit, task_done</td>
 </tr>
 <tr>
 <td><code>SWIVAL_EXIT_CODE</code></td>
 <td>Process exit code as a string</td>
 <td>exit only</td>
+</tr>
+<tr>
+<td><code>SWIVAL_COMMAND</code></td>
+<td>Command of the task, such as <code>/goal</code>. Empty for a prompt</td>
+<td>task_done only</td>
+</tr>
+<tr>
+<td><code>SWIVAL_GOAL_STATUS</code></td>
+<td>New goal status, only when the task changed the goal</td>
+<td>task_done only</td>
 </tr>
 </tbody>
 </table>
@@ -267,8 +279,34 @@ with Session(
 <li>An exit failure forces a nonzero process exit after cleanup completes (CLI) or raises <code>LifecycleError</code> (library API).</li>
 </ul>
 <p>In the library API, <code>LifecycleError</code> propagates from <code>Session.run()</code>, <code>Session.close()</code>, and <code>Session.__exit__()</code> (when no other exception is active).</p>
+<p>The <code>task_done</code> event always fails open, even in fail-closed mode. A broken notification script must not end your session.</p>
 <h3 id="kill-switch">Kill Switch</h3>
 <p>Pass <code>--no-lifecycle</code> to disable hooks entirely. This is useful for nested invocations, CI jobs, or debugging.</p>
+<h2 id="task-notifications">Task Notifications</h2>
+<p>In the REPL, Swival runs the hook with the <code>task_done</code> event each time a task finishes. A task is a plain prompt, a custom <code>!command</code>, or one of these commands: <code>/goal</code>, <code>/continue</code>, <code>/simplify</code>, <code>/learn</code>, <code>/audit</code>, <code>/init</code> and <code>/btw</code>. Each <code>/loop</code> iteration is a task too. All other commands, such as <code>/help</code> or <code>/goal pause</code>, are not tasks.</p>
+<p>The hook runs after Swival prints the answer. <code>SWIVAL_COMMAND</code> holds the command that started the task, such as <code>/goal</code> or <code>!deploy</code>. It is empty for a plain prompt, and it is <code>/loop</code> for a loop iteration. <code>SWIVAL_OUTCOME</code> tells you how the task ended: <code>success</code>, <code>exhausted</code>, <code>interrupted</code> or <code>error</code>.</p>
+<p>This script speaks when any task ends:</p>
+<pre><code class="language-sh">#!/bin/sh
+[ &quot;$1&quot; = &quot;task_done&quot; ] || exit 0
+spd-say &quot;Swival task: $SWIVAL_OUTCOME&quot; &gt;/dev/null 2&gt;&amp;1 &amp;
+</code></pre>
+<p><code>spd-say</code> is the Linux command. On macOS, use <code>say</code> in its place: <code>say "Swival task: $SWIVAL_OUTCOME"</code>.</p>
+<p>Check the event name first, as this script does. If you already have a sync script, make sure it ignores <code>task_done</code>, or it will sync after every task.</p>
+<h3 id="goal-notifications">Goal Notifications</h3>
+<p><code>SWIVAL_OUTCOME</code> describes the task, not the goal. A <code>/goal</code> task can end with <code>success</code> while the goal still needs more work. A goal can also complete later, through <code>/continue</code> or a plain prompt.</p>
+<p>This is what <code>SWIVAL_GOAL_STATUS</code> is for. Swival sets it only when the task changed the goal. A change is a new goal, or a new status for the current goal. The value is <code>active</code>, <code>paused</code>, <code>budget_limited</code> or <code>complete</code>. In all other cases the variable is not set. A completed goal therefore reports <code>complete</code> once, not after every later prompt.</p>
+<p>This script speaks only when a goal completes:</p>
+<pre><code class="language-sh">#!/bin/sh
+[ &quot;$1&quot; = &quot;task_done&quot; ] || exit 0
+[ &quot;$SWIVAL_GOAL_STATUS&quot; = &quot;complete&quot; ] || exit 0
+spd-say &quot;Swival goal complete&quot; &gt;/dev/null 2&gt;&amp;1 &amp;
+</code></pre>
+<p>It does not look at <code>SWIVAL_COMMAND</code>, because <code>/continue</code> or a plain prompt can also complete the goal.</p>
+<h3 id="keep-the-hook-fast">Keep The Hook Fast</h3>
+<p>Swival waits for the hook before it starts the next task. It also waits until the hook closes its output. A slow program must go to the background with its output redirected, as in the last line of both scripts. You can still type while the hook runs, and Swival queues your lines. For this reason a <code>task_done</code> hook gets an empty standard input: the terminal belongs to the prompt.</p>
+<p><code>lifecycle_timeout</code> applies to this event too. Ctrl-C stops the hook script, but not the programs that the script started.</p>
+<h3 id="where-it-does-not-run">Where It Does Not Run</h3>
+<p>One-shot runs do not send <code>task_done</code>. They do not need it, because the <code>exit</code> hook already runs when the task ends, with <code>SWIVAL_OUTCOME</code> set. The library API and <code>--serve</code> do not send it either.</p>
 <h2 id="library-api">Library API</h2>
 <p><code>Session</code> supports the same lifecycle semantics as the CLI:</p>
 <pre><code class="language-python">from swival import Session
@@ -288,7 +326,7 @@ s.ask(&quot;question&quot;)
 s.close(outcome=&quot;success&quot;, exit_code=0)
 </code></pre>
 <p>For single-shot <code>run()</code>, the exit hook fires after local artifacts are written, even if the agent loop raises an exception. The <code>outcome</code> and <code>exit_code</code> passed to the hook reflect what actually happened.</p>
-<p>For multi-turn <code>ask()</code>, the exit hook fires when the session is closed — either via <code>close()</code> or <code>__exit__</code>. It does not fire after each <code>ask()</code> call. This matches REPL semantics: one startup, one exit.</p>
+<p>For multi-turn <code>ask()</code>, the exit hook fires when the session is closed — either via <code>close()</code> or <code>__exit__</code>. It does not fire after each <code>ask()</code> call. This matches REPL semantics: one startup, one exit. <code>Session</code> never sends <code>task_done</code>.</p>
 <h2 id="hugging-face-buckets">Hugging Face Buckets</h2>
 <p>HF Buckets provide S3-like object storage on the Hugging Face Hub. Combined with lifecycle hooks, they give Swival commit-scoped remote state with no HF-specific code in Swival itself.</p>
 <p>Note that HF Buckets are not end-to-end encrypted. Files are encrypted in transit (TLS) and at rest on HF's servers, but Hugging Face itself can access the stored data. If your <code>.swival/</code> state contains sensitive information, encrypt it before syncing.</p>
@@ -312,6 +350,9 @@ set -e
 EVENT=&quot;$1&quot;
 BASE_DIR=&quot;$2&quot;
 SWIVAL_DIR=&quot;$BASE_DIR/.swival&quot;
+
+# Sync at startup and exit only, not after each REPL task
+[ &quot;$EVENT&quot; = &quot;startup&quot; ] || [ &quot;$EVENT&quot; = &quot;exit&quot; ] || exit 0
 
 # Skip if not in a Git repo
 [ &quot;$SWIVAL_GIT_PRESENT&quot; = &quot;0&quot; ] &amp;&amp; exit 0
@@ -398,7 +439,7 @@ echo &quot;$HF_NS/swival-$HASH&quot;
 <p><strong>Reviewer and self-review:</strong> Hooks do not run in <code>--reviewer-mode</code>. Self-review doesn't run hooks either. No nested sync.</p>
 <p><strong>A2A serve:</strong> The <code>--serve</code> process itself does not run hooks, but the per-context sessions it creates inherit the lifecycle settings and run startup and exit hooks per session (exit fires when a session is evicted or closed). Use <code>--no-lifecycle</code> to disable hooks in a long-lived server.</p>
 <p><strong>AgentFS sandbox:</strong> Hooks run in the same process context as Swival. If you are running inside an AgentFS sandbox, the hook script needs network access to reach the remote storage backend.</p>
-<p><strong>Reports:</strong> Lifecycle events (startup and exit) are recorded in the report timeline when <code>--report</code> is set. Each event includes its exit code, duration, and any error message. A fail-closed exit hook failure rewrites the report with <code>outcome: "error"</code>.</p>
+<p><strong>Reports:</strong> Lifecycle events (startup, exit and task_done) are recorded in the report timeline when <code>--report</code> is set. Each event includes its exit code, duration, and any error message. A fail-closed exit hook failure rewrites the report with <code>outcome: "error"</code>.</p>
             <nav class="page-nav" aria-label="Page navigation"><a class="nav-prev" href="acp.html"><span class="nav-label">&larr; Previous</span><span class="nav-title">ACP</span></a><a class="nav-next" href="custom-commands.html"><span class="nav-label">Next &rarr;</span><span class="nav-title">Custom Commands</span></a></nav>
         </article>
         <aside class="page-toc" aria-label="On this page">

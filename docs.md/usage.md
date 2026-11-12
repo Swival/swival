@@ -489,7 +489,7 @@ See [Decision Models](decision-models.md) and [Model Routing](decision-models.md
 
 ### Lifecycle Hook Flags
 
-`--lifecycle-command COMMAND` runs a user-defined command at startup and exit as `<command> startup|exit <base_dir>`. The hook receives `SWIVAL_*` environment variables with Git and project metadata, enabling remote sync of `.swival/` state. See [Lifecycle Hooks](lifecycle-hooks.md) for the environment variable contract, execution ordering, and examples.
+`--lifecycle-command COMMAND` runs a user-defined command at startup and exit as `<command> startup|exit <base_dir>`. In the REPL, it also runs as `<command> task_done <base_dir>` each time a task finishes. The hook receives `SWIVAL_*` environment variables with Git and project metadata, enabling remote sync of `.swival/` state. See [Lifecycle Hooks](lifecycle-hooks.md) for the environment variable contract, execution ordering, and examples.
 
 `--lifecycle-timeout SECONDS` sets the timeout for lifecycle hook execution (default: 300).
 

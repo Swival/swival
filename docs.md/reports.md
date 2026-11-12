@@ -215,7 +215,7 @@ For `storm_suppression`, fields include `name`, `args_hash` (a hash of the canon
 For `skipped_call`, fields include `name` (the tool that was not run) and `after` (the write, edit, or delete that failed before it).
 Skipped calls are not `tool_call` events and are not part of the tool counters.
 
-For `lifecycle`, fields include `event` (`startup` or `exit`), `exit_code`, `duration_s`, and optionally `error`. Lifecycle events appear when `--lifecycle-command` is configured. See [Lifecycle Hooks](lifecycle-hooks.md) for details.
+For `lifecycle`, fields include `event` (`startup`, `exit` or `task_done`), `exit_code`, `duration_s`, and optionally `error`. Lifecycle events appear when `--lifecycle-command` is configured. See [Lifecycle Hooks](lifecycle-hooks.md) for details.
 
 For `command_policy`, fields include `bucket` (the normalized command bucket) and `decision` (`allow`, `persist`, `once`, `always_ask`, `deny`, or `block`). The interactive decisions come from `--commands ask` approval prompts; a `block` decision is also recorded whenever any restricted policy (`none`, an allowlist, or a denied bucket) rejects a command.
 

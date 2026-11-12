@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import types
 
+import pytest
+
 from swival import agent, loops as loops_mod
 from swival.input_dispatch import InputContext, StepResult
 from swival.loops import (
@@ -797,6 +799,65 @@ class TestCleanupInterrupts:
         monkeypatch.setattr(agent, "_fire_loop_iteration", fake_fire)
         agent._fire_due_loops(ctx)
         assert calls == ["first", "second"]
+
+
+class TestTaskDone:
+    def test_fires_after_each_iteration(self, monkeypatch):
+        clock = _CapturedClock(start=0.0)
+        _patch_clock(monkeypatch, clock)
+        registry = LoopRegistry()
+        ctx = _make_ctx(loop_registry=registry)
+        calls: list[tuple] = []
+        ctx.on_task_done = lambda *args: calls.append(args)
+        monkeypatch.setattr(agent, "execute_input", lambda *a, **k: _ok_step())
+        monkeypatch.setattr(agent.fmt, "info", lambda t: None)
+        monkeypatch.setattr(agent.fmt, "repl_answer", lambda t: None)
+
+        # /loop is not an agent turn itself, so the REPL does not fire again.
+        step = agent._execute_loop("5m foo", ctx, mode="repl")
+        agent._notify_task_done(ctx, "/loop", step)
+        assert calls == [(ctx, "/loop", "success", None)]
+
+        clock.advance(301)
+        agent._fire_due_loops(ctx)
+        assert len(calls) == 2
+
+    def test_interrupted_hook_keeps_the_iteration_result(self, monkeypatch):
+        """Ctrl-C during the hook stops the batch, like Ctrl-C during a turn."""
+        clock = _CapturedClock(start=100.0)
+        _patch_clock(monkeypatch, clock)
+        registry = LoopRegistry()
+        ctx = _make_ctx(loop_registry=registry)
+        ran: list[str] = []
+
+        def fake_execute_input(parsed, ctx_arg, *, mode="repl"):
+            ran.append(parsed.raw)
+            return _ok_step()
+
+        def interrupted(*args):
+            raise KeyboardInterrupt()
+
+        ctx.on_task_done = interrupted
+        monkeypatch.setattr(agent, "execute_input", fake_execute_input)
+        monkeypatch.setattr(agent.fmt, "info", lambda t: None)
+        monkeypatch.setattr(agent.fmt, "repl_answer", lambda t: None)
+
+        first, second = (
+            registry.register(
+                interval_seconds=0,
+                prompt=prompt,
+                parsed_prompt=agent.parse_input_line(prompt),
+            )
+            for prompt in ("first", "second")
+        )
+        first.consecutive_failures = 5
+        clock.advance(10)
+        with pytest.raises(KeyboardInterrupt):
+            agent._fire_due_loops(ctx)
+        assert ran == ["first"]
+        assert first.consecutive_failures == 0
+        assert first.last_fire == clock.t
+        assert len(registry) == 2
 
 
 class TestSessionCostReconcile:

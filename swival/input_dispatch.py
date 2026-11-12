@@ -128,6 +128,8 @@ class InputContext:
     last_answer: str | None = None
     reviewer: ExternalReviewer | SelfReviewer | None = None
     review: ReviewState = field(default_factory=ReviewState)
+    # The REPL calls it when a task ends: (ctx, command, outcome, goal status if the task changed it).
+    on_task_done: Callable[["InputContext", str, str, str | None], None] | None = None
 
 
 @dataclass

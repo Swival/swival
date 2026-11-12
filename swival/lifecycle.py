@@ -3,6 +3,8 @@
 Runs a user-configured command at startup and exit with Git/project metadata
 passed via SWIVAL_* environment variables. The hook can hydrate .swival/ from
 remote storage on startup and push it back on exit.
+
+The REPL also runs it with the task_done event each time a task finishes.
 """
 
 import hashlib
@@ -28,6 +30,15 @@ _GIT_ENV_MAP = {
     "repo_hash": "SWIVAL_REPO_HASH",
     "project_hash": "SWIVAL_PROJECT_HASH",
 }
+
+# These describe one event, so a Swival started from inside a hook must not inherit them.
+_EVENT_ENV_KEYS = (
+    "SWIVAL_REPORT",
+    "SWIVAL_OUTCOME",
+    "SWIVAL_EXIT_CODE",
+    "SWIVAL_COMMAND",
+    "SWIVAL_GOAL_STATUS",
+)
 
 
 def _git_output(args: list[str], cwd: str, *, working_tree: bool = False) -> str:
@@ -133,12 +144,16 @@ def build_hook_env(
     report_path: str | None = None,
     outcome: str | None = None,
     exit_code: int | None = None,
+    task_command: str | None = None,
+    goal_status: str | None = None,
 ) -> dict[str, str]:
     """Build the SWIVAL_* environment dict for a hook invocation.
 
     *resolved_base* must be an already-resolved absolute path.
     """
     env = dict(os.environ)
+    for key in _EVENT_ENV_KEYS:
+        env.pop(key, None)
 
     env["SWIVAL_HOOK_EVENT"] = event
     env["SWIVAL_BASE_DIR"] = resolved_base
@@ -157,14 +172,16 @@ def build_hook_env(
         if val is not None:
             env[env_key] = val
 
-    # Exit-only variables
-    if event == "exit":
-        if report_path:
-            env["SWIVAL_REPORT"] = report_path
-        if outcome:
-            env["SWIVAL_OUTCOME"] = outcome
-        if exit_code is not None:
-            env["SWIVAL_EXIT_CODE"] = str(exit_code)
+    if report_path:
+        env["SWIVAL_REPORT"] = report_path
+    if outcome:
+        env["SWIVAL_OUTCOME"] = outcome
+    if exit_code is not None:
+        env["SWIVAL_EXIT_CODE"] = str(exit_code)
+    if task_command is not None:
+        env["SWIVAL_COMMAND"] = task_command
+    if goal_status is not None:
+        env["SWIVAL_GOAL_STATUS"] = goal_status
 
     return env
 
@@ -192,6 +209,9 @@ def run_lifecycle_hook(
     report_path: str | None = None,
     outcome: str | None = None,
     exit_code: int | None = None,
+    task_command: str | None = None,
+    goal_status: str | None = None,
+    stdin: int | None = None,
     verbose: bool = False,
 ) -> dict:
     """Run a lifecycle hook command.
@@ -210,6 +230,8 @@ def run_lifecycle_hook(
         report_path=report_path,
         outcome=outcome,
         exit_code=exit_code,
+        task_command=task_command,
+        goal_status=goal_status,
     )
 
     result = {
@@ -227,6 +249,7 @@ def run_lifecycle_hook(
             argv,
             cwd=resolved,
             env=env,
+            stdin=stdin,
             capture_output=True,
             timeout=timeout,
         )
@@ -250,7 +273,7 @@ def run_lifecycle_hook(
             raise LifecycleError(result["error"])
         _warn_hook(result, verbose)
 
-    except FileNotFoundError as e:
+    except OSError as e:
         result["duration"] = time.monotonic() - t0
         result["error"] = f"lifecycle {event} hook failed to start: {e}"
         if fail_closed:

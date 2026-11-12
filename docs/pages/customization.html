@@ -363,7 +363,7 @@ Don't add dependencies without asking.
 <h2 id="secret-encryption">Secret Encryption</h2>
 <p>Swival can transparently encrypt recognized credential tokens before they leave your machine. See <a href="secrets.html">Secret Encryption</a> for the full documentation, including built-in token patterns, custom patterns, key management, and threat model.</p>
 <h2 id="lifecycle-hooks">Lifecycle Hooks</h2>
-<p>Swival can run a user-defined command at startup and exit, useful for syncing <code>.swival/</code> state to and from remote storage. See <a href="lifecycle-hooks.html">Lifecycle Hooks</a> for the full documentation, including environment variables, execution ordering, failure semantics, and a complete Hugging Face Buckets example.</p>
+<p>Swival can run a user-defined command at startup and exit, useful for syncing <code>.swival/</code> state to and from remote storage. In the REPL, the same command also runs each time a task finishes, so a script can notify you. See <a href="lifecycle-hooks.html">Lifecycle Hooks</a> for the full documentation, including environment variables, execution ordering, failure semantics, and a complete Hugging Face Buckets example.</p>
 <h2 id="command-middleware">Command Middleware</h2>
 <p>Swival can run a user-defined command before each shell command the agent issues, allowing you to rewrite, block, or pass through commands before they execute. The primary use case is integrating with RTK to produce token-optimized command output. See <a href="command-middleware.html">Command Middleware</a> for the full documentation, including the JSON contract, RTK setup, and a ready-to-use adapter script.</p>
 <h2 id="turn-and-token-limits">Turn And Token Limits</h2>

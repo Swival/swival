@@ -8,6 +8,7 @@ import pytest
 from conftest import fake_tool_result, plain_console
 
 from swival.agent import (
+    AgentError,
     build_parser,
     main,
     run_agent_loop,
@@ -35,8 +36,13 @@ from swival.agent import (
     remember_agents_fact,
     _repl_remember,
     _repl_status,
+    _goal_change,
+    _goal_snapshot,
+    _step_outcome,
     CompactionState,
 )
+from swival.goal import GoalState
+from swival.input_dispatch import StepResult
 from swival.repl_ui import _REPL_SHIFT_ENTER_SEQUENCES, _repl_key_bindings
 from swival.command_policy import CommandPolicy
 from swival.snapshot import SnapshotState
@@ -801,6 +807,98 @@ class TestReplLoop:
 
         captured = capsys.readouterr()
         assert "answer" in captured.out
+
+
+class TestTaskDone:
+    def _run(self, tmp_path, inputs, *, agent_loop=None, **overrides):
+        """Run the REPL and return what the callback received."""
+        calls = []
+
+        def on_task_done(ctx, command, outcome, goal_status):
+            calls.append((command, outcome, goal_status))
+
+        if agent_loop is None:
+            agent_loop = MagicMock(return_value=("answer", False))
+        session = MagicMock()
+        session.prompt.side_effect = inputs
+        with (
+            patch("prompt_toolkit.PromptSession", return_value=session),
+            patch("swival.agent.run_agent_loop", agent_loop),
+        ):
+            repl_loop(
+                [_sys("system")],
+                [],
+                **_loop_kwargs(tmp_path, on_task_done=on_task_done, **overrides),
+            )
+        return calls
+
+    def test_fires_for_a_prompt_but_not_for_an_info_command(self, tmp_path):
+        calls = self._run(tmp_path, ["hello", "/help", "/exit"])
+        assert calls == [("", "success", None)]
+
+    def test_custom_command_reports_its_name(self, tmp_path):
+        with patch(
+            "swival.agent._repl_run_custom_command",
+            return_value=("deploy", "deploy it", None),
+        ):
+            calls = self._run(tmp_path, ["!deploy staging", "/exit"])
+        assert calls == [("!deploy", "success", None)]
+
+    def test_provider_failure_is_an_error(self, tmp_path):
+        """The REPL prints the error and goes on, so the step has no answer."""
+        failing = MagicMock(side_effect=AgentError("provider is down"))
+        calls = self._run(tmp_path, ["hello", "/exit"], agent_loop=failing)
+        assert calls == [("", "error", None)]
+
+    def test_goal_status_is_reported_once(self, tmp_path):
+        """Only the turn that completes the goal reports its status."""
+        goal = GoalState()
+
+        def finish_goal(*args, **kwargs):
+            if goal.has_active():
+                goal.set_status("complete")
+            return "answer", False
+
+        calls = self._run(
+            tmp_path,
+            ["/goal ship it", "thanks", "/exit"],
+            agent_loop=finish_goal,
+            goal_state=goal,
+        )
+        assert calls == [("/goal", "success", "complete"), ("", "success", None)]
+
+    @pytest.mark.parametrize(
+        "step, outcome",
+        [
+            (StepResult(kind="agent_turn", text=""), "success"),
+            (StepResult(kind="agent_turn", text="error: x", is_error=True), "error"),
+            (StepResult(kind="agent_turn", text="so far", exhausted=True), "exhausted"),
+            (StepResult(kind="agent_turn", text=None, exhausted=True), "exhausted"),
+            (StepResult(kind="agent_turn", interrupted=True), "interrupted"),
+        ],
+    )
+    def test_step_outcome(self, step, outcome):
+        assert _step_outcome(step) == outcome
+
+    def test_goal_change(self):
+        ctx = SimpleNamespace(goal_state=GoalState())
+        before = _goal_snapshot(ctx)
+        ctx.goal_state.create("first")
+        assert _goal_change(ctx, before) == "active"
+
+        before = _goal_snapshot(ctx)
+        ctx.goal_state.set_status("complete")
+        assert _goal_change(ctx, before) == "complete"
+
+        # A replaced goal can end on the status the old one had.
+        before = _goal_snapshot(ctx)
+        ctx.goal_state.create("second")
+        ctx.goal_state.set_status("complete")
+        assert _goal_change(ctx, before) == "complete"
+
+        before = _goal_snapshot(ctx)
+        ctx.goal_state.clear()
+        assert _goal_change(ctx, before) is None
 
 
 # ---------------------------------------------------------------------------

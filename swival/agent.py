@@ -7563,6 +7563,7 @@ def build_parser():
         metavar="COMMAND",
         default=_UNSET,
         help="Command invoked at startup and exit as: <command> startup|exit <base_dir>. "
+        "The REPL also invokes it with task_done when a task finishes. "
         "Receives SWIVAL_* env vars with Git and project metadata.",
     )
     integrations_group.add_argument(
@@ -10782,6 +10783,10 @@ def _run_main(args, report, _write_report, parser):
                 goal_state=goal_state,
             )
 
+        _on_task_done = None
+        if args._lifecycle_cmd and not args._no_lifecycle:
+            _on_task_done = functools.partial(_run_task_done_hook, args, report)
+
         repl_loop(
             messages,
             tools,
@@ -10799,6 +10804,7 @@ def _run_main(args, report, _write_report, parser):
             start_dir=start_dir,
             trace_dir=getattr(args, "trace_dir", None),
             instructions_enabled=_instructions_enabled,
+            on_task_done=_on_task_done,
         )
     finally:
         _shutdown_and_reconcile(
@@ -16639,6 +16645,77 @@ def _run_after_render(step: StepResult | None) -> None:
     callback()
 
 
+def _step_outcome(step: StepResult) -> str:
+    if step.interrupted:
+        return "interrupted"
+    if step.is_error:
+        return "error"
+    if step.exhausted:
+        return "exhausted"
+    # No answer means the turn failed, and the REPL already printed why.
+    return "success" if step.text is not None else "error"
+
+
+def _task_command(parsed: ParsedInput) -> str:
+    if parsed.is_custom_command:
+        return parsed.raw.split(None, 1)[0]
+    return parsed.cmd or ""
+
+
+def _goal_snapshot(ctx: InputContext) -> tuple[str, str] | None:
+    record = ctx.goal_state.get() if ctx.goal_state is not None else None
+    return (record.goal_id, record.status) if record is not None else None
+
+
+def _goal_change(ctx: InputContext, before: tuple[str, str] | None) -> str | None:
+    """Return the goal status if the goal changed since *before*."""
+    after = _goal_snapshot(ctx)
+    return after[1] if after is not None and after != before else None
+
+
+def _notify_task_done(
+    ctx: InputContext,
+    command: str,
+    step: StepResult | None,
+    goal_status: str | None = None,
+) -> None:
+    if ctx.on_task_done is None or step is None or step.kind != "agent_turn":
+        return
+    ctx.on_task_done(ctx, command, _step_outcome(step), goal_status)
+
+
+def _run_task_done_hook(args, report, ctx, command, outcome, goal_status) -> None:
+    """Always fail open: a broken notification script must not end the session."""
+    from .lifecycle import run_lifecycle_hook
+
+    # The provider and the model may have changed since startup.
+    settings = _current_llm_settings(
+        ctx.profiles,
+        ctx.current_profile,
+        ctx.startup_profile,
+        ctx.raw_llm_baseline,
+        ctx.pre_profile_baseline,
+        ctx.on_startup_runtime,
+    )
+    hook_result = run_lifecycle_hook(
+        args._lifecycle_cmd,
+        "task_done",
+        args.base_dir,
+        timeout=args._lifecycle_timeout,
+        provider=settings.get("provider") or args.provider,
+        model=ctx.loop_kwargs.get("model_id"),
+        git_meta=args._lifecycle_git_meta,
+        outcome=outcome,
+        task_command=command,
+        goal_status=goal_status,
+        # The prompt owns the terminal while this hook runs.
+        stdin=subprocess.DEVNULL,
+        verbose=args.verbose,
+    )
+    if report:
+        report.record_lifecycle(hook_result)
+
+
 def _run_loop_iteration_snapshot(reg: "LoopRegistration", ctx: InputContext) -> bool:
     """Fire one iteration of a registered loop in its own snapshot."""
     if ctx.loop_registry is None:
@@ -16710,6 +16787,7 @@ def _run_loop_iteration_snapshot(reg: "LoopRegistration", ctx: InputContext) -> 
         fmt.info(
             f"{tag} done. next fire >= {_format_loop_duration(reg.interval_seconds)}."
         )
+    _notify_task_done(ctx, "/loop", step)
     return stop_batch
 
 
@@ -16950,6 +17028,7 @@ def repl_loop(
     web_search_policy=None,
     reviewer=None,
     initial_question: str | None = None,
+    on_task_done=None,
 ):
     """Interactive read-eval-print loop.
 
@@ -17220,6 +17299,7 @@ def repl_loop(
         instructions_enabled=instructions_enabled,
         instructions_full=instructions_full,
         reviewer=reviewer,
+        on_task_done=on_task_done,
     )
 
     completer.model_candidates = lambda: _model_completion_candidates(ctx)
@@ -17256,6 +17336,7 @@ def repl_loop(
         if parsed.is_plain_text:
             ctx.loop_kwargs["repl_input_text"] = parsed.raw
         result = None
+        goal_before = _goal_snapshot(ctx)
         with ui.turn():
             try:
                 result = execute_input(parsed, ctx, mode="repl")
@@ -17276,6 +17357,9 @@ def repl_loop(
             _run_after_render(result)
             if result.interrupted:
                 ui.recall_queued()
+            _notify_task_done(
+                ctx, _task_command(parsed), result, _goal_change(ctx, goal_before)
+            )
         return bool(result is not None and result.stop)
 
     _repl_outcome = "error"
