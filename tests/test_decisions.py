@@ -524,7 +524,7 @@ class TestAnswerValidation:
                     "legend": {},
                     "probabilities": {},
                 },
-                "add up to 0.000",
+                "legend does not match the requested levels",
             ),
             (
                 {
@@ -542,24 +542,50 @@ class TestAnswerValidation:
         assert out.startswith("error: decision model returned an unusable response: ")
         assert expected in out
 
-    def test_litellm_fills_in_missing_score_levels(self):
-        """Known limit: answers are checked after LiteLLM's conversion.
+    @pytest.mark.parametrize("legend", [{}, ANSWERS["clarity"]["legend"]])
+    def test_litellm_preserves_missing_score_levels(self, legend):
+        """LiteLLM no longer fills absent score probabilities with zeros.
 
-        The server skipped levels 0 and 2 and the whole legend, but LiteLLM
-        fills them in and the total is still 1, so the answer passes.
+        It rebuilds the legend from the supplied probability entries, so
+        Swival rejects the incomplete legend even when the total is 1.
         """
         out = _through_litellm(
             {
                 "type": "score",
                 "score": 1.0,
                 "confidence": 1.0,
-                "legend": {},
+                "legend": legend,
                 "probabilities": {"1": 1.0},
             }
         )
-        clarity = json.loads(out)["answers"]["clarity"]
-        assert clarity["probabilities"] == {"0": 0.0, "1": 1.0, "2": 0.0}
-        assert clarity["legend"] == ANSWERS["clarity"]["legend"]
+        assert out == (
+            "error: decision model returned an unusable response: "
+            "clarity: legend does not match the requested levels"
+        )
+
+    @pytest.mark.parametrize("name", ["clarity", "install_tool"])
+    def test_well_formed_raw_server_answers(self, name):
+        out = json.loads(_through_litellm(ANSWERS[name]))
+        assert out["answers"][name] == ANSWERS[name]
+
+    @pytest.mark.parametrize("legend", [{}, ANSWERS["clarity"]["legend"]])
+    def test_explicit_zero_score_probabilities(self, legend):
+        """Zero probabilities are valid when the server supplies every level.
+
+        LiteLLM still fills missing legend labels for supplied probabilities.
+        """
+        answer = {
+            "type": "score",
+            "score": 1.0,
+            "confidence": 1.0,
+            "legend": legend,
+            "probabilities": {"0": 0.0, "1": 1.0, "2": 0.0},
+        }
+        out = json.loads(_through_litellm(answer))
+        assert out["answers"]["clarity"] == {
+            **answer,
+            "legend": ANSWERS["clarity"]["legend"],
+        }
 
     def test_structured_levels_in_the_legend(self, systemone):
         levels = [{"level": "low"}, ["mid", 2], "high"]
