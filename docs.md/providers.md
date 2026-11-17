@@ -422,6 +422,10 @@ swival --logout
 
 The `--top-p`, `--seed`, and `tool_choice` parameters are not supported by the ChatGPT Plus/Pro backend. Swival drops them automatically when using this provider.
 
+The `think` and `snapshot` tools are not offered with this provider.
+The backend rejects the whole response when a tool call looks like the model's own reasoning, and reports it as a usage-policy violation of your prompt.
+The model reasons natively instead, and context compaction still applies.
+
 Models like `gpt-6.1-sol` support tunable reasoning effort. Use `--reasoning-effort` to control how much the model thinks before responding:
 
 ```sh

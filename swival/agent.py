@@ -679,6 +679,26 @@ def _is_prompt_rejection(exc) -> bool:
     return not _is_vision_rejection(exc)
 
 
+def _ease_rejected_request(completion_kwargs: dict) -> str:
+    """Lower the reasoning effort of a request ChatGPT just rejected.
+
+    ChatGPT rejects what the model wrote, not the prompt, so the same request
+    mostly fails the same way again.
+    With little reasoning the model tends to pick another action.
+    Returns what to add to the retry warning.
+    """
+    if not str(completion_kwargs.get("model", "")).startswith("chatgpt/"):
+        return ""
+    if completion_kwargs.get("reasoning_effort") in ("none", "minimal", "low"):
+        return ""
+    # An effort set through extra_body wins over the one lowered here.
+    extra_body = completion_kwargs.get("extra_body") or {}
+    if "reasoning" in extra_body or "reasoning_effort" in extra_body:
+        return ""
+    completion_kwargs["reasoning_effort"] = "low"
+    return " at low reasoning effort"
+
+
 def _prompt_rejection_hint(exc) -> str:
     return _PROMPT_REJECTION_HINT if _is_prompt_rejection(exc) else ""
 
@@ -2343,6 +2363,19 @@ def _without_tool(tools: list | None, name: str) -> list | None:
     if not tools or all(t.get("function", {}).get("name") != name for t in tools):
         return tools
     return [t for t in tools if t.get("function", {}).get("name") != name]
+
+
+# ChatGPT's backend fails a whole response when it reads a tool call as leaked
+# reasoning, and reports that as a usage-policy prompt rejection.
+# A thought or a snapshot summary is a write-up of the model's reasoning, so
+# these calls are refused most of the time, and nearly always at high effort.
+# The same models take both tools fine through the OpenAI API.
+_CHATGPT_REFUSED_TOOLS = frozenset({"think", "snapshot"})
+
+
+def _refused_tools(provider: str | None) -> frozenset[str]:
+    """Tools the provider is known to refuse calls to, so never offered."""
+    return _CHATGPT_REFUSED_TOOLS if provider == "chatgpt" else frozenset()
 
 
 def _vision_unsupported(provider: str, model_id: str, api_base: str | None) -> bool:
@@ -6019,6 +6052,7 @@ def _completion_with_retry(
 
     Usage-policy prompt rejections are retried too, within the same attempt
     limit, unless *retry_prompt_rejections* is false.
+    For ChatGPT the retries lower the reasoning effort in *completion_kwargs*.
 
     On failure, attaches ``_provider_retries`` to the raised exception so
     callers can record how many attempts were made before the error.
@@ -6051,8 +6085,11 @@ def _completion_with_retry(
             coe._provider_retries = attempt
             raise coe
         except Exception as e:
+            eased = ""
             if _is_prompt_rejection(e):
                 retryable, reason = retry_prompt_rejections, "Prompt rejected"
+                if retryable:
+                    eased = _ease_rejected_request(completion_kwargs)
             elif isinstance(e, litellm.BadRequestError):
                 retryable = False
             elif _looks_like_context_overflow(
@@ -6070,7 +6107,7 @@ def _completion_with_retry(
             delay *= 0.75 + 0.5 * random.random()
             if verbose:
                 fmt.warning(
-                    f"{reason}; retrying in {delay:.0f}s "
+                    f"{reason}; retrying{eased} in {delay:.0f}s "
                     f"(attempt {attempt + 2}/{max_retries})"
                 )
             time.sleep(delay)
@@ -6711,6 +6748,11 @@ def call_llm(
         if choice.finish_reason == "length":
             return
         if _has_malformed_tool_args(choice.message):
+            return
+        # A retry at lower effort did not answer the request the key describes.
+        if completion_kwargs.get("reasoning_effort") != request_base.get(
+            "reasoning_effort"
+        ):
             return
         msg_d = (
             choice.message.model_dump(exclude_none=True)
@@ -9418,7 +9460,7 @@ _AUTONOMY_DIRECTIVES: dict[_InteractionPolicy, str] = {
 
 _AMBIGUITY_DIRECTIVES: dict[_InteractionPolicy, str] = {
     "autonomous": (
-        "- If the task is ambiguous, use `think` to reason through the possible "
+        "- If the task is ambiguous, {{AMBIGUITY_REASONING}} the possible "
         "interpretations against the codebase context, pick the most likely intent, "
         "and briefly state your choice before acting."
     ),
@@ -9433,11 +9475,17 @@ _AMBIGUITY_DIRECTIVES: dict[_InteractionPolicy, str] = {
 def _apply_interaction_policy(
     system_content: str,
     policy: _InteractionPolicy,
+    *,
+    think: bool = True,
 ) -> str:
     """Replace autonomy placeholders with policy-specific directives."""
+    reasoning = "use `think` to reason through" if think else "weigh"
     return system_content.replace(
         "{{AUTONOMY_DIRECTIVE}}", _AUTONOMY_DIRECTIVES[policy]
-    ).replace("{{AMBIGUITY_DIRECTIVE}}", _AMBIGUITY_DIRECTIVES[policy])
+    ).replace(
+        "{{AMBIGUITY_DIRECTIVE}}",
+        _AMBIGUITY_DIRECTIVES[policy].replace("{{AMBIGUITY_REASONING}}", reasoning),
+    )
 
 
 _MEMORY_GUIDANCE_BLOCK = (
@@ -9476,12 +9524,32 @@ _SUBAGENT_GUIDANCE_BLOCK = (
 )
 
 
+_THINK_GUIDANCE_BLOCK = (
+    "- **Use `think` before** multi-step coding tasks, debugging, choosing between "
+    "alternatives, and editing code \u2014 not for simple direct answers.\n"
+)
+
+_THINK_ON_ERROR_GUIDANCE_BLOCK = (
+    "- **On tool errors,** cause clear: fix the call directly, no `think`. "
+    "Cause or next step unclear, or same error again: `think` first.\n"
+)
+
+_SNAPSHOT_GUIDANCE_BLOCK = (
+    "- **Use `snapshot restore` after substantial exploration** (multiple file reads, "
+    "debugging sessions, trying several approaches). Pass a thorough summary with file "
+    "paths, function names, line numbers, decisions, and next steps \u2014 future-you "
+    'only sees the summary. Optional: `snapshot save label="..."` first to scope it; '
+    "add `force=true` if you wrote files or ran commands.\n"
+)
+
+
 def _apply_capability_substitutions(
     system_content: str,
     *,
     no_memory: bool,
     files_mode: str,
     subagents: bool = False,
+    withheld_tools: frozenset[str] = frozenset(),
 ) -> str:
     """Substitute capability-gated placeholders in the prompt template.
 
@@ -9490,7 +9558,10 @@ def _apply_capability_substitutions(
     outside .swival/, so the editing rules are unreachable). The post-template
     "Filesystem access is restricted" sentence still gets appended.
     {{SUBAGENT_GUIDANCE}}: dropped when subagents is False.
+    {{THINK_GUIDANCE}}, {{THINK_ON_ERROR_GUIDANCE}}, {{SNAPSHOT_GUIDANCE}}:
+    dropped when the tool is in withheld_tools.
     """
+    think = "think" not in withheld_tools
     memory_block = "" if no_memory else _MEMORY_GUIDANCE_BLOCK
     editing_block = "" if files_mode == "none" else _EDITING_GUIDANCE_BLOCK
     subagent_block = _SUBAGENT_GUIDANCE_BLOCK if subagents else ""
@@ -9498,6 +9569,15 @@ def _apply_capability_substitutions(
         system_content.replace("{{MEMORY_GUIDANCE}}", memory_block)
         .replace("{{EDITING_GUIDANCE}}", editing_block)
         .replace("{{SUBAGENT_GUIDANCE}}", subagent_block)
+        .replace("{{THINK_GUIDANCE}}", _THINK_GUIDANCE_BLOCK if think else "")
+        .replace(
+            "{{THINK_ON_ERROR_GUIDANCE}}",
+            _THINK_ON_ERROR_GUIDANCE_BLOCK if think else "",
+        )
+        .replace(
+            "{{SNAPSHOT_GUIDANCE}}",
+            "" if "snapshot" in withheld_tools else _SNAPSHOT_GUIDANCE_BLOCK,
+        )
     )
 
 
@@ -9599,6 +9679,7 @@ def assemble_system_prompt(
 
     breakdown: dict = {}
     templated = not system_prompt and provider != "command"
+    withheld_tools = _refused_tools(provider)
 
     if system_prompt:
         base = system_prompt
@@ -9629,10 +9710,13 @@ def assemble_system_prompt(
             no_memory=no_memory,
             files_mode=files_mode,
             subagents=subagents,
+            withheld_tools=withheld_tools,
         )
 
     if policy is not None:
-        base = _apply_interaction_policy(base, policy)
+        base = _apply_interaction_policy(
+            base, policy, think="think" not in withheld_tools
+        )
     breakdown["builtin"] = count_tokens(base)
 
     loaded_set: "instructions_mod.InstructionSet | None" = None
@@ -11213,6 +11297,9 @@ def _run_agent_loop(
     provider = llm_kwargs.get("provider", "lmstudio")
     if _vision_unsupported(provider, model_id, api_base):
         tools = _without_tool(tools, "view_image")
+    refused_tools = _refused_tools(provider)
+    for name in refused_tools:
+        tools = _without_tool(tools, name)
     # Workers without a decision model may still share the parent's tool list.
     decide_call = None
     if decisions is None:
@@ -12572,7 +12659,7 @@ def _run_agent_loop(
                     )
                     interventions.append(reminder)
 
-        if snapshot_state is not None:
+        if snapshot_state is not None and "snapshot" not in refused_tools:
             if all_tools_readonly:
                 snapshot_read_streak += 1
                 if snapshot_read_streak >= 5 and not snapshot_nudge_fired:

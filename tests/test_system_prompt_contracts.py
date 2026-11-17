@@ -26,6 +26,7 @@ from swival.agent import (
     DEFAULT_SYSTEM_PROMPT_FILE,
     _apply_capability_substitutions,
     _apply_interaction_policy,
+    _refused_tools,
 )
 
 
@@ -35,6 +36,7 @@ def _read_prompt(
     no_memory: bool = False,
     files_mode: str = "some",
     subagents: bool = False,
+    withheld_tools: frozenset[str] = frozenset(),
 ) -> str:
     """Return the assembled prompt the way build_system_prompt() would.
 
@@ -43,9 +45,13 @@ def _read_prompt(
     """
     raw = DEFAULT_SYSTEM_PROMPT_FILE.read_text(encoding="utf-8")
     raw = _apply_capability_substitutions(
-        raw, no_memory=no_memory, files_mode=files_mode, subagents=subagents
+        raw,
+        no_memory=no_memory,
+        files_mode=files_mode,
+        subagents=subagents,
+        withheld_tools=withheld_tools,
     )
-    return _apply_interaction_policy(raw, policy)
+    return _apply_interaction_policy(raw, policy, think="think" not in withheld_tools)
 
 
 def _normalize(text: str) -> str:
@@ -325,6 +331,15 @@ class TestInteractionPolicySubstitution:
 # ---------------------------------------------------------------------------
 # Capability gates: prompt content must adapt to active features
 # ---------------------------------------------------------------------------
+
+
+class TestRefusedToolsGate:
+    def test_prompt_never_names_a_tool_the_provider_refuses(self):
+        for policy in ("autonomous", "interactive"):
+            text = _read_prompt(policy, withheld_tools=_refused_tools("chatgpt"))
+            assert "think" not in text
+            assert "snapshot" not in text
+            assert "{{" not in text
 
 
 class TestMemoryGate:

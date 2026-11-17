@@ -374,6 +374,9 @@ swival --provider chatgpt --model gpt-6.1-sol &quot;task&quot;
 swival --logout
 </code></pre>
 <p>The <code>--top-p</code>, <code>--seed</code>, and <code>tool_choice</code> parameters are not supported by the ChatGPT Plus/Pro backend. Swival drops them automatically when using this provider.</p>
+<p>The <code>think</code> and <code>snapshot</code> tools are not offered with this provider.
+The backend rejects the whole response when a tool call looks like the model's own reasoning, and reports it as a usage-policy violation of your prompt.
+The model reasons natively instead, and context compaction still applies.</p>
 <p>Models like <code>gpt-6.1-sol</code> support tunable reasoning effort. Use <code>--reasoning-effort</code> to control how much the model thinks before responding:</p>
 <pre><code class="language-sh">swival --provider chatgpt --model gpt-6.1-sol --reasoning-effort high &quot;task&quot;
 </code></pre>

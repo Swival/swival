@@ -1367,7 +1367,7 @@ class TestPromptRejectionRetry:
         assert sent[0]["parallel_tool_calls"] is False
 
     @_BOTH_SHAPES
-    def test_resent_unchanged_then_succeeds(self, stub_provider, rejection, provider):
+    def test_resent_then_succeeds(self, stub_provider, rejection, provider):
         outcomes = iter([rejection(), _make_response("recovered")])
         sent = []
 
@@ -1385,7 +1385,9 @@ class TestPromptRejectionRetry:
         )
         assert (msg.content, retries) == ("recovered", 1)
         assert len(sent) == 2
-        assert sent[0] == sent[1]
+        # ChatGPT rejects what the model wrote, so only it gets an easier request.
+        resent_effort = "low" if provider == "chatgpt" else "high"
+        assert sent[1] == sent[0] | {"reasoning_effort": resent_effort}
 
     def test_exhaustion_raises_original_with_count(self, stub_provider):
         from swival import fmt

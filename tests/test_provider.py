@@ -5578,3 +5578,29 @@ class TestAnthropicThinkingBlocks:
         sent = mock_comp.call_args.kwargs["messages"]
         assert ("thinking_blocks" in sent[6]) is kept
         assert "thinking_blocks" in history[6]
+
+
+@pytest.mark.parametrize(
+    "provider, offered",
+    [
+        ("chatgpt", ["read_file"]),
+        ("generic", ["read_file", "think", "snapshot"]),
+    ],
+)
+def test_chatgpt_is_not_offered_the_tools_it_refuses(tmp_path, provider, offered):
+    from tests.conftest import build_loop_kwargs, make_message
+
+    tools = [
+        {"type": "function", "function": {"name": name, "parameters": {}}}
+        for name in ("read_file", "think", "snapshot")
+    ]
+    seen = []
+
+    def fake_call_llm(*args, **kwargs):
+        seen.append([t["function"]["name"] for t in args[7]])
+        return make_message(content="done"), "stop"
+
+    kwargs = build_loop_kwargs(tmp_path) | {"llm_kwargs": {"provider": provider}}
+    with patch("swival.agent.call_llm", side_effect=fake_call_llm):
+        agent.run_agent_loop([{"role": "user", "content": "hi"}], tools, **kwargs)
+    assert seen == [offered]
