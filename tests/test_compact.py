@@ -3508,6 +3508,18 @@ def _loop_kwargs(tmp_path, **overrides):
     return defaults
 
 
+def _unknown_400(text):
+    """A 400 the provider layer could not put a name on."""
+    error = AgentError(f"LLM call failed: {text}")
+    error._request_shaped = True
+    return error
+
+
+def _image_question():
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}}
+    return {"role": "user", "content": [{"type": "text", "text": "look"}, image]}
+
+
 def _completion_ok(content="recovered"):
     msg = SimpleNamespace(content=content, tool_calls=None, role="assistant")
     choice = SimpleNamespace(message=msg, finish_reason="stop")
@@ -3645,6 +3657,132 @@ class TestUnknownWindowOverflowLoop:
         with patch("swival.agent.call_llm", side_effect=always_bad):
             with pytest.raises(AgentError, match="malformed request"):
                 run_agent_loop(messages, _DUMMY_TOOLS, **_loop_kwargs(tmp_path))
+
+    @pytest.mark.parametrize("overflow", [True, False])
+    def test_minimal_prompt_recovery_runs_only_once(self, tmp_path, overflow):
+        """This is the DeepSeek loop: only the request without tools gets
+        through, and its few tokens of reply were fed back in on every turn."""
+        from swival.agent import run_agent_loop
+
+        probes = 0
+
+        def only_without_tools(*args, **kwargs):
+            nonlocal probes
+            if args[7] is None:
+                probes += 1
+                reply = SimpleNamespace(content="We need", tool_calls=None)
+                return reply, "length", [], 0, (0, 0)
+            if overflow:
+                raise ContextOverflowError("context length exceeded")
+            raise _unknown_400("tool schema rejected")
+
+        def run():
+            messages = [_sys("system"), _user("question " + "z" * 30000)]
+            return run_agent_loop(
+                messages, _DUMMY_TOOLS, **_loop_kwargs(tmp_path, max_turns=20)
+            )
+
+        with (
+            patch("swival.agent.compact_to_budget", side_effect=_noop_compact),
+            patch("swival.agent.call_llm", side_effect=only_without_tools),
+        ):
+            if overflow:
+                assert run() == (_CONTEXT_EXHAUSTED_FALLBACK, True)
+            else:
+                with pytest.raises(AgentError, match="tool schema rejected"):
+                    run()
+        assert probes == 1
+
+    def test_no_minimal_prompt_for_a_size_already_accepted(self, tmp_path):
+        """Without its image, the prompt is smaller than the one the provider
+        took a turn earlier, so the 400 is not an overflow."""
+        from swival.agent import run_agent_loop
+
+        with_tools = []
+
+        def rejects_after_first(*args, **kwargs):
+            with_tools.append(args[7] is not None)
+            if len(with_tools) == 1:
+                return _ok_msg("")
+            if args[7] is None:
+                return _ok_msg("probe answered")
+            raise _unknown_400("unsupported parameter")
+
+        messages = [_sys("system"), _image_question()]
+        with patch("swival.agent.call_llm", side_effect=rejects_after_first):
+            with pytest.raises(AgentError, match="unsupported parameter"):
+                run_agent_loop(
+                    messages, _DUMMY_TOOLS, **_loop_kwargs(tmp_path, max_turns=5)
+                )
+        assert with_tools == [True, True, True]
+        assert len(messages) == 4
+
+    @pytest.mark.parametrize("refusal_first", [False, True])
+    def test_forced_tool_choice_refused_during_overflow_recovery(
+        self, tmp_path, refusal_first
+    ):
+        """Overflow recovery resends the turn several times.
+        The forced tool choice must be refused only once, whichever of the two
+        errors the provider reports first."""
+        from swival.agent import run_agent_loop
+
+        outcomes = []
+
+        def fake_call_llm(*args, **kwargs):
+            forced = kwargs.get("tool_choice") == "required" and args[7] is not None
+            overflows = estimate_tokens(args[2], None) > 10_000
+            if overflows and not (forced and refusal_first):
+                outcomes.append("overflow")
+                raise ContextOverflowError("context length exceeded")
+            if forced:
+                outcomes.append("refused")
+                raise _unknown_400("Thinking mode does not support this tool_choice")
+            outcomes.append("ok")
+            return _ok_msg("recovered")
+
+        messages = [
+            _sys("system"),
+            _user("inspect the file"),
+            _assistant_tc([("call-1", "read_file", '{"path":"large.txt"}')]),
+            _tool("call-1", "z" * 80_000),
+            _assistant("I inspected the file."),
+            _user("Finish the task."),
+        ]
+        with patch("swival.agent.call_llm", side_effect=fake_call_llm):
+            answer, _ = run_agent_loop(
+                messages,
+                _DUMMY_TOOLS,
+                **_loop_kwargs(tmp_path, initial_tool_choice="required"),
+            )
+        assert answer == "recovered"
+        assert outcomes[0] == ("refused" if refusal_first else "overflow")
+        assert "overflow" in outcomes
+        assert outcomes.count("refused") == 1
+
+    def test_forcing_survives_an_unrelated_rejection(self, tmp_path):
+        """The 400 is about the image: it comes back the same without the
+        forced tool choice, so forcing stays on."""
+        from swival._msg import _has_image_content
+        from swival.agent import run_agent_loop
+
+        sent = []
+
+        def rejects_images(*args, **kwargs):
+            has_image = _has_image_content(args[2])
+            sent.append((kwargs.get("tool_choice", "auto"), has_image))
+            if has_image:
+                raise _unknown_400("unprocessable")
+            return _ok_msg("done")
+
+        messages = [_sys("system"), _image_question()]
+        with patch("swival.agent.call_llm", side_effect=rejects_images):
+            answer, _ = run_agent_loop(
+                messages,
+                _DUMMY_TOOLS,
+                **_loop_kwargs(tmp_path, initial_tool_choice="required"),
+            )
+        assert answer == "done"
+        assert sent == [("required", True), ("auto", True), ("required", False)]
 
     def test_known_window_unclassified_error_still_raises(self, tmp_path):
         """The backstop is scoped to the unknown-window regime: a request-shaped

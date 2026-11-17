@@ -18,6 +18,7 @@ from swival.agent import (
     _strip_code_spans,
 )
 from swival.goal import GoalState
+from swival.report import AgentError
 from swival.snapshot import SnapshotState
 from swival.thinking import ThinkingState
 from swival.todo import TodoState
@@ -376,7 +377,17 @@ def test_loop_recovers_from_textual_tool_call_leak(tmp_path, monkeypatch):
     assert found_trim, "trimmed assistant message should be in history"
 
 
-def test_xml_tool_leak_repair_requires_one_native_call(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "refuses_forced_choice, expected_choices",
+    [
+        (False, ["auto", "required", "auto"]),
+        # DeepSeek refuses a forced tool choice in thinking mode.
+        (True, ["auto", "required", "auto", "auto"]),
+    ],
+)
+def test_xml_tool_leak_repair_requires_one_native_call(
+    tmp_path, monkeypatch, refuses_forced_choice, expected_choices
+):
     (tmp_path / "needle.txt").write_text("found\n", encoding="utf-8")
     read_file_tool = next(
         tool for tool in TOOLS if tool["function"]["name"] == "read_file"
@@ -401,6 +412,10 @@ def test_xml_tool_leak_repair_requires_one_native_call(tmp_path, monkeypatch):
 
     def fake_call_llm(*args, **kwargs):
         choices.append(kwargs.get("tool_choice", "auto"))
+        if refuses_forced_choice and choices[-1] == "required":
+            error = AgentError("Thinking mode does not support this tool_choice")
+            error._request_shaped = True
+            raise error
         return next(responses), "stop", [], 0, (0, 0)
 
     monkeypatch.setattr(agent, "call_llm", fake_call_llm)
@@ -431,7 +446,7 @@ def test_xml_tool_leak_repair_requires_one_native_call(tmp_path, monkeypatch):
 
     assert answer == "done"
     assert exhausted is False
-    assert choices == ["auto", "required", "auto"]
+    assert choices == expected_choices
 
 
 def test_xml_root_not_sent_as_tool_is_plain_text(tmp_path, monkeypatch):

@@ -3027,6 +3027,10 @@ class AdaptiveContextBudget:
         if estimate > self.accepted_high:
             self.accepted_high = estimate
 
+    def has_accepted(self, estimate: int) -> bool:
+        """True if the provider already took a prompt at least this large."""
+        return 0 < estimate <= self.accepted_high
+
     def record_reject(self, estimate: int) -> None:
         if estimate > 0 and (self.rejected_low is None or estimate < self.rejected_low):
             self.rejected_low = estimate
@@ -5564,6 +5568,21 @@ def _is_vision_rejection(error: "AgentError") -> bool:
 def _is_vision_capability_rejection(error: "AgentError") -> bool:
     """Does the rejection blame the model rather than this particular image?"""
     return _error_mentions(error, _VISION_CAPABILITY_PATTERNS)
+
+
+def _may_reject_forced_tool_choice(error: "AgentError") -> bool:
+    """Could this request have failed because it forced a tool call?
+
+    Some servers refuse ``tool_choice="required"``.
+    DeepSeek does in thinking mode, with a plain 400.
+    """
+    if isinstance(error, ContextOverflowError) or _is_vision_rejection(error):
+        return False
+    return (
+        isinstance(error, ToolsNotSupportedError)
+        or getattr(error, "_request_shaped", False)
+        or _error_mentions(error, ("tool_choice", "tool choice"))
+    )
 
 
 def _call_llm_with_dismiss(dismiss, llm_args, **llm_kwargs):
@@ -11025,6 +11044,12 @@ def _run_agent_loop(
     _announced_action_nudge_pending = False
     _textual_tool_call_repair_pending = False
     _initial_tool_choice_pending = initial_tool_choice == "required"
+    _forced_tool_choice_rejected = False
+
+    # A minimal-prompt recovery only gets a few tokens back.
+    # If the next normal request fails too, it did not help, and trying it
+    # again would repeat on every turn.
+    _floor_recovery_unconfirmed = False
     _malformed_tool_call_repair_pending = False
     _duplicate_tool_call_repair_pending = False
     _final_attempt_injected_for_goal: str | None = None
@@ -11098,6 +11123,8 @@ def _run_agent_loop(
         bookkeeping. Returns the (msg, finish_reason, cmd_activity,
         provider_retries, cache_stats) tuple for the caller to bind. Mutates
         ``messages`` in place; the caller resets ``_last_request_tools``."""
+        nonlocal _floor_recovery_unconfirmed
+        _floor_recovery_unconfirmed = True
         messages[:] = terminal.working_messages
         if snapshot_state is not None:
             snapshot_state.invalidate_index_checkpoint()
@@ -11343,6 +11370,35 @@ def _run_agent_loop(
         _is_tools_retry = True
         turns -= 1
 
+    def _call_turn_llm(dismiss, llm_args, **kwargs):
+        """Call the model, and stop forcing a tool call if the provider refuses.
+
+        This comes before any recovery that drops tools, images or history.
+        """
+        nonlocal _forced_tool_choice_rejected
+        tools_sent = llm_args[7]
+        if _forced_tool_choice_rejected or not tools_sent:
+            kwargs.pop("tool_choice", None)
+        try:
+            return _call_llm_with_dismiss(dismiss, llm_args, **kwargs)
+        except AgentError as e:
+            if "tool_choice" not in kwargs or not _may_reject_forced_tool_choice(e):
+                raise
+            if verbose:
+                fmt.warning(
+                    "provider rejected the forced tool choice, retrying "
+                    f"without it: {_short_error(str(e), 200)}"
+                )
+            del kwargs["tool_choice"]
+            _forced_tool_choice_rejected = True
+            try:
+                return _call_llm_with_dismiss(dismiss, llm_args, **kwargs)
+            except AgentError as unforced:
+                # Still refused, so the tool choice was not the problem.
+                if _may_reject_forced_tool_choice(unforced):
+                    _forced_tool_choice_rejected = False
+                raise
+
     def _forget_vision():
         """Remember that this model refuses images and stop offering view_image."""
         nonlocal tools, effective_tools
@@ -11564,7 +11620,7 @@ def _run_agent_loop(
             else:
                 _waiting_cm = nullcontext()
             with _waiting_cm as _dismiss_waiting:
-                _llm_result = _call_llm_with_dismiss(
+                _llm_result = _call_turn_llm(
                     _dismiss_waiting,
                     _llm_args,
                     unknown_context_window=context_length is None,
@@ -11798,7 +11854,7 @@ def _run_agent_loop(
                         if verbose
                         else nullcontext()
                     ) as _dismiss_waiting:
-                        _llm_result = _call_llm_with_dismiss(
+                        _llm_result = _call_turn_llm(
                             _dismiss_waiting,
                             _llm_args,
                             unknown_context_window=context_length is None,
@@ -11868,6 +11924,7 @@ def _run_agent_loop(
                     raise
                 else:
                     _last_request_tools = retry_tools
+                    _floor_recovery_unconfirmed = False
                     elapsed = time.monotonic() - t0
                     if verbose:
                         fmt.llm_timing(elapsed, finish_reason)
@@ -11888,7 +11945,11 @@ def _run_agent_loop(
                     _compaction_success = True
                     break
 
-            if not _compaction_success and _tne_pending is None:
+            if (
+                not _compaction_success
+                and _tne_pending is None
+                and not _floor_recovery_unconfirmed
+            ):
                 # Absolute terminal floor. The reactive ladder shrinks only
                 # relative to the current size, so an unknown context window has
                 # no hard target to descend to. Try a few fixed minimal-prompt
@@ -11960,7 +12021,12 @@ def _run_agent_loop(
                 turns -= 1
                 continue
             _recovered = False
-            if _terminal_floor_eligible(e, context_length):
+            # A size the provider already took is not an overflow.
+            if (
+                not _floor_recovery_unconfirmed
+                and not _adaptive_budget.has_accepted(token_est)
+                and _terminal_floor_eligible(e, context_length)
+            ):
                 # Phase 4: at an unknown window an uncategorized 4xx may be an
                 # overflow the classifier missed. Probe with a minimal prompt
                 # before aborting — shrinking either recovers, fails honestly on
@@ -11968,7 +12034,8 @@ def _run_agent_loop(
                 if verbose:
                     fmt.warning(
                         "uncategorized provider rejection at an unknown context "
-                        "window; probing with a minimal terminal-floor prompt"
+                        "window; probing with a minimal terminal-floor prompt: "
+                        f"{_short_error(str(e), 200)}"
                     )
                 try:
                     terminal = _run_terminal_floor_ladder(
@@ -12023,6 +12090,7 @@ def _run_agent_loop(
                 raise
         else:
             _last_request_tools = effective_tools
+            _floor_recovery_unconfirmed = False
             elapsed = time.monotonic() - t0
             if verbose:
                 fmt.llm_timing(elapsed, finish_reason)
