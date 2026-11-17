@@ -104,7 +104,8 @@
             <h1 id="web-browsing">Web Browsing</h1>
 <p>To look something up, the built-in <a href="tools.html#web_search"><code>web_search</code></a> tool needs no setup.
 The approaches below are for interacting with pages.</p>
-<p>Swival can browse the web, interact with pages, fill forms, take screenshots, and extract content. There are four ways to set this up, each with different tradeoffs.</p>
+<p>Swival can browse the web, interact with pages, fill forms, take screenshots, and extract content.
+There are five ways to set this up, each with different tradeoffs.</p>
 <table>
 <thead>
 <tr>
@@ -118,6 +119,11 @@ The approaches below are for interacting with pages.</p>
 <td><a href="#chrome-devtools-mcp">Chrome DevTools MCP</a></td>
 <td>MCP server controlling Chrome</td>
 <td>Full browser fidelity, debugging, screenshots</td>
+</tr>
+<tr>
+<td><a href="#safari-mcp">Safari MCP</a></td>
+<td>Apple's built-in MCP server for Safari on macOS</td>
+<td>Safari rendering, debugging, screenshots</td>
 </tr>
 <tr>
 <td><a href="#lightpanda-mcp">Lightpanda MCP</a></td>
@@ -204,6 +210,42 @@ NODE_OPTIONS = &quot;--no-warnings&quot;
 <li><code>NODE_OPTIONS=--no-warnings</code> silences the <code>ExperimentalWarning: localStorage is not available</code> line, which comes from Node itself rather than the server, so no server flag controls it.</li>
 </ul>
 <p>One notice has no off switch: the security banner that begins "chrome-devtools-mcp exposes content of the browser instance" is printed unconditionally. If you want a completely silent startup, point <code>command</code> at a small wrapper script that runs the server and discards its stderr (<code>npx ... 2&gt;/dev/null</code>).</p>
+<h2 id="safari-mcp">Safari MCP</h2>
+<p><a href="https://webkit.org/blog/18136/introducing-the-safari-mcp-server-for-web-developers/">Safari MCP</a> is Apple's official MCP server, built into Safari 27 and later on macOS.
+It lets Swival inspect the DOM, interact with pages, take screenshots, read console output and network requests, and run JavaScript in Safari.</p>
+<h3 id="setup_1">Setup</h3>
+<p>Enable these settings in Safari:</p>
+<ol>
+<li>Go to <strong>Safari &gt; Settings &gt; Advanced</strong> and enable <strong>Show features for web developers</strong>.</li>
+<li>Go to <strong>Safari &gt; Settings &gt; Developer</strong> and enable <strong>Allow remote automation and external agents</strong>.</li>
+</ol>
+<p>Then add this to <code>swival.toml</code>:</p>
+<pre><code class="language-toml">[mcp_servers.safari]
+command = &quot;/usr/bin/safaridriver&quot;
+args = [&quot;--mcp&quot;]
+</code></pre>
+<p>Or add this to <code>.swival/mcp.json</code>:</p>
+<pre><code class="language-json">{
+  &quot;mcpServers&quot;: {
+    &quot;safari&quot;: {
+      &quot;command&quot;: &quot;/usr/bin/safaridriver&quot;,
+      &quot;args&quot;: [&quot;--mcp&quot;]
+    }
+  }
+}
+</code></pre>
+<p>Swival launches <code>/usr/bin/safaridriver --mcp</code> and communicates with it over stdio.
+No separate server package is needed.
+In Apple's client registration examples, <code>safari-mcp</code> is the server name, not an executable to install.</p>
+<h3 id="sessions-and-privacy">Sessions and privacy</h3>
+<p>Safari uses an isolated automation session, separate from your normal logged-in browsing profile.
+The server does not have access to your personal Safari information, such as AutoFill or other browsing activity.
+Apple says the MCP server runs entirely locally and makes no network calls of its own; pages opened in Safari still make their normal network requests.
+Captured page content, screenshots, and console logs go to Swival, and may be sent to your configured model provider.</p>
+<h3 id="example_1">Example</h3>
+<pre><code class="language-sh">swival &quot;Open https://example.com in Safari and check its layout and console errors&quot;
+</code></pre>
+<p>Swival gets tools such as <code>mcp__safari__navigate_to_url</code>, <code>mcp__safari__get_page_content</code>, <code>mcp__safari__page_interactions</code>, and <code>mcp__safari__screenshot</code>.</p>
 <h2 id="lightpanda-mcp">Lightpanda MCP</h2>
 <p><a href="https://lightpanda.io/">Lightpanda</a> is a headless browser built from scratch for AI agents. It skips pixel rendering entirely and focuses on DOM processing and JavaScript execution via V8. The result is roughly 10x faster page loads and 10x less memory than headless Chrome.</p>
 <p>Lightpanda has a built-in MCP server that you can connect to Swival directly. Its tools cover both extraction and interaction: <code>goto</code> for navigation, <code>markdown</code> for page content as markdown, <code>links</code> for extracting all links, <code>tree</code> for an AI-friendly DOM representation, <code>interactiveElements</code> for listing buttons and inputs, <code>structuredData</code> for JSON-LD and OpenGraph metadata, <code>evaluate</code> for running JavaScript, plus interaction tools like <code>click</code>, <code>fill</code>, and <code>scroll</code>.</p>
@@ -223,7 +265,7 @@ sudo mv ./lightpanda /usr/local/bin/
 <p>Verify it works:</p>
 <pre><code class="language-sh">lightpanda fetch --dump html https://example.com
 </code></pre>
-<h3 id="setup_1">Setup</h3>
+<h3 id="setup_2">Setup</h3>
 <p>Add it to your <code>swival.toml</code>:</p>
 <pre><code class="language-toml">[mcp_servers.lightpanda]
 command = &quot;lightpanda&quot;
@@ -242,7 +284,7 @@ args = [&quot;mcp&quot;]
 <p>That's the entire setup. No Node.js, no Chrome download, no browser process lingering in the background. Lightpanda starts in milliseconds and uses a fraction of Chrome's memory (123 MB peak vs 2 GB for headless Chrome in the project's published benchmark).</p>
 <h3 id="what-it-gives-swival_1">What it gives Swival</h3>
 <p>Once configured, Swival gets tools like <code>mcp__lightpanda__markdown</code>, <code>mcp__lightpanda__links</code>, <code>mcp__lightpanda__tree</code>, and <code>mcp__lightpanda__evaluate</code>. The <code>markdown</code> tool is particularly useful since it returns page content in a format that's already compact and easy for the model to reason about.</p>
-<h3 id="example_1">Example</h3>
+<h3 id="example_2">Example</h3>
 <pre><code class="language-sh">swival
 &gt; Fetch https://news.ycombinator.com and summarize the top 5 stories
 </code></pre>
@@ -332,6 +374,8 @@ swival --commands agent-browser &quot;Open example.com and describe the page&quo
 <p>Note that Lightpanda doesn't support screenshots, so commands like <code>agent-browser screenshot</code> won't work with this engine. Everything else, including snapshots, clicking, form filling, and JavaScript evaluation, works the same as with Chrome.</p>
 <h2 id="which-approach-should-i-use">Which approach should I use?</h2>
 <p>Pick <strong>Chrome DevTools MCP</strong> when you need the full browser: screenshots, network inspection, performance profiling, or sites that require complete rendering fidelity. It has the most tools and the best compatibility, but it's also the heaviest.</p>
+<p>Pick <strong>Safari MCP</strong> when you need to test how a site renders and behaves in Safari on macOS.
+It uses Apple's built-in server and keeps the automation session separate from your personal browsing.</p>
 <p>Pick <strong>Lightpanda MCP</strong> when you just need to read web pages. It's the simplest to set up (one binary, two lines of config), the fastest to start, and the lightest on resources. It can't take screenshots, but for research, scraping, and documentation lookup it's hard to beat.</p>
 <p>Pick <strong>agent-browser</strong> when you need interactive browsing with low token overhead. The ref-based snapshot system keeps context usage down, which helps when you need to visit many pages or do complex multi-step interactions. You can run it with Chrome for full fidelity or with Lightpanda for speed.</p>
 <p>You can also combine approaches. For example, use Lightpanda MCP for quick content lookups and Chrome DevTools MCP for tasks that need screenshots or full rendering fidelity.</p>
