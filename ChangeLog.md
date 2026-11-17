@@ -2,6 +2,10 @@
 
 All notable user-facing changes to Swival.
 
+## 1.9.5
+
+- ChatGPT provider: `think` and `snapshot` are no longer offered to this provider, since the backend rejects those tool calls as a usage-policy violation. When the provider refuses a request, the retry lowers the reasoning effort to "low" instead of resending the same prompt, and forced tool choices are retried without the force if the provider refuses them.
+
 ## 1.9.4
 
 - The `/model` picker now always shows a picker UI and can list Bedrock models.
