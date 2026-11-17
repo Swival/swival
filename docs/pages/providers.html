@@ -125,7 +125,7 @@ model = &quot;qwen3-coder-next&quot;
 
 [profiles.gpt]
 provider = &quot;chatgpt&quot;
-model = &quot;gpt-6.1-sol&quot;
+model = &quot;gpt-6.2-sol&quot;
 reasoning_effort = &quot;high&quot;
 
 [profiles.claude]
@@ -363,22 +363,22 @@ location = &quot;us-central1&quot;
 <p>Authentication uses an OAuth device-code flow — on first use, Swival prints a device code and a verification URL to your terminal. Open the URL, enter the code, and authorize with your ChatGPT account. The resulting tokens are cached locally and refreshed automatically on subsequent runs.</p>
 <p>If you need to pass an API key explicitly, set <code>CHATGPT_API_KEY</code> or use <code>--api-key</code>.</p>
 <p><code>--model</code> is required. There is no default model.</p>
-<pre><code class="language-sh">swival --provider chatgpt --model gpt-6.1-sol &quot;task&quot;
+<pre><code class="language-sh">swival --provider chatgpt --model gpt-6.2-sol &quot;task&quot;
 </code></pre>
 <p>On the first run, you will see a device-code prompt with a URL and a code to enter in your browser. Once you complete the flow, the OAuth tokens are stored locally and refreshed automatically. To remove the cached tokens and force the device-code flow on the next run, use <code>swival --logout</code>.</p>
 <p>Supported model names may change over time. Check OpenAI's documentation for the current model list and naming conventions.</p>
 <p>When <code>--max-context-tokens</code> is not set, Swival looks the window up in LiteLLM's model registry. Set the flag explicitly if your model is not listed there.</p>
 <p>Two environment variables are available for advanced use. <code>CHATGPT_TOKEN_DIR</code> overrides the default token storage directory, and <code>CHATGPT_AUTH_FILE</code> overrides the token filename or path. Use <code>--base-url</code> to override the API base URL.</p>
 <pre><code class="language-sh">export CHATGPT_TOKEN_DIR=/path/to/tokens
-swival --provider chatgpt --model gpt-6.1-sol &quot;task&quot;
+swival --provider chatgpt --model gpt-6.2-sol &quot;task&quot;
 swival --logout
 </code></pre>
 <p>The <code>--top-p</code>, <code>--seed</code>, and <code>tool_choice</code> parameters are not supported by the ChatGPT Plus/Pro backend. Swival drops them automatically when using this provider.</p>
 <p>The <code>think</code> and <code>snapshot</code> tools are not offered with this provider.
 The backend rejects the whole response when a tool call looks like the model's own reasoning, and reports it as a usage-policy violation of your prompt.
 The model reasons natively instead, and context compaction still applies.</p>
-<p>Models like <code>gpt-6.1-sol</code> support tunable reasoning effort. Use <code>--reasoning-effort</code> to control how much the model thinks before responding:</p>
-<pre><code class="language-sh">swival --provider chatgpt --model gpt-6.1-sol --reasoning-effort high &quot;task&quot;
+<p>Models like <code>gpt-6.2-sol</code> support tunable reasoning effort. Use <code>--reasoning-effort</code> to control how much the model thinks before responding:</p>
+<pre><code class="language-sh">swival --provider chatgpt --model gpt-6.2-sol --reasoning-effort high &quot;task&quot;
 </code></pre>
 <p>You can also combine reasoning effort with <strong>priority processing</strong> (<code>service_tier: "priority"</code>) for faster responses without sacrificing quality. See the <a href="usage.html#service-tiers">Service Tiers</a> section.</p>
 <p>No other configuration is needed.</p>

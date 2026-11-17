@@ -197,7 +197,7 @@ description = "Fast local model for simple edits and short questions."
 
 [profiles.gpt]
 provider = "chatgpt"
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 description = "General coding model for features, bug fixes, and tests."
 ```
 

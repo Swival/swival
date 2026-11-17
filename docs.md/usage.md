@@ -240,10 +240,10 @@ Network errors are retried, and so are prompts the provider flags as "potentiall
 Some OpenAI models return that for perfectly harmless requests, and sending the same request again often works.
 If it keeps failing, try another model.
 
-`--reasoning-effort LEVEL` sets the reasoning effort for models that support tunable reasoning (e.g. gpt-6.1-sol). Valid levels are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `default`.
+`--reasoning-effort LEVEL` sets the reasoning effort for models that support tunable reasoning (e.g. gpt-6.2-sol). Valid levels are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `default`.
 
 ```sh
-swival --provider chatgpt --model gpt-6.1-sol --reasoning-effort high "task"
+swival --provider chatgpt --model gpt-6.2-sol --reasoning-effort high "task"
 ```
 
 `--show-thinking` keeps the model's streamed thinking in your terminal scrollback after the answer is printed, instead of wiping it when the live stream ends. It only affects the display (the thinking goes to stderr, never into stdout, history, traces, or reports) and it needs a verbose, interactive terminal with a provider that streams reasoning. Without it, a collapsed one-line note (`thinking: N lines / ~M tokens, hidden`) is shown instead. The config-file equivalent is `show_thinking = true`.
@@ -258,7 +258,7 @@ Service tier is not exposed as a dedicated CLI flag. Pass it via `--extra-body`:
 
 ```sh
 # Priority ("fast" mode — like Codex's fast setting)
-swival --provider chatgpt --model gpt-6.1-sol \
+swival --provider chatgpt --model gpt-6.2-sol \
     --extra-body '{"service_tier": "priority"}' "task"
 ```
 
@@ -266,7 +266,7 @@ In config:
 
 ```toml
 [chatgpt]
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 extra_body = { service_tier = "priority" }
 ```
 
@@ -274,7 +274,7 @@ extra_body = { service_tier = "priority" }
 
 ```sh
 # Fast response + moderate reasoning
-swival --provider chatgpt --model gpt-6.1-sol \
+swival --provider chatgpt --model gpt-6.2-sol \
     --reasoning-effort medium \
     --extra-body '{"service_tier": "priority"}' "task"
 ```

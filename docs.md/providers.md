@@ -26,7 +26,7 @@ model = "qwen3-coder-next"
 
 [profiles.gpt]
 provider = "chatgpt"
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 reasoning_effort = "high"
 
 [profiles.claude]
@@ -403,7 +403,7 @@ If you need to pass an API key explicitly, set `CHATGPT_API_KEY` or use `--api-k
 `--model` is required. There is no default model.
 
 ```sh
-swival --provider chatgpt --model gpt-6.1-sol "task"
+swival --provider chatgpt --model gpt-6.2-sol "task"
 ```
 
 On the first run, you will see a device-code prompt with a URL and a code to enter in your browser. Once you complete the flow, the OAuth tokens are stored locally and refreshed automatically. To remove the cached tokens and force the device-code flow on the next run, use `swival --logout`.
@@ -416,7 +416,7 @@ Two environment variables are available for advanced use. `CHATGPT_TOKEN_DIR` ov
 
 ```sh
 export CHATGPT_TOKEN_DIR=/path/to/tokens
-swival --provider chatgpt --model gpt-6.1-sol "task"
+swival --provider chatgpt --model gpt-6.2-sol "task"
 swival --logout
 ```
 
@@ -426,10 +426,10 @@ The `think` and `snapshot` tools are not offered with this provider.
 The backend rejects the whole response when a tool call looks like the model's own reasoning, and reports it as a usage-policy violation of your prompt.
 The model reasons natively instead, and context compaction still applies.
 
-Models like `gpt-6.1-sol` support tunable reasoning effort. Use `--reasoning-effort` to control how much the model thinks before responding:
+Models like `gpt-6.2-sol` support tunable reasoning effort. Use `--reasoning-effort` to control how much the model thinks before responding:
 
 ```sh
-swival --provider chatgpt --model gpt-6.1-sol --reasoning-effort high "task"
+swival --provider chatgpt --model gpt-6.2-sol --reasoning-effort high "task"
 ```
 
 You can also combine reasoning effort with **priority processing** (`service_tier: "priority"`) for faster responses without sacrificing quality. See the [Service Tiers](usage.md#service-tiers) section.
