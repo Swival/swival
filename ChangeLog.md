@@ -2,6 +2,10 @@
 
 All notable user-facing changes to Swival.
 
+## 1.9.6
+
+- The ChatGPT provider now supports `gpt-6.2-astra` and `gpt-6.2-sol`. Both appear in the `/model` picker even if LiteLLM hasn't listed them yet.
+
 ## 1.9.5
 
 - ChatGPT provider: `think` and `snapshot` are no longer offered to this provider, since the backend rejects those tool calls as a usage-policy violation. When the provider refuses a request, the retry lowers the reasoning effort to "low" instead of resending the same prompt, and forced tool choices are retried without the force if the provider refuses them.
