@@ -8,18 +8,10 @@ All notable user-facing changes to Swival.
 
 ## 1.9.4
 
-- The `/model` picker now always shows a picker UI and can list Bedrock models.
-  Favorites and recents are remembered per provider, and a `tools-only` filter
-  hides models known not to support function calling.
-  Hugging Face models can be searched hub-wide with ``Ctrl+S``.
-- Built-in support for herdr-core (herdr-app) has been added. Swival reports
-  working, idle, and blocked states to compatible terminals, so your window
-  title and status line update as it works.
-- Lifecycle hooks now support a `task_done` event, emitted after interactive
-  tasks and background loop turns. Scripts receive metadata about task outcomes,
-  commands, and goal status through `SWIVAL_*` environment variables.
-- MCP server startup is now capped at 10 seconds (configurable), and MCP schema
-  flattening and repeat-loop protection are always enabled.
+- The `/model` picker now always shows a picker UI and can list Bedrock models. Favorites and recents are remembered per provider, and a `tools-only` filter hides models known not to support function calling. Hugging Face models can be searched hub-wide with ``Ctrl+S``.
+- Built-in support for herdr-core (herdr-app) has been added. Swival reports working, idle, and blocked states to compatible terminals, so your window title and status line update as it works.
+- Lifecycle hooks now support a `task_done` event, emitted after interactive tasks and background loop turns. Scripts receive metadata about task outcomes, commands, and goal status through `SWIVAL_*` environment variables.
+- MCP server startup is now capped at 10 seconds (configurable), and MCP schema flattening and repeat-loop protection are always enabled.
 
 ## 1.9.3
 
@@ -35,56 +27,33 @@ All notable user-facing changes to Swival.
 
 ## 1.9.1
 
-- Fixed file-descriptor exhaustion and repeated event-loop cleanup tracebacks during streamed replies, especially on macOS with its default open-file limit.
-  Swival now disables unused LiteLLM per-chunk streaming logging.
+- Fixed file-descriptor exhaustion and repeated event-loop cleanup tracebacks during streamed replies, especially on macOS with its default open-file limit. Swival now disables unused LiteLLM per-chunk streaming logging.
 
 ## 1.9.0
 
-- Added the `anthropic` provider for Claude through the Anthropic API.
-  Use `--provider anthropic --model MODEL` with `ANTHROPIC_API_KEY` or `--api-key`.
-  It supports model browsing, context-window discovery, prompt caching, cost reporting, and extended thinking through `--reasoning-effort`.
-- Added optional automatic model routing with `--model-routing` or `model_routing = true`.
-  A configured decision model chooses among at least two profiles with descriptions at the start of each task, including subagent tasks.
-  Limit the choices with `routing_profiles`, and control routing in the REPL with `/route`, `/route on`, and `/route off`.
-  Explicit model, provider, or profile choices pause routing.
-  Routing sends the request and a conversation excerpt to the decision service; switching profiles sends the conversation history to the selected chat provider.
-- Added a built-in `web_search` tool that works without an account or API key.
-  It returns a few results with the passages that best match the query, small enough for small context windows.
-  Queries go to free search services: Parallel, Keenable, Exa and Tavily.
-  Turn it off with `--no-web-search` or `web_search = false`, or pick the services with `web_search_providers`.
-  `llm_filter` sees every query, and queries that look like they contain a credential are refused.
+- Added the `anthropic` provider for Claude through the Anthropic API. Use `--provider anthropic --model MODEL` with `ANTHROPIC_API_KEY` or `--api-key`. It supports model browsing, context-window discovery, prompt caching, cost reporting, and extended thinking through `--reasoning-effort`.
+- Added optional automatic model routing with `--model-routing` or `model_routing = true`. A configured decision model chooses among at least two profiles with descriptions at the start of each task, including subagent tasks. Limit the choices with `routing_profiles`, and control routing in the REPL with `/route`, `/route on`, and `/route off`. Explicit model, provider, or profile choices pause routing. Routing sends the request and a conversation excerpt to the decision service; switching profiles sends the conversation history to the selected chat provider.
+- Added a built-in `web_search` tool that works without an account or API key. It returns a few results with the passages that best match the query, small enough for small context windows. Queries go to free search services: Parallel, Keenable, Exa and Tavily. Turn it off with `--no-web-search` or `web_search = false`, or pick the services with `web_search_providers`. `llm_filter` sees every query, and queries that look like they contain a credential are refused.
 - Token counting now uses bundled tokenizer data by default and falls back to estimates after a two-second loading timeout, avoiding startup stalls on slow or offline connections.
 - When a decision request fails because the service cannot be reached, times out, or is unavailable, `decide` now asks the agent to continue without decision-model results.
-- `--reviewer-mode` now hides `.swival/HISTORY.md` from its tools and does not append to it, keeping past agent answers out of the review evidence.
-  This also applies to `--self-review`.
+- `--reviewer-mode` now hides `.swival/HISTORY.md` from its tools and does not append to it, keeping past agent answers out of the review evidence. This also applies to `--self-review`.
 
 ## 1.0.48
 
-- Added optional decision models alongside the chat model through `--decision-model`, including hosted Jev and local Clef servers.
-  The `decide` tool returns yes/no probabilities, classifications, and scores.
-  Use `--decision-base-url` and `--decision-api-key` for a custom server, or `--no-decisions` to disable a configured model.
-  These settings are also available in config and the Python `Session` API.
-- `--reviewer-mode` and `--self-review` now let the reviewer inspect workspace files through a read-only tool loop.
-  Reviewers can read, list, search, and outline files, but cannot edit files, run commands, or fetch URLs.
-  These restrictions apply even with `--yolo`; external reviewer scripts remain unchanged.
-- Swival now updates herdr's activity indicator automatically: working during turns, blocked during command approval, and idle between turns.
-  It clears its status on exit, and nested Swival processes leave the parent's status alone.
+- Added optional decision models alongside the chat model through `--decision-model`, including hosted Jev and local Clef servers. The `decide` tool returns yes/no probabilities, classifications, and scores. Use `--decision-base-url` and `--decision-api-key` for a custom server, or `--no-decisions` to disable a configured model. These settings are also available in config and the Python `Session` API.
+- `--reviewer-mode` and `--self-review` now let the reviewer inspect workspace files through a read-only tool loop. Reviewers can read, list, search, and outline files, but cannot edit files, run commands, or fetch URLs. These restrictions apply even with `--yolo`; external reviewer scripts remain unchanged.
+- Swival now updates herdr's activity indicator automatically: working during turns, blocked during command approval, and idle between turns. It clears its status on exit, and nested Swival processes leave the parent's status alone.
 - When the model's context window is unknown, the instruction budget is now 8,192 tokens instead of 2,048.
 
 ## 1.0.47
 
-- `run_python` can now call MCP tools explicitly allowed with a server's `python_tools` setting.
-  Code snippets can page, filter, and combine tool results before returning only printed output to the model.
-- MCP tool results now pass structured-only data to the model and summarize resource links, images, and audio.
-  JSON-RPC errors and invalid responses no longer degrade an otherwise working server.
-  Server-controlled error text now appears under the untrusted-content label.
+- `run_python` can now call MCP tools explicitly allowed with a server's `python_tools` setting. Code snippets can page, filter, and combine tool results before returning only printed output to the model.
+- MCP tool results now pass structured-only data to the model and summarize resource links, images, and audio. JSON-RPC errors and invalid responses no longer degrade an otherwise working server. Server-controlled error text now appears under the untrusted-content label.
 - The default turn limit is now 200 in the REPL and 250 in one-shot mode.
 - `run_command`, `run_shell_command`, and `run_python` timeouts can now reach two hours.
-- Command exit codes now appear before spilled-output previews and in reports and traces.
-  A nonzero exit code no longer marks a successful tool dispatch as a failure.
+- Command exit codes now appear before spilled-output previews and in reports and traces. A nonzero exit code no longer marks a successful tool dispatch as a failure.
 - Repeated unchanged todo reminders now back off from 3 to 6, 12, and then 24 turns.
-- The agent now corrects understood tool errors without an extra `think` call.
-  It also groups independent file edits and applies same-file edits from bottom to top.
+- The agent now corrects understood tool errors without an extra `think` call. It also groups independent file edits and applies same-file edits from bottom to top.
 
 ## 1.0.46
 
@@ -96,16 +65,11 @@ All notable user-facing changes to Swival.
 
 ## 1.0.45
 
-- Large MCP tool catalogs now load schemas on demand through `tool_search`, leaving more context available for the conversation.
-  Loaded schemas remain available in later turns; set `defer_mcp_schemas = false` in config to send all schemas from the start.
-- JSON reports now include an `exposure` breakdown showing how much input comes from tool results, tool schemas, conversation history, and summaries across requests.
-  These estimates account for content sent repeatedly and help identify what is consuming context; they are separate from provider usage and billing figures.
-- Added `--provider-timeout` to set the provider request timeout in seconds and `--initial-tool-choice required` to request a tool call on the first model request.
-  Both options are also available in config and the Python `Session` API.
-- Recovery now recognizes XML calls named after an available tool when a model emits them as plain text.
-  Follow-up requests after leaked tool calls or announced actions now require tool use when tools are available and the provider supports it.
-- File reads and `grep` now mark clipped lines with the number of omitted characters.
-  `edit_file` refuses replacements that end exactly at the display cutoff of a longer line, preventing edits copied from truncated output from silently leaving the hidden suffix behind.
+- Large MCP tool catalogs now load schemas on demand through `tool_search`, leaving more context available for the conversation. Loaded schemas remain available in later turns; set `defer_mcp_schemas = false` in config to send all schemas from the start.
+- JSON reports now include an `exposure` breakdown showing how much input comes from tool results, tool schemas, conversation history, and summaries across requests. These estimates account for content sent repeatedly and help identify what is consuming context; they are separate from provider usage and billing figures.
+- Added `--provider-timeout` to set the provider request timeout in seconds and `--initial-tool-choice required` to request a tool call on the first model request. Both options are also available in config and the Python `Session` API.
+- Recovery now recognizes XML calls named after an available tool when a model emits them as plain text. Follow-up requests after leaked tool calls or announced actions now require tool use when tools are available and the provider supports it.
+- File reads and `grep` now mark clipped lines with the number of omitted characters. `edit_file` refuses replacements that end exactly at the display cutoff of a longer line, preventing edits copied from truncated output from silently leaving the hidden suffix behind.
 - Concurrent `edit_file` calls within a Swival session now serialize edits to the same file, preventing agents and subagents from silently overwriting each other's changes.
 - `outline` line numbers now agree with the file-reading and editing tools even when a file contains form feeds or Unicode line separators.
 - The ChatGPT model picker now includes `gpt-6-astra`, `gpt-6-luna`, and `gpt-6-sol`.
@@ -113,23 +77,15 @@ All notable user-facing changes to Swival.
 
 ## 1.0.44
 
-- `CLAUDE.md` and `AGENTS.md` are loaded in full: if they do not fit, Swival stops with a message naming the files instead of trimming them.
-  `--instructions-full` loads them regardless, an unreadable file is reported and skipped, and loaded rules now survive context compaction.
-- `/remember` and `/init` now take effect in the running session, not just the next one.
-  If the change cannot be applied, Swival prints the exact line and file and holds back model turns until you fix it.
+- `CLAUDE.md` and `AGENTS.md` are loaded in full: if they do not fit, Swival stops with a message naming the files instead of trimming them. `--instructions-full` loads them regardless, an unreadable file is reported and skipped, and loaded rules now survive context compaction.
+- `/remember` and `/init` now take effect in the running session, not just the next one. If the change cannot be applied, Swival prints the exact line and file and holds back model turns until you fix it.
 - Without tokenizer data, context sizes are now treated as estimates: Swival warns once, and no longer compacts or clamps output on a guess.
-- Added `/reasoning` to inspect or change the reasoning effort during a REPL session.
-  `/reasoning LEVEL` applies to the next turn and subsequently spawned subagents, `/reasoning -` restores the previous level, and selecting a profile restores that profile's setting.
-- If a model rejects a prompt containing an image, Swival now removes the image and retries the request as text-only.
-  A model-wide vision rejection also withdraws `view_image` for that endpoint and model for the rest of the process, while a rejection specific to one image leaves the tool available.
-- The `generic` provider now sends stable `x-opencode-session` and `x-opencode-client` headers to `opencode.ai`, allowing the OpenCode Go service to keep related turns, retries, compactions, and worktree calls in one session.
-  `/clear`, `/new`, and subagents start independent sessions.
-- Automatic Git metadata collection and `/audit` now ignore repository-configured hooks, filesystem monitors, filters, diff helpers, text conversion, and alternate attribute sources.
-  This prevents a received directory with a preserved malicious `.git/config` from running code before a prompt or during an audit.
-- `grep` include globs now honor their directory components, and recursive searches skip FIFOs and other special files instead of risking a hang.
-  Token counting also accepts text containing reserved-token spellings such as `<|endoftext|>` and falls back to conservative byte counting when the tokenizer data is unavailable offline.
-- Regenerating an existing config with `--init-config` now preserves all recognized settings, inline nested tables, quoted keys, and escaped control characters instead of silently dropping or corrupting values that are absent from the current template.
-  Relative command-provider model paths inside profiles are now resolved relative to the config file, and switching profiles correctly replaces a profile-specific `user_agent`.
+- Added `/reasoning` to inspect or change the reasoning effort during a REPL session. `/reasoning LEVEL` applies to the next turn and subsequently spawned subagents, `/reasoning -` restores the previous level, and selecting a profile restores that profile's setting.
+- If a model rejects a prompt containing an image, Swival now removes the image and retries the request as text-only. A model-wide vision rejection also withdraws `view_image` for that endpoint and model for the rest of the process, while a rejection specific to one image leaves the tool available.
+- The `generic` provider now sends stable `x-opencode-session` and `x-opencode-client` headers to `opencode.ai`, allowing the OpenCode Go service to keep related turns, retries, compactions, and worktree calls in one session. `/clear`, `/new`, and subagents start independent sessions.
+- Automatic Git metadata collection and `/audit` now ignore repository-configured hooks, filesystem monitors, filters, diff helpers, text conversion, and alternate attribute sources. This prevents a received directory with a preserved malicious `.git/config` from running code before a prompt or during an audit.
+- `grep` include globs now honor their directory components, and recursive searches skip FIFOs and other special files instead of risking a hang. Token counting also accepts text containing reserved-token spellings such as `<|endoftext|>` and falls back to conservative byte counting when the tokenizer data is unavailable offline.
+- Regenerating an existing config with `--init-config` now preserves all recognized settings, inline nested tables, quoted keys, and escaped control characters instead of silently dropping or corrupting values that are absent from the current template. Relative command-provider model paths inside profiles are now resolved relative to the config file, and switching profiles correctly replaces a profile-specific `user_agent`.
 - A2A request bodies are now size-limited while they stream, so clients cannot bypass the configured limit by omitting or understating `Content-Length`.
 - Automatic correction for a single-model server is now scoped to the endpoint as well as the requested model, preventing a correction learned from one server from changing requests sent to another.
 - `--no-subagents` is now honored even when the context window would otherwise auto-enable subagents, and an outer Ctrl-C is reported to lifecycle exit hooks as an interruption with status 130.
@@ -137,27 +93,20 @@ All notable user-facing changes to Swival.
 
 ## 1.0.43
 
-- The REPL has been redesigned.
-  You can now type or edit the next message during a turn; Enter queues it and queued messages run in order once the turn finishes.
-  Ctrl-C interrupts the running turn and moves any queued messages back into the editor instead of running them unattended.
+- The REPL has been redesigned. You can now type or edit the next message during a turn; Enter queues it and queued messages run in order once the turn finishes. Ctrl-C interrupts the running turn and moves any queued messages back into the editor instead of running them unattended.
 - `/loop` iterations in the REPL now fire on schedule while you are idle at the prompt, instead of waiting for your next command.
 - The `Session` object was not reaching the agent loop in REPL mode, so a context window learned from a provider rejection was not remembered. Fixed.
 - Updated google-cloud-aiplatform to 2.0, whose wheels no longer require a local Rust build on newer Python versions.
 
 ## 1.0.42
 
-- Added `/btw <question>` for one-off REPL side questions.
-  It uses an isolated copy of the current context, then discards its transcript and session-state changes.
-  Costs still count, and external effects persist.
-- Goal mode now continues correctly after tool use or response recovery.
-  New prompts, `/continue`, and `/goal resume` also restart automatic continuation after the model gets stuck.
+- Added `/btw <question>` for one-off REPL side questions. It uses an isolated copy of the current context, then discards its transcript and session-state changes. Costs still count, and external effects persist.
+- Goal mode now continues correctly after tool use or response recovery. New prompts, `/continue`, and `/goal resume` also restart automatic continuation after the model gets stuck.
 - When a model announces its next action but ends the turn without making the tool call, Swival now asks once for the action to be performed.
-- Identical duplicate tool calls in one response are now discarded before anything executes.
-  MCP tools explicitly marked as non-read-only and non-idempotent are also protected from a second identical invocation.
+- Identical duplicate tool calls in one response are now discarded before anything executes. MCP tools explicitly marked as non-read-only and non-idempotent are also protected from a second identical invocation.
 - Tool-call markup leaked into plain text is now repaired when output is truncated and when using command providers, instead of being mistaken for a final answer.
 - Hugging Face shared-endpoint request-size rejections now trigger context compaction and an automatic retry, even when the model advertises a larger context window.
-- `grep` now streams files and retains bounded results instead of loading entire workspaces into memory, preventing out-of-memory failures on large repositories.
-  Search limits and skipped oversized files are reported clearly.
+- `grep` now streams files and retains bounded results instead of loading entire workspaces into memory, preventing out-of-memory failures on large repositories. Search limits and skipped oversized files are reported clearly.
 - `list_files` no longer fails an entire listing because it encounters a broken symlink.
 - Local endpoints configured with `extra_body.chat_template_kwargs.preserve_thinking = true` now retain `reasoning_content` when replaying tool-call turns.
 
@@ -476,222 +425,125 @@ All notable user-facing changes to Swival.
 
 ## 0.10.11
 
-- Shell-command execution is now only exposed in unrestricted command modes:
-  `run_shell_command` is hidden outside `--commands all` / `--yolo`, while
-  `run_command` remains available for argv-style execution in `--commands ask`
-  and allowlist modes.
-- Profiles that omit `max_output_tokens` no longer crash or override provider
-  defaults. Swival now preserves an unset output cap instead of substituting a
-  large context-derived value.
+- Shell-command execution is now only exposed in unrestricted command modes: `run_shell_command` is hidden outside `--commands all` / `--yolo`, while `run_command` remains available for argv-style execution in `--commands ask` and allowlist modes.
+- Profiles that omit `max_output_tokens` no longer crash or override provider defaults. Swival now preserves an unset output cap instead of substituting a large context-derived value.
 
 ## 0.10.10
 
-- Swival now automatically falls back to plain chat when a provider or model
-  does not support function calling, including OpenRouter's tool-unsupported
-  responses.
-- Command execution has been split into two tools: `run_command` now takes an
-  argv array, while `run_shell_command` takes a shell string and is only
-  exposed in unrestricted command modes. This avoids the old union-type schema
-  that weaker models often mangled.
-- Tool-call repair has been tightened for small models, making malformed
-  arguments more likely to be repaired into valid tool calls.
+- Swival now automatically falls back to plain chat when a provider or model does not support function calling, including OpenRouter's tool-unsupported responses.
+- Command execution has been split into two tools: `run_command` now takes an argv array, while `run_shell_command` takes a shell string and is only exposed in unrestricted command modes. This avoids the old union-type schema that weaker models often mangled.
+- Tool-call repair has been tightened for small models, making malformed arguments more likely to be repaired into valid tool calls.
 
 ## 0.10.9
 
-- REPL `/profile` switching now correctly inherits top-level config values:
-  profiles that omit keys like `api_key` pick them up from the config file
-  rather than from the previously active profile.
-- Malformed tool-call repair now handles file path parameters: glob
-  metacharacters (`*`, `?`, `[]`) are stripped from path and directory fields
-  whose schema description does not indicate a glob or pattern value, and
-  common field-name aliases (`path`, `file`, `filename`) are mapped to the
-  correct schema name. That helps small models.
+- REPL `/profile` switching now correctly inherits top-level config values: profiles that omit keys like `api_key` pick them up from the config file rather than from the previously active profile.
+- Malformed tool-call repair now handles file path parameters: glob metacharacters (`*`, `?`, `[]`) are stripped from path and directory fields whose schema description does not indicate a glob or pattern value, and common field-name aliases (`path`, `file`, `filename`) are mapped to the correct schema name. That helps small models.
 
 ## 0.10.8
 
-- A new `/profile` REPL command can list available profiles, switch to a different
-  LLM profile mid-session, and revert to the startup profile (or baseline config)
-  with `/profile -`. `/status` now shows the active profile.
-- TAB completion has been added to the REPL for slash commands, custom
-  `!commands`, directory-path arguments for `/add-dir` and `/add-dir-ro`, and
-  `$skill` mentions.
-- `/init` now includes commit and pull request style guidance in generated
-  `AGENTS.md` files, derived from recent git history and any PR template.
+- A new `/profile` REPL command can list available profiles, switch to a different LLM profile mid-session, and revert to the startup profile (or baseline config) with `/profile -`. `/status` now shows the active profile.
+- TAB completion has been added to the REPL for slash commands, custom `!commands`, directory-path arguments for `/add-dir` and `/add-dir-ro`, and `$skill` mentions.
+- `/init` now includes commit and pull request style guidance in generated `AGENTS.md` files, derived from recent git history and any PR template.
 
 ## 0.10.7
 
-- Interactive command approval mode has been added: `--commands ask` prompts the
-  user before every shell command execution. Approvals can be scoped per command
-  bucket and persisted to `.swival/approved_buckets`, denied, or allowed once.
-  High-risk commands and inline code execution (`bash -c`, `python -c`,
-  `node -e`, etc.) are flagged with extra warnings.
-- Untrusted external content labeling has been added: output from `fetch_url`,
-  MCP servers, and A2A agents is now wrapped with a deterministic
-  `[UNTRUSTED EXTERNAL CONTENT]` header before the model sees it, instructing
-  the model to treat it as data only. The label is baked into spill files so it
-  survives later `read_file` access.
-- JSON reports now include a `security` section that tracks command policy
-  blocks, approvals, and untrusted input ingestion events.
+- Interactive command approval mode has been added: `--commands ask` prompts the user before every shell command execution. Approvals can be scoped per command bucket and persisted to `.swival/approved_buckets`, denied, or allowed once. High-risk commands and inline code execution (`bash -c`, `python -c`, `node -e`, etc.) are flagged with extra warnings.
+- Untrusted external content labeling has been added: output from `fetch_url`, MCP servers, and A2A agents is now wrapped with a deterministic `[UNTRUSTED EXTERNAL CONTENT]` header before the model sees it, instructing the model to treat it as data only. The label is baked into spill files so it survives later `read_file` access.
+- JSON reports now include a `security` section that tracks command policy blocks, approvals, and untrusted input ingestion events.
 - Bedrock provider now forwards the AWS profile to the reviewer session.
 
 ## 0.10.6
 
-- Special tokens in user, system, and tool messages are now escaped by inserting
-  zero-width spaces at token boundaries, preventing the tokenizer from
-  misinterpreting literal text as control tokens.
-- Tool descriptions have been removed from the system prompt, freeing up context
-  space (models already receive tool schemas via the function-calling API).
-- Internal litellm fields and `reasoning_content` are now stripped from assistant
-  messages before they are sent back to the provider, fixing compatibility
-  issues.
+- Special tokens in user, system, and tool messages are now escaped by inserting zero-width spaces at token boundaries, preventing the tokenizer from misinterpreting literal text as control tokens.
+- Tool descriptions have been removed from the system prompt, freeing up context space (models already receive tool schemas via the function-calling API).
+- Internal litellm fields and `reasoning_content` are now stripped from assistant messages before they are sent back to the provider, fixing compatibility issues.
 
 ## 0.10.5
 
-- `/status` REPL command has been added to show the current session state
-  (provider, model, profile, token usage, active tools, and configuration).
-- Bedrock provider now suggests the `aws sso login` command when authentication
-  fails.
-- LM Studio provider now sets `LITELLM_LOCAL_MODEL_COST_MAP` to avoid
-  unnecessary remote lookups for model pricing.
+- `/status` REPL command has been added to show the current session state (provider, model, profile, token usage, active tools, and configuration).
+- Bedrock provider now suggests the `aws sso login` command when authentication fails.
+- LM Studio provider now sets `LITELLM_LOCAL_MODEL_COST_MAP` to avoid unnecessary remote lookups for model pricing.
 
 ## 0.10.4
 
 - Onboarding has been improved.
-- Subagents are now auto-enabled when the context window is 100K tokens or
-  larger.
+- Subagents are now auto-enabled when the context window is 100K tokens or larger.
 
 ## 0.10.3
 
-- An interactive onboarding wizard has been added: on first run with no config
-  file, Swival guides the user through provider selection, API key entry, and
-  config file creation. Re-running onboarding merges new provider settings into
-  an existing config file instead of overwriting it.
-- Common malformed tool calls from weaker models are now automatically repaired
-  before reaching dispatch: orphaned tool-call references, missing required
-  fields, and broken JSON are patched up so the agent loop can continue.
+- An interactive onboarding wizard has been added: on first run with no config file, Swival guides the user through provider selection, API key entry, and config file creation. Re-running onboarding merges new provider settings into an existing config file instead of overwriting it.
+- Common malformed tool calls from weaker models are now automatically repaired before reaching dispatch: orphaned tool-call references, missing required fields, and broken JSON are patched up so the agent loop can continue.
 
 ## 0.10.2
 
-- Named LLM profiles have been added: `[profiles.NAME]` tables can be defined
-  in config files to bundle provider, model, API key, and other LLM settings
-  under a short name. Use `--profile NAME` to select one at runtime, or set
-  `active_profile` in config for a default. `--list-profiles` prints all
-  available profiles.
+- Named LLM profiles have been added: `[profiles.NAME]` tables can be defined in config files to bundle provider, model, API key, and other LLM settings under a short name. Use `--profile NAME` to select one at runtime, or set `active_profile` in config for a default. `--list-profiles` prints all available profiles.
 - Provider error messages now include the model ID for easier debugging.
 - Minimax-specific transient errors are now caught and retried.
 
 ## 0.10.1
 
-- Filesystem access controls have been decoupled from `--yolo`:
-  `--files` (`all`, `some`, `none`) controls file access independently, and
-  `--commands` (`all`, `none`, or a comma-separated whitelist) controls which
-  shell commands the agent may run. `--yolo` is now shorthand for
-  `--files all --commands all`.
+- Filesystem access controls have been decoupled from `--yolo`: `--files` (`all`, `some`, `none`) controls file access independently, and `--commands` (`all`, `none`, or a comma-separated whitelist) controls which shell commands the agent may run. `--yolo` is now shorthand for `--files all --commands all`.
 - AWS Bedrock has been added as a provider.
-- `/simplify` REPL command has been added: runs a review pass over recently
-  changed code, checking for reuse opportunities, quality issues, and
-  inefficiencies, then fixes any problems found.
+- `/simplify` REPL command has been added: runs a review pass over recently changed code, checking for reuse opportunities, quality issues, and inefficiencies, then fixes any problems found.
 - REPL answers are now rendered as Markdown on TTYs.
-- Project-level MCP configuration has been moved from `.mcp.json` to
-  `.swival/mcp.json`.
+- Project-level MCP configuration has been moved from `.mcp.json` to `.swival/mcp.json`.
 
 ## 0.9.7
 
-- Parallel subagents have been added: `spawn_subagent` launches an independent
-  agent loop in a background thread to work on a task concurrently, and
-  `check_subagents` polls, collects results, or cancels running subagents.
-  Up to 4 subagents can run in parallel. Each gets its own thinking, todo,
-  snapshot, and file-tracker state. Subagents have access to all file and
-  search tools but cannot spawn their own subagents.
-- The todo list is now session-scoped and purely in-memory. It no longer
-  persists to `.swival/todo.md` or uses file locking. Concurrent sessions
-  get fully independent todo lists with no cross-session interference.
-- `/remember <text>` REPL command has been added to persist a project fact
-  to `AGENTS.md` under `## Conventions`. The live system prompt is updated
-  immediately so the agent sees the new fact without restarting.
-- `read_file` on a missing `MEMORY.md` now returns a helpful hint explaining
-  its purpose instead of a generic "file not found" error.
+- Parallel subagents have been added: `spawn_subagent` launches an independent agent loop in a background thread to work on a task concurrently, and `check_subagents` polls, collects results, or cancels running subagents. Up to 4 subagents can run in parallel. Each gets its own thinking, todo, snapshot, and file-tracker state. Subagents have access to all file and search tools but cannot spawn their own subagents.
+- The todo list is now session-scoped and purely in-memory. It no longer persists to `.swival/todo.md` or uses file locking. Concurrent sessions get fully independent todo lists with no cross-session interference.
+- `/remember <text>` REPL command has been added to persist a project fact to `AGENTS.md` under `## Conventions`. The live system prompt is updated immediately so the agent sees the new fact without restarting.
+- `read_file` on a missing `MEMORY.md` now returns a helpful hint explaining its purpose instead of a generic "file not found" error.
 
 ## 0.9.6
 
-- Prompt caching has been added. When a provider supports it, the system
-  prompt is cached on the first request and reused for subsequent calls,
-  reducing costs and latency. Can be disabled with `--no-cache-prompts`.
+- Prompt caching has been added. When a provider supports it, the system prompt is cached on the first request and reused for subsequent calls, reducing costs and latency. Can be disabled with `--no-cache-prompts`.
 
 ## 0.9.5
 
-- `outline` tool has been added: shows the structural skeleton of one or more
-  files (classes, functions, top-level declarations) with line numbers, without
-  bodies. Useful for navigating unfamiliar code.
+- `outline` tool has been added: shows the structural skeleton of one or more files (classes, functions, top-level declarations) with line numbers, without bodies. Useful for navigating unfamiliar code.
 
 ## 0.9.4
 
-- `/copy` REPL command has been added to copy the last assistant response to
-  the clipboard.
-- When using LM Studio, the max context length is now always queried from the
-  server instead of relying on a hardcoded default.
+- `/copy` REPL command has been added to copy the last assistant response to the clipboard.
+- When using LM Studio, the max context length is now always queried from the server instead of relying on a hardcoded default.
 
 ## 0.9.3
 
-- When Swival is launched on a TTY with no task, it now enters REPL mode
-  directly.
-- Filesystem built-in tools now expand `~` in paths, so home-directory paths work
-  consistently across file reads, writes, edits, deletes, and searches.
-- The fetch_url tool has a higher probability to get used consistently
-  by small models.
+- When Swival is launched on a TTY with no task, it now enters REPL mode directly.
+- Filesystem built-in tools now expand `~` in paths, so home-directory paths work consistently across file reads, writes, edits, deletes, and searches.
+- The fetch_url tool has a higher probability to get used consistently by small models.
 
 ## 0.9.2
 
 - Homebrew installation support has been added.
-- `Session.ask()` now rolls back conversation history on failure, so a failed turn
-  doesn't corrupt a long-lived Python session.
-- Public Python API exceptions have been formalized: `ContextOverflowError` and
-  `LifecycleError` are now exported
-- The persistent todo list is now safer across concurrent sessions and processes:
-  writes use file locking and merge on-disk changes instead of clobbering them.
-- SIGTERM now shuts Swival down cleanly with exit code 143, preserves
-  continue-here state, and closes MCP/A2A managers during teardown.
+- `Session.ask()` now rolls back conversation history on failure, so a failed turn doesn't corrupt a long-lived Python session.
+- Public Python API exceptions have been formalized: `ContextOverflowError` and `LifecycleError` are now exported
+- The persistent todo list is now safer across concurrent sessions and processes: writes use file locking and merge on-disk changes instead of clobbering them.
+- SIGTERM now shuts Swival down cleanly with exit code 143, preserves continue-here state, and closes MCP/A2A managers during teardown.
 
 ## 0.9.1
 
-- Generic lifecycle hooks have been added: user-configured commands run at
-  startup and exit, with Git and project metadata passed via `SWIVAL_*`
-  environment variables. Startup hooks run before memory and continue-here
-  loading so they can hydrate `.swival/` from remote storage; exit hooks run
-  after all artifacts are written. Configurable via `swival.toml` or
-  `~/.config/swival/config.toml`.
-- Custom command arguments are now passed as a single string: `!command a b c`
-  calls the script with `$2="a b c"` instead of spreading each word as a
-  separate argv entry.
+- Generic lifecycle hooks have been added: user-configured commands run at startup and exit, with Git and project metadata passed via `SWIVAL_*` environment variables. Startup hooks run before memory and continue-here loading so they can hydrate `.swival/` from remote storage; exit hooks run after all artifacts are written. Configurable via `swival.toml` or `~/.config/swival/config.toml`.
+- Custom command arguments are now passed as a single string: `!command a b c` calls the script with `$2="a b c"` instead of spreading each word as a separate argv entry.
 
 ## 0.9.0
 
-- Outbound LLM filter: a new `--llm-filter` flag (and `llm_filter` config key)
-  runs a user-defined script before every provider call. The script receives
-  messages as JSON on stdin and can redact content or block the request entirely.
-  Fails closed — script errors or rejections prevent the request from being sent.
-  Runs before secret encryption so filters see human-readable text. Configurable
-  from CLI, `swival.toml`, or `~/.config/swival/config.toml`.
+- Outbound LLM filter: a new `--llm-filter` flag (and `llm_filter` config key) runs a user-defined script before every provider call. The script receives messages as JSON on stdin and can redact content or block the request entirely. Fails closed — script errors or rejections prevent the request from being sent. Runs before secret encryption so filters see human-readable text. Configurable from CLI, `swival.toml`, or `~/.config/swival/config.toml`.
 
 ## 0.1.36
 
-- Custom commands have been added: executable scripts placed in
-  `~/.config/swival/commands/` can be invoked from the REPL with `!name`,
-  and their output is injected into the conversation as the next user message.
+- Custom commands have been added: executable scripts placed in `~/.config/swival/commands/` can be invoked from the REPL with `!name`, and their output is injected into the conversation as the next user message.
 
 ## 0.1.35
 
-- `/init` workflow discovery is now platform-aware: it detects the current OS
-  and architecture and only extracts commands that apply to the host platform.
+- `/init` workflow discovery is now platform-aware: it detects the current OS and architecture and only extracts commands that apply to the host platform.
 
 ## 0.1.34
 
-- `/init` now discovers workflow files and validates the generated instructions
-  by writing them out and checking the result.
-- Transient LLM errors (rate limits, timeouts, server errors) are now retried
-  automatically with exponential backoff.
-- An interaction-policy system prompt has been added to distinguish REPL and
-  autonomous modes, giving the model clearer behavioral guidance for each.
+- `/init` now discovers workflow files and validates the generated instructions by writing them out and checking the result.
+- Transient LLM errors (rate limits, timeouts, server errors) are now retried automatically with exponential backoff.
+- An interaction-policy system prompt has been added to distinguish REPL and autonomous modes, giving the model clearer behavioral guidance for each.
 
 ## 0.1.33
 
@@ -699,60 +551,41 @@ All notable user-facing changes to Swival.
 
 ## 0.1.32
 
-- Last-resort compaction has been added: when the context window is too small for
-  tool schemas, all tool definitions are dropped and the system prompt is truncated
-  so the conversation can continue as plain chat.
-- Command provider now supports tool calling via a `<swival:call>` XML convention,
-  allowing external command-based backends to invoke tools.
-- Data-URI inlined images are now stripped after HTML-to-markdown conversion to
-  avoid bloating context with base64 blobs.
-- Markdown comments (`<!-- ... -->`) are now trimmed from skill and agent
-  instruction files.
+- Last-resort compaction has been added: when the context window is too small for tool schemas, all tool definitions are dropped and the system prompt is truncated so the conversation can continue as plain chat.
+- Command provider now supports tool calling via a `<swival:call>` XML convention, allowing external command-based backends to invoke tools.
+- Data-URI inlined images are now stripped after HTML-to-markdown conversion to avoid bloating context with base64 blobs.
+- Markdown comments (`<!-- ... -->`) are now trimmed from skill and agent instruction files.
 - OpenRouter requests now include `referer` and `title` headers.
 
 ## 0.1.31
 
-- The `grep` tool now supports a `context_lines` parameter to show surrounding
-  lines before and after each match.
+- The `grep` tool now supports a `context_lines` parameter to show surrounding lines before and after each match.
 - `/new` has been added as a synonym for `/clear` in the REPL.
-- `reasoning_effort` set to `"default"` is now skipped instead of being sent to
-  the provider.
+- `reasoning_effort` set to `"default"` is now skipped instead of being sent to the provider.
 
 ## 0.1.30
 
-- Secrets encryption has been added: credential tokens in LLM messages
-  can be transparently encrypted before being sent to the provider and decrypted
-  on return, preventing accidental leakage through hosted APIs.
-- The `--sanitize-thinking` CLI flag has been fixed (it was accepted but ignored
-  in 0.1.29).
-- `read_multiple_files` now accepts a plain string in addition to an array,
-  for resilience with models that pass a single filename as a string.
+- Secrets encryption has been added: credential tokens in LLM messages can be transparently encrypted before being sent to the provider and decrypted on return, preventing accidental leakage through hosted APIs.
+- The `--sanitize-thinking` CLI flag has been fixed (it was accepted but ignored in 0.1.29).
+- `read_multiple_files` now accepts a plain string in addition to an array, for resilience with models that pass a single filename as a string.
 
 ## 0.1.29
 
-- Command provider has been added for shelling out to external programs as the
-  LLM backend: the conversation is passed as a plain-text transcript on stdin,
-  and the response is read from stdout.
-- Leaked reasoning tags (`<think>`, `</think>`) from models with bogus
-  templates can now be stripped. This can be controlled with `sanitize_thinking`
-  in config or `--sanitize-thinking`.
-- Race conditions when multiple A2A contexts run concurrently have been fixed by
-  isolating per-context temporary files (cmd_output) and adding file locks.
-- SQLite cross-thread error when `--serve` and `--cache` are combined has been
-  fixed.
+- Command provider has been added for shelling out to external programs as the LLM backend: the conversation is passed as a plain-text transcript on stdin, and the response is read from stdout.
+- Leaked reasoning tags (`<think>`, `</think>`) from models with bogus templates can now be stripped. This can be controlled with `sanitize_thinking` in config or `--sanitize-thinking`.
+- Race conditions when multiple A2A contexts run concurrently have been fixed by isolating per-context temporary files (cmd_output) and adding file locks.
+- SQLite cross-thread error when `--serve` and `--cache` are combined has been fixed.
 
 ## 0.1.28
 
-- Support for vision has been added: a new `view_image` tool allows the
-agent use vision-enabled models to examine images.
+- Support for vision has been added: a new `view_image` tool allows the agent use vision-enabled models to examine images.
 - Skill scanning now skips dot directories.
 
 ## 0.1.27
 
 - Skills can now be loaded from `.agents/skills/` and `~/.agents/skills/` directories.
 - Global agent instructions via `~/.agents/AGENTS.md` have been added.
-- Documentation has been improved with web browsing options, lightpanda MCP server
-  usage, and chrome-devtools-mcp examples.
+- Documentation has been improved with web browsing options, lightpanda MCP server usage, and chrome-devtools-mcp examples.
 
 ## 0.1.26
 
@@ -763,67 +596,44 @@ agent use vision-enabled models to examine images.
 ## 0.1.25
 
 - Native Google Gemini API support has been added.
-- A2A streaming (`SendStreamingMessage`) has been added: real-time SSE delivery of
-  status updates, tool lifecycle events, and incremental text.
-- `CancelTask` support has been added: per-task cancel flags are checked between
-  tool calls and at each turn boundary.
-- A2A server hardening has been added: sliding-window rate limiting, request size
-  validation, concurrency semaphore, and active-context protection against
-  LRU eviction.
-- Read access to external skill directories has been auto-granted and supporting
-  files are now listed on skill activation.
+- A2A streaming (`SendStreamingMessage`) has been added: real-time SSE delivery of status updates, tool lifecycle events, and incremental text.
+- `CancelTask` support has been added: per-task cancel flags are checked between tool calls and at each turn boundary.
+- A2A server hardening has been added: sliding-window rate limiting, request size validation, concurrency semaphore, and active-context protection against LRU eviction.
+- Read access to external skill directories has been auto-granted and supporting files are now listed on skill activation.
 
 ## 0.1.24
 
-- A2A server mode (`--serve`) has been added: a swival Session can be exposed as
-  an A2A endpoint, with context-keyed multi-turn sessions, bearer auth, and
-  TTL-based cleanup.
-- Customizable A2A server agent card has been added: `--serve-name`,
-  `--serve-description`, and `[[serve_skills]]` in `swival.toml` control how the
-  agent advertises itself.
+- A2A server mode (`--serve`) has been added: a swival Session can be exposed as an A2A endpoint, with context-keyed multi-turn sessions, bearer auth, and TTL-based cleanup.
+- Customizable A2A server agent card has been added: `--serve-name`, `--serve-description`, and `[[serve_skills]]` in `swival.toml` control how the agent advertises itself.
 - `/tools` REPL command has been added to list available tools.
 
 ## 0.1.23
 
-- A2A (Agent-to-Agent) support has been added: remote agents can be connected via
-  `[a2a_servers.*]` in `swival.toml` or `--a2a-config`, with tools exposed as
-  `a2a__<agent>__<skill>`.
-- Budgeted memory injection has been added. `--memory-full` can be used for legacy
-  full injection.
+- A2A (Agent-to-Agent) support has been added: remote agents can be connected via `[a2a_servers.*]` in `swival.toml` or `--a2a-config`, with tools exposed as `a2a__<agent>__<skill>`.
+- Budgeted memory injection has been added. `--memory-full` can be used for legacy full injection.
 - Support for reading questions from stdin when piped has been added.
 
 ## 0.1.22
 
-- `--self-review` option has been added: the agent reviews its own work before
-  finishing.
-- Reviewer feedback visibility has been improved and expected actions have been
-  made more explicit.
-- Informational stderr from the reviewer is now shown as warnings instead of being
-  silently discarded.
+- `--self-review` option has been added: the agent reviews its own work before finishing.
+- Reviewer feedback visibility has been improved and expected actions have been made more explicit.
+- Informational stderr from the reviewer is now shown as warnings instead of being silently discarded.
 - The default number of review rounds has been bumped up to 15.
-- A cache miss cascade caused by dropped `tool_call` fields in cached responses
-  has been fixed.
+- A cache miss cascade caused by dropped `tool_call` fields in cached responses has been fixed.
 
 ## 0.1.21
 
-- Optional SQLite LLM response cache (`--cache`) has been added for faster
-  repeated queries, with system-prompt-independent cache keys.
+- Optional SQLite LLM response cache (`--cache`) has been added for faster repeated queries, with system-prompt-independent cache keys.
 - A deadlock when a shell command backgrounds a child process has been fixed.
-- The `todo` tool accepting JSON-encoded array strings instead of proper lists
-  has been fixed.
+- The `todo` tool accepting JSON-encoded array strings instead of proper lists has been fixed.
 
 ## 0.1.20
 
-- The project-local skills directory has been moved from `skills/` to
-  `.swival/skills/`.
-- Spurious "shadowed by itself" warnings when `--skills-dir` pointed to the same
-  directory as the project-local skills location have been fixed.
-- `$skill-name` mention syntax has been added: `$deploy` can be typed in a message
-  to automatically activate a skill without the model needing to call `use_skill`.
-- The skill catalog in the system prompt has been reworked with file paths, trigger
-  rules, and progressive disclosure guidance.
-- Auto-injected skills now use assistant+tool message pairs so compaction can
-  shrink or drop them under context pressure.
+- The project-local skills directory has been moved from `skills/` to `.swival/skills/`.
+- Spurious "shadowed by itself" warnings when `--skills-dir` pointed to the same directory as the project-local skills location have been fixed.
+- `$skill-name` mention syntax has been added: `$deploy` can be typed in a message to automatically activate a skill without the model needing to call `use_skill`.
+- The skill catalog in the system prompt has been reworked with file paths, trigger rules, and progressive disclosure guidance.
+- Auto-injected skills now use assistant+tool message pairs so compaction can shrink or drop them under context pressure.
 - Auto-activated skills are now recorded in JSON reports.
 
 ## 0.1.19
@@ -832,10 +642,8 @@ agent use vision-enabled models to examine images.
 
 ## 0.1.18
 
-- `read_multiple_files` tool has been added for reading several files in a single
-  call.
-- Continue-here feature has been added: session state is saved on interruption
-  (Ctrl+C, max turns, compaction failure) and resumed on next start.
+- `read_multiple_files` tool has been added for reading several files in a single call.
+- Continue-here feature has been added: session state is saved on interruption (Ctrl+C, max turns, compaction failure) and resumed on next start.
 - The `todo` tool has been made to accept multiple tasks in one call.
 - The `grep` tool has been extended with additional options.
 - Context overflow detection for non-standard exception types has been fixed.
@@ -856,8 +664,7 @@ agent use vision-enabled models to examine images.
 
 ## 0.1.15
 
-- `write_file` has been made to coerce JSON content into a string instead of
-  erroring.
+- `write_file` has been made to coerce JSON content into a string instead of erroring.
 
 ## 0.1.14
 
@@ -865,48 +672,36 @@ agent use vision-enabled models to examine images.
 
 ## 0.1.13
 
-- AgentFS sandbox support has been integrated with auto-session IDs, diff hints,
-  and strict read mode.
+- AgentFS sandbox support has been integrated with auto-session IDs, diff hints, and strict read mode.
 - "Did you mean?" suggestions for mistyped tool command names have been added.
 - MCP servers have been made to inherit the parent process environment variables.
 
 ## 0.1.12
 
-- Generic OpenAI-compatible provider has been added for any server that speaks the
-  OpenAI API.
-- Snapshot tool has been added for proactive context collapse, with `/snapshot` and
-  `/restore` REPL commands.
-- `--extra-body` option has been added to pass arbitrary JSON to the LLM request
-  (useful for disabling thinking, etc.).
+- Generic OpenAI-compatible provider has been added for any server that speaks the OpenAI API.
+- Snapshot tool has been added for proactive context collapse, with `/snapshot` and `/restore` REPL commands.
+- `--extra-body` option has been added to pass arbitrary JSON to the LLM request (useful for disabling thinking, etc.).
 - OpenRouter documentation and setup instructions have been added.
 
 ## 0.1.11
 
-- MCP (Model Context Protocol) server support has been added. Servers are
-  configured in `swival.toml` or `.mcp.json`; tools are exposed as
-  `mcp__<server>__<tool>`.
-- Configurable size limits for MCP tool output (`MCP_INLINE_LIMIT`,
-  `MCP_FILE_LIMIT`) have been added.
+- MCP (Model Context Protocol) server support has been added. Servers are configured in `swival.toml` or `.mcp.json`; tools are exposed as `mcp__<server>__<tool>`.
+- Configurable size limits for MCP tool output (`MCP_INLINE_LIMIT`, `MCP_FILE_LIMIT`) have been added.
 
 ## 0.1.10
 
-- Reviewer mode (`--reviewer-mode`) has been added: an LLM-as-judge loop that
-  automatically evaluates agent output, with `--objective`, `--verify`,
-  and `--review-prompt` options.
+- Reviewer mode (`--reviewer-mode`) has been added: an LLM-as-judge loop that automatically evaluates agent output, with `--objective`, `--verify`, and `--review-prompt` options.
 - `--max-review-rounds` has been added to cap review iterations.
 
 ## 0.1.9
 
-- Graduated context compaction has been introduced: `compact_messages` ->
-  `drop_middle_turns` -> `aggressive_drop_turns`, replacing the previous
-  all-or-nothing approach.
+- Graduated context compaction has been introduced: `compact_messages` -> `drop_middle_turns` -> `aggressive_drop_turns`, replacing the previous all-or-nothing approach.
 - `/continue` is now suggested when the agent hits the max turn limit.
 - Clamping and retry messages have been improved.
 
 ## 0.1.8
 
-- `grep` and `list_files` tools have been made to accept file paths in addition to
-  directories.
+- `grep` and `list_files` tools have been made to accept file paths in addition to directories.
 - `grep` tool output has been improved.
 - Whether the model supports vision is now reported.
 - Global instructions via `~/.config/swival/AGENTS.md` have been added.
@@ -914,10 +709,8 @@ agent use vision-enabled models to examine images.
 
 ## 0.1.7
 
-- Configuration file support (`swival.toml` and `~/.config/swival/config.toml`)
-  has been added.
-- `--add-dir-ro` has been added for read-only additional directories (renamed from
-  `--allow-dir`).
+- Configuration file support (`swival.toml` and `~/.config/swival/config.toml`) has been added.
+- `--add-dir-ro` has been added for read-only additional directories (renamed from `--allow-dir`).
 - Common command syntax mistakes in yolo mode are now auto-corrected.
 - Instructions file has been switched from `ZOK.md` to `AGENT.md`.
 
@@ -931,8 +724,7 @@ agent use vision-enabled models to examine images.
 
 ## 0.1.5
 
-- `todo` tool has been added: a persistent checklist in `.swival/todo.md` that
-  survives context compaction, with periodic reminders and duplicate detection.
+- `todo` tool has been added: a persistent checklist in `.swival/todo.md` that survives context compaction, with periodic reminders and duplicate detection.
 - `/init` command has been added for bootstrapping `AGENT.md`.
 - A public Python API (`swival.Session`, `swival.run()`) has been exposed.
 - A loading spinner during LLM calls has been added.
@@ -944,11 +736,9 @@ agent use vision-enabled models to examine images.
 - `delete_file` tool has been added.
 - `move_file` / `rename_file` tools have been added.
 - External reviewer support for automated evaluation has been added.
-- Read-before-write is now required: the agent must read a file before editing or
-  overwriting it (can be disabled with `--no-read-guard`).
+- Read-before-write is now required: the agent must read a file before editing or overwriting it (can be disabled with `--no-read-guard`).
 - Final output is now printed even when `--report` is enabled.
-- Default values for `temperature` and `top_p` have been removed (the provider
-  decides).
+- Default values for `temperature` and `top_p` have been removed (the provider decides).
 
 ## 0.1.3
 
@@ -972,6 +762,4 @@ agent use vision-enabled models to examine images.
 
 ## 0.1.0
 
-Initial release. Core agent loop with tool-use, LM Studio and HuggingFace
-providers, file read/write/edit, grep, list_files, run_command, thinking tool,
-skills system, and REPL mode.
+Initial release. Core agent loop with tool-use, LM Studio and HuggingFace providers, file read/write/edit, grep, list_files, run_command, thinking tool, skills system, and REPL mode.
