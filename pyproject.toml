@@ -54,17 +54,16 @@ swival = "swival.agent:main"
 requires = ["hatchling>=1.33.0"]
 build-backend = "hatchling.build"
 
+# Anchored with a leading slash: a bare "README.md" also matches nested copies
+# in untracked directories, which makes the sdist depend on the build machine.
 [tool.hatch.build.targets.sdist]
 include = [
-    "swival/",
-    "tests/",
-    "pyproject.toml",
-    "README.md",
-    "LICENSE",
-    "ChangeLog.md",
-]
-exclude = [
-    "homebrew-tap/",
+    "/swival/",
+    "/tests/",
+    "/pyproject.toml",
+    "/README.md",
+    "/LICENSE",
+    "/ChangeLog.md",
 ]
 
 [tool.hatch.build.targets.wheel]

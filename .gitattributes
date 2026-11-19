@@ -1,0 +1,3 @@
+# Check out every file byte for byte, so a release rebuilt from its tag
+# matches the published files on every platform.
+* -text

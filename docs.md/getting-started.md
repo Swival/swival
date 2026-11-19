@@ -27,6 +27,30 @@ brew install swival/tap/swival
 
 This builds from source and pulls in Python 3.14 automatically. The first install takes a while because several dependencies compile native extensions.
 
+### Verifying a Release
+
+Release files are signed with [minisign](https://jedisct1.github.io/minisign/).
+Each wheel and sdist on the [releases page](https://github.com/Swival/swival/releases) has a `.minisig` signature next to it.
+The files on PyPI are the same files, so the same signatures cover them too.
+To check what you downloaded, run this in the directory that holds the files and their signatures:
+
+```sh
+for f in swival-*.whl swival-*.tar.gz; do
+  minisign -Vm "$f" -P RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3
+done
+```
+
+Builds are reproducible, so you can also rebuild a release from its tag with `git`, `make` and `uv`.
+The commands below rebuild the latest release, and the checksums should match the published files exactly:
+
+```sh
+git clone https://github.com/Swival/swival
+cd swival
+git checkout "$(git describe --tags --abbrev=0)"
+make dist
+shasum -a 256 dist/*
+```
+
 ## Upgrading
 
 To upgrade an existing installation to the newest release:

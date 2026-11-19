@@ -116,6 +116,23 @@
 brew install swival/tap/swival
 </code></pre>
 <p>This builds from source and pulls in Python 3.14 automatically. The first install takes a while because several dependencies compile native extensions.</p>
+<h3 id="verifying-a-release">Verifying a Release</h3>
+<p>Release files are signed with <a href="https://jedisct1.github.io/minisign/">minisign</a>.
+Each wheel and sdist on the <a href="https://github.com/Swival/swival/releases">releases page</a> has a <code>.minisig</code> signature next to it.
+The files on PyPI are the same files, so the same signatures cover them too.
+To check what you downloaded, run this in the directory that holds the files and their signatures:</p>
+<pre><code class="language-sh">for f in swival-*.whl swival-*.tar.gz; do
+  minisign -Vm &quot;$f&quot; -P RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3
+done
+</code></pre>
+<p>Builds are reproducible, so you can also rebuild a release from its tag with <code>git</code>, <code>make</code> and <code>uv</code>.
+The commands below rebuild the latest release, and the checksums should match the published files exactly:</p>
+<pre><code class="language-sh">git clone https://github.com/Swival/swival
+cd swival
+git checkout &quot;$(git describe --tags --abbrev=0)&quot;
+make dist
+shasum -a 256 dist/*
+</code></pre>
 <h2 id="upgrading">Upgrading</h2>
 <p>To upgrade an existing installation to the newest release:</p>
 <pre><code class="language-sh">uv tool upgrade swival    # if installed with uv
