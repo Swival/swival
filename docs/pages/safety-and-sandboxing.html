@@ -106,8 +106,8 @@
 The operating system then enforces what the agent can read and write, and nono can also filter network access and roll back changes.</p>
 <h2 id="nono-sandbox-mode">nono Sandbox Mode</h2>
 <p>Pass <code>--sandbox nono</code> to run Swival inside a <a href="https://nono.sh">nono</a> sandbox.
-At startup, Swival restarts itself as <code>nono run -- swival ...</code>.
-The kernel then enforces the file and network limits, using Landlock on Linux and Seatbelt on macOS.
+At startup, Swival restarts itself as <code>nono run -- swival ...</code>, unless it's already running under nono.
+The operating system then enforces the file limits, using Landlock on Linux and Seatbelt on macOS, and nono can also block or filter network access.
 The parent nono process stays outside the sandbox to handle the audit log, network proxy, and rollback, while the Swival child only gets the access it was granted.</p>
 <pre><code class="language-sh">swival --sandbox nono &quot;Refactor the auth module&quot; --yolo
 </code></pre>
@@ -117,7 +117,7 @@ Turn on rollback snapshots if you want a way to undo them:</p>
 <pre><code class="language-sh">swival --sandbox nono --nono-rollback &quot;Try a risky migration&quot; --yolo
 </code></pre>
 <p>After the run, Swival prints a hint for reviewing or undoing the changes (unless <code>--quiet</code> is set):</p>
-<pre><code class="language-text">  Review changes: nono rollback
+<pre><code class="language-text">  Review changes: nono rollback list
 </code></pre>
 <p>nono can also filter the agent's network access. Block it entirely, or restrict it to an allowlist:</p>
 <pre><code class="language-sh">swival --sandbox nono --nono-block-net &quot;Offline analysis&quot; --yolo
@@ -177,7 +177,7 @@ swival --sandbox nono --nono-allow-domain api.openai.com --nono-allow-domain git
 </code></pre>
 <p><code>provider-only</code> works with the default <code>builtin</code> sandbox, which still applies Swival's own file checks.
 It can't be combined with <code>--sandbox nono</code>, or run inside an external <code>nono run</code>, because that would mean running nono inside nono.
-Wrapped commands get the same file access a full nono run would give them: the base directory, <code>--add-dir</code> paths, temp directories, and nono's usual runtime allowances.
+Wrapped commands can access the base directory, <code>--add-dir</code> paths, temp directories, and nono's usual runtime allowances.
 That also means nono's built-in credential protections (<code>~/.ssh</code> and friends) apply to them.</p>
 <p>This mode needs the <code>jedisct1/swival</code> nono profile pack installed before it starts. The wrapper runs once per agent command, so Swival checks for the pack up front rather than letting nono pull it mid-run: an unreachable registry would otherwise cost every single command a failed download. Startup tells you to run <code>nono pull jedisct1/swival</code> when it is missing.</p>
 <p><code>none</code> is the air-gapped expert mode. The entire Swival process tree is re-executed under <code>nono --block-net</code>: no DNS, no public hosts, no loopback, enforced by the OS for Swival itself and every child. Because that includes the provider call, only the <code>command</code> provider — a local model process speaking over stdin/stdout — is compatible. <code>--serve</code>, remote MCP/A2A, and the nono proxy flags (<code>--nono-allow-domain</code>, <code>--nono-network-profile</code>, <code>--nono-credential</code>) are rejected up front. The air gap is verified, not assumed: if you wrap Swival in <code>nono run</code> yourself instead of letting it re-exec, startup checks nono's capability file and fails unless the surrounding sandbox really was started with <code>--block-net</code>.</p>

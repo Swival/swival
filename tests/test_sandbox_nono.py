@@ -74,8 +74,10 @@ _PACK_ABSENT = '{"packages": {"nolabs-ai/claude": {"version": "1.0.0"}}}'
 
 
 class TestIsInsideNono:
-    def test_false_by_default(self, monkeypatch):
+    def test_false_when_cap_file_unset_or_empty(self, monkeypatch):
         _clear_sandboxed(monkeypatch)
+        assert is_inside_nono() is False
+        monkeypatch.setenv(_NONO_ENV, "")
         assert is_inside_nono() is False
 
     def test_true_when_nono_sets_cap_file(self, monkeypatch):
@@ -308,7 +310,8 @@ class TestMaybeReexec:
         _clear_sandboxed(monkeypatch)
         _mock_nono_script(tmp_path)
         monkeypatch.setenv("PATH", str(tmp_path))
-        monkeypatch.setattr(sys, "argv", ["swival", "--repl"])
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(sys, "argv", ["swival", "--report", "r.json", "--repl"])
 
         captured = {}
 
@@ -334,7 +337,12 @@ class TestMaybeReexec:
         assert captured["args"][prof_idx + 1] == "myprofile"
         assert captured["env"][_VERSION_ENV] == "0.59.0"
         dash_idx = captured["args"].index("--")
-        assert captured["args"][dash_idx + 1 :] == ["swival", "--repl"]
+        assert captured["args"][dash_idx + 1 :] == [
+            "swival",
+            "--report",
+            str(tmp_path.resolve() / "r.json"),
+            "--repl",
+        ]
 
     def test_open_network_lets_cost_map_download(self, tmp_path, monkeypatch):
         """With no network restriction the child must not force the offline map."""

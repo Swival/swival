@@ -171,8 +171,8 @@
 <p><code>skills_discovered</code> records skill names discovered at startup. <code>instructions_loaded</code> records loaded instruction files as absolute paths (e.g. the user-level <code>AGENTS.md</code> from <code>~/.config/swival/</code>, the cross-agent <code>~/.agents/AGENTS.md</code>, and the project-level files).</p>
 <h3 id="sandbox"><code>sandbox</code></h3>
 <p><code>mode</code> is always present, and is either <code>builtin</code> (Swival's own path checks) or <code>nono</code> (the operating system enforces the limits through nono).
-When <code>mode</code> is <code>nono</code>, <code>rollback</code> says whether rollback snapshots are on, and <code>network</code> is set to <code>offline</code> when the network is blocked.
-<code>nono_version</code> (the nono binary version) and <code>nono_profile</code> (the profile in use) may also appear.</p>
+When <code>mode</code> is <code>nono</code>, <code>rollback</code> says whether rollback snapshots were requested, and <code>network</code> is set to <code>offline</code> when Swival was asked to block the network.
+<code>nono_version</code> (the nono binary version) and <code>nono_profile</code> (the profile Swival asked nono to use) may also appear.</p>
 <h3 id="result"><code>result</code></h3>
 <p><code>outcome</code> is <code>success</code>, <code>exhausted</code>, or <code>error</code>. <code>answer</code> contains final assistant text or <code>null</code> when unavailable. <code>exit_code</code> is the process exit code, which is <code>0</code> for success, <code>2</code> for turn exhaustion, and <code>1</code> for runtime failure. <code>error_message</code> appears only when <code>outcome</code> is <code>error</code>.</p>
 <p>A <code>success</code> outcome means the model produced a final non-tool response. An <code>exhausted</code> outcome means the run reached <code>max_turns</code> before completing. An <code>error</code> outcome means runtime setup or execution failed.</p>

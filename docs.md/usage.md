@@ -305,7 +305,7 @@ Useful for long-running sessions.
 
 `--sandbox` picks the sandbox.
 The default, `builtin`, checks paths inside Swival itself.
-`nono` has the operating system enforce the limits instead (Landlock on Linux, Seatbelt on macOS), and adds network filtering and optional rollback.
+`nono` adds limits enforced by the operating system (Landlock on Linux, Seatbelt on macOS), plus network filtering and optional rollback.
 It comes with its own flags (`--nono-profile`, `--nono-block-net`, `--nono-allow-domain`, `--nono-rollback`, and more); see [nono](nono.md) for the full list.
 
 `--no-read-guard` disables the read-before-write guard that normally prevents editing existing files before reading them.

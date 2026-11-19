@@ -87,7 +87,7 @@ def effective_profile(profile: str | None) -> str:
 
 
 def is_inside_nono() -> bool:
-    """True under nono, whether Swival re-exec'd itself or the user ran it with `nono run`."""
+    """True when nono's NONO_CAP_FILE is non-empty, whether Swival re-exec'd itself or the user ran it with `nono run`."""
     return bool(os.environ.get(_NONO_ENV))
 
 
@@ -527,14 +527,7 @@ def check_wrapper_available() -> None:
 
 
 def check_sandbox_available() -> None:
-    """Raise ConfigError if sandbox="nono" is requested but we are not inside nono.
-
-    Called by Session to fail fast for library users — the re-exec path only
-    works for the CLI entry point, not for programmatic API usage.
-
-    Accepts both Swival-initiated re-exec (both markers) and external wrapping
-    (``nono run -- python script.py``, which sets only ``NONO_CAP_FILE``).
-    """
+    """Fail fast when Session asks for nono outside of it, since only the CLI can re-exec itself."""
     if not is_inside_nono():
         raise ConfigError(
             'sandbox="nono" requires running inside a nono sandbox. '

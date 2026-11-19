@@ -102,7 +102,7 @@
         <article class="docs-content">
             <h1 id="using-swival-with-nono">Using Swival With nono</h1>
 <p><a href="https://nono.sh">nono</a> is a sandbox that confines Swival at the operating system level, using Landlock on Linux and Seatbelt on macOS.
-The agent can't read or write any file it wasn't granted, and the kernel enforces that instead of Swival's own checks.
+The agent can't read or write any file it wasn't granted, and the kernel enforces that on top of Swival's own checks.
 Network access is allowed by default, but you can block it or limit it to a list of domains.</p>
 <p>This makes nono the right choice for untrusted or destructive tasks, for runs where you want network egress under control, and for any situation where you would rather the operating system say no than rely on the agent behaving.</p>
 <h2 id="integrated-sandbox-mode">Integrated Sandbox Mode</h2>
@@ -147,8 +147,10 @@ Network access is allowed by default, but you can block it or limit it to a list
 <p>With <code>--nono-rollback</code>, nono records an atomic snapshot of the files the run touches so you can undo the whole thing afterwards.</p>
 <pre><code class="language-sh">swival --sandbox nono --nono-rollback &quot;Migrate the test suite to pytest&quot; --yolo
 </code></pre>
-<p>After the run, review and restore snapshots with nono directly:</p>
-<pre><code class="language-sh">nono rollback
+<p>After the run, use nono directly to find the snapshot, look at what changed, and restore it if you want:</p>
+<pre><code class="language-sh">nono rollback list
+nono rollback show &lt;session-id&gt;
+nono rollback restore &lt;session-id&gt;
 </code></pre>
 <p>This pairs well with high-autonomy runs: let the agent work freely, inspect the result, and roll back in one step if you do not want to keep it.</p>
 <h2 id="provider-credentials">Provider Credentials</h2>
@@ -194,7 +196,7 @@ nono run --allow &quot;$PWD&quot; --profile jedisct1/swival -- \
 </code></pre>
 <p>This gives you defense in depth: nono enforces the hard boundary at the kernel, and Swival's guards add a second layer inside it.</p>
 <h2 id="practical-guidance">Practical Guidance</h2>
-<p>For untrusted or destructive tasks, use <code>--sandbox nono --yolo</code>: the agent can do anything inside the workspace, and the operating system makes sure it can't get out.
+<p>For untrusted or destructive tasks, use <code>--sandbox nono --yolo</code>: <code>--yolo</code> lifts Swival's own file and command limits, while nono keeps the agent inside what it was granted.
 Add <code>--nono-rollback</code> when you want an easy undo, and <code>--nono-block-net</code> or <code>--nono-allow-domain</code> when you care about network access.
 For everyday edits you trust, the default <code>builtin</code> mode is usually enough.</p>
 <h2 id="further-reading">Further Reading</h2>

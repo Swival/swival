@@ -1,7 +1,7 @@
 # Using Swival With nono
 
 [nono](https://nono.sh) is a sandbox that confines Swival at the operating system level, using Landlock on Linux and Seatbelt on macOS.
-The agent can't read or write any file it wasn't granted, and the kernel enforces that instead of Swival's own checks.
+The agent can't read or write any file it wasn't granted, and the kernel enforces that on top of Swival's own checks.
 Network access is allowed by default, but you can block it or limit it to a list of domains.
 
 This makes nono the right choice for untrusted or destructive tasks, for runs where you want network egress under control, and for any situation where you would rather the operating system say no than rely on the agent behaving.
@@ -89,10 +89,12 @@ With `--nono-rollback`, nono records an atomic snapshot of the files the run tou
 swival --sandbox nono --nono-rollback "Migrate the test suite to pytest" --yolo
 ```
 
-After the run, review and restore snapshots with nono directly:
+After the run, use nono directly to find the snapshot, look at what changed, and restore it if you want:
 
 ```sh
-nono rollback
+nono rollback list
+nono rollback show <session-id>
+nono rollback restore <session-id>
 ```
 
 This pairs well with high-autonomy runs: let the agent work freely, inspect the result, and roll back in one step if you do not want to keep it.
@@ -173,7 +175,7 @@ This gives you defense in depth: nono enforces the hard boundary at the kernel, 
 
 ## Practical Guidance
 
-For untrusted or destructive tasks, use `--sandbox nono --yolo`: the agent can do anything inside the workspace, and the operating system makes sure it can't get out.
+For untrusted or destructive tasks, use `--sandbox nono --yolo`: `--yolo` lifts Swival's own file and command limits, while nono keeps the agent inside what it was granted.
 Add `--nono-rollback` when you want an easy undo, and `--nono-block-net` or `--nono-allow-domain` when you care about network access.
 For everyday edits you trust, the default `builtin` mode is usually enough.
 

@@ -90,8 +90,8 @@ The JSON below is from a verified local run using `--model dummy-model --max-tur
 ### `sandbox`
 
 `mode` is always present, and is either `builtin` (Swival's own path checks) or `nono` (the operating system enforces the limits through nono).
-When `mode` is `nono`, `rollback` says whether rollback snapshots are on, and `network` is set to `offline` when the network is blocked.
-`nono_version` (the nono binary version) and `nono_profile` (the profile in use) may also appear.
+When `mode` is `nono`, `rollback` says whether rollback snapshots were requested, and `network` is set to `offline` when Swival was asked to block the network.
+`nono_version` (the nono binary version) and `nono_profile` (the profile Swival asked nono to use) may also appear.
 
 ### `result`
 

@@ -8511,7 +8511,7 @@ def main():
             parts.append("rollback=on")
         fmt.info(" ".join(parts))
         if args.nono_rollback:
-            fmt.info("Review changes: nono rollback")
+            fmt.info("Review changes: nono rollback list")
 
     # Resolved after the sandbox re-exec, so LiteLLM is only imported once.
     from .decisions import resolve_settings as _resolve_decisions
@@ -9923,7 +9923,7 @@ def _show_sandbox_review_hint(args) -> None:
     from .sandbox_nono import is_inside_nono
 
     if is_inside_nono():
-        fmt.info("Review changes: nono rollback")
+        fmt.info("Review changes: nono rollback list")
 
 
 def _resolve_network_policy(

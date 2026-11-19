@@ -8,8 +8,8 @@ The operating system then enforces what the agent can read and write, and nono c
 ## nono Sandbox Mode
 
 Pass `--sandbox nono` to run Swival inside a [nono](https://nono.sh) sandbox.
-At startup, Swival restarts itself as `nono run -- swival ...`.
-The kernel then enforces the file and network limits, using Landlock on Linux and Seatbelt on macOS.
+At startup, Swival restarts itself as `nono run -- swival ...`, unless it's already running under nono.
+The operating system then enforces the file limits, using Landlock on Linux and Seatbelt on macOS, and nono can also block or filter network access.
 The parent nono process stays outside the sandbox to handle the audit log, network proxy, and rollback, while the Swival child only gets the access it was granted.
 
 ```sh
@@ -28,7 +28,7 @@ swival --sandbox nono --nono-rollback "Try a risky migration" --yolo
 After the run, Swival prints a hint for reviewing or undoing the changes (unless `--quiet` is set):
 
 ```text
-  Review changes: nono rollback
+  Review changes: nono rollback list
 ```
 
 nono can also filter the agent's network access. Block it entirely, or restrict it to an allowlist:
@@ -78,7 +78,7 @@ swival --network provider-only --provider openrouter --model qwen/qwen3-coder "R
 
 `provider-only` works with the default `builtin` sandbox, which still applies Swival's own file checks.
 It can't be combined with `--sandbox nono`, or run inside an external `nono run`, because that would mean running nono inside nono.
-Wrapped commands get the same file access a full nono run would give them: the base directory, `--add-dir` paths, temp directories, and nono's usual runtime allowances.
+Wrapped commands can access the base directory, `--add-dir` paths, temp directories, and nono's usual runtime allowances.
 That also means nono's built-in credential protections (`~/.ssh` and friends) apply to them.
 
 This mode needs the `jedisct1/swival` nono profile pack installed before it starts. The wrapper runs once per agent command, so Swival checks for the pack up front rather than letting nono pull it mid-run: an unreachable registry would otherwise cost every single command a failed download. Startup tells you to run `nono pull jedisct1/swival` when it is missing.
