@@ -30,8 +30,6 @@ _PATH_FLAGS = frozenset(
         "--skills-dir",
         "--mcp-config",
         "--a2a-config",
-        "--objective",
-        "--verify",
         "--report",
         "--cache-dir",
         "--trace-dir",
@@ -353,7 +351,10 @@ def build_nono_argv(
 
 
 def _absolutize_argv(argv: list[str]) -> list[str]:
-    """Make path arguments absolute so the child under nono doesn't depend on its working directory."""
+    """Make path arguments absolute so the child under nono doesn't depend on its working directory.
+
+    --objective and --verify are left alone because Swival resolves them against the base directory.
+    """
 
     def absolute(value: str) -> str:
         return str(Path(value).expanduser().resolve())

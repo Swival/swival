@@ -458,7 +458,8 @@ class TestMisc:
         monkeypatch.chdir(tmp_path)
         cwd, home = tmp_path.resolve(), Path.home().resolve()
         argv = ["swival", "--base-dir", "p", "--add-dir=a", "--report", "~/r"]
-        argv += ["--trace-dir", "/abs", "--model=m", "q", "--", "--add-dir", "x"]
+        argv += ["--trace-dir", "/abs", "--verify", "v.md", "--model=m"]
+        argv += ["q", "--", "--add-dir", "x"]
         assert _absolutize_argv(argv) == [
             "swival",
             "--base-dir",
@@ -468,6 +469,8 @@ class TestMisc:
             f"{home}/r",
             "--trace-dir",
             "/abs",
+            "--verify",
+            "v.md",
             "--model=m",
             "q",
             "--",
