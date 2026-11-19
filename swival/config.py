@@ -23,7 +23,7 @@ _UNSET = object()  # Sentinel for "not set by CLI"
 
 # --- Schema ---
 
-SANDBOX_MODES = ("builtin", "agentfs", "nono")
+SANDBOX_MODES = ("builtin", "nono")
 NETWORK_MODES = ("full", "provider-only", "none")
 REASONING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "default")
 INITIAL_TOOL_CHOICES = ("auto", "required")
@@ -85,9 +85,6 @@ CONFIG_KEYS: dict[str, type | tuple[type, ...]] = {
     "allowed_dirs_ro": list,
     "network": str,
     "sandbox": str,
-    "sandbox_session": str,
-    "sandbox_strict_read": bool,
-    "sandbox_auto_session": bool,
     "nono_profile": str,
     "nono_rollback": bool,
     "nono_block_net": bool,
@@ -167,7 +164,6 @@ _INVERT_BOOL_KEYS: dict[str, str] = {
     "no_history": "history",
     "no_memory": "memory",
     "no_continue": "continue_here",
-    "no_sandbox_auto_session": "sandbox_auto_session",
     "no_lifecycle": "lifecycle_enabled",
     "quiet": "verbose",
 }
@@ -209,9 +205,6 @@ _ARGPARSE_DEFAULTS: dict[str, Any] = {
     "add_dir_ro": [],
     "network": "full",
     "sandbox": "builtin",
-    "sandbox_session": None,
-    "sandbox_strict_read": False,
-    "no_sandbox_auto_session": False,
     "nono_profile": None,
     "nono_rollback": False,
     "nono_block_net": False,
@@ -1200,13 +1193,8 @@ def apply_config_to_args(args: argparse.Namespace, config: dict) -> None:
             args.encrypt_secrets = enc_val
             args.no_encrypt_secrets = not enc_val
 
-    # Special handling: positive config key -> negative argparse dest
-    if "sandbox_auto_session" in config:
-        if _is_unset("no_sandbox_auto_session"):
-            args.no_sandbox_auto_session = not config["sandbox_auto_session"]
-
     # Apply all other config keys
-    _SKIP_KEYS = {"color", "sandbox_auto_session", "encrypt_secrets"}
+    _SKIP_KEYS = {"color", "encrypt_secrets"}
     for key, value in config.items():
         if key in _SKIP_KEYS:
             continue
@@ -1257,8 +1245,6 @@ def args_to_session_kwargs(args, base_dir: str) -> dict:
         "no_skills",
         "network",
         "sandbox",
-        "sandbox_session",
-        "sandbox_strict_read",
         "nono_profile",
         "nono_rollback",
         "nono_block_net",
@@ -1580,10 +1566,7 @@ def generate_config(
         '# network = "full"                # "full" | "provider-only" (agent commands cannot reach the network) | "none" (air-gapped, command provider only)',
         "# web_search = true               # web_search tool; queries go to third-party search providers",
         '# web_search_providers = ["parallel", "keenable", "exa", "tavily"]  # providers web_search may use',
-        '# sandbox = "builtin"             # "builtin" | "agentfs" | "nono"',
-        '# sandbox_session = "my-session"  # agentfs session ID (optional)',
-        "# sandbox_strict_read = false",
-        "# sandbox_auto_session = true",
+        '# sandbox = "builtin"             # "builtin" | "nono"',
         '# nono options apply when sandbox is "nono" (requires the nono binary):',
         '# nono_profile = "claude-code"    # named nono profile',
         "# nono_rollback = false           # enable atomic rollback snapshots",

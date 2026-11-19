@@ -18,7 +18,6 @@ from swival.config import _UNSET, apply_config_to_args, args_to_session_kwargs
 from swival.report import ConfigError, ReportCollector
 from swival.mcp_client import _jail_stdio_command
 from swival.sandbox_nono import (
-    _ENV_MARKER,
     _NONO_ENV,
     build_block_net_wrapper,
     build_nono_argv,
@@ -54,14 +53,8 @@ JAIL = ["nono", "run", "--silent", "--allow", "/base", "--block-net", "--"]
 
 @pytest.fixture(autouse=True)
 def _outside_nono(monkeypatch):
-    """Neutralize an inherited nono environment.
-
-    These tests exercise Swival's own policy logic; a host that happens to
-    run the suite inside nono must not leak its sandbox markers into them.
-    Tests that need the markers set them explicitly.
-    """
+    """Hide an inherited nono environment, in case the suite itself runs under nono."""
     monkeypatch.delenv(_NONO_ENV, raising=False)
-    monkeypatch.delenv(_ENV_MARKER, raising=False)
 
 
 def _set_cap(tmp_path, monkeypatch, content):
@@ -154,7 +147,7 @@ class TestNoneResolution:
         args, error, diag = _resolve(
             tmp_path,
             ["--network", "none", "--provider", "command"],
-            config={"sandbox": "agentfs"},
+            config={"sandbox": "builtin"},
         )
         assert error is None
         assert args.sandbox == "nono"
@@ -168,16 +161,20 @@ class TestNoneResolution:
         assert error is None and diag is None
         assert args.nono_block_net is True
 
-    def test_cli_none_with_cli_builtin_rejected(self, tmp_path):
-        _, error, _ = _resolve(tmp_path, ["--network", "none", "--sandbox", "builtin"])
-        assert "--network none requires the nono sandbox" in error
-        assert "--network full" in error
-
-    def test_config_none_with_cli_agentfs_fails_closed(self, tmp_path):
-        _, error, _ = _resolve(
-            tmp_path, ["--sandbox", "agentfs"], config={"network": "none"}
-        )
-        assert 'config sets network = "none"' in error
+    @pytest.mark.parametrize(
+        "argv, config, source",
+        [
+            (["--network", "none", "--sandbox", "builtin"], None, "--network none"),
+            (
+                ["--sandbox", "builtin"],
+                {"network": "none"},
+                'config sets network = "none", which',
+            ),
+        ],
+    )
+    def test_none_with_cli_builtin_rejected(self, tmp_path, argv, config, source):
+        _, error, _ = _resolve(tmp_path, argv, config=config)
+        assert f"{source} requires the nono sandbox" in error
         assert "--network full" in error
 
     def test_config_none_with_cli_nono_keeps_policy(self, tmp_path):
@@ -297,13 +294,6 @@ class TestProviderOnlyResolution:
         assert error is None
         assert args.sandbox == "builtin"
         assert args.nono_block_net is False
-
-    def test_agentfs_sandbox_compatible(self, tmp_path):
-        args, error, _ = _resolve(
-            tmp_path, ["--network", "provider-only", "--sandbox", "agentfs"]
-        )
-        assert error is None
-        assert args.sandbox == "agentfs"
 
     def test_nono_sandbox_rejected(self, tmp_path):
         _, error, _ = _resolve(
@@ -639,9 +629,12 @@ class TestNetBlockedVerification:
 
 
 class TestSessionNetwork:
-    def test_invalid_mode_raises(self, tmp_path):
-        with pytest.raises(ConfigError, match="'network' must be"):
-            Session(base_dir=str(tmp_path), network="offline")
+    @pytest.mark.parametrize(
+        "kwarg, value", [("network", "offline"), ("sandbox", "agentfs")]
+    )
+    def test_invalid_mode_raises(self, tmp_path, kwarg, value):
+        with pytest.raises(ConfigError, match=f"'{kwarg}' must be"):
+            Session(base_dir=str(tmp_path), **{kwarg: value})
 
     def test_none_outside_nono_raises(self, tmp_path):
         s = Session(
@@ -777,9 +770,24 @@ class TestNetworkReport:
         kwargs.update(overrides)
         return rc, rc.build_report(**kwargs)
 
-    def test_full_mode_has_no_network_field(self):
+    def test_defaults_record_no_network_and_builtin_sandbox(self):
         _, report = self._build()
         assert "network" not in report
+        assert report["sandbox"] == {"mode": "builtin"}
+
+    def test_nono_sandbox_block(self):
+        _, report = self._build(
+            sandbox_mode="nono",
+            nono_rollback=True,
+            nono_version="0.82.0",
+            nono_profile="swival",
+        )
+        assert report["sandbox"] == {
+            "mode": "nono",
+            "rollback": True,
+            "nono_version": "0.82.0",
+            "nono_profile": "swival",
+        }
 
     def test_provider_only_recorded(self):
         _, report = self._build(network_mode="provider-only")
@@ -842,7 +850,6 @@ class TestLiveEnforcement:
             pytest.skip("swival console script not installed in this environment")
         env = dict(os.environ)
         env.pop(_NONO_ENV, None)
-        env.pop(_ENV_MARKER, None)
         return subprocess.run(
             [str(swival_bin), *argv],
             capture_output=True,

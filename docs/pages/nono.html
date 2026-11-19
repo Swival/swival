@@ -89,7 +89,6 @@
 <li><a href="providers.html">Providers</a></li>
 <li><a href="reports.html">Reports</a></li>
 <li><a href="reviews.html">Reviews</a></li>
-<li><a href="agentfs.html">AgentFS</a></li>
 <li><a href="nono.html" class="active">nono</a></li>
 </ul>
 </div>
@@ -102,7 +101,9 @@
         </aside>
         <article class="docs-content">
             <h1 id="using-swival-with-nono">Using Swival With nono</h1>
-<p><a href="https://nono.sh">nono</a> is a capability-based sandbox that confines Swival at the operating-system level: Landlock on Linux, Seatbelt on macOS. Where AgentFS overlays the filesystem and lets you copy changes back afterwards, nono enforces access by path. The agent process simply cannot read, write, or reach anything it was not granted, and the denial happens in the kernel rather than in Swival's own guards.</p>
+<p><a href="https://nono.sh">nono</a> is a sandbox that confines Swival at the operating system level, using Landlock on Linux and Seatbelt on macOS.
+The agent can't read or write any file it wasn't granted, and the kernel enforces that instead of Swival's own checks.
+Network access is allowed by default, but you can block it or limit it to a list of domains.</p>
 <p>This makes nono the right choice for untrusted or destructive tasks, for runs where you want network egress under control, and for any situation where you would rather the operating system say no than rely on the agent behaving.</p>
 <h2 id="integrated-sandbox-mode">Integrated Sandbox Mode</h2>
 <p>The simplest way to use nono with Swival is the built-in sandbox mode:</p>
@@ -193,14 +194,15 @@ nono run --allow &quot;$PWD&quot; --profile jedisct1/swival -- \
 </code></pre>
 <p>This gives you defense in depth: nono enforces the hard boundary at the kernel, and Swival's guards add a second layer inside it.</p>
 <h2 id="practical-guidance">Practical Guidance</h2>
-<p>For untrusted or destructive tasks, <code>--sandbox nono --yolo</code> is the combination to reach for: the agent gets full capability within the workspace while the operating system guarantees it cannot escape. Add <code>--nono-rollback</code> when you want a clean undo, and <code>--nono-block-net</code> or <code>--nono-allow-domain</code> when network egress matters. For everyday edits you trust, the lighter <code>builtin</code> or <code>agentfs</code> modes are usually enough.</p>
+<p>For untrusted or destructive tasks, use <code>--sandbox nono --yolo</code>: the agent can do anything inside the workspace, and the operating system makes sure it can't get out.
+Add <code>--nono-rollback</code> when you want an easy undo, and <code>--nono-block-net</code> or <code>--nono-allow-domain</code> when you care about network access.
+For everyday edits you trust, the default <code>builtin</code> mode is usually enough.</p>
 <h2 id="further-reading">Further Reading</h2>
 <ul>
 <li><a href="safety-and-sandboxing.html">Safety and Sandboxing</a></li>
-<li><a href="agentfs.html">Using Swival With AgentFS</a></li>
 <li><a href="providers.html">Providers</a></li>
 </ul>
-            <nav class="page-nav" aria-label="Page navigation"><a class="nav-prev" href="agentfs.html"><span class="nav-label">&larr; Previous</span><span class="nav-title">AgentFS</span></a><a class="nav-next" href="python-api.html"><span class="nav-label">Next &rarr;</span><span class="nav-title">Python API</span></a></nav>
+            <nav class="page-nav" aria-label="Page navigation"><a class="nav-prev" href="reviews.html"><span class="nav-label">&larr; Previous</span><span class="nav-title">Reviews</span></a><a class="nav-next" href="python-api.html"><span class="nav-label">Next &rarr;</span><span class="nav-title">Python API</span></a></nav>
         </article>
         <aside class="page-toc" aria-label="On this page">
             <p class="page-toc-title">On this page</p>

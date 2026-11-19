@@ -303,15 +303,10 @@ Useful for long-running sessions.
 
 `--network` sets the network policy for the run. The default, `full`, changes nothing. `provider-only` keeps the model provider reachable (hosted APIs and local HTTP servers both work) while every agent-initiated subprocess — shell commands, the `run_python` tool, stdio MCP servers, and everything they spawn — runs inside a `nono run --block-net` wrapper with no network access; `fetch_url` and `web_search` are removed as well. `none` goes further: the whole Swival process tree is re-executed under `nono --block-net`, nothing can make an outbound connection (loopback included), and only the `command` provider works. Both restricted modes require the `nono` binary and reject URL-backed MCP servers and A2A clients. Can also be set in config as `network = "provider-only"`; an explicit `--network full` on the command line overrides an inherited value. See [Safety and Sandboxing](safety-and-sandboxing.md) for the exact guarantees.
 
-`--sandbox` selects the sandbox backend. The default is `builtin`, which uses application-layer path guards. Set it to `agentfs` to re-exec Swival inside an [AgentFS](agentfs.md) overlay for OS-enforced write isolation (requires the `agentfs` binary on PATH), or `nono` for capability-based OS sandboxing with Landlock or Seatbelt, network filtering, and optional rollback. The `nono` backend has its own family of flags (`--nono-profile`, `--nono-block-net`, `--nono-allow-domain`, `--nono-rollback`, and more); see [nono](nono.md) for the full list.
-
-`--sandbox-session` sets an AgentFS session ID so sandbox state persists across runs. Only valid with `--sandbox agentfs`.
-
-`--sandbox-strict-read` enables strict read isolation inside the AgentFS sandbox. When set, the agent process can only read files that have been explicitly allowed, rather than having unrestricted read access to the host filesystem.
-
-This requires an AgentFS version with strict read support. If the installed version does not support it, Swival exits with an error. Only valid with `--sandbox agentfs`.
-
-`--no-sandbox-auto-session` disables the automatic session ID that Swival generates when `--sandbox agentfs` is used without an explicit `--sandbox-session`. By default, Swival derives a deterministic session ID from the project directory so that re-running in the same directory reuses the overlay automatically. Pass this flag to get a fresh, ephemeral overlay each time.
+`--sandbox` picks the sandbox.
+The default, `builtin`, checks paths inside Swival itself.
+`nono` has the operating system enforce the limits instead (Landlock on Linux, Seatbelt on macOS), and adds network filtering and optional rollback.
+It comes with its own flags (`--nono-profile`, `--nono-block-net`, `--nono-allow-domain`, `--nono-rollback`, and more); see [nono](nono.md) for the full list.
 
 `--no-read-guard` disables the read-before-write guard that normally prevents editing existing files before reading them.
 

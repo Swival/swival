@@ -360,6 +360,7 @@ The example script above does not do this. It always syncs to `heads/<sha>`, whi
 
 **A2A serve:** The `--serve` process itself does not run hooks, but the per-context sessions it creates inherit the lifecycle settings and run startup and exit hooks per session (exit fires when a session is evicted or closed). Use `--no-lifecycle` to disable hooks in a long-lived server.
 
-**AgentFS sandbox:** Hooks run in the same process context as Swival. If you are running inside an AgentFS sandbox, the hook script needs network access to reach the remote storage backend.
+**nono sandbox:** Hooks run as child processes of Swival, so under `--sandbox nono` they get the same file and network limits.
+A hook that syncs to remote storage won't work if the network is blocked with `--nono-block-net` or `--network none`.
 
 **Reports:** Lifecycle events (startup, exit and task_done) are recorded in the report timeline when `--report` is set. Each event includes its exit code, duration, and any error message. A fail-closed exit hook failure rewrites the report with `outcome: "error"`.

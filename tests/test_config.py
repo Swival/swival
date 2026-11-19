@@ -52,7 +52,6 @@ def _make_args(**overrides):
         "add_dir": None,  # append actions use None sentinel
         "add_dir_ro": None,  # append actions use None sentinel
         "sandbox": _UNSET,
-        "sandbox_session": _UNSET,
         "nono_profile": _UNSET,
         "nono_rollback": _UNSET,
         "nono_block_net": _UNSET,

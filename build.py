@@ -153,7 +153,6 @@ NAV = [
             ),
             ("reports", "Reports", "JSON reports for benchmarking and evaluation"),
             ("reviews", "Reviews", "External reviewer scripts for automated QA gates"),
-            ("agentfs", "AgentFS", "Copy-on-write filesystem sandboxing"),
             (
                 "nono",
                 "nono",

@@ -2923,7 +2923,6 @@ class TestProfileProviderIntegration:
             "add_dir": None,
             "add_dir_ro": None,
             "sandbox": _UNSET,
-            "sandbox_session": _UNSET,
             "no_read_guard": _UNSET,
             "no_instructions": _UNSET,
             "no_skills": _UNSET,

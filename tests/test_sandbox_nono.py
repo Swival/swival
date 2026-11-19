@@ -11,9 +11,9 @@ from swival.report import ConfigError
 from swival.sandbox_nono import (
     DEFAULT_PROFILE,
     WRAPPER_PROFILE,
-    _ENV_MARKER,
     _NONO_ENV,
     _VERSION_ENV,
+    _absolutize_argv,
     _find_nono,
     build_block_net_wrapper,
     build_nono_argv,
@@ -23,13 +23,11 @@ from swival.sandbox_nono import (
     effective_profile,
     get_nono_version,
     is_inside_nono,
-    is_sandboxed,
     maybe_reexec,
     probe_nono,
     profile_pack_installed,
     provider_credential_read_dirs,
     provider_state_dirs,
-    rollback_hint,
     writable_temp_dirs,
 )
 
@@ -64,19 +62,10 @@ def _mock_nono_script(
 
 
 def _set_sandboxed(monkeypatch):
-    """Set both markers to simulate Swival-initiated re-exec inside nono."""
-    monkeypatch.setenv(_ENV_MARKER, "1")
-    monkeypatch.setenv(_NONO_ENV, "/tmp/.nono-deadbeef.json")
-
-
-def _set_external_nono(monkeypatch):
-    """Set only NONO_CAP_FILE to simulate external `nono run` wrapping."""
-    monkeypatch.delenv(_ENV_MARKER, raising=False)
     monkeypatch.setenv(_NONO_ENV, "/tmp/.nono-deadbeef.json")
 
 
 def _clear_sandboxed(monkeypatch):
-    monkeypatch.delenv(_ENV_MARKER, raising=False)
     monkeypatch.delenv(_NONO_ENV, raising=False)
 
 
@@ -84,58 +73,14 @@ _PACK_PRESENT = '{"packages": {"jedisct1/swival": {"version": "0.1.2"}}}'
 _PACK_ABSENT = '{"packages": {"nolabs-ai/claude": {"version": "1.0.0"}}}'
 
 
-# ===========================================================================
-# is_sandboxed() — requires both markers (Swival re-exec path)
-# ===========================================================================
-
-
-class TestIsSandboxed:
-    def test_not_sandboxed_by_default(self, monkeypatch):
-        _clear_sandboxed(monkeypatch)
-        assert is_sandboxed() is False
-
-    def test_sandboxed_when_both_markers_set(self, monkeypatch):
-        _set_sandboxed(monkeypatch)
-        assert is_sandboxed() is True
-
-    def test_not_sandboxed_with_only_swival_marker(self, monkeypatch):
-        """Setting SWIVAL_NONO_ACTIVE alone must not bypass the check."""
-        monkeypatch.setenv(_ENV_MARKER, "1")
-        monkeypatch.delenv(_NONO_ENV, raising=False)
-        assert is_sandboxed() is False
-
-    def test_not_sandboxed_with_only_nono_marker(self, monkeypatch):
-        _set_external_nono(monkeypatch)
-        assert is_sandboxed() is False
-
-    def test_not_sandboxed_for_empty_cap_file(self, monkeypatch):
-        monkeypatch.setenv(_ENV_MARKER, "1")
-        monkeypatch.setenv(_NONO_ENV, "")
-        assert is_sandboxed() is False
-
-
-# ===========================================================================
-# is_inside_nono() — accepts external wrapping (nono's own marker only)
-# ===========================================================================
-
-
 class TestIsInsideNono:
     def test_false_by_default(self, monkeypatch):
         _clear_sandboxed(monkeypatch)
         assert is_inside_nono() is False
 
-    def test_true_with_both_markers(self, monkeypatch):
+    def test_true_when_nono_sets_cap_file(self, monkeypatch):
         _set_sandboxed(monkeypatch)
         assert is_inside_nono() is True
-
-    def test_true_with_only_nono_marker(self, monkeypatch):
-        _set_external_nono(monkeypatch)
-        assert is_inside_nono() is True
-
-    def test_false_with_only_swival_marker(self, monkeypatch):
-        monkeypatch.setenv(_ENV_MARKER, "1")
-        monkeypatch.delenv(_NONO_ENV, raising=False)
-        assert is_inside_nono() is False
 
 
 # ===========================================================================
@@ -387,7 +332,6 @@ class TestMaybeReexec:
         assert "--rollback" in captured["args"]
         prof_idx = captured["args"].index("--profile")
         assert captured["args"][prof_idx + 1] == "myprofile"
-        assert captured["env"][_ENV_MARKER] == "1"
         assert captured["env"][_VERSION_ENV] == "0.59.0"
         dash_idx = captured["args"].index("--")
         assert captured["args"][dash_idx + 1 :] == ["swival", "--repl"]
@@ -452,19 +396,6 @@ class TestMaybeReexec:
         maybe_reexec(sandbox="nono", base_dir=str(tmp_path), add_dirs=[])
         assert chdir_calls == []
 
-    def test_swival_marker_alone_does_not_skip_reexec(self, tmp_path, monkeypatch):
-        """Only NONO_CAP_FILE proves we are inside nono; the Swival marker alone must not."""
-        monkeypatch.setenv(_ENV_MARKER, "1")
-        monkeypatch.delenv(_NONO_ENV, raising=False)
-        _mock_nono_script(tmp_path)
-        monkeypatch.setenv("PATH", str(tmp_path))
-        monkeypatch.setattr(sys, "argv", ["swival", "task"])
-
-        called = []
-        monkeypatch.setattr(os, "execvpe", lambda f, a, e: called.append(a))
-        maybe_reexec(sandbox="nono", base_dir=str(tmp_path), add_dirs=[])
-        assert len(called) == 1
-
     def test_reexec_grants_geap_gcloud_credentials(self, tmp_path, monkeypatch):
         """geap re-exec must pass the gcloud credential dir through as a --read grant."""
         _clear_sandboxed(monkeypatch)
@@ -487,32 +418,6 @@ class TestMaybeReexec:
 
 
 # ===========================================================================
-# External wrapping: nono marker present, Swival marker absent
-# ===========================================================================
-
-
-class TestExternalWrapping:
-    def test_is_inside_nono_true(self, monkeypatch):
-        _set_external_nono(monkeypatch)
-        assert is_inside_nono() is True
-
-    def test_is_sandboxed_false(self, monkeypatch):
-        _set_external_nono(monkeypatch)
-        assert is_sandboxed() is False
-
-    def test_maybe_reexec_skips(self, tmp_path, monkeypatch):
-        _set_external_nono(monkeypatch)
-        called = []
-        monkeypatch.setattr(os, "execvpe", lambda *a: called.append(a))
-        maybe_reexec(sandbox="nono", base_dir=str(tmp_path), add_dirs=[])
-        assert called == []
-
-    def test_check_sandbox_available_does_not_raise(self, monkeypatch):
-        _set_external_nono(monkeypatch)
-        check_sandbox_available()  # should not raise
-
-
-# ===========================================================================
 # check_sandbox_available()
 # ===========================================================================
 
@@ -523,7 +428,7 @@ class TestCheckSandboxAvailable:
         with pytest.raises(ConfigError, match="nono"):
             check_sandbox_available()
 
-    def test_passes_when_swival_reexec(self, monkeypatch):
+    def test_passes_inside_nono(self, monkeypatch):
         _set_sandboxed(monkeypatch)
         check_sandbox_available()
 
@@ -542,15 +447,34 @@ class TestMisc:
         monkeypatch.setenv(_VERSION_ENV, "0.59.0")
         assert get_nono_version() == "0.59.0"
 
-    def test_rollback_hint(self):
-        assert rollback_hint() == "nono rollback"
-
     def test_effective_profile_default(self):
         assert effective_profile(None) == DEFAULT_PROFILE
         assert effective_profile("") == DEFAULT_PROFILE
 
     def test_effective_profile_explicit(self):
         assert effective_profile("python-dev") == "python-dev"
+
+    def test_absolutize_argv(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        cwd, home = tmp_path.resolve(), Path.home().resolve()
+        argv = ["swival", "--base-dir", "p", "--add-dir=a", "--report", "~/r"]
+        argv += ["--trace-dir", "/abs", "--model=m", "q", "--", "--add-dir", "x"]
+        assert _absolutize_argv(argv) == [
+            "swival",
+            "--base-dir",
+            f"{cwd}/p",
+            f"--add-dir={cwd}/a",
+            "--report",
+            f"{home}/r",
+            "--trace-dir",
+            "/abs",
+            "--model=m",
+            "q",
+            "--",
+            "--add-dir",
+            "x",
+        ]
+        assert _absolutize_argv(["swival", "--report"]) == ["swival", "--report"]
 
 
 class TestCostMapHostReachable:
@@ -777,7 +701,7 @@ class TestCheckWrapperAvailable:
 
     def test_inside_nono_still_wins(self, tmp_path, monkeypatch):
         """The nesting refusal must not be masked by the pack check."""
-        _set_external_nono(monkeypatch)
+        _set_sandboxed(monkeypatch)
         _mock_nono_script(tmp_path, list_output=_PACK_ABSENT)
         monkeypatch.setenv("PATH", str(tmp_path))
         with pytest.raises(ConfigError) as exc:

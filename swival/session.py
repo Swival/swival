@@ -25,6 +25,7 @@ from .config import (
     NETWORK_MODES,
     ONESHOT_MAX_TURNS,
     PROFILE_KEYS,
+    SANDBOX_MODES,
     _validate_profiles,
     check_routing_profiles,
     first_remote_integration,
@@ -136,9 +137,6 @@ class Session:
         allowed_dirs_ro: list[str] | None = None,
         network: str = "full",
         sandbox: str = "builtin",
-        sandbox_session: str | None = None,
-        sandbox_strict_read: bool = False,
-        sandbox_auto_session: bool = True,
         nono_profile: str | None = None,
         nono_rollback: bool = False,
         nono_block_net: bool = False,
@@ -251,6 +249,11 @@ class Session:
                 f"'network' must be one of {NETWORK_MODES!r}, got {network!r}"
             )
         self.network = network
+        if sandbox not in SANDBOX_MODES:
+            raise ConfigError(
+                f"'sandbox' must be one of {SANDBOX_MODES!r}, got {sandbox!r}"
+            )
+        self.sandbox = sandbox
         self.web_search = web_search
         if web_search_providers is not None:
             from .websearch import validate_providers
@@ -259,10 +262,6 @@ class Session:
         self.web_search_providers = web_search_providers
         self._web_search_policy = None
         self._net_jail: list[str] | None = None
-        self.sandbox = sandbox
-        self.sandbox_session = sandbox_session
-        self.sandbox_strict_read = sandbox_strict_read
-        self.sandbox_auto_session = sandbox_auto_session
         # nono knobs are stored for report metadata and validation only.
         # Session does not bootstrap nono — the CLI re-exec path does that,
         # or the user wraps their process with `nono run` externally.
@@ -464,11 +463,6 @@ class Session:
                     f'network="{self.network}" is incompatible with '
                     f"{label} {name!r}; remove it"
                 )
-
-        if self.sandbox == "agentfs":
-            from .sandbox_agentfs import check_sandbox_available
-
-            check_sandbox_available()
 
         if self.sandbox == "nono":
             from .sandbox_nono import check_sandbox_available, verify_net_blocked
@@ -1145,8 +1139,6 @@ class Session:
                 turns=collector.max_turn_seen,
                 goal_stats=goal_stats,
                 sandbox_mode=self.sandbox,
-                sandbox_session=self.sandbox_session,
-                sandbox_strict_read=self.sandbox_strict_read,
                 nono_version=nono_version,
                 nono_profile=self.nono_profile,
                 nono_rollback=self.nono_rollback,

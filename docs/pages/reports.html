@@ -89,7 +89,6 @@
 <li><a href="providers.html">Providers</a></li>
 <li><a href="reports.html" class="active">Reports</a></li>
 <li><a href="reviews.html">Reviews</a></li>
-<li><a href="agentfs.html">AgentFS</a></li>
 <li><a href="nono.html">nono</a></li>
 </ul>
 </div>
@@ -171,7 +170,9 @@
 <p><code>commands</code> records the configured command policy: <code>"all"</code> (unrestricted, the default), <code>"none"</code> (disabled), <code>"ask"</code> (interactive approval per bucket), or a sorted list of whitelisted basenames. <code>max_review_rounds</code> records the reviewer retry limit.</p>
 <p><code>skills_discovered</code> records skill names discovered at startup. <code>instructions_loaded</code> records loaded instruction files as absolute paths (e.g. the user-level <code>AGENTS.md</code> from <code>~/.config/swival/</code>, the cross-agent <code>~/.agents/AGENTS.md</code>, and the project-level files).</p>
 <h3 id="sandbox"><code>sandbox</code></h3>
-<p><code>mode</code> is always present and is <code>builtin</code> (application-layer path guards), <code>agentfs</code> (OS-enforced write isolation via AgentFS), or <code>nono</code> (OS-enforced isolation via nono). <code>session</code> appears when an AgentFS session ID is active. When <code>mode</code> is <code>agentfs</code>, <code>strict_read</code> is always present (whether strict read isolation is enabled), and <code>agentfs_version</code> (the AgentFS binary version) and <code>diff_hint</code> (a hint for reviewing changes) may also appear. When <code>mode</code> is <code>nono</code>, <code>rollback</code> is always present (whether atomic rollback snapshots are enabled), and <code>nono_version</code> (the nono binary version) and <code>nono_profile</code> (the named profile applied) may also appear.</p>
+<p><code>mode</code> is always present, and is either <code>builtin</code> (Swival's own path checks) or <code>nono</code> (the operating system enforces the limits through nono).
+When <code>mode</code> is <code>nono</code>, <code>rollback</code> says whether rollback snapshots are on, and <code>network</code> is set to <code>offline</code> when the network is blocked.
+<code>nono_version</code> (the nono binary version) and <code>nono_profile</code> (the profile in use) may also appear.</p>
 <h3 id="result"><code>result</code></h3>
 <p><code>outcome</code> is <code>success</code>, <code>exhausted</code>, or <code>error</code>. <code>answer</code> contains final assistant text or <code>null</code> when unavailable. <code>exit_code</code> is the process exit code, which is <code>0</code> for success, <code>2</code> for turn exhaustion, and <code>1</code> for runtime failure. <code>error_message</code> appears only when <code>outcome</code> is <code>error</code>.</p>
 <p>A <code>success</code> outcome means the model produced a final non-tool response. An <code>exhausted</code> outcome means the run reached <code>max_turns</code> before completing. An <code>error</code> outcome means runtime setup or execution failed.</p>

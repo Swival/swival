@@ -89,7 +89,6 @@
 <li><a href="providers.html">Providers</a></li>
 <li><a href="reports.html">Reports</a></li>
 <li><a href="reviews.html">Reviews</a></li>
-<li><a href="agentfs.html">AgentFS</a></li>
 <li><a href="nono.html">nono</a></li>
 </ul>
 </div>
@@ -144,10 +143,7 @@ print(answer)
     allowed_dirs: list[str] | None = None,
     allowed_dirs_ro: list[str] | None = None,
     network: str = &quot;full&quot;,  # &quot;full&quot;, &quot;provider-only&quot;, or &quot;none&quot;
-    sandbox: str = &quot;builtin&quot;,
-    sandbox_session: str | None = None,
-    sandbox_strict_read: bool = False,
-    sandbox_auto_session: bool = True,
+    sandbox: str = &quot;builtin&quot;,  # &quot;builtin&quot; or &quot;nono&quot;
     nono_profile: str | None = None,
     nono_rollback: bool = False,
     nono_block_net: bool = False,

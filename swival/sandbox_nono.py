@@ -5,10 +5,6 @@ nono is a capability-based sandbox runtime for AI agents.  It uses Landlock
 We run it in supervised mode (``nono run -- swival ...``): the parent stays
 unsandboxed and provides audit, network proxy, and rollback services while the
 child inherits the enforced sandbox.
-
-This module mirrors ``sandbox_agentfs.py``: a ``maybe_reexec()`` that replaces
-the process early in startup, plus detection helpers.  It does not route
-through the unused ``SandboxBackend`` interface.
 """
 
 import json
@@ -22,11 +18,26 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .report import ConfigError
-from .sandbox_agentfs import _absolutize_argv
 
-_ENV_MARKER = "SWIVAL_NONO_ACTIVE"
 _NONO_ENV = "NONO_CAP_FILE"
 _VERSION_ENV = "SWIVAL_NONO_VERSION"
+
+_PATH_FLAGS = frozenset(
+    {
+        "--base-dir",
+        "--add-dir",
+        "--add-dir-ro",
+        "--skills-dir",
+        "--mcp-config",
+        "--a2a-config",
+        "--objective",
+        "--verify",
+        "--report",
+        "--cache-dir",
+        "--trace-dir",
+        "--acp-log",
+    }
+)
 
 # litellm fetches its model cost map from this host at import time. Knowing it
 # lets us decide whether the sandbox's network policy will let the download
@@ -77,27 +88,9 @@ def effective_profile(profile: str | None) -> str:
     return profile or DEFAULT_PROFILE
 
 
-def is_sandboxed() -> bool:
-    """Return True if Swival re-exec'd itself inside a nono sandbox.
-
-    Requires both our own marker (set during re-exec) and the ``NONO_CAP_FILE``
-    variable that nono always sets in the child environment.  Requiring both
-    prevents a bare ``export SWIVAL_NONO_ACTIVE=1`` from masquerading as a
-    sandbox.
-
-    For external wrapping (``nono run -- swival ...``), only ``NONO_CAP_FILE``
-    is present.  That case is accepted by ``is_inside_nono()``.
-    """
-    return _has_swival_marker() and _has_nono_env()
-
-
 def is_inside_nono() -> bool:
-    """Return True if the process is inside nono (any entry path).
-
-    True when either Swival re-exec'd itself (both markers set) or the user
-    wrapped Swival externally with ``nono run`` (only ``NONO_CAP_FILE`` set).
-    """
-    return _has_nono_env()
+    """True under nono, whether Swival re-exec'd itself or the user ran it with `nono run`."""
+    return bool(os.environ.get(_NONO_ENV))
 
 
 def is_net_blocked() -> bool:
@@ -134,14 +127,6 @@ def verify_net_blocked(claim: str) -> None:
             "network, but its capability file does not record --block-net. "
             "Re-run the outer `nono run` with --block-net."
         )
-
-
-def _has_swival_marker() -> bool:
-    return os.environ.get(_ENV_MARKER) == "1"
-
-
-def _has_nono_env() -> bool:
-    return bool(os.environ.get(_NONO_ENV))
 
 
 def _append_resolved_unique(
@@ -307,11 +292,6 @@ def get_nono_version() -> str | None:
     return os.environ.get(_VERSION_ENV)
 
 
-def rollback_hint() -> str:
-    """Return the nono command for reviewing rollback snapshots."""
-    return "nono rollback"
-
-
 def build_nono_argv(
     *,
     nono_bin: str,
@@ -372,6 +352,28 @@ def build_nono_argv(
     return argv
 
 
+def _absolutize_argv(argv: list[str]) -> list[str]:
+    """Make path arguments absolute so the child under nono doesn't depend on its working directory."""
+
+    def absolute(value: str) -> str:
+        return str(Path(value).expanduser().resolve())
+
+    result = list(argv)
+    i = 0
+    while i < len(result):
+        token = result[i]
+        if token == "--":
+            break
+        flag, eq, value = token.partition("=")
+        if eq and flag in _PATH_FLAGS:
+            result[i] = f"{flag}={absolute(value)}"
+        elif token in _PATH_FLAGS and i + 1 < len(result):
+            i += 1
+            result[i] = absolute(result[i])
+        i += 1
+    return result
+
+
 def maybe_reexec(
     *,
     sandbox: str,
@@ -392,10 +394,6 @@ def maybe_reexec(
     - sandbox != "nono"
     - Already running inside nono (``NONO_CAP_FILE`` set), which also covers
       the case where the user wrapped Swival externally with ``nono run``.
-
-    Unlike agentfs, nono enforces by path rather than by overlaying the CWD,
-    so we do not ``os.chdir()``.  Path-bearing argv flags are still resolved to
-    absolute as a safety measure.
 
     On success, this function does not return (os.execvpe replaces the
     process).  On failure, raises ConfigError.
@@ -431,7 +429,6 @@ def maybe_reexec(
     # swival process, which needs its bundled bin/ reachable on entry. User
     # tool spawns inside the re-exec'd swival are protected separately.
     env = os.environ.copy()
-    env[_ENV_MARKER] = "1"
     env[_VERSION_ENV] = probe["version"]
 
     # The re-exec'd Swival imports litellm inside the sandbox, which would try

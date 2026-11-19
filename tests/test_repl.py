@@ -255,7 +255,6 @@ class TestArgumentParsing:
                 side_effect=lambda *_args: events.append("run_main"),
             ),
             patch("swival.agent._resolve_network_policy", return_value=(None, None)),
-            patch("swival.sandbox_agentfs.maybe_reexec"),
             patch("swival.sandbox_nono.maybe_reexec"),
         ):
             main()

@@ -7678,27 +7678,9 @@ def build_parser():
     )
     access_group.add_argument(
         "--sandbox",
-        choices=["builtin", "agentfs", "nono"],
+        choices=["builtin", "nono"],
         default=_UNSET,
-        help='Sandbox backend: "builtin" (app-layer path guards), "agentfs" (OS-enforced via AgentFS), or "nono" (OS-enforced via nono). Default: builtin.',
-    )
-    access_group.add_argument(
-        "--sandbox-session",
-        type=str,
-        default=_UNSET,
-        help="AgentFS session ID for persistent sandbox state across runs (only with --sandbox agentfs).",
-    )
-    access_group.add_argument(
-        "--sandbox-strict-read",
-        action="store_true",
-        default=_UNSET,
-        help="Enable strict read isolation in AgentFS sandbox (requires agentfs with strict read support).",
-    )
-    access_group.add_argument(
-        "--no-sandbox-auto-session",
-        action="store_true",
-        default=_UNSET,
-        help="Disable automatic session ID generation for AgentFS sandbox.",
+        help='Sandbox backend: "builtin" (app-layer path guards) or "nono" (OS-enforced via nono). Default: builtin.',
     )
     access_group.add_argument(
         "--nono-profile",
@@ -8451,14 +8433,6 @@ def main():
                 "(agent subprocesses are network-blocked via nono)"
             )
 
-    # Validation: --sandbox-session requires --sandbox agentfs
-    if args.sandbox_session is not None and args.sandbox != "agentfs":
-        parser.error("--sandbox-session requires --sandbox agentfs")
-
-    # Validation: --sandbox-strict-read requires --sandbox agentfs
-    if args.sandbox_strict_read and args.sandbox != "agentfs":
-        parser.error("--sandbox-strict-read requires --sandbox agentfs")
-
     # Validation: --nono-* flags require --sandbox nono
     _nono_flag_set = any(
         [
@@ -8496,36 +8470,6 @@ def main():
         parser.error(
             "--max-output-tokens must be <= --max-context-tokens when both are specified."
         )
-
-    # AgentFS sandbox: re-exec inside agentfs if requested.
-    # This replaces the current process on success (does not return).
-    from .sandbox_agentfs import (
-        maybe_reexec,
-        is_sandboxed,
-        get_agentfs_version,
-        get_agentfs_session,
-        diff_hint,
-    )
-
-    maybe_reexec(
-        sandbox=args.sandbox,
-        sandbox_session=args.sandbox_session,
-        base_dir=str(Path(args.base_dir).resolve()),
-        add_dirs=getattr(args, "add_dir", []) or [],
-        sandbox_strict_read=args.sandbox_strict_read,
-        sandbox_auto_session=not args.no_sandbox_auto_session,
-    )
-
-    if args.sandbox == "agentfs" and is_sandboxed() and args.verbose:
-        session = get_agentfs_session()
-        parts = ["Sandbox: agentfs"]
-        if session:
-            parts.append(f"(session: {session})")
-        fmt.info(" ".join(parts))
-        if session:
-            fmt.info(
-                f"Resume: swival --sandbox agentfs --sandbox-session {session} ..."
-            )
 
     # nono sandbox: re-exec inside nono if requested.
     # This replaces the current process on success (does not return).
@@ -8567,9 +8511,7 @@ def main():
             parts.append("rollback=on")
         fmt.info(" ".join(parts))
         if args.nono_rollback:
-            from .sandbox_nono import rollback_hint
-
-            fmt.info(f"Review changes: {rollback_hint()}")
+            fmt.info("Review changes: nono rollback")
 
     # Resolved after the sandbox re-exec, so LiteLLM is only imported once.
     from .decisions import resolve_settings as _resolve_decisions
@@ -8582,7 +8524,7 @@ def main():
         parser.error(str(e))
 
     # --- A2A serve mode ---
-    # Placed after validations and AgentFS re-exec so all CLI checks apply.
+    # After the checks and sandbox re-exec above, so serve mode gets them too.
     if _is_serve:
         from .config import args_to_session_kwargs
 
@@ -8732,8 +8674,6 @@ def main():
                 }
                 if payload is not None:
                     goal_stats["current"] = payload
-        _session = get_agentfs_session()
-        _diff = diff_hint(_session)
         report.finalize(
             task=task or args.question or "",
             model=model_id,
@@ -8748,10 +8688,6 @@ def main():
             snapshot_stats=snapshot_stats,
             goal_stats=goal_stats,
             sandbox_mode=args.sandbox,
-            sandbox_session=_session or args.sandbox_session,
-            sandbox_strict_read=args.sandbox_strict_read,
-            agentfs_version=get_agentfs_version(),
-            diff_hint=_diff,
             nono_version=get_nono_version(),
             nono_profile=(
                 nono_effective_profile(args.nono_profile)
@@ -9981,29 +9917,13 @@ def _format_a2a_tool_info(tool_info: dict[str, list[tuple[str, str]]]) -> str:
 
 
 def _show_sandbox_review_hint(args) -> None:
-    """Show the sandbox review-changes hint on exit (verbose mode only).
-
-    Covers both agentfs (``agentfs diff``) and nono (``nono rollback``).
-    """
-    if not args.verbose:
+    if not (args.verbose and args.sandbox == "nono" and args.nono_rollback):
         return
 
-    if args.sandbox == "agentfs":
-        from .sandbox_agentfs import is_sandboxed, get_agentfs_session, diff_hint
+    from .sandbox_nono import is_inside_nono
 
-        if not is_sandboxed():
-            return
-        hint = diff_hint(get_agentfs_session())
-        if hint:
-            fmt.sandbox_hint(f"Review changes: {hint}")
-        return
-
-    if args.sandbox == "nono" and args.nono_rollback:
-        from .sandbox_nono import is_inside_nono, rollback_hint
-
-        if not is_inside_nono():
-            return
-        fmt.sandbox_hint(f"Review changes: {rollback_hint()}")
+    if is_inside_nono():
+        fmt.info("Review changes: nono rollback")
 
 
 def _resolve_network_policy(
@@ -10093,8 +10013,8 @@ def _resolve_network_policy(
         if args.sandbox == "nono":
             return (
                 f"{what} is incompatible with --sandbox nono; agent commands "
-                f"would need to nest nono inside nono. Use --sandbox builtin "
-                f"or agentfs, or --network none for an air-gapped run",
+                f"would need to nest nono inside nono. Use --sandbox builtin, "
+                f"or --network none for an air-gapped run",
                 None,
             )
         from .sandbox_nono import check_wrapper_available

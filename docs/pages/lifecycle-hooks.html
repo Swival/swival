@@ -89,7 +89,6 @@
 <li><a href="providers.html">Providers</a></li>
 <li><a href="reports.html">Reports</a></li>
 <li><a href="reviews.html">Reviews</a></li>
-<li><a href="agentfs.html">AgentFS</a></li>
 <li><a href="nono.html">nono</a></li>
 </ul>
 </div>
@@ -438,7 +437,8 @@ echo &quot;$HF_NS/swival-$HASH&quot;
 <h2 id="interaction-with-other-features">Interaction with Other Features</h2>
 <p><strong>Reviewer and self-review:</strong> Hooks do not run in <code>--reviewer-mode</code>. Self-review doesn't run hooks either. No nested sync.</p>
 <p><strong>A2A serve:</strong> The <code>--serve</code> process itself does not run hooks, but the per-context sessions it creates inherit the lifecycle settings and run startup and exit hooks per session (exit fires when a session is evicted or closed). Use <code>--no-lifecycle</code> to disable hooks in a long-lived server.</p>
-<p><strong>AgentFS sandbox:</strong> Hooks run in the same process context as Swival. If you are running inside an AgentFS sandbox, the hook script needs network access to reach the remote storage backend.</p>
+<p><strong>nono sandbox:</strong> Hooks run as child processes of Swival, so under <code>--sandbox nono</code> they get the same file and network limits.
+A hook that syncs to remote storage won't work if the network is blocked with <code>--nono-block-net</code> or <code>--network none</code>.</p>
 <p><strong>Reports:</strong> Lifecycle events (startup, exit and task_done) are recorded in the report timeline when <code>--report</code> is set. Each event includes its exit code, duration, and any error message. A fail-closed exit hook failure rewrites the report with <code>outcome: "error"</code>.</p>
             <nav class="page-nav" aria-label="Page navigation"><a class="nav-prev" href="acp.html"><span class="nav-label">&larr; Previous</span><span class="nav-title">ACP</span></a><a class="nav-next" href="custom-commands.html"><span class="nav-label">Next &rarr;</span><span class="nav-title">Custom Commands</span></a></nav>
         </article>

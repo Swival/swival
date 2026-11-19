@@ -278,4 +278,5 @@ If you want to understand how Swival fits large tasks into small context windows
 
 If you want to connect to remote agents via the A2A protocol, or expose Swival as an A2A server, see [A2A](a2a.md). If you want to drive Swival from an ACP-aware editor such as Zed or the `agent-client-protocol.nvim` plugin, see [ACP](acp.md).
 
-If you want copy-on-write isolation so you can review and apply changes only when ready, read [Using Swival with AgentFS](agentfs.md). If you want to run a staged security audit over your codebase, see [Security Audit](audit.md).
+If you want the operating system to enforce what the agent can touch, with optional rollback, read [Using Swival with nono](nono.md).
+If you want to run a staged security audit over your codebase, see [Security Audit](audit.md).

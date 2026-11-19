@@ -89,7 +89,9 @@ The JSON below is from a verified local run using `--model dummy-model --max-tur
 
 ### `sandbox`
 
-`mode` is always present and is `builtin` (application-layer path guards), `agentfs` (OS-enforced write isolation via AgentFS), or `nono` (OS-enforced isolation via nono). `session` appears when an AgentFS session ID is active. When `mode` is `agentfs`, `strict_read` is always present (whether strict read isolation is enabled), and `agentfs_version` (the AgentFS binary version) and `diff_hint` (a hint for reviewing changes) may also appear. When `mode` is `nono`, `rollback` is always present (whether atomic rollback snapshots are enabled), and `nono_version` (the nono binary version) and `nono_profile` (the named profile applied) may also appear.
+`mode` is always present, and is either `builtin` (Swival's own path checks) or `nono` (the operating system enforces the limits through nono).
+When `mode` is `nono`, `rollback` says whether rollback snapshots are on, and `network` is set to `offline` when the network is blocked.
+`nono_version` (the nono binary version) and `nono_profile` (the profile in use) may also appear.
 
 ### `result`
 

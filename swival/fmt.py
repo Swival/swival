@@ -1457,9 +1457,6 @@ def error(msg: str) -> None:
     _console.print(line)
 
 
-sandbox_hint = info
-
-
 def quick_shell(cmd: str, returncode: int, output: str) -> None:
     title = Text(f"$ {cmd}", style="bold")
     subtitle = Text()

@@ -2,6 +2,13 @@
 
 All notable user-facing changes to Swival.
 
+## Unreleased
+
+- AgentFS support is gone, since the project no longer seems to be maintained.
+  This removes the `agentfs` sandbox mode, `--sandbox-session`, `--sandbox-strict-read`, `--no-sandbox-auto-session`, their config keys and `Session` arguments, and the AgentFS fields in JSON reports.
+  Use `--sandbox nono` if you need OS-level isolation.
+- `Session` now rejects an unknown `sandbox` value instead of quietly running with only the built-in checks.
+
 ## 1.9.6
 
 - The ChatGPT provider now supports `gpt-6.2-astra` and `gpt-6.2-sol`. Both appear in the `/model` picker even if LiteLLM hasn't listed them yet.

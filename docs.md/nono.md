@@ -1,6 +1,8 @@
 # Using Swival With nono
 
-[nono](https://nono.sh) is a capability-based sandbox that confines Swival at the operating-system level: Landlock on Linux, Seatbelt on macOS. Where AgentFS overlays the filesystem and lets you copy changes back afterwards, nono enforces access by path. The agent process simply cannot read, write, or reach anything it was not granted, and the denial happens in the kernel rather than in Swival's own guards.
+[nono](https://nono.sh) is a sandbox that confines Swival at the operating system level, using Landlock on Linux and Seatbelt on macOS.
+The agent can't read or write any file it wasn't granted, and the kernel enforces that instead of Swival's own checks.
+Network access is allowed by default, but you can block it or limit it to a list of domains.
 
 This makes nono the right choice for untrusted or destructive tasks, for runs where you want network egress under control, and for any situation where you would rather the operating system say no than rely on the agent behaving.
 
@@ -171,10 +173,11 @@ This gives you defense in depth: nono enforces the hard boundary at the kernel, 
 
 ## Practical Guidance
 
-For untrusted or destructive tasks, `--sandbox nono --yolo` is the combination to reach for: the agent gets full capability within the workspace while the operating system guarantees it cannot escape. Add `--nono-rollback` when you want a clean undo, and `--nono-block-net` or `--nono-allow-domain` when network egress matters. For everyday edits you trust, the lighter `builtin` or `agentfs` modes are usually enough.
+For untrusted or destructive tasks, use `--sandbox nono --yolo`: the agent can do anything inside the workspace, and the operating system makes sure it can't get out.
+Add `--nono-rollback` when you want an easy undo, and `--nono-block-net` or `--nono-allow-domain` when you care about network access.
+For everyday edits you trust, the default `builtin` mode is usually enough.
 
 ## Further Reading
 
 - [Safety and Sandboxing](safety-and-sandboxing.md)
-- [Using Swival With AgentFS](agentfs.md)
 - [Providers](providers.md)

@@ -53,10 +53,7 @@ Session(
     allowed_dirs: list[str] | None = None,
     allowed_dirs_ro: list[str] | None = None,
     network: str = "full",  # "full", "provider-only", or "none"
-    sandbox: str = "builtin",
-    sandbox_session: str | None = None,
-    sandbox_strict_read: bool = False,
-    sandbox_auto_session: bool = True,
+    sandbox: str = "builtin",  # "builtin" or "nono"
     nono_profile: str | None = None,
     nono_rollback: bool = False,
     nono_block_net: bool = False,

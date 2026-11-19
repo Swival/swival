@@ -2,58 +2,15 @@
 
 Swival's built-in sandbox is implemented at the application layer. It validates paths and enforces command policy in Python, but it is not an operating-system isolation boundary. You should treat it as a strong guardrail for normal use, not as a hard security perimeter against untrusted or adversarial models.
 
-If you need stronger isolation, Swival integrates with two OS-level sandbox runtimes: AgentFS (copy-on-write filesystem overlay) and nono (Landlock/Seatbelt capability enforcement with optional network filtering and rollback).
-
-## AgentFS Sandbox Mode
-
-Pass `--sandbox agentfs` to run Swival inside an AgentFS overlay. At startup, Swival re-executes itself inside `agentfs run`, which provides copy-on-write filesystem isolation. The agent can edit files and run commands freely, but writes are confined to the overlay — your real project tree stays untouched until you copy changes back.
-
-```sh
-swival --sandbox agentfs "Refactor the auth module" --yolo
-```
-
-In this mode, `--base-dir` and each `--add-dir` path are mapped to AgentFS `--allow` rules so the agent can write to those directories inside the overlay. Everything else on the host filesystem is read-only to subprocesses.
-
-Swival automatically generates a deterministic session ID from the project directory, so re-running `swival --sandbox agentfs` in the same directory reuses the overlay. You can see the session ID and a resume command when diagnostics are enabled (the default unless `--quiet` is set). To provide your own session ID instead:
-
-```sh
-swival --sandbox agentfs --sandbox-session my-feature "Continue the refactor" --yolo
-```
-
-To get a fresh, ephemeral overlay with no session reuse:
-
-```sh
-swival --sandbox agentfs --no-sandbox-auto-session "One-off task" --yolo
-```
-
-After a run, Swival prints a diff hint showing how to review changes (unless `--quiet` is set):
-
-```text
-  Review changes: agentfs diff swival-a1b2c3d4e5f6
-```
-
-This requires the `agentfs` binary on PATH. If it is not found, Swival exits with an actionable error. See [Using Swival With AgentFS](agentfs.md) for more workflows.
-
-### Strict Read Mode
-
-By default, the AgentFS sandbox only isolates writes — the agent can still read any file on the host filesystem. Pass `--sandbox-strict-read` to also restrict reads to explicitly allowed directories:
-
-```sh
-swival --sandbox agentfs --sandbox-strict-read "Analyze the project" --yolo
-```
-
-This flag requires an AgentFS version that supports strict read isolation. No current release supports it yet, so using the flag today produces a clear error with the installed version. When AgentFS ships the feature, Swival will detect it automatically and pass the appropriate flags through.
-
-You can also combine `sandbox-exec` with AgentFS when you want additional kernel-level controls like network restriction:
-
-```sh
-sandbox-exec -p '(version 1)(allow default)(deny network*)' \
-    swival --sandbox agentfs "task" --yolo
-```
+If you need a real isolation boundary, run Swival inside nono.
+The operating system then enforces what the agent can read and write, and nono can also filter network access and roll back changes.
 
 ## nono Sandbox Mode
 
-Pass `--sandbox nono` to run Swival inside a [nono](https://nono.sh) sandbox. Like the AgentFS path, Swival re-executes itself early in startup — this time as `nono run -- swival ...`. nono enforces filesystem and network boundaries at the kernel level, using Landlock on Linux and Seatbelt on macOS. The supervising parent process stays outside the sandbox and provides the audit trail, network proxy, and rollback machinery; the child Swival runs with the enforced capability set.
+Pass `--sandbox nono` to run Swival inside a [nono](https://nono.sh) sandbox.
+At startup, Swival restarts itself as `nono run -- swival ...`.
+The kernel then enforces the file and network limits, using Landlock on Linux and Seatbelt on macOS.
+The parent nono process stays outside the sandbox to handle the audit log, network proxy, and rollback, while the Swival child only gets the access it was granted.
 
 ```sh
 swival --sandbox nono "Refactor the auth module" --yolo
@@ -61,7 +18,8 @@ swival --sandbox nono "Refactor the auth module" --yolo
 
 The base directory is granted read+write (so the agent can edit your project), and each `--add-dir` path becomes an additional grant. nono's default system-path allowances cover the Python interpreter and standard libraries, and Swival adds read-only grants for its own install location and the interpreter prefixes, so the re-exec'd process stays importable no matter how Swival was installed.
 
-Unlike AgentFS, nono enforces by path rather than overlaying the working directory, so writes land on your real files. Enable rollback snapshots when you want a safety net:
+nono doesn't keep a separate copy of your project, so the agent's changes land on your real files.
+Turn on rollback snapshots if you want a way to undo them:
 
 ```sh
 swival --sandbox nono --nono-rollback "Try a risky migration" --yolo
@@ -118,7 +76,10 @@ Inside that wrapped process, `Session(sandbox="nono")` detects the sandbox and p
 swival --network provider-only --provider openrouter --model qwen/qwen3-coder "Review this repo"
 ```
 
-`provider-only` composes with `--sandbox builtin` (the default) and `--sandbox agentfs`, which keep owning filesystem policy. It cannot be combined with `--sandbox nono` (the wrapper would have to nest nono inside nono) and cannot run inside an external `nono run` wrapper for the same reason. Wrapped commands get the same filesystem grants a full nono run would give them — the base directory, `--add-dir` paths, temp directories, and nono's standard runtime allowances — which also means nono's built-in credential protections (`~/.ssh` and friends) apply inside them.
+`provider-only` works with the default `builtin` sandbox, which still applies Swival's own file checks.
+It can't be combined with `--sandbox nono`, or run inside an external `nono run`, because that would mean running nono inside nono.
+Wrapped commands get the same file access a full nono run would give them: the base directory, `--add-dir` paths, temp directories, and nono's usual runtime allowances.
+That also means nono's built-in credential protections (`~/.ssh` and friends) apply to them.
 
 This mode needs the `jedisct1/swival` nono profile pack installed before it starts. The wrapper runs once per agent command, so Swival checks for the pack up front rather than letting nono pull it mid-run: an unreachable registry would otherwise cost every single command a failed download. Startup tells you to run `nono pull jedisct1/swival` when it is missing.
 

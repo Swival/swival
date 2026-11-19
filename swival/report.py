@@ -404,10 +404,6 @@ class ReportCollector:
         snapshot_stats: dict | None = None,
         goal_stats: dict | None = None,
         sandbox_mode: str = "builtin",
-        sandbox_session: str | None = None,
-        sandbox_strict_read: bool = False,
-        agentfs_version: str | None = None,
-        diff_hint: str | None = None,
         nono_version: str | None = None,
         nono_profile: str | None = None,
         nono_rollback: bool = False,
@@ -428,14 +424,6 @@ class ReportCollector:
             result["error_message"] = error_message
 
         sandbox: dict = {"mode": sandbox_mode}
-        if sandbox_session is not None:
-            sandbox["session"] = sandbox_session
-        if sandbox_mode == "agentfs":
-            sandbox["strict_read"] = sandbox_strict_read
-            if agentfs_version is not None:
-                sandbox["agentfs_version"] = agentfs_version
-            if diff_hint is not None:
-                sandbox["diff_hint"] = diff_hint
         if sandbox_mode == "nono":
             sandbox["rollback"] = nono_rollback
             if nono_block_net:
@@ -535,10 +523,6 @@ class ReportCollector:
         snapshot_stats: dict | None = None,
         goal_stats: dict | None = None,
         sandbox_mode: str = "builtin",
-        sandbox_session: str | None = None,
-        sandbox_strict_read: bool = False,
-        agentfs_version: str | None = None,
-        diff_hint: str | None = None,
         nono_version: str | None = None,
         nono_profile: str | None = None,
         nono_rollback: bool = False,
@@ -561,10 +545,6 @@ class ReportCollector:
             snapshot_stats=snapshot_stats,
             goal_stats=goal_stats,
             sandbox_mode=sandbox_mode,
-            sandbox_session=sandbox_session,
-            sandbox_strict_read=sandbox_strict_read,
-            agentfs_version=agentfs_version,
-            diff_hint=diff_hint,
             nono_version=nono_version,
             nono_profile=nono_profile,
             nono_rollback=nono_rollback,
