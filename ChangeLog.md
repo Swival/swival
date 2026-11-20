@@ -4,6 +4,9 @@ All notable user-facing changes to Swival.
 
 ## Unreleased
 
+- You can now steer the model while it works in the REPL.
+  Type a correction and press `Alt+Enter` to have the model act on it after the current step, without waiting for the whole task to finish.
+  Pressing `Enter` still queues your message for after the task.
 - AgentFS support is gone, since the project no longer seems to be maintained.
   This removes the `agentfs` sandbox mode, `--sandbox-session`, `--sandbox-strict-read`, `--no-sandbox-auto-session`, their config keys and `Session` arguments, and the AgentFS fields in JSON reports.
   Use `--sandbox nono` if you need OS-level isolation.
