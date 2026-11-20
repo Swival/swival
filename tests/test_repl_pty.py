@@ -10,6 +10,7 @@ Wall-clock sensitive, so it carries the ``stress`` marker and is excluded from
 ``make test``. Run it with ``pytest -m stress tests/test_repl_pty.py``.
 """
 
+import contextlib
 import fcntl
 import json
 import os
@@ -57,10 +58,15 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body.encode())
 
+    def _reply(self, payload):
+        time.sleep(1.0)
+        return {"role": "assistant", "content": REPLY}
+
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
         payload = json.loads(self.rfile.read(length) or b"{}")
-        time.sleep(1.0)
+        message = self._reply(payload)
+        finish = "tool_calls" if message.get("tool_calls") else "stop"
         if not payload.get("stream"):
             body = json.dumps(
                 {
@@ -69,11 +75,7 @@ class _Handler(BaseHTTPRequestHandler):
                     "created": int(time.time()),
                     "model": "fake-model",
                     "choices": [
-                        {
-                            "index": 0,
-                            "message": {"role": "assistant", "content": REPLY},
-                            "finish_reason": "stop",
-                        }
+                        {"index": 0, "message": message, "finish_reason": finish}
                     ],
                 }
             ).encode()
@@ -86,11 +88,18 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
-        self._sse(_chunk({"role": "assistant", "content": ""}))
-        for word in REPLY.split(" "):
-            self._sse(_chunk({"content": word + " "}))
-            time.sleep(0.08)
-        self._sse(_chunk({}, finish="stop"))
+        if message.get("tool_calls"):
+            calls = [{"index": i, **tc} for i, tc in enumerate(message["tool_calls"])]
+            self._sse(_chunk({"role": "assistant", "tool_calls": calls}))
+        else:
+            self._sse(_chunk({"role": "assistant", "content": ""}))
+            words = message["content"].split(" ")
+            for index, word in enumerate(words):
+                self._sse(
+                    _chunk({"content": word if index == len(words) - 1 else word + " "})
+                )
+                time.sleep(0.08)
+        self._sse(_chunk({}, finish=finish))
         self.wfile.write(b"data: [DONE]\n\n")
         self.wfile.flush()
 
@@ -197,18 +206,25 @@ class _Repl:
             return None
 
 
-@pytest.fixture
-def repl(tmp_path, fake_server):
+@contextlib.contextmanager
+def _running_repl(tmp_path, base_url):
     workdir = tmp_path / "work"
     workdir.mkdir()
+    (workdir / "notes.txt").write_text("notes\n")
     (tmp_path / "xdg").mkdir()
-    instance = _Repl(workdir, fake_server, tmp_path / "xdg")
+    instance = _Repl(workdir, base_url, tmp_path / "xdg")
     try:
         yield instance
     finally:
         if instance.proc.poll() is None:
             instance.proc.kill()
         instance.proc.wait(timeout=5)
+
+
+@pytest.fixture
+def repl(tmp_path, fake_server):
+    with _running_repl(tmp_path, fake_server) as instance:
+        yield instance
 
 
 def test_type_while_streaming_then_queue_and_interrupt(repl):
@@ -245,4 +261,99 @@ def test_ctrl_c_at_idle_prompt(repl):
     assert "half typed" not in repl.text()
     assert "Ask anything" in repl.text()
     repl.send("\x03")
+    assert repl.close() == 0
+
+
+TOOL_CALL = {
+    "id": "call_1",
+    "type": "function",
+    "function": {"name": "read_file", "arguments": '{"file_path": "notes.txt"}'},
+}
+
+
+@pytest.fixture
+def scripted_server():
+    """Answers each request with the next scripted reply ("tool" means a read_file call) and keeps the messages it got."""
+
+    class _Scripted(_Handler):
+        replies = []
+        requests = []
+
+        def _reply(self, payload):
+            self.requests.append(payload.get("messages", []))
+            # Slow only the first time, to leave room for typing the correction.
+            if len(self.requests) == 1:
+                time.sleep(2.0)
+            reply = self.replies.pop(0) if self.replies else "All done."
+            if reply == "tool":
+                return {"role": "assistant", "content": None, "tool_calls": [TOOL_CALL]}
+            return {"role": "assistant", "content": reply}
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Scripted)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}", _Scripted
+    finally:
+        server.shutdown()
+
+
+def _wait_for_requests(repl, handler, count, timeout):
+    # Keep reading the terminal, or the REPL blocks on a full pty before sending anything.
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and len(handler.requests) < count:
+        repl.pump(0.1)
+    return len(handler.requests) >= count
+
+
+@pytest.fixture
+def scripted_repl(tmp_path, scripted_server):
+    url, handler = scripted_server
+    with _running_repl(tmp_path, url) as instance:
+        yield instance, handler
+
+
+def _correct_during_first_request(repl, handler, correction):
+    assert repl.wait_for("Ask anything", 20)
+    repl.send("edit the tests\r")
+    assert _wait_for_requests(repl, handler, 1, 10)
+    repl.send(correction)
+    repl.pump(0.3)
+    repl.send("\x1b\r")
+
+
+def test_alt_enter_reaches_the_model_after_the_tool_batch(scripted_repl):
+    repl, handler = scripted_repl
+    handler.replies[:] = ["tool", "Left the tests alone."]
+    _correct_during_first_request(repl, handler, "leave the tests alone")
+    assert repl.wait_for("Left the tests alone.", 20)
+
+    # With Enter, the correction would only show up after the final answer.
+    second = handler.requests[1]
+    assert second[-2]["role"] == "tool"
+    assert second[-1]["role"] == "user"
+    assert "leave the tests alone" in json.dumps(second[-1]["content"])
+    assert not any(m["role"] == "assistant" and m.get("content") for m in second)
+
+    repl.send("/exit\r")
+    assert repl.close() == 0
+
+
+def test_alt_enter_during_the_final_answer_runs_next(scripted_repl):
+    repl, handler = scripted_repl
+    handler.replies[:] = ["Edited the tests.", "Reverted them."]
+    _correct_during_first_request(repl, handler, "actually, leave them alone")
+    # With Enter it would show as queued.
+    assert repl.wait_for("next   actually, leave them alone", 5)
+    assert "queued" not in repl.text()
+    assert repl.wait_for("Edited the tests.", 20)
+    assert repl.wait_for("Reverted them.", 20)
+
+    second = handler.requests[1]
+    assert second[-2]["role"] == "assistant"
+    assert second[-2]["content"] == "Edited the tests."
+    assert second[-1]["role"] == "user"
+    assert "actually, leave them alone" in json.dumps(second[-1]["content"])
+
+    repl.send("/exit\r")
     assert repl.close() == 0

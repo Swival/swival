@@ -97,26 +97,26 @@ In `--serve`, the server process itself runs no hooks, but each per-context sess
 
 The hook receives all of the parent environment plus these `SWIVAL_*` variables:
 
-| Variable              | Description                                                    | Events          |
-| --------------------- | -------------------------------------------------------------- | --------------- |
-| `SWIVAL_HOOK_EVENT`   | `startup`, `exit` or `task_done`                               | all             |
-| `SWIVAL_BASE_DIR`     | Absolute path to the project base directory                    | all             |
-| `SWIVAL_SWIVAL_DIR`   | Path to the `.swival/` directory                               | all             |
-| `SWIVAL_PROVIDER`     | Provider name (e.g. `lmstudio`, `openrouter`)                  | all             |
-| `SWIVAL_MODEL`        | Resolved model ID                                              | all             |
-| `SWIVAL_GIT_PRESENT`  | `1` if inside a Git repo, `0` otherwise                        | all             |
-| `SWIVAL_REPO_ROOT`    | Git repo root (absolute path)                                  | all             |
-| `SWIVAL_PROJECT_REL`  | Relative path from repo root to base_dir (empty at repo root)  | all             |
-| `SWIVAL_GIT_HEAD`     | HEAD commit SHA                                                | all             |
-| `SWIVAL_GIT_DIRTY`    | `1` if working tree has staged, unstaged, or untracked changes | all             |
-| `SWIVAL_GIT_REMOTE`   | `remote.origin.url` value                                      | all             |
-| `SWIVAL_REPO_HASH`    | 48-character hash of normalized repo identity                  | all             |
-| `SWIVAL_PROJECT_HASH` | 48-character hash of repo identity + project_rel               | all             |
-| `SWIVAL_REPORT`       | Path to the report file                                        | exit only       |
-| `SWIVAL_OUTCOME`      | Outcome: `success`, `exhausted`, `interrupted`, `error`        | exit, task_done |
-| `SWIVAL_EXIT_CODE`    | Process exit code as a string                                  | exit only       |
-| `SWIVAL_COMMAND`      | Command of the task, such as `/goal`. Empty for a prompt       | task_done only  |
-| `SWIVAL_GOAL_STATUS`  | New goal status, only when the task changed the goal           | task_done only  |
+| Variable              | Description                                                        | Events          |
+| --------------------- | ------------------------------------------------------------------ | --------------- |
+| `SWIVAL_HOOK_EVENT`   | `startup`, `exit` or `task_done`                                   | all             |
+| `SWIVAL_BASE_DIR`     | Absolute path to the project base directory                        | all             |
+| `SWIVAL_SWIVAL_DIR`   | Path to the `.swival/` directory                                   | all             |
+| `SWIVAL_PROVIDER`     | Provider name (e.g. `lmstudio`, `openrouter`)                      | all             |
+| `SWIVAL_MODEL`        | Resolved model ID                                                  | all             |
+| `SWIVAL_GIT_PRESENT`  | `1` if inside a Git repo, `0` otherwise                            | all             |
+| `SWIVAL_REPO_ROOT`    | Git repo root (absolute path)                                      | all             |
+| `SWIVAL_PROJECT_REL`  | Relative path from repo root to base_dir (empty at repo root)      | all             |
+| `SWIVAL_GIT_HEAD`     | HEAD commit SHA                                                    | all             |
+| `SWIVAL_GIT_DIRTY`    | `1` if working tree has staged, unstaged, or untracked changes     | all             |
+| `SWIVAL_GIT_REMOTE`   | `remote.origin.url` value                                          | all             |
+| `SWIVAL_REPO_HASH`    | 48-character hash of normalized repo identity                      | all             |
+| `SWIVAL_PROJECT_HASH` | 48-character hash of repo identity + project_rel                   | all             |
+| `SWIVAL_REPORT`       | Path to the report file                                            | exit only       |
+| `SWIVAL_OUTCOME`      | Outcome: `success`, `exhausted`, `interrupted`, `error`, `stopped` | exit, task_done |
+| `SWIVAL_EXIT_CODE`    | Process exit code as a string                                      | exit only       |
+| `SWIVAL_COMMAND`      | Command of the task, such as `/goal`. Empty for a prompt           | task_done only  |
+| `SWIVAL_GOAL_STATUS`  | New goal status, only when the task changed the goal               | task_done only  |
 
 Git-specific variables are omitted when `SWIVAL_GIT_PRESENT=0`.
 
@@ -147,7 +147,10 @@ Pass `--no-lifecycle` to disable hooks entirely. This is useful for nested invoc
 
 In the REPL, Swival runs the hook with the `task_done` event each time a task finishes. A task is a plain prompt, a custom `!command`, or one of these commands: `/goal`, `/continue`, `/simplify`, `/learn`, `/audit`, `/init` and `/btw`. Each `/loop` iteration is a task too. All other commands, such as `/help` or `/goal pause`, are not tasks.
 
-The hook runs after Swival prints the answer. `SWIVAL_COMMAND` holds the command that started the task, such as `/goal` or `!deploy`. It is empty for a plain prompt, and it is `/loop` for a loop iteration. `SWIVAL_OUTCOME` tells you how the task ended: `success`, `exhausted`, `interrupted` or `error`.
+The hook runs after Swival prints the answer.
+`SWIVAL_COMMAND` holds the command that started the task, such as `/goal` or `!deploy`.
+It is empty for a plain prompt, and it is `/loop` for a loop iteration.
+`SWIVAL_OUTCOME` tells you how the task ended: `success`, `exhausted`, `interrupted`, `error`, or `stopped` when Alt+Enter cut it short to run a correction.
 
 This script speaks when any task ends:
 

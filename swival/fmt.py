@@ -1537,7 +1537,7 @@ def get_console() -> Console:
 def repl_banner() -> None:
     _console.print(
         Text(
-            "Type /exit or Ctrl-D to quit. Ctrl-C to interrupt; /continue to continue.",
+            "Type /exit or Ctrl-D to quit. Ctrl-C to interrupt, Alt+Enter to correct the model while it works; /continue to continue.",
             style="dim",
         )
     )

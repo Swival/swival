@@ -49,12 +49,22 @@ _QUEUE_PREVIEW_CHARS = 60
 _PARK_TIMEOUT = 10.0
 
 _IDLE_PLACEHOLDER = "Ask anything.  / commands  @ files  ! shell  Shift+Enter newline"
-_BUSY_PLACEHOLDER = "Type the next message, Enter queues it.  Ctrl-C interrupts."
+_BUSY_PLACEHOLDER = (
+    "Enter queues the next message, Alt+Enter runs it after this step.  "
+    "Ctrl-C interrupts."
+)
 _CONTINUATION = "  "
 _BORDER_STEPS = 24
 _BORDER_CYCLE_SECONDS = 3.0
 
 _REPL_SHIFT_ENTER_SEQUENCES = ("\x1b[27;2;13~", "\x1b[13;2u")
+# Alt+Enter and Ctrl+Enter as some terminals report them, read as Esc then Enter
+_REPL_STEER_SEQUENCES = (
+    "\x1b[13;3u",
+    "\x1b[27;3;13~",
+    "\x1b[13;5u",
+    "\x1b[27;5;13~",
+)
 
 
 def _border_palette() -> dict:
@@ -87,6 +97,8 @@ _BASE_STYLE = {
     "bottom-toolbar.sep": "#45475a",
     "queued.label": "bold ansiyellow",
     "queued.text": "#a6adc8",
+    "next.label": "bold ansicyan",
+    "next.text": "#cdd6f4",
     "completion-menu": "bg:#1e1e2e #cdd6f4",
     "completion-menu.completion.current": "bg:#585b70 #ffffff bold",
     "completion-menu.meta.completion": "bg:#1e1e2e #6c7086",
@@ -98,14 +110,20 @@ _BASE_STYLE = {
 
 
 def _repl_key_bindings(ui: "ReplUI | None" = None):
-    """Enter submits, Shift+Enter and Ctrl-J insert a newline, Ctrl-C depends
-    on whether a turn is running. Without a ``ui`` (tests) Ctrl-C aborts."""
+    """Enter submits, Shift+Enter and Ctrl-J insert a newline, Alt+Enter runs the line after the current step, and Ctrl-C depends on whether a turn is running.
+
+    Without a ``ui`` (tests), Alt+Enter is Enter and Ctrl-C aborts.
+    """
+    from prompt_toolkit.enums import DEFAULT_BUFFER
+    from prompt_toolkit.filters import has_focus
     from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
     from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.keys import Keys
 
     for sequence in _REPL_SHIFT_ENTER_SEQUENCES:
         ANSI_SEQUENCES[sequence] = Keys.ControlM
+    for sequence in _REPL_STEER_SEQUENCES:
+        ANSI_SEQUENCES[sequence] = (Keys.Escape, Keys.ControlM)
 
     kb = KeyBindings()
 
@@ -119,6 +137,16 @@ def _repl_key_bindings(ui: "ReplUI | None" = None):
             event.current_buffer.insert_text("\n")
         else:
             event.current_buffer.validate_and_handle()
+
+    # Most terminals send Alt+Enter as Esc then Enter.
+    # Not in Ctrl-R search, where the buffer holds the search query.
+    @kb.add("escape", "enter", filter=has_focus(DEFAULT_BUFFER))
+    def _steer(event):
+        buffer = event.current_buffer
+        if ui is not None and ui.steer(buffer.text):
+            buffer.reset(append_to_history=True)
+        else:
+            buffer.validate_and_handle()
 
     @kb.add("c-c")
     def _interrupt_or_abort(event):
@@ -144,6 +172,7 @@ class ReplEvent:
     # Submitted while a turn was running: shown above the input until it
     # runs, handed back to the editor if the turn is interrupted.
     queued: bool = False
+    handoff: bool = False
 
 
 def _interrupt_main_thread() -> None:
@@ -167,6 +196,10 @@ def _is_tty(stream) -> bool:
 
 def _is_exit_command(text: str) -> bool:
     return parse_input_line(text).cmd in EXIT_COMMANDS
+
+
+def _stack(first: str, rest: str | None) -> str:
+    return "\n\n".join(part for part in (first, rest) if part)
 
 
 def _preview(text: str, limit: int = _QUEUE_PREVIEW_CHARS) -> str:
@@ -536,6 +569,9 @@ class ReplUI:
 
         self._inbox: collections.deque[ReplEvent] = collections.deque()
         self._inbox_cv = threading.Condition()
+        # Both under _inbox_cv: lines typed with Alt+Enter, and whether a turn is running.
+        self._next: list[str] = []
+        self._turn_active = False
 
         self._lock = threading.Lock()
         self._slots: list[_Slot] = []
@@ -550,6 +586,8 @@ class ReplUI:
         self._park_cv = threading.Condition()
         self._parked = threading.Event()
         self._saved_document = None
+        # Lines sent back to the editor, under _lock until a prompt takes them.
+        self._recalled: str | None = None
 
         self._thread: threading.Thread | None = None
         self._ticker: threading.Thread | None = None
@@ -700,7 +738,7 @@ class ReplUI:
             except Exception:
                 fragments = []
         hint = (
-            "Enter queues · ^C interrupts"
+            "Enter queues · Alt+Enter next · ^C interrupts"
             if self._busy
             else "^R history · Tab complete"
         )
@@ -781,11 +819,17 @@ class ReplUI:
     def next_event(self, timeout: float | None = None) -> ReplEvent | None:
         """Block for the next event; ``None`` when ``timeout`` elapses first."""
         with self._inbox_cv:
-            if not self._inbox:
+            if not self._inbox and not self._next:
                 self._inbox_cv.wait(timeout=timeout)
-            if not self._inbox:
+            if self._next:
+                event = ReplEvent(
+                    "line", "\n\n".join(self._next), queued=True, handoff=True
+                )
+                self._next.clear()
+            elif self._inbox:
+                event = self._inbox.popleft()
+            else:
                 return None
-            event = self._inbox.popleft()
         # Echo a queued line right above its own turn's output.
         if event.queued and fmt._console.is_terminal:
             fmt.repl_prompt_echo(event.text)
@@ -799,14 +843,42 @@ class ReplUI:
         outside the agent loop's own handlers (a state command, cleanup)
         into a warning plus a recall of the queued lines.
         """
-        self.set_busy(True)
+        started = False
         try:
+            # Inside the try, so a Ctrl-C landing here can't leave the flags set.
+            with self._inbox_cv:
+                self._turn_active = True
+            self.set_busy(True)
+            started = True
             yield
         except KeyboardInterrupt:
+            if not started:
+                raise
             fmt.warning("interrupted.")
             self.recall_queued()
         finally:
+            with self._inbox_cv:
+                self._turn_active = False
             self.set_busy(False)
+
+    def steer(self, text: str) -> bool:
+        """Run *text* right after the current step, ahead of queued lines.
+
+        Returns False for anything but plain text typed during a turn, which then goes through Enter.
+        """
+        if not parse_input_line(text).is_plain_text:
+            return False
+        with self._inbox_cv:
+            if not self._turn_active:
+                return False
+            self._next.append(text)
+            self._inbox_cv.notify()
+        self.flash("runs after the current step")
+        return True
+
+    def steering_pending(self) -> bool:
+        with self._inbox_cv:
+            return bool(self._next)
 
     def recall_queued(self) -> None:
         """Move lines queued during an interrupted turn back into the editor.
@@ -816,29 +888,39 @@ class ReplUI:
         that one the user wants honored regardless.
         """
         with self._inbox_cv:
+            texts = list(self._next)
+            self._next.clear()
             recalled = [
                 e for e in self._inbox if e.queued and not _is_exit_command(e.text)
             ]
             for event in recalled:
                 self._inbox.remove(event)
-        if not recalled:
+        texts += [e.text for e in recalled]
+        if not texts:
             return
-        self._prepend_to_editor("\n\n".join(e.text for e in recalled))
+        self.prepend_to_editor("\n\n".join(texts))
         self.flash("queued messages moved back to the editor")
 
-    def _prepend_to_editor(self, text: str) -> None:
-        buffer = self._buffer()
+    def prepend_to_editor(self, text: str) -> None:
+        with self._lock:
+            self._recalled = _stack(text, self._recalled)
+        self._router.call_in_prompt(self._claim_recalled)
 
-        def _apply() -> None:
-            try:
-                current = buffer.text
-                buffer.text = text if not current else text + "\n\n" + current
-                buffer.cursor_position = len(buffer.text)
-            except Exception:
-                pass
-
-        if not self._router.call_in_prompt(_apply):
-            self._saved_document = text
+    def _claim_recalled(self) -> None:
+        # A prompt that already accepted its line is on its way out, so the next one takes the text instead.
+        app = self._app()
+        if app is None or app.is_done:
+            return
+        with self._lock:
+            text, self._recalled = self._recalled, None
+        if not text:
+            return
+        try:
+            buffer = self._buffer()
+            buffer.text = _stack(text, buffer.text)
+            buffer.cursor_position = len(buffer.text)
+        except Exception:
+            pass
 
     def set_busy(self, busy: bool) -> None:
         with self._lock:
@@ -1004,6 +1086,10 @@ class ReplUI:
             while self._wait_unparked():
                 default = self._saved_document
                 self._saved_document = None
+                with self._lock:
+                    recalled, self._recalled = self._recalled, None
+                if recalled:
+                    default = _stack(recalled, getattr(default, "text", default))
                 try:
                     result = self._session.prompt(
                         self.prompt_message,
@@ -1079,13 +1165,17 @@ class ReplUI:
         with self._lock:
             if self._slots:
                 return True
-        return bool(self.queued)
+        return bool(self.queued) or self.steering_pending()
 
     def live_fragments(self, width: int, rows: int, input_rows: int) -> list:
-        """Fragments for the status region: active slots, then queued lines."""
+        """Fragments for the status region: active slots, then lines typed with Alt+Enter, then queued lines."""
         slots = self.slots()
+        with self._inbox_cv:
+            steering = list(self._next)
         queued = self.queued
-        budget = max(rows - input_rows - len(queued) - 4, _STREAM_MIN_ROWS)
+        budget = max(
+            rows - input_rows - len(steering) - len(queued) - 4, _STREAM_MIN_ROWS
+        )
         fragments: list = []
         for slot in slots:
             try:
@@ -1100,12 +1190,13 @@ class ReplUI:
             if fragments:
                 fragments.append(("", "\n"))
             fragments.extend(ANSI(text).__pt_formatted_text__())
-        for index, line in enumerate(queued):
-            if fragments:
-                fragments.append(("", "\n"))
-            label = "queued" if index == 0 else "      "
-            fragments.append(("class:queued.label", f"  {label} "))
-            fragments.append(("class:queued.text", _preview(line, width - 12)))
+        for kind, lines in (("next", steering), ("queued", queued)):
+            for index, line in enumerate(lines):
+                if fragments:
+                    fragments.append(("", "\n"))
+                label = kind.ljust(6) if index == 0 else "      "
+                fragments.append((f"class:{kind}.label", f"  {label} "))
+                fragments.append((f"class:{kind}.text", _preview(line, width - 12)))
         return fragments
 
     def placeholder(self) -> str:

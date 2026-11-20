@@ -53,6 +53,16 @@ The prompt is a framed input box that stays on screen the whole session. It is b
 
 The input stays live while the model works. Everything the agent prints scrolls up above the box, and the transient displays (the spinner, the streamed answer, the progress bar of a running command) sit between the output and the box. You can type or edit the next message during a turn; pressing Enter queues it, the queue is shown above the box, and queued messages run in order once the turn is over. Ctrl-C interrupts the running turn; anything queued at that point is moved back into the editor rather than run unattended, so a correction typed after seeing the model head the wrong way is not followed by stale follow-ups. Ctrl-C on an empty idle prompt asks for a second press before quitting (Ctrl-D quits right away); on a half-typed line it just clears the line.
 
+To correct the model while it works, press Alt+Enter instead of Enter.
+Swival lets the current step finish, including any tool calls the model already asked for, then runs your message right away, ahead of anything queued.
+Alt+Enter is for "leave the tests alone", Enter is for "and then update the changelog".
+
+A correction also stops the subagents the interrupted work started, and pauses an active goal until `/goal resume` or `/continue`.
+If you type several before the model gets there, they go out together, in the order you typed them.
+Commands typed with Alt+Enter are queued like with Enter, and at an idle prompt Alt+Enter is just Enter.
+
+If your terminal doesn't send Alt+Enter (on macOS, Option has to act as Meta), press Esc and then Enter.
+
 The REPL greets you with an animated splash, and in one-shot mode the rule that marks the start of each request flows into place before it settles. These only play on a genuine interactive terminal with color, never when output is piped or redirected. To turn them off entirely, for a slow terminal, a screen reader, a remote shell, or just a preference for reduced motion, set `SWIVAL_ANIMATIONS=0`:
 
 ```sh

@@ -6389,6 +6389,46 @@ def _prompt_cache_kwargs(
     return {"cache_control_injection_points": points}
 
 
+def _join_user_content(first, second):
+    if isinstance(first, list) or isinstance(second, list):
+
+        def _parts(content):
+            if isinstance(content, list):
+                return list(content)
+            return [{"type": "text", "text": content or ""}]
+
+        return _parts(first) + _parts(second)
+    return f"{first or ''}\n\n{second or ''}"
+
+
+def _merge_consecutive_user_messages(messages: list) -> list:
+    """Join back-to-back user messages, because some local chat templates reject them.
+
+    Messages that differ in anything but their content, like a ``name``, stay separate so nobody's words get attributed to someone else.
+    """
+
+    def _rest(m):
+        return {k: v for k, v in m.items() if k != "content"}
+
+    merged = []
+    for m in messages:
+        prev = merged[-1] if merged else None
+        if (
+            isinstance(m, dict)
+            and isinstance(prev, dict)
+            and m.get("role") == "user"
+            and prev.get("role") == "user"
+            and _rest(m) == _rest(prev)
+        ):
+            merged[-1] = {
+                **prev,
+                "content": _join_user_content(prev.get("content"), m.get("content")),
+            }
+        else:
+            merged.append(m)
+    return merged
+
+
 def call_llm(
     base_url,
     model_id,
@@ -6426,6 +6466,7 @@ def call_llm(
     provider_timeout=900,
     exposure=None,
     model_autofix=True,
+    stop_check=None,
 ):
     """Call LiteLLM with the appropriate provider.
 
@@ -6439,6 +6480,7 @@ def call_llm(
     *model_autofix* lets a server that serves a single other model stand in
     for an unknown one.
     Routing turns it off.
+    *stop_check* runs before anything is sent and before every resend, and raises to abandon the call.
     """
     # Internal keys are stripped before sending, so capture synthetic
     # scaffolding flags and result names while they are still there.
@@ -6469,6 +6511,10 @@ def call_llm(
         synthetic = None
         if result_keys is not None:
             result_keys = rekey_results(unfiltered, result_keys, messages)
+
+    # After the filter, which can take a while, and before cached answers and command runs.
+    if stop_check is not None:
+        stop_check()
 
     if provider == "command":
         if command_tool_kwargs is not None:
@@ -6538,6 +6584,10 @@ def call_llm(
         _sanitize_assistant_messages(messages)
         messages = secret_shield.encrypt_messages(messages)
         cache = None  # disable cache when encryption is active
+
+    # Exposure counts each message as written, so the merge can't blur who said what.
+    messages_as_written = messages
+    messages = _merge_consecutive_user_messages(messages)
 
     import litellm
 
@@ -6809,18 +6859,20 @@ def call_llm(
 
     attempts = 0
 
-    def _record_attempt():
+    def on_attempt():
         nonlocal attempts
-        attempts += 1
-        exposure.request(
-            completion_kwargs["messages"],
-            completion_kwargs.get("tools"),
-            synthetic=synthetic,
-            result_keys=result_keys,
-            resend=attempts > 1,
-        )
+        if stop_check is not None:
+            stop_check()
+        if exposure is not None:
+            attempts += 1
+            exposure.request(
+                messages_as_written,
+                completion_kwargs.get("tools"),
+                synthetic=synthetic,
+                result_keys=result_keys,
+                resend=attempts > 1,
+            )
 
-    on_attempt = _record_attempt if exposure is not None else None
     # Summary calls fall back to something else, so a rejected prompt should
     # not make them wait.
     retry_prompt_rejections = call_kind == "agent"
@@ -10842,6 +10894,25 @@ def _run_main(args, report, _write_report, parser):
     _show_sandbox_review_hint(args)
 
 
+class _SteeringStop(BaseException):
+    """Stops the loop before its next model call because an Alt+Enter correction is waiting.
+
+    It's a BaseException so the error handling around model calls can't swallow it.
+    """
+
+    def __init__(self, replied: bool = False):
+        super().__init__()
+        self.replied = replied
+
+
+# Tags the nudges the loop added since the model's last reply, so a stop can remove the ones nobody answered.
+_AWAITING_REPLY = "_swival_awaiting"
+
+
+def _drop_unanswered_scaffolding(messages: list, token: str) -> None:
+    messages[:] = [m for m in messages if _msg_get(m, _AWAITING_REPLY) != token]
+
+
 @keep_awake(reason="swival agent turn")
 def run_agent_loop(messages: list, tools: list, **loop_kwargs):
     """Run the agent loop, then reconcile the session-cost display on every
@@ -10924,8 +10995,11 @@ def _run_agent_loop(
     initial_tool_choice: str = "auto",
     decisions=None,
     web_search_policy=None,
+    steering_pending: "Callable[[], bool] | None" = None,
 ) -> tuple[str | None, bool]:
     """Run the tool-calling loop until a final answer or max turns.
+
+    With *steering_pending*, the loop raises ``_SteeringStop`` instead of calling the model once a correction is waiting.
 
     Mutates `messages` in place (appends assistant/tool messages,
     in-place compaction on overflow).
@@ -10994,6 +11068,34 @@ def _run_agent_loop(
     def _write_turns():
         if turn_state is not None:
             turn_state["turns_used"] = turns
+
+    awaiting_reply = _uuid.uuid4().hex
+    replied = False
+
+    def _stop_if_steering():
+        if not steering_pending():
+            return
+        _drop_unanswered_scaffolding(messages, awaiting_reply)
+        # This iteration's model call never happened, so it doesn't count.
+        if turn_state is not None:
+            turn_state["turns_used"] = turns - 1
+        raise _SteeringStop(replied)
+
+    def _append_scaffolding(content: str) -> None:
+        messages.append(
+            {
+                "role": "user",
+                "content": content,
+                "_swival_synthetic": True,
+                _AWAITING_REPLY: awaiting_reply,
+            }
+        )
+
+    def _append_reply(msg) -> None:
+        nonlocal awaiting_reply, replied
+        messages.append(_msg_to_dict(msg))
+        awaiting_reply = _uuid.uuid4().hex
+        replied = True
 
     consecutive_errors: dict[str, tuple[str, int]] = {}
     storm_breaker = StormBreaker()
@@ -11066,7 +11168,7 @@ def _run_agent_loop(
         ignoring the continuation prompt.
         """
         nonlocal _continuation_pending
-        messages.append({"role": "user", "content": content, "_swival_synthetic": True})
+        _append_scaffolding(content)
         _continuation_pending = False
 
     def _account_goal_usage(
@@ -11428,6 +11530,9 @@ def _run_agent_loop(
     _is_tools_retry = False
     while turns < max_turns:
         turns += 1
+        # Before the token estimate and any compaction, which a stop would waste.
+        if steering_pending is not None:
+            _stop_if_steering()
 
         # Check cancellation flag
         if cancel_flag is not None and cancel_flag.is_set():
@@ -11450,12 +11555,8 @@ def _run_agent_loop(
                 and rec.status in (GoalStatus.ACTIVE, GoalStatus.BUDGET_LIMITED)
                 and _final_attempt_injected_for_goal != rec.goal_id
             ):
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": goal_state.final_attempt_prompt(max_turns=max_turns),
-                        "_swival_synthetic": True,
-                    }
+                _append_scaffolding(
+                    goal_state.final_attempt_prompt(max_turns=max_turns)
                 )
                 _final_attempt_injected_for_goal = rec.goal_id
                 if verbose:
@@ -11588,6 +11689,9 @@ def _run_agent_loop(
             or _textual_tool_call_repair_pending
         ) and effective_tools:
             _turn_llm_kwargs = {**llm_kwargs, "tool_choice": "required"}
+        # Not in the shared llm_kwargs: metaskill loops get those too, and a stop there would cut a tool batch short.
+        if steering_pending is not None:
+            _turn_llm_kwargs = {**_turn_llm_kwargs, "stop_check": _stop_if_steering}
 
         t0 = time.monotonic()
         # The clamp itself can refuse, so this holds a value either way: the
@@ -12128,7 +12232,7 @@ def _run_agent_loop(
                 fmt.warning("LLM returned empty response, requesting continuation...")
             # Give the message placeholder content so it's valid in history
             _set_msg_content(msg, _EMPTY_ASSISTANT_PLACEHOLDER)
-            messages.append(_msg_to_dict(msg))
+            _append_reply(msg)
             _reprompt(
                 "Your response was empty. Please continue working on "
                 "the task using the available tools."
@@ -12208,7 +12312,7 @@ def _run_agent_loop(
             _reprompt(_make_duplicate_tool_call_repair_prompt(duplicate_tool_names))
             continue
 
-        messages.append(_msg_to_dict(msg))
+        _append_reply(msg)
 
         # Recover from native tool-call markup leaked as plain text. Some weak
         # or poorly configured servers emit a tool call as assistant content
@@ -12341,13 +12445,7 @@ def _run_agent_loop(
                         goal_state.budget_limit_reported_goal_id = rec.goal_id
                 if goal_state is not None:
                     goal_state.record_next_step(msg.content)
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": content,
-                        "_swival_synthetic": True,
-                    }
-                )
+                _append_scaffolding(content)
                 _continuation_pending = kind == "continuation"
                 if verbose:
                     fmt.info(
@@ -12631,13 +12729,7 @@ def _run_agent_loop(
             image_stash.clear()
 
         if interventions:
-            messages.append(
-                {
-                    "role": "user",
-                    "content": "\n\n".join(interventions),
-                    "_swival_synthetic": True,
-                }
-            )
+            _append_scaffolding("\n\n".join(interventions))
         if verbose:
             fmt.context_stats(
                 f"Context after turn {turns}",
@@ -12681,7 +12773,8 @@ def _run_agent_loop(
         _show_state_summaries(thinking_state, todo_state, snapshot_state, goal_state)
 
     # Save continue file (with LLM enhancement since we're not in a hurry)
-    if continue_here:
+    # Not when a correction is waiting: it runs next, and its handoff saves the file anyway.
+    if continue_here and not (steering_pending is not None and steering_pending()):
         from .continue_here import write_continue_file
 
         write_continue_file(
@@ -12701,6 +12794,9 @@ def _run_agent_loop(
             provider_kwargs=_provider_extra_kwargs(llm_kwargs),
         )
 
+    # No model call comes after this, so drop the nudges here or the correction would follow them.
+    if steering_pending is not None and steering_pending():
+        _drop_unanswered_scaffolding(messages, awaiting_reply)
     _write_turns()
     return last_text, True
 
@@ -15160,6 +15256,7 @@ class TurnOutcome(NamedTuple):
     interrupted: bool = False
     # An AgentError took the request back out of the transcript.
     rolled_back: bool = False
+    stopped: bool = False
 
 
 # Marks the request a turn appends, to find it again after an error.
@@ -15195,12 +15292,16 @@ def _invoke_agent_turn(
     *,
     goal_launch: bool = False,
     route: bool = False,
+    follow_up: bool = False,
 ) -> TurnOutcome:
     """Append content and run the agent loop.
 
     With *route*, the decision model may move the task to another profile
     first.
     The routing_profiles check runs either way.
+
+    A *follow_up* is an extra pass of a step, like a review retry.
+    It gives way to an Alt+Enter correction: it doesn't start if one is waiting, and it's removed again if the loop stops before the model answers it.
 
     On an interactive context, an ``AgentError`` before any progress takes the
     request back out of the transcript (``rolled_back``).
@@ -15212,6 +15313,8 @@ def _invoke_agent_turn(
     blocked = _revalidate_pending_instructions(ctx)
     if blocked is not None:
         raise _InstructionsPending(blocked)
+    if follow_up and _steering_pending(ctx):
+        return TurnOutcome(None, stopped=True)
     request_id = None
     if content is not None:
         request_id = _uuid.uuid4().hex
@@ -15228,8 +15331,17 @@ def _invoke_agent_turn(
                 ctx.tools,
                 max_turns=ctx.turn_state["max_turns"],
                 goal_launch_turn=goal_launch,
+                steering_pending=ctx.steering_pending,
                 **ctx.loop_kwargs,
             )
+    except _SteeringStop as stop:
+        # A follow-up the model never answered goes away, along with anything set up for it, like a skill it mentioned.
+        if follow_up and not stop.replied and request_id is not None:
+            for i, m in enumerate(ctx.messages):
+                if _msg_get(m, _REQUEST_MARKER) == request_id:
+                    del ctx.messages[i:]
+                    break
+        return TurnOutcome(None, stopped=True)
     except KeyboardInterrupt:
         # Pause any active goal so subsequent `/continue` can resume from a
         # consistent baseline. Accounting was rolled in by the loop.
@@ -15263,6 +15375,22 @@ def _invoke_agent_turn(
 
 def _reset_subagent(ctx: InputContext) -> None:
     if ctx.subagent_manager is not None:
+        _join_subagents(ctx, replace=True)
+
+
+def _replace_subagent_manager(ctx: InputContext) -> None:
+    ctx.subagent_manager = ctx.subagent_manager.fresh_copy()
+    ctx.loop_kwargs["subagent_manager"] = ctx.subagent_manager
+    if ctx.subagent_holder is not None:
+        ctx.subagent_holder[0] = ctx.subagent_manager
+
+
+def _join_subagents(ctx: InputContext, *, replace: bool) -> None:
+    """Stop the subagents and wait for them, then replace their manager if asked.
+
+    In the REPL the join is recorded as owed first, so if Ctrl-C cuts it short, the next step still waits for those workers.
+    """
+    if ctx.pending_joins is None:
         try:
             _shutdown_and_reconcile(
                 ctx.subagent_manager,
@@ -15270,10 +15398,42 @@ def _reset_subagent(ctx: InputContext) -> None:
                 ctx.loop_kwargs.get("verbose"),
             )
         finally:
-            ctx.subagent_manager = ctx.subagent_manager.fresh_copy()
-            ctx.loop_kwargs["subagent_manager"] = ctx.subagent_manager
-            if ctx.subagent_holder is not None:
-                ctx.subagent_holder[0] = ctx.subagent_manager
+            if replace:
+                _replace_subagent_manager(ctx)
+        return
+    ctx.pending_joins.append((ctx.subagent_manager, replace))
+    _finish_pending_joins(ctx)
+
+
+def _finish_pending_joins(ctx: InputContext) -> None:
+    pending = ctx.pending_joins
+    # Stop them all first, so nobody keeps working while we wait on another manager.
+    for manager, _replace in pending:
+        if manager is not None:
+            manager.cancel_all()
+    while pending:
+        manager, replace = pending[0]
+        _shutdown_and_reconcile(
+            manager,
+            ctx.loop_kwargs.get("session_cost"),
+            ctx.loop_kwargs.get("verbose"),
+        )
+        pending.pop(0)
+        if replace and ctx.subagent_manager is manager:
+            _replace_subagent_manager(ctx)
+
+
+def _hand_off_to_correction(ctx: InputContext) -> None:
+    """Stop what an Alt+Enter correction takes over from.
+
+    The subagents are only marked as owed here, and the REPL waits for them next.
+    Their manager is kept, so results they already finished can still be collected.
+    """
+    if ctx.subagent_manager is not None:
+        ctx.pending_joins.append((ctx.subagent_manager, False))
+    if ctx.goal_state is not None:
+        ctx.goal_state.pause()
+    _save_continue_state(ctx)
 
 
 def _finalize_agent_step(
@@ -15300,6 +15460,10 @@ def _review_feedback_message(review_round: int, feedback: str) -> str:
     )
 
 
+def _steering_pending(ctx: InputContext) -> bool:
+    return ctx.steering_pending is not None and ctx.steering_pending()
+
+
 def _review_and_retry(
     turn: TurnOutcome, review_task: str, ctx: InputContext, conversation: str | None
 ) -> TurnOutcome:
@@ -15311,6 +15475,9 @@ def _review_and_retry(
     report = ctx.loop_kwargs.get("report")
     review_round = 0
     while turn.answer and not (turn.exhausted or turn.interrupted):
+        # The correction gets its own review.
+        if _steering_pending(ctx):
+            break
         review_round += 1
         if ctx.verbose:
             fmt.review_sending(review_round)
@@ -15354,13 +15521,18 @@ def _review_and_retry(
             ctx.loop_kwargs["turn_offset"] = report.max_turn_seen
         try:
             retry = _invoke_agent_turn(
-                _review_feedback_message(review_round, verdict.text), ctx
+                _review_feedback_message(review_round, verdict.text),
+                ctx,
+                follow_up=True,
             )
         except _InstructionsPending as pending:
             fmt.warning(pending.step.text)
             break
         if retry.rolled_back:
             fmt.warning("the retry failed; showing the answer the reviewer rejected.")
+            break
+        if retry.stopped:
+            turn = turn._replace(stopped=True)
             break
         turn = retry
     return turn
@@ -15411,6 +15583,7 @@ def _run_agent_step(
         return StepResult(kind="agent_turn", interrupted=True)
     answer, exhausted = turn.answer, turn.exhausted
     step = _finalize_agent_step(answer, exhausted, history_label, ctx)
+    step.stopped = turn.stopped
     if answer is not None:
         ctx.last_answer = answer
     _teardown_goal(ctx)
@@ -15425,11 +15598,7 @@ def _run_agent_step(
 def _shutdown_isolated_turn(ctx: InputContext) -> bool:
     """Shut down an isolated manager. Return True when cleanup is interrupted."""
     try:
-        _shutdown_and_reconcile(
-            ctx.subagent_manager,
-            ctx.loop_kwargs.get("session_cost"),
-            ctx.loop_kwargs.get("verbose"),
-        )
+        _join_subagents(ctx, replace=False)
     except KeyboardInterrupt:
         return True
     return False
@@ -15996,22 +16165,24 @@ def _execute_init(cmd_arg: str, ctx: InputContext) -> StepResult:
 
 def _run_init_passes(cmd_arg: str, ctx: InputContext) -> StepResult:
     def _run_init_pass(
+        prompt: str,
         history_label: str,
         interrupt_message: str,
-    ) -> tuple[str | None, bool] | None:
-        turn = _invoke_agent_turn(None, ctx)
-        answer, exhausted = turn.answer, turn.exhausted
+        *,
+        follow_up: bool,
+    ) -> TurnOutcome | None:
+        turn = _invoke_agent_turn(prompt, ctx, follow_up=follow_up)
         if turn.interrupted:
             fmt.warning(interrupt_message)
             return None
-        if not ctx.no_history and answer:
+        if not ctx.no_history and turn.answer:
             append_history(
                 ctx.base_dir,
                 history_label,
-                answer,
+                turn.answer,
                 diagnostics=ctx.verbose,
             )
-        return answer, exhausted
+        return turn
 
     if cmd_arg:
         fmt.warning(f"/init takes no arguments, ignoring {cmd_arg!r}")
@@ -16034,16 +16205,23 @@ def _run_init_passes(cmd_arg: str, ctx: InputContext) -> StepResult:
 
     last_answer = None
     any_exhausted = False
+    stopped = False
     for _pass, prompt in enumerate(
         (_init_prompt(), INIT_ENRICH_PROMPT, INIT_WRITE_PROMPT), 1
     ):
-        ctx.messages.append({"role": "user", "content": prompt})
-        result = _run_init_pass(f"/init pass {_pass}", "interrupted, /init aborted.")
-        if result is None:
+        turn = _run_init_pass(
+            prompt,
+            f"/init pass {_pass}",
+            "interrupted, /init aborted.",
+            follow_up=_pass > 1,
+        )
+        if turn is None:
             return StepResult(kind="agent_turn", text=None, interrupted=True)
-        answer, exhausted = result
-        last_answer = answer
-        if exhausted:
+        if turn.stopped:
+            stopped = True
+            break
+        last_answer = turn.answer
+        if turn.exhausted:
             any_exhausted = True
             if ctx.verbose:
                 fmt.warning(f"max turns reached during /init pass {_pass}.")
@@ -16052,21 +16230,25 @@ def _run_init_passes(cmd_arg: str, ctx: InputContext) -> StepResult:
     # Post-write validation and retry.
     agents_path = Path(ctx.base_dir).resolve() / "AGENTS.md"
     reason, _content = validate_agents_md(agents_path)
-    if reason is not None:
-        retry_prompt = INIT_RETRY_PROMPT.format(reason=reason)
-        ctx.messages.append({"role": "user", "content": retry_prompt})
-        result = _run_init_pass(
-            "/init pass 4 (retry)", "interrupted, /init retry aborted."
+    if reason is not None and not stopped:
+        turn = _run_init_pass(
+            INIT_RETRY_PROMPT.format(reason=reason),
+            "/init pass 4 (retry)",
+            "interrupted, /init retry aborted.",
+            follow_up=True,
         )
-        if result is None:
+        if turn is None:
             return StepResult(kind="agent_turn", text=None, interrupted=True)
-        last_answer, exhausted = result
-        if exhausted:
-            any_exhausted = True
-        retry_reason, _content = validate_agents_md(agents_path)
-        if retry_reason is not None:
-            fmt.warning(f"AGENTS.md still invalid after retry: {retry_reason}")
+        if turn.stopped:
+            stopped = True
+        else:
+            last_answer = turn.answer
+            any_exhausted = any_exhausted or turn.exhausted
+            retry_reason, _content = validate_agents_md(agents_path)
+            if retry_reason is not None:
+                fmt.warning(f"AGENTS.md still invalid after retry: {retry_reason}")
 
+    # Even after a stop, since an earlier pass may already have written AGENTS.md.
     refresh = refresh_system_instructions(ctx)
     if not refresh.ok:
         if refresh.blocking:
@@ -16075,7 +16257,9 @@ def _run_init_passes(cmd_arg: str, ctx: InputContext) -> StepResult:
             f"AGENTS.md written, but not active in this session: {refresh.reason}."
         )
 
-    return StepResult(kind="agent_turn", text=last_answer, exhausted=any_exhausted)
+    return StepResult(
+        kind="agent_turn", text=last_answer, exhausted=any_exhausted, stopped=stopped
+    )
 
 
 def _execute_delegated_command(
@@ -16120,6 +16304,9 @@ def _execute_simplify(cmd_arg: str, ctx: InputContext) -> StepResult:
             text=f"error: simplify failed: {e}",
             is_error=True,
         )
+    # The apply pass edits files, so a correction typed during the analysis goes first.
+    if _steering_pending(ctx):
+        return StepResult(kind="agent_turn", stopped=True)
     return _run_agent_step(prompt, "/simplify", ctx, interrupt_label="/simplify")
 
 
@@ -16667,6 +16854,7 @@ def _build_isolated_ctx(ctx: InputContext, kind: _IsolatedTurnKind) -> InputCont
         # Its own review state, so these turns can't change the parent's.
         reviewer=None,
         review=ReviewState(),
+        steering_pending=None,
         **loop_overrides,
     )
 
@@ -16724,6 +16912,8 @@ def _step_outcome(step: StepResult) -> str:
         return "interrupted"
     if step.is_error:
         return "error"
+    if step.stopped:
+        return "stopped"
     if step.exhausted:
         return "exhausted"
     # No answer means the turn failed, and the REPL already printed why.
@@ -16881,6 +17071,8 @@ def _fire_due_loops(ctx: InputContext) -> None:
     if ctx.loop_registry is None or len(ctx.loop_registry) == 0:
         return
     for reg in ctx.loop_registry.due():
+        if _steering_pending(ctx):
+            break
         # An earlier iteration in this batch may have auto-cancelled this id.
         if ctx.loop_registry.get(reg.id) is None:
             continue
@@ -17137,6 +17329,7 @@ def repl_loop(
         "/copy to copy last answer to clipboard",
         "Ctrl-R searches input history · Shift+Enter/Ctrl-J adds a newline",
         "Enter while the model works queues the next message",
+        "Alt+Enter while the model works runs your message after the current step",
         "Ctrl-C interrupts work and returns queued messages to the editor",
         "Ctrl-C clears a half-typed line at the idle prompt",
         "/clear or /new starts a fresh conversation",
@@ -17372,6 +17565,8 @@ def repl_loop(
         instructions_full=instructions_full,
         reviewer=reviewer,
         on_task_done=on_task_done,
+        steering_pending=ui.steering_pending,
+        pending_joins=[],
     )
 
     completer.model_candidates = lambda: _model_completion_candidates(ctx)
@@ -17391,25 +17586,46 @@ def repl_loop(
 
     def _fire_loops_while_idle():
         with ui.turn():
+            _finish_pending_joins(ctx)
             _fire_due_loops(ctx)
         _refresh_toolbar_state()
 
-    def _handle_line(line: str) -> bool:
+    def _clear_the_way(parsed: ParsedInput, handoff: bool) -> bool:
+        """Make sure older work has stopped before a step runs.
+
+        If Ctrl-C interrupts the wait, the line goes back to the editor and this returns False.
+        """
+        if parsed.cmd in EXIT_COMMANDS:
+            return True
+        try:
+            if handoff:
+                _hand_off_to_correction(ctx)
+            _finish_pending_joins(ctx)
+        except KeyboardInterrupt:
+            fmt.warning("interrupted while stopping earlier work.")
+            ui.recall_queued()
+            ui.prepend_to_editor(parsed.raw)
+            return False
+        return True
+
+    def _handle_line(line: str, handoff: bool = False) -> bool:
         """Run one submitted line. Returns True when the REPL should stop."""
         parsed = parse_input_line(line)
         if not parsed.raw:
             return False
-        return _handle_parsed(parsed)
+        return _handle_parsed(parsed, handoff=handoff)
 
-    def _handle_parsed(parsed: ParsedInput) -> bool:
-        if report is not None:
-            report.record_repl_turn(parsed.raw)
-
-        if parsed.is_plain_text:
-            ctx.loop_kwargs["repl_input_text"] = parsed.raw
+    def _handle_parsed(parsed: ParsedInput, handoff: bool = False) -> bool:
         result = None
+        # Before the handoff, which may pause the goal.
         goal_before = _goal_snapshot(ctx)
         with ui.turn():
+            if not _clear_the_way(parsed, handoff):
+                return False
+            if report is not None:
+                report.record_repl_turn(parsed.raw)
+            if parsed.is_plain_text:
+                ctx.loop_kwargs["repl_input_text"] = parsed.raw
             try:
                 result = execute_input(parsed, ctx, mode="repl")
             finally:
@@ -17429,6 +17645,8 @@ def repl_loop(
             _run_after_render(result)
             if result.interrupted:
                 ui.recall_queued()
+            elif result.stopped:
+                fmt.info("stopped; your next message runs now.")
             _notify_task_done(
                 ctx, _task_command(parsed), result, _goal_change(ctx, goal_before)
             )
@@ -17462,7 +17680,7 @@ def repl_loop(
                 if event.kind == "exit":
                     _write_continue_state()
                     break
-                stop = _handle_line(event.text)
+                stop = _handle_line(event.text, handoff=event.handoff)
                 print(file=sys.stderr)  # blank line before the next exchange
                 _refresh_toolbar_state()
             except KeyboardInterrupt:

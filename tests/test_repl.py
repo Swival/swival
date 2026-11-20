@@ -43,7 +43,11 @@ from swival.agent import (
 )
 from swival.goal import GoalState
 from swival.input_dispatch import StepResult
-from swival.repl_ui import _REPL_SHIFT_ENTER_SEQUENCES, _repl_key_bindings
+from swival.repl_ui import (
+    _REPL_SHIFT_ENTER_SEQUENCES,
+    _REPL_STEER_SEQUENCES,
+    _repl_key_bindings,
+)
 from swival.command_policy import CommandPolicy
 from swival.snapshot import SnapshotState
 from swival.thinking import ThinkingState
@@ -434,6 +438,74 @@ class TestReplLoop:
             repl_loop(messages, [], **_loop_kwargs(tmp_path))
         return mock_session
 
+    def test_pending_joins_finish_before_a_step_runs(self, tmp_path):
+        order = []
+        with (
+            patch(
+                "swival.agent._finish_pending_joins",
+                side_effect=lambda ctx: order.append("join"),
+            ),
+            patch(
+                "swival.agent.execute_input",
+                side_effect=lambda parsed, *a, **k: (
+                    order.append(parsed.raw) or StepResult(kind="agent_turn", text="ok")
+                ),
+            ),
+        ):
+            self._run_repl(tmp_path, ["hello", "/exit"])
+        assert order[:2] == ["join", "hello"]
+
+    def test_goal_status_is_read_before_the_handoff_pauses_it(self, tmp_path):
+        from swival.repl_ui import ReplEvent, ReplUI
+
+        order = []
+        events = [ReplEvent("line", "fix it", queued=True, handoff=True), None]
+        with (
+            patch.object(
+                ReplUI,
+                "next_event",
+                side_effect=lambda *a, **k: (
+                    events.pop(0) if events else ReplEvent("exit")
+                ),
+            ),
+            patch(
+                "swival.agent._goal_snapshot",
+                side_effect=lambda ctx: order.append("snapshot"),
+            ),
+            patch(
+                "swival.agent._hand_off_to_correction",
+                side_effect=lambda ctx: order.append("handoff"),
+            ),
+            patch(
+                "swival.agent.execute_input",
+                return_value=StepResult(kind="agent_turn", text="ok"),
+            ),
+        ):
+            self._run_repl(tmp_path, [])
+        assert order[:2] == ["snapshot", "handoff"]
+
+    def test_interrupted_join_puts_the_line_back_in_the_editor(self, tmp_path):
+        from swival.repl_ui import ReplUI
+
+        ran = []
+
+        def finish(ctx):
+            raise KeyboardInterrupt
+
+        with (
+            patch("swival.agent._finish_pending_joins", side_effect=finish),
+            patch(
+                "swival.agent.execute_input",
+                side_effect=lambda parsed, *a, **k: (
+                    ran.append(parsed.raw) or StepResult(kind="flow_control", stop=True)
+                ),
+            ),
+            patch.object(ReplUI, "prepend_to_editor") as returned,
+        ):
+            self._run_repl(tmp_path, ["hello", "/exit"])
+        assert "hello" not in ran
+        returned.assert_called_once_with("hello")
+
     def test_repl_prompt_session_receives_style(self, tmp_path):
         """Verify PromptSession is created with a style kwarg."""
         inputs = ["/exit"]
@@ -518,6 +590,29 @@ class TestReplLoop:
             _REPL_SHIFT_ENTER_SEQUENCES[1],
             "\r",
         ]
+
+    @pytest.mark.parametrize("keys", ["\x1b\r", *_REPL_STEER_SEQUENCES])
+    def test_alt_enter_steers_or_falls_back_to_enter(self, keys):
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.input import create_pipe_input
+        from prompt_toolkit.output import DummyOutput
+
+        for turn_running in (True, False):
+            steered = []
+            ui = SimpleNamespace(
+                steer=lambda text: steered.append(text) or turn_running
+            )
+            with create_pipe_input() as pipe:
+                pipe.send_text("fix it" + keys + "next\r")
+                session = PromptSession(
+                    input=pipe,
+                    output=DummyOutput(),
+                    key_bindings=_repl_key_bindings(ui),
+                )
+                line = session.prompt()
+            assert steered == ["fix it"]
+            # A steered line leaves the prompt open; otherwise it's submitted like Enter.
+            assert line == ("next" if turn_running else "fix it")
 
     def test_bottom_toolbar_shows_context_and_tokens(self, tmp_path):
         """Toolbar shows token spend and context utilization."""
@@ -3302,6 +3397,7 @@ class TestSessionCostDisplay:
             subagent_manager=_Mgr(),
             loop_kwargs=loop_kwargs,
             subagent_holder=[None],
+            pending_joins=None,
         )
 
         with plain_console() as buf:
@@ -3336,6 +3432,7 @@ class TestSessionCostDisplay:
             subagent_manager=broken,
             loop_kwargs=loop_kwargs,
             subagent_holder=[None],
+            pending_joins=None,
         )
 
         with plain_console() as buf:
@@ -3372,6 +3469,7 @@ class TestSessionCostDisplay:
             subagent_manager=broken,
             loop_kwargs=loop_kwargs,
             subagent_holder=[None],
+            pending_joins=None,
         )
 
         with plain_console() as buf:

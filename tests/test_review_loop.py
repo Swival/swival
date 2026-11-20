@@ -517,10 +517,11 @@ class TestConversationContext:
 class TestIsolation:
     @pytest.mark.parametrize("kind", ["loop", "btw"])
     def test_isolated_context_has_no_reviewer_and_its_own_state(self, tmp_path, kind):
-        ctx = _ctx(tmp_path, _Reviewer(ACCEPT))
+        ctx = _ctx(tmp_path, _Reviewer(ACCEPT), steering_pending=lambda: True)
         iso = agent._build_isolated_ctx(ctx, kind)
         assert iso.reviewer is None
         assert iso.review is not ctx.review
+        assert iso.steering_pending is None
 
     def test_background_loop_leaves_parent_review_state_alone(
         self, tmp_path, monkeypatch

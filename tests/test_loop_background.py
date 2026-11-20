@@ -741,6 +741,43 @@ class TestCleanupInterrupts:
         assert reg.consecutive_failures == 0
         assert any("interrupted during cleanup" in warning for warning in warnings)
 
+    def test_interrupted_cleanup_leaves_the_worker_to_the_repl(self, monkeypatch):
+        class HeldOpen:
+            """A worker that outlives the first Ctrl-C, then exits."""
+
+            joins = 0
+
+            def cancel_all(self):
+                pass
+
+            def fresh_copy(self):
+                return self
+
+            def shutdown(self):
+                HeldOpen.joins += 1
+                if HeldOpen.joins == 1:
+                    raise KeyboardInterrupt()
+
+        registry = LoopRegistry()
+        ctx = _make_ctx(loop_registry=registry)
+        ctx.subagent_manager = HeldOpen()
+        ctx.pending_joins = []
+        monkeypatch.setattr(agent, "execute_input", lambda *a, **k: _ok_step())
+        monkeypatch.setattr(agent.fmt, "warning", lambda t: None)
+        monkeypatch.setattr(agent.fmt, "info", lambda t: None)
+        monkeypatch.setattr(agent.fmt, "repl_answer", lambda t: None)
+        reg = registry.register(
+            interval_seconds=300,
+            prompt="cleanup check",
+            parsed_prompt=agent.parse_input_line("cleanup check"),
+        )
+        agent._run_loop_iteration_snapshot(reg, ctx)
+        # The isolated context is gone, but its join is still owed.
+        assert len(ctx.pending_joins) == 1
+        agent._finish_pending_joins(ctx)
+        assert HeldOpen.joins == 2
+        assert ctx.pending_joins == []
+
     def test_turn_interrupt_preserves_loop_and_stops_batch(self, monkeypatch):
         registry = LoopRegistry()
         ctx = _make_ctx(loop_registry=registry)

@@ -54,9 +54,7 @@ class _FakeApp:
         self.loop = _ImmediateLoop()
         self.results = queue.Queue()
 
-    @property
-    def is_done(self):
-        return False
+    is_done = False
 
     def exit(self, *, result=None, exception=None, style=""):
         self.results.put(result)
@@ -201,13 +199,13 @@ class TestQueueing:
                 break
             texts.append(event.text)
         assert texts == ["typed while idle", "/exit"]
-        assert ui._saved_document == "follow-up one\n\nfollow-up two"
+        assert ui._recalled == "follow-up one\n\nfollow-up two"
         assert ui.queued == []
 
     def test_recall_with_nothing_queued_is_noop(self):
         ui = _make_ui(_FakeSession([]))
         ui.recall_queued()
-        assert ui._saved_document is None
+        assert ui._recalled is None
         assert ui.flash_text() is None
 
     def test_next_event_timeout(self):
@@ -215,6 +213,83 @@ class TestQueueing:
         started = time.monotonic()
         assert ui.next_event(timeout=0.05) is None
         assert time.monotonic() - started < 1
+
+    def test_steering_needs_a_running_turn_and_plain_text(self):
+        ui = _make_ui(_FakeSession([]))
+        assert not ui.steer("leave the tests alone")
+        with ui.turn():
+            assert not ui.steer("/compact")
+            assert not ui.steer("   ")
+            assert ui.steer("leave the tests alone")
+        assert ui.steering_pending()
+
+    def test_ctrl_c_while_a_turn_starts_leaves_it_idle(self, monkeypatch):
+        ui = _make_ui(_FakeSession([]))
+
+        def interrupted(busy):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(ui, "set_busy", interrupted)
+        with pytest.raises(KeyboardInterrupt):
+            with ui.turn():
+                pass
+        assert not ui.steer("leave the tests alone")
+
+    def test_corrections_run_first_in_typed_order_as_one_handoff(self):
+        ui = _make_ui(_FakeSession([]))
+        with ui.turn():
+            ui._submit("queued follow-up")
+            ui.steer("edit the tests")
+            ui.steer("actually, leave them alone")
+            assert ui.live_visible()
+        event = ui.next_event(timeout=0)
+        assert event == ReplEvent(
+            "line",
+            "edit the tests\n\nactually, leave them alone",
+            queued=True,
+            handoff=True,
+        )
+        assert not ui.steering_pending()
+        assert ui.next_event(timeout=0).text == "queued follow-up"
+
+    def test_steering_wakes_a_waiting_next_event(self):
+        ui = _make_ui(_FakeSession([]))
+        with ui.turn():
+            threading.Timer(0.05, ui.steer, args=("stop that",)).start()
+            started = time.monotonic()
+            event = ui.next_event(timeout=5)
+        assert event.handoff and time.monotonic() - started < 2
+
+    def test_recalls_keep_corrections_first_and_add_up(self):
+        ui = _make_ui(_FakeSession([]))
+        with ui.turn():
+            ui._submit("queued follow-up")
+            ui.steer("leave the tests alone")
+            ui.recall_queued()
+        assert not ui.steering_pending()
+        assert ui._recalled == "leave the tests alone\n\nqueued follow-up"
+        # A second recall before the next prompt adds to the first.
+        ui.prepend_to_editor("edit the docs")
+        assert ui._recalled == (
+            "edit the docs\n\nleave the tests alone\n\nqueued follow-up"
+        )
+
+    def test_recall_skips_a_prompt_that_already_accepted_its_line(self):
+        session = _FakeSession(["/exit"])
+        ui = _make_ui(session)
+        session.app.is_done = True
+        session.default_buffer.text = "accepted line"
+        ui._router.prompt_started(session.app, session.app.loop, None)
+        ui.prepend_to_editor("leave the tests alone")
+        assert session.default_buffer.text == "accepted line"
+        ui._router.prompt_finished()
+        ui.start()
+        try:
+            assert ui.next_event(timeout=5).text == "/exit"
+        finally:
+            ui.stop()
+        # The next prompt opens with it instead.
+        assert session.calls[0] == "leave the tests alone"
 
     def test_exit_command_detection(self):
         assert _is_exit_command("/exit")

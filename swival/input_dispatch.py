@@ -130,6 +130,10 @@ class InputContext:
     review: ReviewState = field(default_factory=ReviewState)
     # The REPL calls it when a task ends: (ctx, command, outcome, goal status if the task changed it).
     on_task_done: Callable[["InputContext", str, str, str | None], None] | None = None
+    # REPL only: whether an Alt+Enter correction is waiting. Side contexts don't get it.
+    steering_pending: Callable[[], bool] | None = None
+    # REPL only: subagent managers still owed a join after a Ctrl-C, shared with side contexts.
+    pending_joins: list | None = None
 
 
 @dataclass
@@ -157,6 +161,8 @@ class StepResult:
     exhausted: bool = False
     is_error: bool = False
     interrupted: bool = False
+    # Cut short so an Alt+Enter correction could run next.
+    stopped: bool = False
     after_render: Callable[[], None] | None = None
 
 
